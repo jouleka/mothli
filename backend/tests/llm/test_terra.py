@@ -107,3 +107,13 @@ def test_terra_api_cost_is_separate_from_chatgpt_plan_usage():
     assert not pricing_known("gpt-6.1-terra-other")
     assert not pricing_known("chatgpt-plan:gpt-6.1-terra")
     assert usd_of("chatgpt-plan:gpt-6.1-terra", {"in": 1000000, "out": 1000000}) == 0
+
+
+def test_recap_preflight_includes_the_same_local_harness_allowance_as_reservations():
+    from app.api.views import _recap_input_fits
+    settings = Settings(_env_file=None)
+    local = LLMClient(env={"LLM_TRANSPORT": "codex-local"})
+    assert _recap_input_fits(settings, local, "Recap.", "x" * 30_000)
+    assert not _recap_input_fits(settings, local, "Recap.", "x" * 40_000)
+    api = LLMClient(provider="openai-compatible", env={}, api_key="synthetic")
+    assert _recap_input_fits(settings, api, "Recap.", "x" * 40_000)

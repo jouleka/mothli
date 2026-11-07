@@ -1226,7 +1226,8 @@ def _make_now(client, store, catalog, settings, book_id, eff, delta, facts, *, b
 
 def _recap_input_fits(settings, client, system, user, *, schema=None):
     """Preflight only input shape; the budgeted runner still atomically admits book-level spend."""
-    peak_input = estimate_input_tokens(system, user, schema)
+    from app.cost.limits import completion_input_overhead
+    peak_input = estimate_input_tokens(system, user, schema) + completion_input_overhead(client)
     if (schema is not None and client.provider == "openai-compatible"
             and not getattr(client, "_is_native_openai", False)):
         peak_input += settings.cost_max_output_tokens_per_call + 512
