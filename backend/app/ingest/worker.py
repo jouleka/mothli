@@ -392,30 +392,47 @@ class IngestWorker:
 
     def _complete_extraction(self, book_id, ordinal, title, roster, text, *, book_type="novel",
                              content_language="und"):
-        """Allow one fresh chapter pass only for an explicit grounding rejection.
+        """Allow one fresh extraction of the affected chunk for an explicit grounding rejection.
 
         Each failed pass settles its own reservations before returning here. Provider failures,
         invalid review verdicts, cost ceilings and integrity failures never enter this repair path.
-        This bound is per extraction operation; enqueue-generation scheduling is unchanged.
+        Earlier clearances stay private and are reused; every chunk must pass before commit.
         """
         if not text.strip():
             return _empty_extraction(text)
-        feedback = ()
-        for repair in (False, True):
-            self._check_stopping()
-            try:
-                return self._complete_extraction_once(
-                    book_id, ordinal, title, roster, text, book_type=book_type,
-                    content_language=content_language, repair=repair, repair_feedback=feedback,
-                )
-            except ExtractionGroundingRejected as exc:
-                if repair:
-                    raise
-                feedback = exc.repair_feedback
+        _system, chunks, _review_limit = self._extraction_chunks(title, roster, text, book_type, content_language)
+        parts, reservations = [], []
+        usage_total, usd_total = {"in": 0, "out": 0}, 0.0
+        try:
+            for chunk in chunks:
+                feedback = ()
+                for repair in (False, True):
+                    self._check_stopping()
+                    try:
+                        value, usage, usd, ids, clearance = self._complete_extraction_once(
+                            book_id, ordinal, title, roster, chunk, book_type=book_type,
+                            content_language=content_language, repair=repair, repair_feedback=feedback,
+                        )
+                        break
+                    except ExtractionGroundingRejected as exc:
+                        if repair:
+                            raise
+                        feedback = exc.repair_feedback
+                parts.append((chunk, value, clearance))
+                reservations.extend(ids)
+                usage_total = {key: usage_total[key] + usage[key] for key in ("in", "out")}
+                usd_total += usd
+            extraction, clearance = merge_reviewed_extractions(text, parts)
+            return extraction, usage_total, usd_total, reservations, clearance
+        except Exception:
+            # Cleared chunks stay private until the whole chapter is ready. A later failure
+            # settles their actual spend but cannot publish partial facts or a completion receipt.
+            for reservation_id in reservations:
+                self._catalog.settle_cost(book_id, reservation_id, phase="extraction-partial")
+            raise
 
-    def _complete_extraction_once(self, book_id, ordinal, title, roster, text, *, book_type="novel",
-                                  content_language="und", repair=False, repair_feedback=()):
-        """Chunk huge chapters, budget every call, and merge validated parts before any write."""
+    def _extraction_chunks(self, title, roster, text, book_type, content_language):
+        """Keep chunk boundaries stable across one source chunk's bounded factual repair."""
         system = extract_system_for(book_type, content_language)
         empty_prompt = extract_user_prompt(
             title, roster, "", book_type=book_type, content_language=content_language
@@ -444,6 +461,13 @@ class IngestWorker:
             max_input_tokens=chunk_input_limit,
             schema=Extraction,
         )
+        return system, chunks, review_input_limit
+
+    def _complete_extraction_once(self, book_id, ordinal, title, roster, text, *, book_type="novel",
+                                  content_language="und", repair=False, repair_feedback=()):
+        """Chunk huge chapters, budget every call, and merge validated parts before any write."""
+        system, chunks, review_input_limit = self._extraction_chunks(
+            title, roster, text, book_type, content_language)
         # Keep the exact same source chunks and prior roster on a repair. The call budget still
         # includes the fixed instruction and capped private diagnostics; rejected output is absent.
         if repair:
@@ -521,7 +545,7 @@ class IngestWorker:
                         clearance = review_extraction(
                             chunk, validated, roster, complete=reviewed_complete,
                             max_output_tokens=self._settings.cost_max_output_tokens_per_call,
-                            max_input_tokens=review_input_limit,
+                            max_input_tokens=review_input_limit, repair_invalid=True,
                             screen=(screen_extraction if getattr(self._settings, "jev_extraction_enabled", False)
                                     and getattr(self._client, "jev", None) is not None else None),
                         )

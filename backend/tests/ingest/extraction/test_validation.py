@@ -679,3 +679,34 @@ def test_review_batches_fit_input_budget_without_dropping_source_or_extraction()
     assert seen == [field["path"] for field in data["fields"]]
     with pytest.raises(CostCeilingExceeded):
         review_extraction(TEXT, EXTRACTION, [], complete=complete, max_input_tokens=1)
+
+
+@pytest.mark.parametrize("recovers", [True, False])
+def test_one_bounded_format_repair_still_requires_the_complete_evidence_contract(recovers):
+    calls = []
+    def complete(system, user, **kwargs):
+        calls.append((system, user))
+        verdict, usage = _cleared(system, user, **kwargs)
+        if len(calls) == 1 or not recovers:
+            verdict["field_audits"].pop()
+        return verdict, usage
+    if recovers:
+        review_extraction(TEXT, EXTRACTION, [], complete=complete, repair_invalid=True).assert_matches(TEXT, EXTRACTION)
+    else:
+        with pytest.raises(ExtractionSafetyError):
+            review_extraction(TEXT, EXTRACTION, [], complete=complete, repair_invalid=True)
+    assert len(calls) == 2 and calls[0][1] == calls[1][1]
+    assert "previous review" not in calls[0][0] and "previous review" in calls[1][0]
+
+
+def test_format_repair_never_retries_a_semantic_rejection_or_provider_outage():
+    for failure in ("unsupported", "outage"):
+        calls = []
+        def complete(system, user, **kwargs):
+            calls.append(user)
+            if failure == "outage":
+                raise RuntimeError("provider unavailable")
+            return canned_grounding_verdict(user, unsupported_claims=["Not supported."]), {}
+        with pytest.raises(ExtractionSafetyError):
+            review_extraction(TEXT, EXTRACTION, [], complete=complete, repair_invalid=True)
+        assert len(calls) == 1
