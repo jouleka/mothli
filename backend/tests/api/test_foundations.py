@@ -194,3 +194,12 @@ def test_illustrations_do_not_split_a_publisher_chapter_but_new_parts_do():
         {"ordinal": 4, "title": "Chapter I", "part_label": "Part Two"},
     ]}
     assert chapter_numbers(manifest) == {1: 1, 3: 1, 4: 2}
+
+
+def test_retry_of_a_running_preparation_does_not_schedule_a_successor_attempt(env, monkeypatch):
+    api, bid, app, _ = env
+    monkeypatch.setattr(app.state.worker, "status", lambda _: {"status": "running"})
+    def no_new_attempt(*args):
+        raise AssertionError("a duplicate retry must only attach to the existing run")
+    monkeypatch.setattr(app.state.worker, "enqueue", no_new_attempt)
+    assert api.post(f"/api/books/{bid}/ingest/retry").json() == {"status": "running"}

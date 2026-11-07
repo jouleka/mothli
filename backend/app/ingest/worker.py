@@ -454,6 +454,10 @@ class IngestWorker:
         # independent review and all pieces must clear before any chapter memory is published.
         chunk_input_limit = min(chunk_input_limit,
                                 overhead + 3 * self._settings.cost_max_output_tokens_per_call)
+        if self._client.provider == "codex-local":
+            # Dense biography extracts can otherwise leave no space for the full review
+            # context, even after splitting its field list. Bound local source chunks too.
+            chunk_input_limit = min(chunk_input_limit, overhead + 6000)
         chunks = split_text_for_prompt(
             text,
             prompt_without_text=empty_prompt,

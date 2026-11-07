@@ -13,7 +13,8 @@ def retry_ingest(book_id: str, catalog=Depends(get_catalog), worker=Depends(get_
     state = catalog.get_state(book_id)
     if state is None:
         raise HTTPException(404, "unknown book")
-    worker.enqueue(book_id, state["bookmark"])
+    if worker.status(book_id)["status"] != "running":
+        worker.enqueue(book_id, state["bookmark"])
     return {"status": worker.status(book_id)["status"]}
 
 

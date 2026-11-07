@@ -205,6 +205,7 @@ def test_local_transport_chunking_reserves_harness_headroom_with_a_large_roster(
     sent = [p.split("CHAPTER TEXT:\n", 1)[1].split("\n\nExtract entities", 1)[0]
             for p in client.prompts]
     assert len(sent) > 1 and "".join(sent) == text
+    assert max(map(len, sent)) <= 6000
     for reservation in result[3]:
         catalog.settle_cost("b", reservation, phase="test-cleanup")
     catalog.close()
