@@ -56,13 +56,13 @@ def test_browser_security_headers_cover_api_and_block_untrusted_hosts(client):
 def test_built_frontend_can_be_served_by_the_api_process(tmp_path):
     dist = tmp_path / "dist"
     dist.mkdir()
-    (dist / "index.html").write_text("<h1>Reading Companion</h1>", encoding="utf-8")
+    (dist / "index.html").write_text("<h1>Mothli</h1>", encoding="utf-8")
     (dist / "asset.txt").write_text("built asset", encoding="utf-8")
     app = create_app(_settings(tmp_path, frontend_dist_dir=str(dist)))
 
     with TestClient(app) as production_client:
         home = production_client.get("/")
-        assert home.text == "<h1>Reading Companion</h1>"
+        assert home.text == "<h1>Mothli</h1>"
         assert "script-src 'self'" in home.headers["content-security-policy"]
         assert production_client.get("/asset.txt").text == "built asset"
         assert production_client.get("/api/books").json() == []
@@ -84,5 +84,5 @@ def test_env_file_is_the_absolute_repo_root_dotenv():
 
     from app.config import ENV_FILE
     assert Path(ENV_FILE).is_absolute()
-    assert Path(ENV_FILE).parent.name == "reading-companion"
+    assert (Path(ENV_FILE).parent / "backend" / "app" / "config.py").is_file()
     assert Path(ENV_FILE).name == ".env"

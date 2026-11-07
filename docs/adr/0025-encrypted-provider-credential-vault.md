@@ -50,7 +50,7 @@ immediately after provider use. Unavailable credentials become the fixed non-ret
 
 `HOSTED_CREDENTIAL_MASTER_KEY` and `HOSTED_CREDENTIAL_KEY_VERSION` select the active deployer key.
 `HOSTED_CREDENTIAL_PREVIOUS_MASTER_KEYS` temporarily supplies the old versioned keys. The
-`reading-companion-credential-rewrap` command locks bounded batches, decrypts only each DEK, wraps it with
+`mothli-credential-rewrap` command locks bounded batches, decrypts only each DEK, wraps it with
 the active master key, and leaves the provider ciphertext and nonce unchanged. Operators remove an old
 master key only after the command reports no remaining envelopes at that version. Provider-secret
 replacement is separate and always creates a new DEK.

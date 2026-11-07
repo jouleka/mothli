@@ -1,5 +1,6 @@
 import type { AskCitation } from "../api";
 export type SavedCompanionReply = { id: string; body: string; question: string; citations: AskCitation[]; asOfChapter: number; createdAt?: string };
+// Keep the legacy namespace so a brand change cannot orphan saved replies.
 const key = (book: string, owner: string, pass: number | string) => `rc:pip-keeps:${JSON.stringify([owner, book, String(pass)])}`;
 export function readSavedReplies(book: string, owner: string, pass: number | string = 0): SavedCompanionReply[] {
   try {

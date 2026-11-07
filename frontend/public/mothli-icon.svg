@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Mothli, a little book moth</title>
+  <rect width="512" height="512" rx="112" fill="#6050c8"/>
+  <path d="M247 252C220 185 146 147 109 164c-26 52 8 133 132 158Z" fill="#fff5e4"/>
+  <path d="M265 252c27-67 101-105 138-88 26 52-8 133-132 158Z" fill="#fff5e4"/>
+  <path d="M241 284c-50-20-104-5-102 28 2 33 43 55 86 44l24-40Zm30 0c50-20 104-5 102 28-2 33-43 55-86 44l-24-40Z" fill="#c7b8f1"/>
+  <path d="M139 197c34 6 66 24 91 50m-83-11c26 6 48 18 65 32m161-71c-34 6-66 24-91 50m83-11c-26 6-48 18-65 32" fill="none" stroke="#c9b8e7" stroke-width="9" stroke-linecap="round"/>
+  <path d="M243 207c-2-21-11-35-26-41m52 41c2-21 11-35 26-41" fill="none" stroke="#fff5e4" stroke-width="9" stroke-linecap="round"/>
+  <path d="M242 254h28v88l-14 23-14-23Z" fill="#f3d8a8"/>
+  <ellipse cx="256" cy="232" rx="31" ry="32" fill="#fff5e4"/>
+  <g fill="#403366"><ellipse cx="245" cy="231" rx="3.4" ry="4.5"/><ellipse cx="267" cy="231" rx="3.4" ry="4.5"/></g>
+  <path d="M249 243q7 7 14 0" fill="none" stroke="#403366" stroke-width="4" stroke-linecap="round"/>
+</svg>

@@ -204,7 +204,7 @@ export function ReaderTTS({
                 : "the browser or operating system; it may use a platform network service."}
             </p>
             <p className="quiet reader-tts-cost">
-              Litlet provider cost: $0.00 — no Litlet AI provider, API tokens,
+              Mothli provider cost: $0.00 — no Mothli AI provider, API tokens,
               or paid book-text request. Platform data use or charges, if any,
               are controlled by the device or browser provider.
             </p>

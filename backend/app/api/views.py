@@ -23,6 +23,8 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
+from app.reader_reactions import reaction_clarification, reaction_copy
+
 from app.ask import (
     ASK_SYSTEM,
     PREPARED_ANSWER_SYSTEM,
@@ -544,6 +546,11 @@ def ask_the_book(
     *, request: Request = None,
 ):
     eff, state, manifest = _effective(book_id, body.bookmark, catalog, store, settings, worker)
+    clarification = reaction_clarification(body.question, body.history, eff)
+    if clarification:
+        return {"as_of_chapter": eff, "answer_type": "conversation", "message": clarification,
+                "insufficient_evidence": False, "claims": [], "citations": [],
+                "cost": _ask_cost_payload([])}
     waiting = _preparation_state(state, body.bookmark, worker, book_id)
     if waiting:
         return {"as_of_chapter": eff, "insufficient_evidence": True, "status": waiting,
@@ -654,6 +661,9 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
                     raise _conversation_limit_error(exc) from exc
 
     def finish(payload):
+        reaction = reaction_copy(body.question)
+        if reaction and not payload["insufficient_evidence"]:
+            payload["acknowledgment"] = reaction[0]
         if answer_cache is not None and not payload["insufficient_evidence"]:
             answer_cache.set(answer_key, deepcopy(payload))
         return payload
@@ -974,6 +984,8 @@ def selection_action(
             "as_of_chapter": eff,
             "insufficient_evidence": False,
             "text": draft.text,
+            "acknowledgment": (reaction_copy(body.question)[0]
+                               if body.question and reaction_copy(body.question) else None),
             "citation": citation,
             "cost": _ask_cost_payload(calls),
         }

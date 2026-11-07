@@ -16,7 +16,7 @@ import {
   type ReaderMarkAnchor,
   type SelectionAction,
 } from "../api";
-import { AskTheBook, PipMark, type AskSession } from "./AskTheBook";
+import { AskTheBook, type AskSession } from "./AskTheBook";
 import { readSavedReplies, writeSavedReplies, type SavedCompanionReply } from "./companionNotes";
 import "./simple-reader.css";
 import { admitRelocation, arrowPagingBlocked, jumpsAhead } from "./guard";
@@ -66,6 +66,7 @@ import {
 } from "./readerMarks";
 import type { FoliateTTS } from "./tts";
 import { Icon } from "../ui/Icon";
+import { MothliMark } from "../ui/MothliMark";
 import { Button } from "../ui/Button";
 import { presentationFor } from "./bookProfile";
 import { activeOfflineOwner, flushOfflineMutations, queuePosition } from "../pwa/offline";
@@ -144,7 +145,7 @@ export function ReaderPage({
   const [fatal, setFatal] = useState<string | null>(null);
   const [readerReady, setReaderReady] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
-  const [sourceReturn, setSourceReturn] = useState<{cfi:string; destination:"pip"|"notebook"} | null>(null);
+  const [sourceReturn, setSourceReturn] = useState<{cfi:string; destination:"mothli"|"notebook"} | null>(null);
   const [notebookOpenRequest, setNotebookOpenRequest] = useState(0);
   const [askOpen, setAskOpen] = useState(false);
   const [initialAction, setInitialAction] = useState<"recap" | null>(null);
@@ -794,7 +795,7 @@ export function ReaderPage({
     if (!grid) return;
     for (const child of Array.from(grid.children)) {
       if (!child.classList.contains("hero-scrim"))
-        (child as HTMLElement).inert = child.classList.contains("pip-panel") ? selectionAssist != null : modalOpen;
+        (child as HTMLElement).inert = child.classList.contains("mothli-panel") ? selectionAssist != null : modalOpen;
     }
   }, [modalOpen]);
 
@@ -1214,8 +1215,8 @@ export function ReaderPage({
               onDeleteReply={(id) => { try { saveReplies(savedReplies.filter((reply) => reply.id !== id)); setMarksStatus("Deleted"); } catch { setMarksStatus("Couldn’t delete. Try again."); } }}
               onClearSelection={clearReaderSelection}
             />
-            <button className="plain reader-tool pip-trigger" disabled={!pos} aria-label="Talk to Pip" aria-expanded={askOpen} onClick={() => askOpen ? closeWorkspace() : openConversation()}>
-              <PipMark /><span>Pip</span>
+            <button className="plain reader-tool mothli-trigger" disabled={!pos} aria-label="Talk to Mothli" aria-expanded={askOpen} onClick={() => askOpen ? closeWorkspace() : openConversation()}>
+              <MothliMark /><span>Mothli</span>
             </button>
             <details className="reader-settings-menu">
               <summary className="plain reader-tool" aria-label="Reading settings" title="Reading settings"><Icon name="settings" /><span>Settings</span></summary>
@@ -1239,7 +1240,7 @@ export function ReaderPage({
             <Button variant="ghost" className="icon-button" aria-label="Dismiss welcome back" onClick={() => { dismiss(); gridRef.current?.querySelector<HTMLElement>("#main")?.focus(); }}><Icon name="close" /></Button>
           </section>
         )}
-        {sourceReturn && <div className="pip-source-return"><Button icon="arrowLeft" onClick={returnToConversation}>{sourceReturn.destination === "pip" ? "Back to Pip" : "Back to Notebook"}</Button></div>}
+        {sourceReturn && <div className="mothli-source-return"><Button icon="arrowLeft" onClick={returnToConversation}>{sourceReturn.destination === "mothli" ? "Back to Mothli" : "Back to Notebook"}</Button></div>}
         <div
           className="book-view"
           ref={holder}
@@ -1351,7 +1352,7 @@ export function ReaderPage({
           onSaveReply={(reply) => saveReplies([...savedReplies.filter((saved) => saved.id !== reply.id), { ...reply, createdAt: new Date().toISOString() }])}
           onNavigate={(citation) => {
             setInitialAction(null);
-            setSourceReturn(currentAnchor ? {cfi:currentAnchor.cfi,destination:"pip"} : null);
+            setSourceReturn(currentAnchor ? {cfi:currentAnchor.cfi,destination:"mothli"} : null);
             closeWorkspace();
             void viewRef.current?.goTo(citation.cfi ?? citation.href);
           }}

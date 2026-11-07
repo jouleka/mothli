@@ -1,6 +1,6 @@
 # Third-party notices
 
-The project license applies to original Reading Companion code. Vendored and dependency code keeps
+The project license applies to original Mothli code. Vendored and dependency code keeps
 its original license.
 
 ## Foliate JS

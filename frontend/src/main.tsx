@@ -70,7 +70,7 @@ function Boot() {
       <main className="app-boot" aria-busy={!initialization.failed}>
         <Icon name="book" size={34} />
         <header>
-          <p className="smallcaps">reading companion</p>
+          <p className="smallcaps">Mothli</p>
           <h1>Your next chapter.</h1>
         </header>
         <p className="quiet" role={initialization.failed ? "alert" : "status"}>

@@ -18,7 +18,7 @@
 .notebook-simple .notebook-empty { padding: 24px 12px; text-align: center; color: var(--ink-soft); }
 .notebook-simple .notebook-empty > svg { color: var(--accent); transform: rotate(-7deg); }
 .notebook-simple .notebook-empty p { margin: 10px 0 0; font-size: 13px; }
-.notebook-simple .notebook-pip-keeps .marks-list > li { border-left-color: var(--ink-soft); }
+.notebook-simple .notebook-mothli-keeps .marks-list > li { border-left-color: var(--ink-soft); }
 .notebook-simple .notebook-reply-question { font-size: 11px; color: var(--ink-soft); }
 .notebook-simple .notebook-saved-reply p { font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
 .notebook-simple .notebook-saved-reply button { padding: 4px 8px; min-height: 32px; font-size: 11px; }

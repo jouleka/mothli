@@ -431,7 +431,7 @@ def create_app(
     docs_url = "/docs" if settings.expose_api_docs else None
     openapi_url = "/openapi.json" if settings.expose_api_docs else None
     app = FastAPI(
-        title="reading-companion",
+        title="Mothli",
         lifespan=lifespan,
         docs_url=docs_url,
         redoc_url=None,

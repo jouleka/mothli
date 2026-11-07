@@ -1,10 +1,10 @@
-# Reading Companion
+# Mothli
 
-Reading Companion is a self-hosted EPUB reader that builds a structured memory of the story as you
+Mothli is a self-hosted EPUB reader that builds a structured memory of the story as you
 read. It helps you remember characters, relationships, events, and where you stopped without showing
 material beyond your saved reading frontier.
 
-The interface is called **Litlet**. The repository contains the FastAPI service, React reader, local
+**Mothli** is both the app and its AI reading companion. The repository contains the FastAPI service, React reader, local
 SQLite story-memory engine, and an experimental hosted multi-user foundation.
 
 > **Project status:** the local, single-user application is usable and covered by automated tests.
@@ -16,8 +16,8 @@ SQLite story-memory engine, and an experimental hosted multi-user foundation.
 
 - Import and read DRM-free EPUB files you are allowed to use.
 - Maintain a chapter-bounded, bitemporal story memory.
-- Catch up with an evolving recap and spoiler-bounded chapter views.
-- Browse name cards, relationships, highlights, notes, and bookmarks.
+- Catch up and discuss people or passages in one continuing Mothli conversation.
+- Keep highlights, notes, bookmarks, and explicitly saved Mothli replies in Notebook.
 - Ask questions about completed chapters and explain text explicitly selected in the reader.
 - Read aloud with browser speech synthesis.
 - Install the reader as a PWA and queue reading-position changes while offline.
@@ -57,8 +57,8 @@ and accepted architecture decisions are recorded under [`docs/adr`](docs/adr).
 Clone the repository, create a local configuration, and install locked dependencies:
 
 ```bash
-git clone https://github.com/jouleka/reading-companion.git
-cd reading-companion
+git clone https://github.com/jouleka/mothli.git
+cd mothli
 cp .env.example .env
 
 cd backend

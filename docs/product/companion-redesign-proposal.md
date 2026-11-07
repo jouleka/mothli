@@ -36,7 +36,7 @@ These sources inform the proposal. Navigation, tone, and preference hypotheses s
 
 ## Companion identity and voice
 
-Use **Pip** as a working name, with **Momo** and **Lumi** as alternatives. The name is a discussion placeholder, not a cleared trademark. One name and one small visual identity should work in the library, reader, and conversation.
+The user selected **Mothli** on 7 November 2026 for both the app and its companion. Earlier drafts used a placeholder name. Domain ownership and trademark clearance remain separate launch tasks. One name and one small visual identity should work in the library, reader, and conversation.
 
 Introduce it clearly as an AI reading companion at first interaction. Keep an accessible About and privacy explanation, including the actual service providers and permission for sending reading material. A friendly name should not imply we trained the underlying foundation model or that a human is responding. [EU AI Act Article 50](https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=CELEX:32024R1689) addresses informing people about AI interaction, including clear disclosure by the first interaction; exact launch obligations depend on the distribution context.
 
@@ -55,9 +55,9 @@ The following are response patterns, not factual statements about a particular b
 
 ## Proposed navigation
 
-The library remains the place to find a book and continue reading. Inside a book, there are three clear activities: **Read**, **Talk to Pip**, and **Notebook**. These are activities, not three large dashboards or compulsory bottom tabs.
+The library remains the place to find a book and continue reading. Inside a book, there are three clear activities: **Read**, **Talk to Mothli**, and **Notebook**. These are activities, not three large dashboards or compulsory bottom tabs.
 
-The reading toolbar contains Back to library, Contents, Notebook, Talk to Pip, and a compact reading-settings menu. Appearance and listening controls live in that menu or their compact playback surface. Move Start over to book settings with its reset consequences explained; it is not an everyday reading action.
+The reading toolbar contains Back to library, Contents, Notebook, Talk to Mothli, and a compact reading-settings menu. Appearance and listening controls live in that menu or their compact playback surface. Move Start over to book settings with its reset consequences explained; it is not an everyday reading action.
 
 Desktop: the companion opens as a modest side panel that can be resized or closed. The page remains primary. Mobile: open a consistent conversation sheet with an obvious Close or Back to reading control and no composer/keyboard collision. Preserve the exact reading location, selection, and conversation scroll when switching. A source jump has a clear return-to-conversation action.
 
@@ -69,7 +69,7 @@ Use plain labels for navigation. Warm copy belongs in messages and small empty s
 | --- | --- | --- |
 | Library | Keep and simplify | Continue reading is the primary action. Add a book is visible. Remove the technical status card. Offer a return recap only when relevant and ready. |
 | Reading sidebar | Replace | Remove the dashboard of counters, task tiles, and repeated status. Show the companion conversation only when opened. Use one small progress label tied to the actual book structure. |
-| Ask the book | Rebuild as Talk to Pip | A continuing per-book conversation with short replies, contextual actions, follow-ups, and optional source expansion. |
+| Ask the book | Rebuild as Talk to Mothli | A continuing per-book conversation with short replies, contextual actions, follow-ups, and optional source expansion. |
 | Recap | Keep the capability; merge its entry into conversation | A Catch me up shortcut and natural requests produce the same recap. Default to a short continuous account. An expanded recap is an inline view with a clear return, not another permanent top-level world. |
 | People and sections | Remove as a combined destination | Person reminders appear through conversation or selecting a name. Chapter navigation belongs in Contents. Chapter review uses meaningful chapter titles. Relationship detail is optional expansion from a person card. |
 | Reflect | Remove the top-level destination | Personal thoughts are available at any time through conversation and Notebook. Useful generated chapter takeaways can later become an optional conversational action once dependable. |

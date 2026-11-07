@@ -340,3 +340,7 @@
 .room-guide-heading { position: relative; padding-right: 40px; }
 .room-guide-close { position: absolute; right: -5px; top: -5px; display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 50%; background: #ffffff66; color: #736184; }
 .room-guide-close:hover { background: #fffdf8; }
+
+.library-studio .brand { font-size:27px; letter-spacing:-.04em; }
+.library-studio .brand .brand-moth { width:45px; height:45px; transform:rotate(-5deg); }
+@media(max-width:600px) { .library-studio .brand { font-size:23px; } .library-studio .brand .brand-moth { width:38px; height:38px; } }

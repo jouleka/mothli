@@ -14,7 +14,7 @@ from app.eval.spoiler_gate import validity_snapshot
 from app.preparation_plan import valid_saved_plan
 
 
-ANSWER_VERSION = "reviewed-answer-v8-cited-question-bindings"
+ANSWER_VERSION = "reviewed-answer-v9-natural-reactions"
 
 
 class AnswerBusy(RuntimeError):

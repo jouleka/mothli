@@ -79,7 +79,7 @@ describe("arrowPagingBlocked (the global arrow-key guard)", () => {
 
   test("an element inside the companion or an alertdialog blocks paging", () => {
     const aside = document.createElement("aside");
-    aside.className = "pip-conversation";
+    aside.className = "mothli-conversation";
     const child = document.createElement("span");
     aside.appendChild(child);
     document.body.appendChild(aside);

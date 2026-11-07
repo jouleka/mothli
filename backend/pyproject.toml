@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "reading-companion-backend"
+name = "mothli-backend"
 version = "0.1.0"
-description = "Spoiler-safe reading companion — backend (FastAPI service productionizing the LIT cores)"
+description = "Mothli, a spoiler-safe reading companion — backend (FastAPI service productionizing the LIT cores)"
 requires-python = ">=3.12"
 # Runtime deps (ADR 0007 D-A12). Lower bounds = versions verified to co-install 2026-06-28.
 dependencies = [
@@ -28,6 +28,9 @@ dependencies = [
 dev = ["bandit>=1.9.4", "pip-audit>=2.10.1", "pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
+mothli-hosted-worker = "app.hosted.worker:main"
+mothli-credential-rewrap = "app.hosted.credentials:main"
+# Compatibility aliases for existing deployments.
 reading-companion-hosted-worker = "app.hosted.worker:main"
 reading-companion-credential-rewrap = "app.hosted.credentials:main"
 

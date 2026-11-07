@@ -164,11 +164,11 @@ describe("Library interactions", () => {
     const user = userEvent.setup();
     const onOpen = vi.fn();
     render(<Shelf onOpen={onOpen} />);
-    const toggle = screen.getByRole("button", { name: "Meet your companion" });
-    expect(screen.queryByRole("region", { name: "Meet your companion" })).toBeNull();
+    const toggle = screen.getByRole("button", { name: "Meet Mothli" });
+    expect(screen.queryByRole("region", { name: "Meet Mothli" })).toBeNull();
     await user.click(toggle);
-    expect(screen.getByRole("region", { name: "Meet your companion" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Meet Pip" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Meet Mothli" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Meet Mothli" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Close companion introduction" }));
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(toggle);

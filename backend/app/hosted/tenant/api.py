@@ -13,6 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
+from app.reader_reactions import reaction_clarification, reaction_copy
+
 from app.ask import (
     ASK_JUDGE_SYSTEM,
     ASK_SYSTEM,
@@ -963,6 +965,11 @@ async def ask_the_book(
         )
         if context is None:
             raise HTTPException(404, "unknown book")
+        clarification = reaction_clarification(body.question, body.history, context["as_of_chapter"])
+        if clarification:
+            return {"as_of_chapter": context["as_of_chapter"], "answer_type": "conversation",
+                    "message": clarification, "insufficient_evidence": False, "claims": [],
+                    "citations": [], "cost": _ask_cost(calls)}
         question = conversation_question(body.question, body.history, context["as_of_chapter"])
         if question != body.question:
             context = await request.app.state.tenant_repository.ask_context(
@@ -1038,6 +1045,7 @@ async def ask_the_book(
                 "as_of_chapter": context["as_of_chapter"],
                 "insufficient_evidence": False,
                 "claims": [claim.model_dump(mode="json") for claim in draft.claims],
+                "acknowledgment": reaction_copy(body.question)[0] if reaction_copy(body.question) else None,
                 "citations": [_public_ask_citation(source) for source in used],
                 "cost": _ask_cost(calls),
             }
@@ -1143,6 +1151,8 @@ async def selection_action(
                 "as_of_chapter": context["as_of_chapter"],
                 "insufficient_evidence": False,
                 "text": draft.text,
+                "acknowledgment": (reaction_copy(body.question)[0]
+                                   if body.question and reaction_copy(body.question) else None),
                 "citation": citation,
                 "cost": _ask_cost(calls),
             }

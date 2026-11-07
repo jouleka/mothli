@@ -57,7 +57,7 @@ export function ReaderMarks({
   const [note, setNote] = useState("");
   const [label, setLabel] = useState("");
   const [selectionTool, setSelectionTool] = useState<"highlight" | "note" | "understand" | null>(null);
-  const [filter, setFilter] = useState<"all" | "pip" | ReaderMark["kind"]>("all");
+  const [filter, setFilter] = useState<"all" | "mothli" | ReaderMark["kind"]>("all");
   const [query, setQuery] = useState("");
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const busy = /^(saving|deleting)\b/.test(status);
@@ -142,7 +142,7 @@ export function ReaderMarks({
             >Note</Button>
             <Button variant="ghost" icon="sparkle" disabled={busy}
               onClick={() => onTalkAboutSelection ? onTalkAboutSelection() : onAssist("explain")}
-            >Talk to Pip</Button>
+            >Talk to Mothli</Button>
             <Button variant="ghost" className="icon-button" aria-label="More passage tools"
               aria-expanded={selectionTool === "understand"} aria-controls={`${id}-understand`}
               disabled={busy} onClick={() => setSelectionTool(selectionTool === "understand" ? null : "understand")}
@@ -227,7 +227,7 @@ export function ReaderMarks({
           <div className="notebook-filters" role="group" aria-label="Filter notebook">
             {([
               ["all", "All"], ["highlight", "Highlights"],
-              ["annotation", "Notes"], ["bookmark", "Bookmarks"], ["pip", "Pip"],
+              ["annotation", "Notes"], ["bookmark", "Bookmarks"], ["mothli", "Mothli"],
             ] as const).map(([value, title]) => (
               <button
                 key={value}
@@ -259,7 +259,7 @@ export function ReaderMarks({
           <p className="marks-status" role="status" aria-live="polite">
             {status}
           </p>
-          {filter !== "pip" && <section className="notebook-section" aria-label="Your notes and passages">
+          {filter !== "mothli" && <section className="notebook-section" aria-label="Your notes and passages">
             {filter === "all" && (visibleMarks.length > 0 || visibleReplies.length > 0) && <h3>Your pages</h3>}
             {visibleMarks.length ? <ol className="marks-list">
               {visibleMarks.map(mark => <li key={`${mark.kind}-${mark.id}`} data-mark-kind={mark.kind} data-mark-color={mark.kind === "highlight" ? mark.color : undefined}>
@@ -274,8 +274,8 @@ export function ReaderMarks({
               </li>)}
             </ol> : (filter !== "all" || !visibleReplies.length) && <div className="notebook-empty"><Icon name="book" size={30} /><p>{query.trim() ? "Nothing found." : "A little space for your favorite pages."}</p></div>}
           </section>}
-          {(filter === "all" || filter === "pip") && <section className="notebook-section notebook-pip-keeps" aria-label="Saved from Pip">
-            {(visibleReplies.length > 0 || filter === "pip") && <h3><Icon name="sparkle" size={15} /> From Pip</h3>}
+          {(filter === "all" || filter === "mothli") && <section className="notebook-section notebook-mothli-keeps" aria-label="Saved from Mothli">
+            {(visibleReplies.length > 0 || filter === "mothli") && <h3><Icon name="sparkle" size={15} /> From Mothli</h3>}
             {visibleReplies.length ? <ol className="marks-list">
               {visibleReplies.map(reply => <li key={reply.id}>
                 <div className="notebook-saved-reply"><span className="notebook-reply-question">{reply.question}</span><p>{reply.body}</p>
@@ -283,12 +283,12 @@ export function ReaderMarks({
                 </div>
                 {onDeleteReply && <Button variant="ghost" className="mark-delete icon-button" aria-label="Delete saved reply" onClick={() => onDeleteReply(reply.id)}><Icon name="close" size={15} /></Button>}
               </li>)}
-            </ol> : filter === "pip" && <div className="notebook-empty"><Icon name="sparkle" size={30} /><p>{query.trim() ? "Nothing found." : "Keep a favorite reply here."}</p></div>}
+            </ol> : filter === "mothli" && <div className="notebook-empty"><Icon name="sparkle" size={30} /><p>{query.trim() ? "Nothing found." : "Keep a favorite reply here."}</p></div>}
           </section>}
           <a
             className="plain marks-export"
             href={exportUrl}
-            download="litlet-reader-marks.json"
+            download="mothli-notebook.json"
           >
             <Icon name="download" size={16} /> Export pages
           </a>

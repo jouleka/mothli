@@ -97,15 +97,15 @@ describe("ReaderPage a11y shell", () => {
   });
   mocks.readerMarks.mockResolvedValue({ as_of_chapter: 1, marks: [] });
 
-  test("opens Pip on a phone without leaving the reader", async () => {
+  test("opens Mothli on a phone without leaving the reader", async () => {
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, media: "(max-width: 900px)", addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     const {container} = render(<ReaderPage bookId="b" onBack={() => {}} />);
     await screen.findByRole("heading", {level:1,name:/the test book/i});
     const book = container.querySelector("main");
-    fireEvent.click(screen.getByRole("button", {name:"Talk to Pip"}));
+    fireEvent.click(screen.getByRole("button", {name:"Talk to Mothli"}));
     expect(container.querySelector("main")).toBe(book);
     expect(book?.inert).toBe(true);
-    expect(screen.getByRole("dialog", {name:/Pip/i})).toBeTruthy();
+    expect(screen.getByRole("dialog", {name:/Mothli/i})).toBeTruthy();
   });
 
   test("applies appearance presets immediately and syncs the whole preference object", async () => {
@@ -142,7 +142,7 @@ describe("ReaderPage a11y shell", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("main").inert).not.toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /catch me up/i }));
-    expect(screen.getByRole("complementary", { name: /Pip/i })).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: /Mothli/i })).toBeTruthy();
   });
 
   test("LIT-29: no welcome-back on a fresh first visit (nothing auto-opens)", async () => {

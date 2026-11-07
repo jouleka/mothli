@@ -11,10 +11,11 @@ import {
 import { api, ApiError, type AskAnswer, type AskCitation } from "../api";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
+import { MothliMark } from "../ui/MothliMark";
 import { activeOfflineOwner } from "../pwa/offline";
 import { keepTabFocusInside } from "./focusTrap";
 import type { ReaderSelection } from "./ReaderMarksPanel";
-import "./pip-conversation.css";
+import "./mothli-conversation.css";
 
 export type SavedCompanionReply = {
   id: string;
@@ -49,13 +50,15 @@ export type AskSession = {
   update: (changes: Partial<AskSnapshot>) => void;
 };
 const BOOK_USAGE_LIMIT_MESSAGE =
-  "Pip is paused for this book: its usage limit has been reached.";
+  "Mothli is paused for this book: its usage limit has been reached.";
 const REQUEST_TOO_LARGE_MESSAGE = "That’s a lot of pages at once. Pick a passage and we can start there.";
+// Legacy storage namespace preserves existing conversations after the Mothli rename.
 const STORAGE_PREFIX = "litlet.pip.conversation:";
 function storageKey(bookId: string, owner: string, pass: string) {
   return `${STORAGE_PREFIX}${encodeURIComponent(owner)}:${encodeURIComponent(bookId)}:${encodeURIComponent(pass)}`;
 }
 function readableAnswer(answer: AskAnswer): string {
+  if (answer.answer_type === "conversation") return answer.message ?? "Which moment do you mean?";
   if (answer.insufficient_evidence) {
     switch (answer.status) {
       case "preparing":
@@ -70,9 +73,10 @@ function readableAnswer(answer: AskAnswer): string {
         return "I couldn’t find enough in your read pages to answer that. Which passage did you mean?";
     }
   }
-  return answer.answer_type === "recap"
+  const body = answer.answer_type === "recap"
     ? (answer.recap ?? "")
     : answer.claims.map((claim) => claim.text).join("\n\n");
+  return [answer.acknowledgment, body].filter(Boolean).join("\n\n");
 }
 function isStoredExchange(value: unknown): value is AskExchange {
   if (!value || typeof value !== "object") return false;
@@ -166,15 +170,6 @@ function createAskSession(
       listeners.forEach((listener) => listener());
     },
   };
-}
-
-export function PipMark({ className = "" }: { className?: string }) {
-  return (
-    <span className={`pip-mark ${className}`} aria-hidden="true">
-      <span />
-      <i />
-    </span>
-  );
 }
 
 export function AskTheBook({
@@ -351,6 +346,7 @@ export function AskTheBook({
         });
         result = {
           as_of_chapter: selected.as_of_chapter,
+          acknowledgment: selected.acknowledgment,
           insufficient_evidence: selected.insufficient_evidence,
           claims: selected.text
             ? [{ text: selected.text, citation_ids: [1] }]
@@ -421,7 +417,7 @@ export function AskTheBook({
             : reason instanceof ApiError && reason.status === 429
             ? /cost ceiling/i.test(reason.message)
               ? BOOK_USAGE_LIMIT_MESSAGE
-              : "Pip needs a short break. Try again shortly."
+              : "Mothli needs a short break. Try again shortly."
             : "I couldn’t get a reply. Try again?";
         session.update({ error: message });
       }
@@ -460,11 +456,11 @@ export function AskTheBook({
     const viewport = window.visualViewport;
     const resize = () => {
       rootRef.current?.style.setProperty(
-        "--pip-viewport-height",
+        "--mothli-viewport-height",
         `${viewport.height}px`,
       );
       rootRef.current?.style.setProperty(
-        "--pip-viewport-top",
+        "--mothli-viewport-top",
         `${viewport.offsetTop}px`,
       );
     };
@@ -481,21 +477,21 @@ export function AskTheBook({
   );
   return (
     <div
-      className={`pip-panel pip-conversation${embedded ? " pip-conversation--embedded" : " pip-conversation--standalone"}${compact ? " pip-conversation--compact" : ""}`}
+      className={`mothli-panel mothli-conversation${embedded ? " mothli-conversation--embedded" : " mothli-conversation--standalone"}${compact ? " mothli-conversation--compact" : ""}`}
       role={modal ? "dialog" : "complementary"}
       aria-modal={modal || undefined}
       aria-labelledby={titleId}
       ref={rootRef}
     >
-      <header className="pip-header">
-        <PipMark />
+      <header className="mothli-header">
+        <MothliMark />
         <div>
-          <h2 id={titleId}>Pip</h2>
+          <h2 id={titleId}>Mothli</h2>
           <span>{selection ? "This passage" : "Your reading companion"}</span>
         </div>
         <Button
           variant="ghost"
-          className="pip-menu"
+          className="mothli-menu"
           aria-label="Conversation options"
           title="Conversation options"
           onClick={() => setConfirmClear(!confirmClear)}
@@ -504,7 +500,7 @@ export function AskTheBook({
         </Button>
         <Button
           variant="ghost"
-          className="pip-close"
+          className="mothli-close"
           aria-label="Back to reading"
           title="Back to reading"
           onClick={onClose}
@@ -514,7 +510,7 @@ export function AskTheBook({
         </Button>
       </header>
       <div
-        className="pip-thread"
+        className="mothli-thread"
         ref={conversationRef}
         onScroll={(event) => {
           session.scrollTop = event.currentTarget.scrollTop;
@@ -523,7 +519,7 @@ export function AskTheBook({
         aria-label="Book conversation"
       >
         {confirmClear && (
-          <div className="pip-clear">
+          <div className="mothli-clear">
             <span>Clear this chat?</span>
             <Button
               variant="ghost"
@@ -550,8 +546,8 @@ export function AskTheBook({
           </div>
         )}
         {aiDisclosure && (
-          <div className="pip-introduction">
-            <span>Pip is your AI reading companion.</span>
+          <div className="mothli-introduction">
+            <span>Mothli is your AI reading companion.</span>
             <button
               type="button"
               aria-label="Dismiss introduction"
@@ -569,27 +565,27 @@ export function AskTheBook({
           </div>
         )}
         {!visibleExchanges.length && !busy && (
-          <div className="pip-welcome">
-            <PipMark />
+          <div className="mothli-welcome">
+            <MothliMark />
             <p>What’s on your mind?</p>
           </div>
         )}
         {visibleExchanges.map((exchange, index) => (
           <section
-            className="pip-exchange"
+            className="mothli-exchange"
             aria-label={`Question ${index + 1}`}
             data-latest-exchange={
               index === visibleExchanges.length - 1 || undefined
             }
             key={exchange.id}
           >
-            <p className="pip-question">{exchange.question}</p>
-            <div className="pip-reply">
+            <p className="mothli-question">{exchange.question}</p>
+            <div className="mothli-reply">
               <p>{readableAnswer(exchange.answer)}</p>
-              {!exchange.answer.insufficient_evidence && (
-                <div className="pip-reply-actions">
+              {!exchange.answer.insufficient_evidence && exchange.answer.answer_type !== "conversation" && (
+                <div className="mothli-reply-actions">
                   {exchange.answer.citations.length > 0 && (
-                    <details className="pip-sources">
+                    <details className="mothli-sources">
                       <summary>
                         <Icon name="book" size={14} />
                         Pages
@@ -616,7 +612,7 @@ export function AskTheBook({
                   {onSaveReply && (
                     <Button
                       variant="ghost"
-                      className="pip-save"
+                      className="mothli-save"
                       icon={saved.has(exchange.id) ? "check" : "bookmark"}
                       aria-label={
                         saved.has(exchange.id)
@@ -652,13 +648,13 @@ export function AskTheBook({
           </section>
         ))}
         {busy && (
-          <section className="pip-exchange" aria-label="Sending message">
-            <p className="pip-question">{pendingQuestion}</p>
-            <span className="pip-thinking" aria-hidden="true">
+          <section className="mothli-exchange" aria-label="Sending message">
+            <p className="mothli-question">{pendingQuestion}</p>
+            <span className="mothli-thinking" aria-hidden="true">
               •••
             </span>
             <button
-              className="pip-cancel"
+              className="mothli-cancel"
               type="button"
               onClick={() =>
                 session.update({
@@ -673,7 +669,7 @@ export function AskTheBook({
           </section>
         )}
         {peopleOpen && (
-          <div className="pip-people">
+          <div className="mothli-people">
             <div>
               <span>Who was it?</span>
               <button
@@ -703,7 +699,7 @@ export function AskTheBook({
                     inputRef.current?.focus();
                   }}
                 >
-                  <span className="pip-person-monogram" aria-hidden="true">
+                  <span className="mothli-person-monogram" aria-hidden="true">
                     {person.name.trim().charAt(0)}
                   </span>
                   {person.name}
@@ -715,8 +711,8 @@ export function AskTheBook({
           </div>
         )}
       </div>
-      <div className="pip-bottom">
-        <div className="pip-shortcuts" aria-label="Conversation shortcuts">
+      <div className="mothli-bottom">
+        <div className="mothli-shortcuts" aria-label="Conversation shortcuts">
           <Button
             variant="ghost"
             icon="book"
@@ -735,7 +731,7 @@ export function AskTheBook({
           </Button>
         </div>
         {selection && (
-          <div className="pip-selection">
+          <div className="mothli-selection">
             <q>{selection.text}</q>
             {onClearSelection && (
               <button
@@ -749,10 +745,10 @@ export function AskTheBook({
             )}
           </div>
         )}
-        <div className="pip-status" role="status" aria-live="polite">
+        <div className="mothli-status" role="status" aria-live="polite">
           {saveError ||
             (busy ? (
-              <span className="sr-only">Pip is checking your pages.</span>
+              <span className="sr-only">Mothli is checking your pages.</span>
             ) : (
               error && (
                 <>
@@ -766,9 +762,9 @@ export function AskTheBook({
               )
             ))}
         </div>
-        <form className="pip-composer" onSubmit={submit}>
+        <form className="mothli-composer" onSubmit={submit}>
           <label htmlFor={`${titleId}-message`} className="sr-only">
-            Message Pip
+            Message Mothli
           </label>
           <textarea
             id={`${titleId}-message`}
@@ -793,7 +789,7 @@ export function AskTheBook({
             }}
           />
           <div>
-            <span title="Pip only uses the pages you’ve read">
+            <span title="Mothli only uses the pages you’ve read">
               <Icon name="shield" size={12} />
               <span>
                 {selection ? "This passage only" : "Only your read pages"}
@@ -803,7 +799,7 @@ export function AskTheBook({
               type="submit"
               variant="primary"
               aria-label="Send message"
-              className="pip-send"
+              className="mothli-send"
               disabled={busy || question.trim().length < 2}
             >
               <Icon name="arrowRight" size={18} />
