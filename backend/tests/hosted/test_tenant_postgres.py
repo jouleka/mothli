@@ -927,7 +927,7 @@ def test_provider_settings_and_validation_are_owner_scoped(
     extraction = next(item for item in final["items"] if item["capability"] == "extraction")
     assert extraction["model"] == "available-model"
     assert extraction["credential_id"] == valid["id"]
-    assert final["recommendations"]["extraction"]["model"] == "gpt-4o-mini"
+    assert final["recommendations"]["extraction"]["model"] == "gpt-6.1-terra"
     assert final["recommendations_persisted"] is False
 
 
