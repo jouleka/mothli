@@ -426,6 +426,7 @@ class IngestWorker:
         if (self._client.provider == "openai-compatible"
                 and not getattr(self._client, "_is_native_openai", False)):
             chunk_input_limit -= self._settings.cost_max_output_tokens_per_call + 512
+        review_input_limit = chunk_input_limit
         # Leave room for the extraction alongside its source in the review call. The exact review
         # input is checked by budgeted_completion too; oversized output fails closed, never truncated.
         overhead = estimate_input_tokens(system, empty_prompt, Extraction)
@@ -520,6 +521,7 @@ class IngestWorker:
                         clearance = review_extraction(
                             chunk, validated, roster, complete=reviewed_complete,
                             max_output_tokens=self._settings.cost_max_output_tokens_per_call,
+                            max_input_tokens=review_input_limit,
                             screen=(screen_extraction if getattr(self._settings, "jev_extraction_enabled", False)
                                     and getattr(self._client, "jev", None) is not None else None),
                         )

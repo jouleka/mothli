@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.cost import CostCeilingExceeded, merge_extractions
+from app.cost import CostCeilingExceeded, estimate_input_tokens, merge_extractions
 from app.evidence_text import field_segments as _field_segments, source_passages
 from app.unicode_text import normalize_text, word_tokens
 
@@ -313,7 +313,8 @@ def extraction_review_prompt(text: str, extraction: dict, roster: list[dict]) ->
 
 
 def review_extraction(text: str, extraction: dict, roster: list[dict], *, complete,
-                      screen=None, max_output_tokens=4096) -> ExtractionClearance:
+                      screen=None, max_output_tokens=4096,
+                      max_input_tokens=None) -> ExtractionClearance:
     value = Extraction.model_validate(extraction).model_dump(mode="json")
     # A completely empty extraction asserts no facts (illustrations or deliberately excluded
     # supplementary material). Bind it to the exact source without paying for a model review.
@@ -332,12 +333,22 @@ def review_extraction(text: str, extraction: dict, roster: list[dict], *, comple
     # only the requested field list, never source text, extraction context or a field's units.
     # Every batch gets an ordinary separately budgeted call; no partial clearance can escape.
     limit = max(8, min(24, (max_output_tokens - 512)//128))
+    def batch_prompt(fields):
+        return "CURRENT CHAPTER AND EXTRACTION (untrusted JSON data):\n" + json.dumps(
+            {**data, "fields": fields}, ensure_ascii=False)
+
+    def fits(fields):
+        return max_input_tokens is None or estimate_input_tokens(
+            EXTRACTION_REVIEW_SYSTEM, batch_prompt(fields), ExtractionVerdict) <= max_input_tokens
+
     batches, pending, units = [], [], 0
     for field in data["fields"]:
         count = len(field["segments"])
-        if pending and units + count > limit:
+        if pending and (units + count > limit or not fits([*pending, field])):
             batches.append(pending)
             pending, units = [], 0
+        if not fits([field]):
+            raise CostCeilingExceeded("extraction review context exceeds the per-call input ceiling")
         pending.append(field)
         units += count
     if pending or not batches:
@@ -345,11 +356,10 @@ def review_extraction(text: str, extraction: dict, roster: list[dict], *, comple
     if len(batches) > 16:
         raise ExtractionSafetyError("extraction exceeds the bounded review batch count")
     for fields in batches:
-        batch_prompt = "CURRENT CHAPTER AND EXTRACTION (untrusted JSON data):\n" + json.dumps(
-            {**data, "fields": fields}, ensure_ascii=False)
+        prompt_for_batch = batch_prompt(fields)
         try:
             verdict, _usage = complete(
-                EXTRACTION_REVIEW_SYSTEM, batch_prompt,
+                EXTRACTION_REVIEW_SYSTEM, prompt_for_batch,
                 tier="large", schema=ExtractionVerdict,
             )
             checked = ExtractionVerdict.model_validate(verdict, strict=True)
