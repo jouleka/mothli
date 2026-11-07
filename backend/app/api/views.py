@@ -31,6 +31,8 @@ from app.ask import (
     AskRetrievalLimit,
     AskSafetyError,
     ask_prompt,
+    conversation_question,
+    conversation_retrieval_question,
     ask_repair_prompt,
     cited_sources,
     complete_ask_citations,
@@ -57,8 +59,7 @@ from app.ask_selection import (
     SOURCE_SELECTION_SYSTEM,
     SourceSelection,
     SourceSelectionError,
-    selection_prompt as source_selection_prompt,
-    validate_selection,
+    select_sources_bounded,
 )
 
 from app.cost import CostCeilingExceeded, budgeted_completion, estimate_input_tokens, pricing_known
@@ -554,7 +555,7 @@ def ask_the_book(
                 "status": "ready" if recap["recap"] else "paratext_only",
                 "claims": [], "citations": [], "cost": None}
     bank = getattr(client, "answers", None)
-    if settings.reader_answer_cache and hasattr(bank, "run_once"):
+    if settings.reader_answer_cache and not body.history and hasattr(bank, "run_once"):
         eff = min(eff, state["ingest_progress"])
         if eff > 0:
             scope = answer_scope(book_id, eff, state, manifest, catalog=catalog, store=store,
@@ -578,6 +579,13 @@ def ask_the_book(
     return _ask_the_book(book_id, body, catalog, store, settings, client, worker)
 
 
+def _conversation_limit_error(exc):
+    if "per-call" in str(exc):
+        return HTTPException(413, {"code": "request_too_large",
+                                   "message": "This request is too large. Try a selected passage."})
+    return HTTPException(429, "book cost ceiling reached")
+
+
 def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, read_context=None):
     """Answer only from completed, retrieved passages and return chapter-navigable citations."""
     if read_context is None:
@@ -588,6 +596,8 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
         # The single-flight owner runs immediately under the same request lifecycle lease.
         # Reuse its checked snapshot; rescanning the entire live book cannot add a new guarantee.
         eff, state, manifest, scope = read_context
+    question = conversation_question(body.question, body.history, eff)
+    retrieval_question = conversation_retrieval_question(body.question, body.history, eff)
     calls = []
 
     def remember(result, *, provider, model):
@@ -609,7 +619,9 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
             "citations": [],
             "cost": _ask_cost_payload(calls),
         }
-    answer_cache = getattr(client, "answers", None) if settings.reader_answer_cache else None
+    # Conversation context is private session state, not a reusable prepared question.
+    answer_cache = (getattr(client, "answers", None)
+                    if settings.reader_answer_cache and not body.history else None)
     answer_key = None
     if answer_cache is not None:
         if scope is None:
@@ -619,7 +631,7 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
         cached = answer_cache.get(answer_key)
         if cached is not None and cached.get("as_of_chapter") == eff and valid_answer(cached):
             return {**deepcopy(cached), "cached": True, "cost": _ask_cost_payload([])}
-        if settings.reader_reuse_enabled and not getattr(client, "preparing", False):
+        if settings.reader_reuse_enabled and not body.history and not getattr(client, "preparing", False):
             candidates = answer_cache.candidates(scope, body.question, limit=12)
             candidates = [c for c in candidates if c["payload"]["as_of_chapter"] == eff
                           and valid_answer(c["payload"])]
@@ -639,7 +651,7 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
                 except (JevUnavailable, AskRetrievalLimit):
                     pass
                 except CostCeilingExceeded as exc:
-                    raise HTTPException(429, "book cost ceiling reached") from exc
+                    raise _conversation_limit_error(exc) from exc
 
     def finish(payload):
         if answer_cache is not None and not payload["insufficient_evidence"]:
@@ -650,10 +662,10 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
         pinned = mem.pinned_identity()
     try:
         embedded = budgeted_query_embedding(
-            catalog, settings, client, book_id, pinned=pinned, texts=[body.question]
+            catalog, settings, client, book_id, pinned=pinned, texts=[retrieval_question]
         )
     except CostCeilingExceeded as exc:
-        raise HTTPException(429, "book cost ceiling reached") from exc
+        raise _conversation_limit_error(exc) from exc
     embed_identity = client.embed_identity()
     remember(
         embedded,
@@ -670,7 +682,7 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
                 known_names.extend(alias["surface_form"]
                                    for alias in view.aliases_of(character["entity_id"]))
             sources = retrieve_ask_sources(
-                body.question,
+                retrieval_question,
                 bookmark=eff,
                 chapters=view.chapters(),
                 read_chapter=view.raw_text,
@@ -696,24 +708,32 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
                     remember(result, provider="typesafe", model=jev.model)
                     return result.value
                 try:
-                    selected = jev_tasks.select(body.question, sources, run=select_run,
+                    selected = jev_tasks.select(question, sources, run=select_run,
                                                 settings=settings, frontier=eff)
                 except JevUnavailable:
                     pass
             if selected is None:
-                selection = budgeted_completion(
-                    catalog, settings, client, book_id, phase="source-selection",
-                    system=SOURCE_SELECTION_SYSTEM,
-                    user=source_selection_prompt(body.question, sources, frontier=eff),
-                    tier="cheap", schema=SourceSelection,
-                )
-                remember(selection, provider=client.provider, model=client.billing_model("cheap"))
-                selected = validate_selection(selection.value, sources)
+                from app.cost.limits import completion_input_overhead
+                overhead = completion_input_overhead(client)
+                if client.provider == "openai-compatible" and not getattr(client, "_is_native_openai", False):
+                    overhead += settings.cost_max_output_tokens_per_call + 512
+                def fits_selection(prompt):
+                    return (estimate_input_tokens(SOURCE_SELECTION_SYSTEM, prompt, SourceSelection)
+                            + overhead <= settings.cost_max_input_tokens_per_call)
+                def complete_selection(prompt):
+                    selection = budgeted_completion(
+                        catalog, settings, client, book_id, phase="source-selection",
+                        system=SOURCE_SELECTION_SYSTEM, user=prompt, tier="cheap", schema=SourceSelection,
+                    )
+                    remember(selection, provider=client.provider, model=client.billing_model("cheap"))
+                    return selection.value
+                selected = select_sources_bounded(question, sources, fits=fits_selection,
+                                                  complete=complete_selection, frontier=eff)
             sources = selected
-            sources = complete_ask_context(body.question, sources, candidates, known_names=known_names,
+            sources = complete_ask_context(retrieval_question, sources, candidates, known_names=known_names,
                                            allow_named_fallback=True)
         except CostCeilingExceeded as exc:
-            raise HTTPException(429, "book cost ceiling reached") from exc
+            raise _conversation_limit_error(exc) from exc
         except (SourceSelectionError, ValueError) as exc:
             raise HTTPException(502, "evidence selection could not be cleared") from exc
     if not sources:
@@ -725,7 +745,7 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
             "cost": _ask_cost_payload(calls),
         }
 
-    prompt = ask_prompt(body.question, sources, frontier=eff)
+    prompt = ask_prompt(question, sources, frontier=eff)
     repair_feedback = []
     for _attempt in range(2):
         try:
@@ -741,13 +761,13 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
                 schema=AskDraft,
             )
         except CostCeilingExceeded as exc:
-            raise HTTPException(429, "book cost ceiling reached") from exc
+            raise _conversation_limit_error(exc) from exc
         remember(generated, provider=client.provider, model=client.billing_model("large"))
         try:
             completed = _complete_citation_evidence(
                 generated.value, sources, catalog=catalog, settings=settings, client=client,
                 book_id=book_id, known_names=known_names,
-                question=body.question,
+                question=question,
                 remember=lambda result: remember(result, provider=client.provider,
                                                   model=client.billing_model("cheap")),
                 remember_jev=lambda result: remember(result, provider="typesafe",
@@ -758,7 +778,7 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
             draft = validate_ask_draft(completed, sources, known_names=known_names,
                                        defer_lexical_to_judge=client.provider != "stub")
         except CostCeilingExceeded as exc:
-            raise HTTPException(429, "book cost ceiling reached") from exc
+            raise _conversation_limit_error(exc) from exc
         except AskEvidenceError as exc:
             if not exc.repairable:
                 raise HTTPException(502, "answer evidence review could not be cleared") from exc
@@ -826,14 +846,14 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
                 used,
                 tier="cheap",
                 complete=judge_complete,
-                question=body.question,
+                question=question,
                 frontier=eff,
                 scene_sources=[s for s in candidates if s["ordinal"] == eff]
                     if client.provider != "stub" else (),
                 coverage_sources=sources if client.provider != "stub" else (),
             )
         except CostCeilingExceeded as exc:
-            raise HTTPException(429, "book cost ceiling reached") from exc
+            raise _conversation_limit_error(exc) from exc
         except JudgeUnavailable:
             continue
         if verdict["references_future"] or verdict["unsupported_claims"]:

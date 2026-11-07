@@ -73,7 +73,7 @@ describe("Shelf a11y", () => {
     render(<Shelf onOpen={() => {}} />);
     await user.click(screen.getByRole("button", { name: "Library settings and account" }));
     expect(
-      await screen.findByRole("button", { name: /AI provider settings/i }),
+      await screen.findByRole("button", { name: /Connection settings/i }),
     ).toBeTruthy();
   });
 
@@ -150,13 +150,13 @@ describe("Library interactions", () => {
     mocks.providerSettings.mockResolvedValue({ items: [] });
     render(<Shelf onOpen={() => {}} />);
     const toggle = screen.getByRole("button", { name: "Library settings and account" });
-    expect(screen.queryByRole("button", { name: "AI provider settings" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Connection settings" })).toBeNull();
     await user.click(toggle);
-    const settings = await screen.findByRole("button", { name: "AI provider settings" });
+    const settings = await screen.findByRole("button", { name: "Connection settings" });
     settings.focus();
     await user.keyboard("{Escape}");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByRole("button", { name: "AI provider settings" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Connection settings" })).toBeNull();
     expect(document.activeElement).toBe(toggle);
   });
 
@@ -168,7 +168,7 @@ describe("Library interactions", () => {
     expect(screen.queryByRole("region", { name: "Meet your companion" })).toBeNull();
     await user.click(toggle);
     expect(screen.getByRole("region", { name: "Meet your companion" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Find your way back" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Meet Pip" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Close companion introduction" }));
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(toggle);
@@ -181,7 +181,7 @@ describe("Library interactions", () => {
     render(<Shelf onOpen={() => {}} />);
     const toggle = screen.getByRole("button", { name: "Library settings and account" });
     await user.click(toggle);
-    await user.click(await screen.findByRole("button", { name: "AI provider settings" }));
+    await user.click(await screen.findByRole("button", { name: "Connection settings" }));
     expect(await screen.findByRole("dialog", { name: "Your providers" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Close settings" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

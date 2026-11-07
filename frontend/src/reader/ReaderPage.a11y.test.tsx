@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   deleteReaderMark: vi.fn(),
   ingest: vi.fn(),
   catchMeUp: vi.fn(),
+  preparedQuestions: vi.fn(async () => ({questions:[],as_of_chapter:1})),
   epubUrl: vi.fn(() => "/api/books/b/epub"),
 }));
 vi.mock("../api", () => ({
@@ -96,26 +97,21 @@ describe("ReaderPage a11y shell", () => {
   });
   mocks.readerMarks.mockResolvedValue({ as_of_chapter: 1, marks: [] });
 
-  test("uses the collapsed companion sheet at a phone viewport while keeping the book landmark", async () => {
-    vi.stubGlobal("matchMedia", vi.fn(() => ({
-      matches: true,
-      media: "(max-width: 900px)",
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    })));
-    render(<ReaderPage bookId="b" onBack={() => {}} />);
-    await screen.findByRole("heading", { level: 1, name: /the test book/i });
-    const book = screen.getByRole("main");
-    const toggle = screen.getByRole("button", { name: /open reading companion/i });
-    fireEvent.click(toggle);
-    expect(screen.getByRole("main")).toBe(book);
-    expect(screen.getByRole("complementary", { name: /companion/i })
-      .getAttribute("data-expanded")).toBe("true");
+  test("opens Pip on a phone without leaving the reader", async () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, media: "(max-width: 900px)", addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    const {container} = render(<ReaderPage bookId="b" onBack={() => {}} />);
+    await screen.findByRole("heading", {level:1,name:/the test book/i});
+    const book = container.querySelector("main");
+    fireEvent.click(screen.getByRole("button", {name:"Talk to Pip"}));
+    expect(container.querySelector("main")).toBe(book);
+    expect(book?.inert).toBe(true);
+    expect(screen.getByRole("dialog", {name:/Pip/i})).toBeTruthy();
   });
 
   test("applies appearance presets immediately and syncs the whole preference object", async () => {
     const { container } = render(<ReaderPage bookId="b" onBack={() => {}} />);
     await screen.findByRole("heading", { level: 1, name: /the test book/i });
+    fireEvent.click(screen.getByText("Settings", {selector:"summary span"}));
     fireEvent.click(screen.getByRole("button", { name: /reading appearance/i }));
     fireEvent.click(screen.getByRole("radio", { name: /night/i }));
     expect(container.querySelector(".reader-grid")?.getAttribute("data-reader-theme")).toBe("night");
@@ -142,11 +138,11 @@ describe("ReaderPage a11y shell", () => {
     localStorage.setItem("rc:lastSeen:b", JSON.stringify({ t: Date.now() - 5 * 60 * 60 * 1000, bm: 1 }));
     render(<ReaderPage bookId="b" onBack={() => {}} />);
     const banner = (await screen.findByText(/welcome back/i)).closest(".welcome-back")!;
-    expect(banner.textContent).toMatch(/left off in chapter I\b/i);
+    expect(banner.textContent).toMatch(/welcome back/i);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("main").inert).not.toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /catch me up/i }));
-    expect(screen.getByRole("dialog", { name: /welcome back/i })).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: /Pip/i })).toBeTruthy();
   });
 
   test("LIT-29: no welcome-back on a fresh first visit (nothing auto-opens)", async () => {
@@ -159,7 +155,7 @@ describe("ReaderPage a11y shell", () => {
   test("dismissing the returning-reader card keeps keyboard focus in the book", async () => {
     localStorage.setItem("rc:lastSeen:b", JSON.stringify({ t: Date.now() - 5 * 60 * 60 * 1000, bm: 1 }));
     render(<ReaderPage bookId="b" onBack={() => {}} />);
-    const continueButton = await screen.findByRole("button", { name: "Continue reading" });
+    const continueButton = await screen.findByRole("button", { name: "Dismiss welcome back" });
     continueButton.focus();
     fireEvent.click(continueButton);
     expect(screen.queryByRole("region", { name: "Welcome back" })).toBeNull();
@@ -168,7 +164,9 @@ describe("ReaderPage a11y shell", () => {
 
   test("LIT-17: starting a new pass is confirmed and uses the current position epoch", async () => {
     render(<ReaderPage bookId="b" onBack={() => {}} />);
-    const trigger = await screen.findByRole("button", { name: /start over/i });
+    await screen.findByRole("heading", {name:/the test book/i});
+    fireEvent.click(screen.getByText("Settings", {selector:"summary span"}));
+    const trigger = screen.getByRole("button", { name: /start over/i });
     fireEvent.click(trigger);
     expect(screen.getByRole("alertdialog").textContent).toMatch(/companion.*nothing read/i);
     fireEvent.click(screen.getByRole("button", { name: /start again/i }));

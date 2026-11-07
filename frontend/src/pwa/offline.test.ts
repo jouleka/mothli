@@ -320,6 +320,8 @@ describe("tenant-scoped offline outbox", () => {
 
   test("purge removes every owner cache and all reader-local state", async () => {
     localStorage.setItem("rc:reader-marks:book", "secret note");
+    localStorage.setItem("rc:pip-keeps:book", "saved reply");
+    localStorage.setItem("litlet.pip.conversation:book", "private discussion");
     localStorage.setItem("litlet.reader-preferences:book", "night");
     localStorage.setItem(
       `litlet.library-recent:${owner}`,
@@ -345,6 +347,8 @@ describe("tenant-scoped offline outbox", () => {
     await purgeOfflineTenant(owner);
     expect(activeOfflineOwner()).toBe("local");
     expect(localStorage.getItem("rc:reader-marks:book")).toBeNull();
+    expect(localStorage.getItem("rc:pip-keeps:book")).toBeNull();
+    expect(localStorage.getItem("litlet.pip.conversation:book")).toBeNull();
     expect(localStorage.getItem("litlet.reader-preferences:book")).toBeNull();
     expect(localStorage.getItem(`litlet.library-recent:${owner}`)).toBeNull();
     expect(localStorage.getItem("litlet.library-recent:local")).toBe(

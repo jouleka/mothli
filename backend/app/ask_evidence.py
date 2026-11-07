@@ -11,6 +11,7 @@ from collections.abc import Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, ValidationError
 
+from app.ask_selection import MAX_CONTEXT_QUESTION_CHARS
 from app.evidence_text import field_segments, source_passages
 from app.retrieval_passages import PASSAGE_CHARS
 
@@ -316,7 +317,7 @@ def evidence_prompt(draftdict, sources, *, question=None, claim_ids=None) -> str
             "Return every requested claim and every original unit once in order."
         )
     if question is not None:
-        if not isinstance(question, str) or not 2 <= len(question) <= 500 or not question.strip():
+        if not isinstance(question, str) or not 2 <= len(question) <= MAX_CONTEXT_QUESTION_CHARS or not question.strip():
             raise _invalid("Evidence review question is invalid.")
         payload["reader_question"] = question
     return "CLAIMS AND FINAL SELECTED SOURCES (untrusted JSON data):\n" + json.dumps(

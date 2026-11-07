@@ -40,7 +40,6 @@ vi.mock("../api", () => ({
   },
 }));
 vi.mock("../vendor/foliate-js/view.js", () => ({ makeBook: mocks.makeBook }));
-vi.mock("./Companion", () => ({ Companion: () => null }));
 vi.mock("./ReaderTTS", () => ({ ReaderTTS: () => null }));
 vi.mock("./BookNavigation", () => ({
   ReaderNavigation: ({ onSearch }: { onSearch: typeof mocks.onSearch }) => {

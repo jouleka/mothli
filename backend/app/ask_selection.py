@@ -12,9 +12,12 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator
 
 from app.retrieval_passages import PASSAGE_CHARS
+from app.cost.limits import CostCeilingExceeded
 
 MAX_SOURCE_CANDIDATES = 24
 MAX_SELECTED_SOURCES = 6
+# Internal question + up to eight bounded reference messages; public questions stay <=500.
+MAX_CONTEXT_QUESTION_CHARS = 20_000
 SourceId = Annotated[StrictInt, Field(ge=1, le=MAX_SOURCE_CANDIDATES)]
 
 
@@ -90,7 +93,7 @@ def _candidate_map(candidates):
 def selection_prompt(question: str, candidates: list[dict[str, Any]], *, frontier=None) -> str:
     """Preserve verbatim source strings in JSON; never add inferred facts or oracle labels."""
     _candidate_map(candidates)
-    if not isinstance(question, str) or not 2 <= len(question) <= 500 or not question.strip():
+    if not isinstance(question, str) or not 2 <= len(question) <= MAX_CONTEXT_QUESTION_CHARS or not question.strip():
         raise SourceSelectionError("source selection question was invalid")
     payload = {
         "question": question,
@@ -130,3 +133,32 @@ def select_sources(question: str, candidates: list[dict[str, Any]], *, complete)
         return [], {"in": 0, "out": 0}
     value, usage = complete(SOURCE_SELECTION_SYSTEM, prompt, tier="cheap", schema=SourceSelection)
     return validate_selection(value, candidates), usage
+
+
+def select_sources_bounded(question, candidates, *, fits, complete, frontier=None):
+    """Consider every exact candidate within the existing per-call budget, preserving source IDs."""
+    if not candidates:
+        return []
+    prompt = selection_prompt(question, candidates, frontier=frontier)
+    if fits(prompt):
+        return validate_selection(complete(prompt), candidates)
+    batches, batch = [], []
+    for source in candidates:
+        if batch and not fits(selection_prompt(question, [*batch, source], frontier=frontier)):
+            batches.append(batch)
+            batch = []
+        if not fits(selection_prompt(question, [*batch, source], frontier=frontier)):
+            raise CostCeilingExceeded("completion input exceeds per-call ceiling for evidence selection")
+        batch.append(source)
+    if batch:
+        batches.append(batch)
+    selected = []
+    for batch in batches:
+        value = complete(selection_prompt(question, batch, frontier=frontier))
+        selected.extend(validate_selection(value, batch))
+    if len(selected) <= MAX_SELECTED_SOURCES:
+        return selected
+    prompt = selection_prompt(question, selected, frontier=frontier)
+    if not fits(prompt):
+        raise CostCeilingExceeded("completion input exceeds per-call ceiling for final evidence selection")
+    return validate_selection(complete(prompt), selected)

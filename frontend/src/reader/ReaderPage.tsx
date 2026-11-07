@@ -16,12 +16,9 @@ import {
   type ReaderMarkAnchor,
   type SelectionAction,
 } from "../api";
-import { CatchMeUp } from "./CatchMeUp";
-import { AskTheBook, type AskSession } from "./AskTheBook";
-import { ChapterCloseout } from "./ChapterCloseout";
-import { Codex } from "./Codex";
-import { Companion } from "./Companion";
-import { CompanionWorkspaceNavigation, type CompanionView } from "./CompanionWorkspaceNavigation";
+import { AskTheBook, PipMark, type AskSession } from "./AskTheBook";
+import { readSavedReplies, writeSavedReplies, type SavedCompanionReply } from "./companionNotes";
+import "./simple-reader.css";
 import { admitRelocation, arrowPagingBlocked, jumpsAhead } from "./guard";
 import { JumpNote } from "./JumpNote";
 import {
@@ -57,7 +54,6 @@ import {
 import { PositionReporter, type PendingPosition, type PositionSyncState } from "./reporter";
 import { StartOverNote } from "./StartOverNote";
 import { useWelcomeBack } from "./welcomeBack";
-import { roman } from "./roman";
 import { useCompactReaderShell } from "./mobileShell";
 import {
   HIGHLIGHT_COLORS,
@@ -148,20 +144,29 @@ export function ReaderPage({
   const [fatal, setFatal] = useState<string | null>(null);
   const [readerReady, setReaderReady] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
-  const [focusMode, setFocusMode] = useState(false);
-  const [heroOpen, setHeroOpen] = useState(false);
-  const [codexOpen, setCodexOpen] = useState(false);
+  const [sourceReturn, setSourceReturn] = useState<{cfi:string; destination:"pip"|"notebook"} | null>(null);
+  const [notebookOpenRequest, setNotebookOpenRequest] = useState(0);
   const [askOpen, setAskOpen] = useState(false);
-  const [closeoutOpen, setCloseoutOpen] = useState(false);
-  const [closeoutReadyChapter, setCloseoutReadyChapter] = useState<number | null>(null);
+  const [initialAction, setInitialAction] = useState<"recap" | null>(null);
+  const [replySnapshot, setReplySnapshot] = useState<{scope:string;replies:SavedCompanionReply[]}>({scope:"",replies:[]});
   const workspaceTriggerRef = useRef<HTMLElement | null>(null);
   const askSessionRef = useRef<AskSession | null>(null);
   const offlineOwner = activeOfflineOwner();
   useEffect(() => {
     const session = askSessionRef.current;
-    if (session && (session.bookId !== bookId || session.bookmark !== (pos?.bookmark ?? 0) || session.owner !== offlineOwner))
+    if (session && (session.bookId !== bookId || session.owner !== offlineOwner))
       askSessionRef.current = null;
-  }, [bookId, pos?.bookmark, offlineOwner]);
+  }, [bookId, offlineOwner]);
+  const readingPass = pos?.position_epoch ?? 0;
+  const replyScope = JSON.stringify([bookId, offlineOwner, readingPass]);
+  const savedReplies = pos != null && replySnapshot.scope === replyScope ? replySnapshot.replies : [];
+  useEffect(() => {
+    setReplySnapshot({scope:replyScope,replies:pos == null ? [] : readSavedReplies(bookId, offlineOwner, readingPass)});
+  }, [bookId, offlineOwner, readingPass, replyScope, pos == null]);
+  const saveReplies = (next: SavedCompanionReply[]) => {
+    writeSavedReplies(bookId, offlineOwner, readingPass, next);
+    setReplySnapshot({scope:replyScope,replies:next});
+  };
   const [selectionAssist, setSelectionAssist] = useState<{
     action: SelectionAction;
     selection: ReaderSelection;
@@ -780,7 +785,7 @@ export function ReaderPage({
   // while a full-screen leaf (hero or graph) is open, mark everything behind the scrim inert — so
   // aria-modal is honest: the background is neither tabbable nor exposed to AT (belt to the focus trap)
   const modalOpen =
-    heroOpen || codexOpen || askOpen || closeoutOpen || selectionAssist != null;
+    (compactShell && askOpen) || selectionAssist != null;
   // inert everything behind an open full-screen leaf (hero/graph). The close-time un-inert timing is
   // handled synchronously in each leaf's onClose (below) — a reactive effect re-runs too late for the
   // leaf's focus-restore (a11y pass-2, WCAG 2.4.3).
@@ -789,7 +794,7 @@ export function ReaderPage({
     if (!grid) return;
     for (const child of Array.from(grid.children)) {
       if (!child.classList.contains("hero-scrim"))
-        (child as HTMLElement).inert = modalOpen;
+        (child as HTMLElement).inert = child.classList.contains("pip-panel") ? selectionAssist != null : modalOpen;
     }
   }, [modalOpen]);
 
@@ -813,6 +818,9 @@ export function ReaderPage({
     try {
       const reset = await api.resetPosition(bookId, positionEpochRef.current);
       askSessionRef.current = null;
+      setSourceReturn(null);
+      setAskOpen(false);
+      setInitialAction(null);
       positionEpochRef.current = reset.position_epoch;
       positionVersionRef.current =
         reset.position_version ?? positionVersionRef.current + 1;
@@ -1074,43 +1082,32 @@ export function ReaderPage({
     manifest?.book_profile?.book_type ?? "novel",
   ).unit;
 
-  const openWorkspace = (view: CompanionView) => {
-    if (!heroOpen && !codexOpen && !askOpen && !closeoutOpen)
-      workspaceTriggerRef.current = document.activeElement as HTMLElement | null;
-    setHeroOpen(view === "recap");
-    setCodexOpen(view === "memory");
-    setAskOpen(view === "ask");
-    setCloseoutOpen(view === "reflect");
+  const openConversation = (action: "recap" | null = null) => {
+    setInitialAction(action);
+    workspaceTriggerRef.current = document.activeElement as HTMLElement | null;
+    setAskOpen(true);
+    dismiss();
   };
   const closeWorkspace = () => {
     unInertGrid();
-    setHeroOpen(false);
-    setCodexOpen(false);
     setAskOpen(false);
-    setCloseoutOpen(false);
     dismiss();
-    // Switching workspace views unmounts the intermediate navigation button. Restore
-    // the original reader control, rather than relying on that discarded opener.
-    const trigger = workspaceTriggerRef.current;
-    if (trigger && document.contains(trigger) && !trigger.closest(".reader-return-card")) trigger.focus();
-    else gridRef.current?.querySelector<HTMLButtonElement>(".reader-library")?.focus();
-    workspaceTriggerRef.current = null;
+    workspaceTriggerRef.current?.focus();
   };
-  const workspaceNavigation = (active: CompanionView) => (
-    <CompanionWorkspaceNavigation
-      active={active}
-      onNavigate={openWorkspace}
-      unit={unit}
-      canReflect={(pos?.bookmark ?? 0) > 0 && closeoutReadyChapter === pos?.bookmark}
-    />
-  );
+  const returnToConversation = () => {
+    if (sourceReturn) void viewRef.current?.goTo(sourceReturn.cfi);
+    setInitialAction(null);
+    if (sourceReturn?.destination === "notebook") setNotebookOpenRequest((value) => value + 1);
+    else setAskOpen(true);
+    setSourceReturn(null);
+  };
 
   return (
     <div
-      className="reader-grid"
+      className="reader-grid simple-reader"
       ref={gridRef}
       data-reader-theme={preferences.theme}
-      data-focus-mode={(focusMode && !compactShell) || undefined}
+      data-chat-open={askOpen || undefined}
     >
       <a className="skip-link" href="#main">
         skip to the book
@@ -1120,7 +1117,7 @@ export function ReaderPage({
           <div className="reader-titlebar">
             <button
               className="plain reader-library"
-              aria-label="the shelf"
+              aria-label="Back to library"
               title="Back to your library"
               onClick={onBack}
             >
@@ -1147,20 +1144,7 @@ export function ReaderPage({
                       ? "Sync needs attention"
                       : "Saved"}
             </span>
-            <button
-              className="plain reader-companion-toggle"
-              aria-label="Focus mode"
-              aria-pressed={focusMode}
-              title={
-                focusMode
-                  ? "Show the companion"
-                  : "Hide the companion for focused reading"
-              }
-              onClick={() => setFocusMode((value) => !value)}
-            >
-              <Icon name="book" size={16} />
-              <span>Focus</span>
-            </button>
+
           </div>
           <div
             className="reader-toolbar"
@@ -1219,51 +1203,43 @@ export function ReaderPage({
               onDelete={(mark) => {
                 void deleteReaderMark(mark);
               }}
+              openRequest={notebookOpenRequest}
+              onSourceJump={() => { if(currentAnchor) setSourceReturn({cfi:currentAnchor.cfi,destination:"notebook"}); }}
+              savedReplies={savedReplies}
+              onTalkAboutSelection={() => openConversation()}
+              onNavigateReply={(reply) => {
+                const citation = reply.citations[0];
+                if (citation) void viewRef.current?.goTo(citation.cfi ?? citation.href);
+              }}
+              onDeleteReply={(id) => { try { saveReplies(savedReplies.filter((reply) => reply.id !== id)); setMarksStatus("Deleted"); } catch { setMarksStatus("Couldn’t delete. Try again."); } }}
               onClearSelection={clearReaderSelection}
             />
-            <span className="reader-tool-divider" aria-hidden="true" />
-            <ReaderTTS
-              getView={() => viewRef.current}
-              getVisibleRange={() => visibleRangeRef.current}
-              inactive={modalOpen || startOverOpen}
-              resetKey={bookId}
-            />
-            <ReaderControls
-              preferences={preferences}
-              onChange={changePreferences}
-              status={preferenceStatus}
-            />
-            <span className="reader-toolbar-spacer" />
-            {pos && pos.bookmark > 0 && (
-              <button
-                className="plain reader-reset"
-                aria-label="Start over"
-                onClick={() => {
+            <button className="plain reader-tool pip-trigger" disabled={!pos} aria-label="Talk to Pip" aria-expanded={askOpen} onClick={() => askOpen ? closeWorkspace() : openConversation()}>
+              <PipMark /><span>Pip</span>
+            </button>
+            <details className="reader-settings-menu">
+              <summary className="plain reader-tool" aria-label="Reading settings" title="Reading settings"><Icon name="settings" /><span>Settings</span></summary>
+              <div className="reader-settings-body">
+                <ReaderControls preferences={preferences} onChange={changePreferences} status={preferenceStatus} />
+                <ReaderTTS getView={() => viewRef.current} getVisibleRange={() => visibleRangeRef.current} inactive={modalOpen || startOverOpen} resetKey={bookId} />
+                {pos && pos.bookmark > 0 && <button className="plain reader-reset" aria-label="Start over" onClick={() => {
                   positionReportingPausedRef.current = true;
                   setStartOverError(null);
                   setStartOverOpen(true);
-                }}
-              >
-                <Icon name="refresh" size={14} />
-                <span>Start over</span>
-              </button>
-            )}
+                }}><Icon name="refresh" size={16}/><span>Start over</span></button>}
+              </div>
+            </details>
           </div>
         </header>
         {welcomeBack && (
           <section className="reader-return-card welcome-back" aria-label="Welcome back">
             <Icon name="book" size={22} />
-            <div>
-              <strong>Welcome back.</strong>
-              <span>You left off in {unit} {roman(welcomeBack.lastChapter)}. A little refresher?</span>
-            </div>
-            <Button variant="primary" onClick={() => openWorkspace("recap")}>Catch me up</Button>
-            <Button variant="ghost" onClick={() => {
-              gridRef.current?.querySelector<HTMLElement>("#main")?.focus();
-              dismiss();
-            }}>Continue reading</Button>
+            <strong>Welcome back</strong>
+            <Button variant="primary" onClick={() => openConversation("recap")}>Catch me up</Button>
+            <Button variant="ghost" className="icon-button" aria-label="Dismiss welcome back" onClick={() => { dismiss(); gridRef.current?.querySelector<HTMLElement>("#main")?.focus(); }}><Icon name="close" /></Button>
           </section>
         )}
+        {sourceReturn && <div className="pip-source-return"><Button icon="arrowLeft" onClick={returnToConversation}>{sourceReturn.destination === "pip" ? "Back to Pip" : "Back to Notebook"}</Button></div>}
         <div
           className="book-view"
           ref={holder}
@@ -1361,53 +1337,23 @@ export function ReaderPage({
           </div>
         </footer>
       </main>
-      <Companion
-        completedTitle={manifest?.atoms.find((a) => a.ordinal === pos?.bookmark)?.title}
-        chapterProgress={manifest?.content_chapters ? {
-          completed: Math.max(0, ...manifest.atoms.filter((a) => a.ordinal <= (pos?.bookmark ?? 0)).map((a) => a.chapter_number ?? 0)),
-          total: manifest.content_chapters,
-        } : undefined}
-        bookId={bookId}
-        bookmark={pos?.bookmark ?? null}
-        totalAtoms={manifest?.atoms.length ?? 0}
-        bookType={manifest?.book_profile?.book_type ?? "novel"}
-        onOpenHero={() => openWorkspace("recap")}
-        onOpenCodex={() => openWorkspace("memory")}
-        onOpenAsk={() => openWorkspace("ask")}
-        onOpenCloseout={() => openWorkspace("reflect")}
-        onCloseoutReadinessChange={setCloseoutReadyChapter}
-        compact={compactShell}
-        desktopHidden={focusMode}
-      />
-      {heroOpen && (
-        <CatchMeUp
-          bookId={bookId}
-          bookmark={pos?.bookmark ?? 0}
-          totalAtoms={manifest?.atoms.length ?? 0}
-          bookType={manifest?.book_profile?.book_type ?? "novel"}
-          welcomeBackChapter={welcomeBack?.lastChapter ?? null}
-          workspaceNavigation={workspaceNavigation("recap")}
-          onClose={closeWorkspace}
-        />
-      )}
-      {codexOpen && (
-        <Codex
-          bookId={bookId}
-          bookmark={pos?.bookmark ?? 0}
-          bookType={manifest?.book_profile?.book_type ?? "novel"}
-          workspaceNavigation={workspaceNavigation("memory")}
-          onClose={closeWorkspace}
-        />
-      )}
       {askOpen && (
         <AskTheBook
           bookId={bookId}
           bookmark={pos?.bookmark ?? 0}
+          readingPass={readingPass}
+          initialAction={initialAction}
+          embedded
+          compact={compactShell}
+          selection={readerSelection}
+          onClearSelection={clearReaderSelection}
           sessionRef={askSessionRef}
-          workspaceNavigation={workspaceNavigation("ask")}
+          onSaveReply={(reply) => saveReplies([...savedReplies.filter((saved) => saved.id !== reply.id), { ...reply, createdAt: new Date().toISOString() }])}
           onNavigate={(citation) => {
+            setInitialAction(null);
+            setSourceReturn(currentAnchor ? {cfi:currentAnchor.cfi,destination:"pip"} : null);
             closeWorkspace();
-            void viewRef.current?.goTo(citation.href);
+            void viewRef.current?.goTo(citation.cfi ?? citation.href);
           }}
           onClose={closeWorkspace}
         />
@@ -1428,18 +1374,7 @@ export function ReaderPage({
           }}
         />
       )}
-      {closeoutOpen && (
-        <ChapterCloseout
-          bookId={bookId}
-          chapter={pos?.bookmark ?? 0}
-          workspaceNavigation={workspaceNavigation("reflect")}
-          onNavigate={(citation) => {
-            closeWorkspace();
-            void viewRef.current?.goTo(citation.href);
-          }}
-          onClose={closeWorkspace}
-        />
-      )}
+
     </div>
   );
 }

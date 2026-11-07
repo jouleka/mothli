@@ -36,15 +36,16 @@ describe("ReaderMarks", () => {
     render(<ReaderMarks {...props} />);
     fireEvent.click(screen.getByRole("button", { name: "Notebook" }));
     fireEvent.change(screen.getByRole("searchbox", { name: "Search your notebook" }), { target: { value: "missing" } });
-    expect(screen.queryByRole("button", { name: /highlight · chapter 1/i })).toBeNull();
-    expect(screen.getByText("No saved passages match your search.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /highlight · 1/i })).toBeNull();
+    expect(screen.getByText("Nothing found.")).toBeTruthy();
     fireEvent.change(screen.getByRole("searchbox", { name: "Search your notebook" }), { target: { value: "DANGEROUS" } });
-    expect(screen.getByRole("button", { name: /highlight · chapter 1/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /highlight · 1/i })).toBeTruthy();
   });
   test("selection actions preserve text, save a color and note, and pass axe", async () => {
     const onHighlight = vi.fn();
     const onAnnotate = vi.fn();
     const onAssist = vi.fn();
+    const onTalkAboutSelection = vi.fn();
     const { container } = render(
       <ReaderMarks
         {...props}
@@ -52,6 +53,7 @@ describe("ReaderMarks", () => {
         onHighlight={onHighlight}
         onAnnotate={onAnnotate}
         onAssist={onAssist}
+        onTalkAboutSelection={onTalkAboutSelection}
       />,
     );
     expect(screen.queryByRole("button", { name: /^explain$/i })).toBeNull();
@@ -59,10 +61,9 @@ describe("ReaderMarks", () => {
     fireEvent.click(screen.getByRole("button", { name: /^highlight$/i }));
     fireEvent.click(screen.getByRole("button", { name: /yellow highlight/i }));
     expect(onHighlight).toHaveBeenCalledWith("yellow");
-    fireEvent.click(screen.getByRole("button", { name: /^understand$/i }));
-    expect(screen.queryByRole("button", { name: /yellow highlight/i })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /^explain$/i }));
-    expect(onAssist).toHaveBeenCalledWith("explain");
+    fireEvent.click(screen.getByRole("button", { name: /^talk to pip$/i }));
+    expect(onTalkAboutSelection).toHaveBeenCalledOnce();
+    expect(onAssist).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /^note$/i }));
     fireEvent.change(screen.getByLabelText(/add a note/i), {
       target: { value: "Remember this." },
@@ -79,10 +80,10 @@ describe("ReaderMarks", () => {
     const opener = screen.getByRole("button", { name: /^notebook$/i });
     fireEvent.click(opener);
     expect(
-      screen.getByRole("link", { name: /export marks/i }).getAttribute("href"),
+      screen.getByRole("link", { name: /^export pages$/i }).getAttribute("href"),
     ).toBe("/export");
     fireEvent.click(
-      screen.getByRole("button", { name: /highlight · chapter 1/i }),
+      screen.getByRole("button", { name: /highlight · 1/i }),
     );
     expect(onNavigate).toHaveBeenCalledWith(mark);
     expect(
@@ -120,13 +121,18 @@ describe("ReaderMarks", () => {
     );
   });
 
-  test("filters the notebook without changing or losing saved marks", () => {
-    render(<ReaderMarks {...props} />);
-    fireEvent.click(screen.getByRole("button", { name: /^notebook$/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^bookmarks/i }));
-    expect(screen.queryByRole("button", { name: /highlight · chapter 1/i })).toBeNull();
-    expect(screen.getByText("Nothing saved in this view yet.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /^all/i }));
-    expect(screen.getByRole("button", { name: /highlight · chapter 1/i })).toBeTruthy();
+  test("keeps reader notes and saved Pip replies distinct, with passage navigation", () => {
+    const reply = {id: "reply", body: "A checked reply.", question: "Why?", citations: [{id:1, ordinal:1, chapter_key:"one", href:"one.xhtml", title:"One", excerpt:"A passage"}], asOfChapter: 1};
+    const navigate = vi.fn();
+    const sourceJump = vi.fn();
+    const { rerender } = render(<ReaderMarks {...props} savedReplies={[reply]} onNavigateReply={navigate} onSourceJump={sourceJump} />);
+    fireEvent.click(screen.getByRole("button", { name: "Notebook" }));
+    expect(screen.getByRole("region", { name: "Your notes and passages" }).textContent).toContain("A <dangerous> passage");
+    expect(screen.getByRole("region", { name: "Saved from Pip" }).textContent).toContain("A checked reply.");
+    fireEvent.click(screen.getByRole("button", { name: "Passage" }));
+    expect(navigate).toHaveBeenCalledWith(reply);
+    expect(sourceJump).toHaveBeenCalledOnce();
+    rerender(<ReaderMarks {...props} savedReplies={[reply]} onNavigateReply={navigate} openRequest={1} />);
+    expect(screen.getByRole("region", { name: "Saved from Pip" })).toBeTruthy();
   });
 });

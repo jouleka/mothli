@@ -194,10 +194,12 @@ def test_search_embeds_before_the_lock_and_is_bounded(env):
 def test_ask_the_book_returns_cited_completed_passages_and_measured_cost(env):
     c, bid, app, _ = env
     original = app.state.client.complete
+    prompts = []
 
     def answering(system, user, tier="cheap", schema=None):
         fields = getattr(schema, "model_fields", {}) if schema is not None else {}
         if "insufficient_evidence" in fields:
+            prompts.append(user)
             return {
                 "insufficient_evidence": False,
                 "claims": [{
@@ -213,13 +215,18 @@ def test_ask_the_book_returns_cited_completed_passages_and_measured_cost(env):
     try:
         response = c.post(
             f"/api/books/{bid}/ask",
-            json={"question": "Where did Berenice meet Aldric?", "bookmark": 99},
+            json={"question": "Where did she meet him?", "bookmark": 99, "history": [
+                {"role": "user", "content": "Tell me about Berenice and Aldric", "as_of_chapter": 2},
+                {"role": "assistant", "content": "Unread conversation marker", "as_of_chapter": 3},
+            ]},
         )
     finally:
         app.state.client.complete = original
 
     assert response.status_code == 200
     payload = response.json()
+    assert "RECENT CONVERSATION" in prompts[0] and "Berenice and Aldric" in prompts[0]
+    assert "Unread conversation marker" not in prompts[0]
     assert payload["as_of_chapter"] == 2
     assert payload["claims"][0]["citation_ids"] == [1]
     assert payload["citations"][0]["ordinal"] <= 2
@@ -405,7 +412,11 @@ def test_real_provider_source_selection_is_budgeted_and_cannot_bypass_evidence_r
 
     monkeypatch.setattr(client, "complete", complete)
     question = "What is recorded here?" if choice == "empty" else "Where did Berenice meet Aldric?"
-    response = c.post(f"/api/books/{bid}/ask", json={"question": question})
+    response = c.post(f"/api/books/{bid}/ask", json={"question": question, "history": [
+        {"role": "user", "content": "Tell me about Berenice and Aldric", "as_of_chapter": 2},
+        {"role": "assistant", "content": "Berenice and Aldric spoke at the forge. " * 20,
+         "as_of_chapter": 2},
+    ] if choice == "answer" else []})
     assert len(calls) == (4 if choice in {"answer", "empty_names", "judge_auth"} else 1)
     ledger = app.state.catalog.get_costs(bid)
     assert any(row["phase"] == "source-selection" for row in ledger)
