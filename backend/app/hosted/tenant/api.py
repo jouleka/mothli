@@ -20,6 +20,8 @@ from app.ask import (
     AskRequest,
     AskSafetyError,
     ask_prompt,
+    conversation_question,
+    conversation_retrieval_question,
     ask_judge_prompt,
     cited_sources,
     source_facts,
@@ -961,6 +963,15 @@ async def ask_the_book(
         )
         if context is None:
             raise HTTPException(404, "unknown book")
+        question = conversation_question(body.question, body.history, context["as_of_chapter"])
+        if question != body.question:
+            context = await request.app.state.tenant_repository.ask_context(
+                owner_id, book_id, conversation_retrieval_question(
+                    body.question, body.history, context["as_of_chapter"]),
+                requested_bookmark=context["as_of_chapter"],
+            )
+            if context is None:
+                raise HTTPException(404, "unknown book")
         if not context["sources"]:
             return {
                 "as_of_chapter": context["as_of_chapter"],
@@ -971,7 +982,7 @@ async def ask_the_book(
             }
         synthesis = _ready_ai_setting(context["settings"], "synthesis")
         judge = _ready_ai_setting(context["settings"], "judge")
-        prompt = ask_prompt(body.question, context["sources"])
+        prompt = ask_prompt(question, context["sources"])
         for _attempt in range(2):
             try:
                 generated = await _run_owner_completion(

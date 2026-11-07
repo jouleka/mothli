@@ -195,6 +195,8 @@ function clearReaderStorage(): void {
   if (!target) return;
   const prefixes = [
     "rc:reader-marks:",
+    "rc:pip-keeps:",
+    "litlet.pip.conversation:",
     "rc:lastSeen:",
     "litlet.reader-preferences:",
     "litlet.position.",

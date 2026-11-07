@@ -96,6 +96,13 @@ def test_reviewed_answer_cache_is_free_and_frontier_and_reset_scoped(env, monkey
     second = api.post(f"/api/books/{bid}/ask", json=question).json()
     assert second["cached"] is True and second["claims"] == first.json()["claims"]
     assert second["cost"]["calls"] == [] and len(calls) == paid_calls
+    # A pronoun in a personal discussion must never reuse the standalone cached question.
+    contextual = api.post(f"/api/books/{bid}/ask", json={**question, "history": [
+        {"role": "user", "content": "Tell me about Berenice", "as_of_chapter": 2},
+    ]})
+    assert contextual.status_code == 200, contextual.text
+    assert not contextual.json().get("cached") and len(calls) > paid_calls
+    paid_calls = len(calls)
     earlier = api.post(f"/api/books/{bid}/ask", json={**question, "bookmark": 1}).json()
     assert earlier["as_of_chapter"] == 1 and "Berenice" not in str(earlier.get("claims"))
     assert len(calls) > paid_calls

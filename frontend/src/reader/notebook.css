@@ -1,0 +1,29 @@
+.reader-marks .notebook-simple { width: min(540px, calc(100vw - 32px)); padding: 24px; }
+.notebook-simple .notebook-title { display: flex; align-items: center; gap: 10px; color: var(--accent); }
+.notebook-simple .notebook-title h2 { color: var(--ink); font: 26px/1.2 var(--font-display, Georgia, serif); }
+.notebook-simple .reader-panel-heading { margin-bottom: 16px; }
+.reader-marks .notebook-simple .notebook-filters { padding: 12px 0; margin: 0; gap: 2px; }
+.reader-marks .notebook-simple .notebook-filters button { min-height: 40px; padding: 8px 10px; font-size: 12px; }
+.notebook-simple .bookmark-form { padding-bottom: 8px; }
+.notebook-simple .bookmark-form > div { align-items: center; }
+.notebook-simple .bookmark-form input { font-size: 12px; }
+.notebook-simple .bookmark-form button { white-space: nowrap; }
+.notebook-simple .notebook-section > h3 { display: flex; align-items: center; gap: 7px; margin: 20px 0 8px; color: var(--ink-soft); font: 500 12px/1.4 var(--font-ui); }
+.reader-marks .notebook-simple .marks-list { margin: 0; }
+.reader-marks .notebook-simple .marks-list > li { padding: 14px; margin-top: 10px; border-radius: 6px 14px 14px 6px; }
+.notebook-simple .notebook-mark-meta { display: flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 11px; }
+.notebook-simple .mark-location { width: 100%; padding: 0; border: 0; line-height: 1.65; background: transparent; }
+.notebook-simple .mark-location > span:last-child { font-size: 14px; }
+.notebook-simple .mark-delete { padding: 4px; min-width: 30px; min-height: 30px; }
+.notebook-simple .notebook-empty { padding: 24px 12px; text-align: center; color: var(--ink-soft); }
+.notebook-simple .notebook-empty > svg { color: var(--accent); transform: rotate(-7deg); }
+.notebook-simple .notebook-empty p { margin: 10px 0 0; font-size: 13px; }
+.notebook-simple .notebook-pip-keeps .marks-list > li { border-left-color: var(--ink-soft); }
+.notebook-simple .notebook-reply-question { font-size: 11px; color: var(--ink-soft); }
+.notebook-simple .notebook-saved-reply p { font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
+.notebook-simple .notebook-saved-reply button { padding: 4px 8px; min-height: 32px; font-size: 11px; }
+.notebook-simple .marks-export { margin-top: 8px; gap: 7px; color: var(--ink-soft); font-size: 12px; }
+.notebook-simple .marks-status:empty { display: none; }
+@media (max-width: 760px) {
+  .reader-marks .notebook-simple { position: fixed; inset: 84px 12px auto; width: auto; max-height: calc(100dvh - 100px); padding: 18px; }
+}

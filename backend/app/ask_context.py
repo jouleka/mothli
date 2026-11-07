@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from app.ask_evidence import source_name_text
-from app.ask_selection import MAX_SELECTED_SOURCES, MAX_SOURCE_CANDIDATES, SourceSelectionError, validate_selection
+from app.ask_selection import MAX_CONTEXT_QUESTION_CHARS, MAX_SELECTED_SOURCES, MAX_SOURCE_CANDIDATES, SourceSelectionError, validate_selection
 from app.eval.spoiler_gate.grounding import STOPWORDS
 from app.ingest.extraction.resolve import ROLE_NOUNS
 from app.unicode_text import normalize_text, proper_words, word_tokens
@@ -69,7 +69,7 @@ def _validated_pool(selected, candidates):
 
 
 def _query_parts(question, known_names):
-    if not isinstance(question, str) or not 2 <= len(question) <= 500 or not question.strip():
+    if not isinstance(question, str) or not 2 <= len(question) <= MAX_CONTEXT_QUESTION_CHARS or not question.strip():
         raise _invalid()
     if isinstance(known_names, (str, bytes)) or not isinstance(known_names, Iterable):
         raise _invalid()

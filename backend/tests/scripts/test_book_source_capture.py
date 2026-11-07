@@ -40,10 +40,10 @@ def test_capture_observes_both_view_symbols_and_compatibility_alias_means_select
         return selected
 
     monkeypatch.setattr(views, "retrieve_ask_sources", retrieve)
-    monkeypatch.setattr(views, "validate_selection", validate)
+    monkeypatch.setattr(views, "select_sources_bounded", validate)
     with audit.capture_ask_sources() as captured:
         assert views.retrieve_ask_sources("Question?", bookmark=1, candidate_pool=True) is candidates
-        assert views.validate_selection({"source_ids": [17, 2]}, candidates) is selected
+        assert views.select_sources_bounded("What did Rowan say?", candidates, fits=lambda _: True, complete=lambda _: {"source_ids": [17, 2]}) is selected
         evidence = captured.snapshot()
         assert evidence["candidate_sources"] == SOURCES
         assert [source["id"] for source in evidence["selected_sources"]] == [17, 2]
@@ -64,13 +64,13 @@ def test_capture_observes_both_view_symbols_and_compatibility_alias_means_select
 def test_empty_selected_set_is_distinct_from_no_selection_capture(monkeypatch):
     monkeypatch.delattr(views, "complete_ask_context", raising=False)
     monkeypatch.setattr(views, "retrieve_ask_sources", lambda *args, **kwargs: SOURCES)
-    monkeypatch.setattr(views, "validate_selection", lambda *args, **kwargs: [])
+    monkeypatch.setattr(views, "select_sources_bounded", lambda *args, **kwargs: [])
     with audit.capture_ask_sources() as captured:
         views.retrieve_ask_sources("Question?", bookmark=1, candidate_pool=True)
         before = captured.snapshot()
         assert before["candidate_sources"] and before["selected_sources"] is None
         assert not before["selected_sources_captured"]
-        views.validate_selection({"source_ids": []}, SOURCES)
+        views.select_sources_bounded("What did Rowan say?", SOURCES, fits=lambda _: True, complete=lambda _: {"source_ids": []})
         after = captured.snapshot()
         assert after["selected_sources"] == after["retrieved_sources"] == []
         assert after["selected_sources_captured"] and after["selected_capture_method"] == "validated_selection"
@@ -89,11 +89,11 @@ def test_rejected_selection_is_not_reported_as_selected_or_as_empty_success(monk
     def reject(*args, **kwargs):
         raise error
 
-    monkeypatch.setattr(views, "validate_selection", reject)
+    monkeypatch.setattr(views, "select_sources_bounded", reject)
     with audit.capture_ask_sources() as captured:
         views.retrieve_ask_sources("Question?", bookmark=1, candidate_pool=True)
         with pytest.raises(SourceSelectionError) as caught:
-            views.validate_selection({"source_ids": [24]}, SOURCES)
+            views.select_sources_bounded("What did Rowan say?", SOURCES, fits=lambda _: True, complete=lambda _: {"source_ids": [24]})
         assert caught.value is error
         evidence = captured.snapshot()
         assert evidence["candidate_sources"] and evidence["selected_sources"] is None
@@ -200,16 +200,14 @@ def test_source_selection_attempt_keeps_real_usage_trace_and_actual_ledger_phase
 
 def test_final_context_expanded_evidence_is_distinct_from_model_selection(monkeypatch):
     from app.ask_context import complete_ask_context
-    from app.ask_selection import validate_selection
 
     pool = copy.deepcopy(SOURCES)
     pool[16]["context_ids"] = [3]
     monkeypatch.setattr(views, "retrieve_ask_sources", lambda *args, **kwargs: pool)
-    monkeypatch.setattr(views, "validate_selection", validate_selection)
     monkeypatch.setattr(views, "complete_ask_context", complete_ask_context, raising=False)
     with audit.capture_ask_sources() as captured:
         candidates = views.retrieve_ask_sources("What did Rowan say?", bookmark=1, candidate_pool=True)
-        model = views.validate_selection({"source_ids": [17, 2]}, candidates)
+        model = views.select_sources_bounded("What did Rowan say?", candidates, fits=lambda _: True, complete=lambda _: {"source_ids": [17, 2]})
         before = captured.snapshot()
         assert [source["id"] for source in before["model_selected_sources"]] == [17, 2]
         assert before["selected_sources"] is before["retrieved_sources"] is None
@@ -227,15 +225,13 @@ def test_final_context_expanded_evidence_is_distinct_from_model_selection(monkey
 
 def test_context_failure_retains_model_choices_but_never_claims_final_evidence_capture(monkeypatch):
     from app.ask_context import AskContextError, complete_ask_context
-    from app.ask_selection import validate_selection
 
     pool = [dict(SOURCES[0], context_ids=[24])]
     monkeypatch.setattr(views, "retrieve_ask_sources", lambda *args, **kwargs: pool)
-    monkeypatch.setattr(views, "validate_selection", validate_selection)
     monkeypatch.setattr(views, "complete_ask_context", complete_ask_context, raising=False)
     with audit.capture_ask_sources() as captured:
         candidates = views.retrieve_ask_sources("What did Rowan say?", bookmark=1, candidate_pool=True)
-        model = views.validate_selection({"source_ids": [1]}, candidates)
+        model = views.select_sources_bounded("What did Rowan say?", candidates, fits=lambda _: True, complete=lambda _: {"source_ids": [1]})
         with pytest.raises(AskContextError):
             views.complete_ask_context("What did Rowan say?", model, candidates, ["Rowan"])
         evidence = captured.snapshot()

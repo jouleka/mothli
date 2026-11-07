@@ -96,7 +96,7 @@ class AskSourceCapture:
 def capture_ask_sources():
     """Observe retrieval, model validation, and final deterministic context without changing them."""
     captured = AskSourceCapture()
-    retrieve, validate = views.retrieve_ask_sources, views.validate_selection
+    retrieve, validate = views.retrieve_ask_sources, views.select_sources_bounded
     complete_context = getattr(views, "complete_ask_context", None)
     captured.context_enabled = complete_context is not None
 
@@ -127,7 +127,7 @@ def capture_ask_sources():
 
     with ExitStack() as stack:
         stack.enter_context(patch.object(views, "retrieve_ask_sources", observed_retrieve))
-        stack.enter_context(patch.object(views, "validate_selection", observed_selection))
+        stack.enter_context(patch.object(views, "select_sources_bounded", observed_selection))
         if complete_context is not None:
             stack.enter_context(patch.object(views, "complete_ask_context", observed_context))
         yield captured

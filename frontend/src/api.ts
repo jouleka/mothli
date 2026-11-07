@@ -62,9 +62,10 @@ export type CatchMeUp = {
   recap: string | null; now: string | null; as_of_chapter: number;
   cast_size: number; open_threads: number; cast: CastMember[]; cached: boolean;
 };
+export type ConversationMessage = { role: "user" | "assistant"; content: string; as_of_chapter: number };
 export type AskClaim = { text: string; citation_ids: number[] };
 export type AskCitation = {
-  id: number; ordinal: number; chapter_key: string; href: string; title: string; excerpt: string;
+  id: number; ordinal: number; chapter_key: string; href: string; title: string; excerpt: string; cfi?: string;
 };
 export type AskCost = {
   currency: "USD"; usd: string; input_tokens: number; output_tokens: number;
@@ -460,15 +461,15 @@ export const api = {
     fetch(`/api/books/${id}/prepared-questions?bookmark=${bookmark}`).then(
       (r) => j<{ as_of_chapter: number; questions: string[] }>(r),
     ),
-  askBook: (id: string, question: string, bookmark?: number) =>
+  askBook: (id: string, question: string, bookmark?: number, history?: ConversationMessage[]) =>
     fetch(`/api/books/${id}/ask`, {
       method: "POST",
       headers: { "content-type": "application/json", ...csrfHeaders() },
-      body: JSON.stringify({ question, ...(bookmark != null ? { bookmark } : {}) }),
+      body: JSON.stringify({ question, ...(bookmark != null ? { bookmark } : {}), ...(history?.length ? { history } : {}) }),
     }).then((r) => j<AskAnswer>(r)),
   selectionAction: (
     id: string,
-    value: { action: SelectionAction; text: string; atom: number; cfi: string },
+    value: { action: SelectionAction; text: string; atom: number; cfi: string; question?: string; history?: ConversationMessage[] },
   ) => fetch(`/api/books/${id}/selection-action`, {
     method: "POST",
     headers: { "content-type": "application/json", ...csrfHeaders() },

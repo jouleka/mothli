@@ -10,7 +10,6 @@ import {
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { ProviderSettings } from "./ProviderSettings";
-import { AiStatus } from "../ui/AiStatus";
 import "./shelf-redesign.css";
 
 const recentKey = (owner: string) => `litlet.library-recent:${owner}`;
@@ -299,8 +298,8 @@ export function Shelf({
         </div>
         <div className="room-utilities" ref={utilities} id="library-utilities" hidden={!showUtilities}>
           <div className="room-utilities-heading"><span className="eyebrow">YOUR READING SPACE</span><strong>Reading, your way.</strong></div>
-          <AiStatus compact />
-          {settingsAvailable && <Button variant="ghost" icon="settings" onClick={() => { utilitiesToggle.current?.focus(); setShowUtilities(false); setShowSettings(true); }}>AI provider settings</Button>}
+
+          {settingsAvailable && <Button variant="ghost" icon="settings" onClick={() => { utilitiesToggle.current?.focus(); setShowUtilities(false); setShowSettings(true); }}>Connection settings</Button>}
           <InstallApp />
           {session?.user && <span className="account-name">{session.user.display_name}</span>}
           {session === null && <a className="account-link" href="/api/auth/login?return_to=/">Sign in</a>}
@@ -357,9 +356,9 @@ export function Shelf({
                 {spotlight && <p className="continue-author">{spotlight.author || "From your collection"}</p>}
                 <p className="continue-description">
                   {featured
-                    ? "Back after a little while? Your place is saved. Open your companion for a quick catch-up, then turn the page."
+                    ? "Your bookmark is waiting."
                     : spotlight
-                      ? "Open a new world. Your companion will help you remember the people, places, and details along the way."
+                      ? "A new chapter awaits."
                       : "Bring a book you love. We’ll help you follow the characters, connect the details, and find your way back in."}
                 </p>
                 <Button
@@ -397,11 +396,11 @@ export function Shelf({
             </section>
           )}
           <section className="room-guide" id="companion-guide" hidden={!showGuide} aria-label="Meet your companion">
-            <div className="room-guide-heading"><span className="eyebrow">A LITTLE COMPANY BETWEEN THE LINES</span><h2>More story. Less “wait, who?”</h2><p>Open any book, then choose a tool from your companion.</p><button className="room-guide-close" aria-label="Close companion introduction" onClick={() => { setShowGuide(false); document.querySelector<HTMLButtonElement>('[aria-controls="companion-guide"]')?.focus(); }}><Icon name="close" size={18} /></button></div>
+            <div className="room-guide-heading"><h2>Meet Pip</h2><p>Your AI reading companion. Just the pages you’ve read.</p><button className="room-guide-close" aria-label="Close companion introduction" onClick={() => { setShowGuide(false); document.querySelector<HTMLButtonElement>('[aria-controls="companion-guide"]')?.focus(); }}><Icon name="close" size={18} /></button></div>
             <div className="room-guide-grid">
-              <article><span className="room-guide-icon"><Icon name="refresh" size={23} /></span><h3>Find your way back</h3><p>Catch up on what you’ve read with a recap built around your place in the story.</p><span>In your companion · Catch me up</span></article>
-              <article><span className="room-guide-icon"><Icon name="sparkle" size={23} /></span><h3>Put the pieces together</h3><p>Explore the people, their relationships, and the details that connect them.</p><span>In your companion · People & connections</span></article>
-              <article><span className="room-guide-icon"><Icon name="search" size={23} /></span><h3>Follow your curiosity</h3><p>Ask about the story or select a passage for an explanation, definition, or translation.</p><span>In your companion · Ask about the book</span></article>
+              <article><span className="room-guide-icon"><Icon name="book" size={23} /></span><h3>Read</h3><p>Your book. Your pace.</p></article>
+              <article><span className="room-guide-icon"><Icon name="sparkle" size={23} /></span><h3>Talk to Pip</h3><p>“Wait, who was that?”</p></article>
+              <article><span className="room-guide-icon"><Icon name="bookmark" size={23} /></span><h3>Notebook</h3><p>Keep the good bits.</p></article>
             </div>
           </section>
           <section

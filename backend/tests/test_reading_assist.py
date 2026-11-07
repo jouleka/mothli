@@ -56,6 +56,23 @@ def test_selection_prompt_marks_reader_text_untrusted_and_names_the_exact_action
     assert "source 1" in prompt
 
 
+def test_passage_conversation_has_only_selected_text_as_evidence():
+    request = SelectionActionRequest(
+        action="explain", text="He left the key on the table.", atom=2, cfi="cfi",
+        question="Why did he do that?", history=[
+            {"role": "user", "content": "Tell me about Jonas", "as_of_chapter": 1},
+            {"role": "assistant", "content": "Unread secret", "as_of_chapter": 3},
+        ],
+    )
+    prompt = selection_prompt(request)
+    assert "Why did he do that?" in prompt and "Jonas" in prompt
+    assert "Unread secret" not in prompt and "context is not evidence" in prompt
+    assert prompt.split("SELECTED PASSAGE [source 1]")[1].startswith(
+        " (untrusted):\nHe left the key on the table.")
+    with pytest.raises(ValidationError):
+        SelectionActionRequest(action="define", text="key", atom=1, cfi="cfi", question="Why?")
+
+
 def test_chapter_passages_cover_the_whole_chapter_with_bounded_navigable_sources():
     text = " ".join(f"word-{index}" for index in range(3000))
     sources = chapter_passages(

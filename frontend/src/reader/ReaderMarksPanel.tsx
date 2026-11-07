@@ -8,6 +8,8 @@ import type {
 import { Icon } from "../ui/Icon";
 import { Button } from "../ui/Button";
 import { useReaderPopover } from "../ui/useReaderPopover";
+import type { SavedCompanionReply } from "./companionNotes";
+import "./notebook.css";
 
 export type ReaderSelection = { anchor: ReaderMarkAnchor; text: string };
 
@@ -24,6 +26,12 @@ export function ReaderMarks({
   onNavigate,
   onDelete,
   onClearSelection,
+  onTalkAboutSelection,
+  savedReplies = [],
+  onNavigateReply,
+  onDeleteReply,
+  openRequest = 0,
+  onSourceJump,
 }: {
   marks: ReaderMark[];
   selection: ReaderSelection | null;
@@ -37,13 +45,19 @@ export function ReaderMarks({
   onNavigate: (mark: ReaderMark) => void;
   onDelete: (mark: ReaderMark) => void;
   onClearSelection: () => void;
+  onTalkAboutSelection?: () => void;
+  savedReplies?: SavedCompanionReply[];
+  onNavigateReply?: (reply: SavedCompanionReply) => void;
+  onDeleteReply?: (id: string) => void;
+  openRequest?: number;
+  onSourceJump?: () => void;
 }) {
   const { open, closing, id, triggerRef, panelRef, toggle, close } =
     useReaderPopover();
   const [note, setNote] = useState("");
   const [label, setLabel] = useState("");
   const [selectionTool, setSelectionTool] = useState<"highlight" | "note" | "understand" | null>(null);
-  const [filter, setFilter] = useState<"all" | ReaderMark["kind"]>("all");
+  const [filter, setFilter] = useState<"all" | "pip" | ReaderMark["kind"]>("all");
   const [query, setQuery] = useState("");
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const busy = /^(saving|deleting)\b/.test(status);
@@ -51,6 +65,14 @@ export function ReaderMarks({
     (filter === "all" || mark.kind === filter) &&
     `${mark.selected_text ?? ""} ${mark.body ?? ""} ${mark.label ?? ""}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
   ).sort((a, b) => a.anchor.atom - b.anchor.atom);
+
+  const visibleReplies = savedReplies.filter(reply => `${reply.question} ${reply.body}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+
+  useEffect(() => {
+    if (openRequest > 0 && !open) toggle();
+    // Only an explicit source-return request reopens the retained notebook view.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRequest]);
 
   // A failed save keeps its passage and draft. Only a new passage or a cleared
   // selection starts a new draft; opening another tool does not discard it.
@@ -118,40 +140,24 @@ export function ReaderMarks({
               disabled={busy}
               onClick={() => setSelectionTool(selectionTool === "note" ? null : "note")}
             >Note</Button>
-            <Button
-              variant="ghost"
-              icon="sparkle"
-              aria-expanded={selectionTool === "understand"}
-              aria-controls={`${id}-understand`}
-              disabled={busy}
-              onClick={() => setSelectionTool(selectionTool === "understand" ? null : "understand")}
-            >Understand</Button>
+            <Button variant="ghost" icon="sparkle" disabled={busy}
+              onClick={() => onTalkAboutSelection ? onTalkAboutSelection() : onAssist("explain")}
+            >Talk to Pip</Button>
+            <Button variant="ghost" className="icon-button" aria-label="More passage tools"
+              aria-expanded={selectionTool === "understand"} aria-controls={`${id}-understand`}
+              disabled={busy} onClick={() => setSelectionTool(selectionTool === "understand" ? null : "understand")}
+            ><Icon name="more" /></Button>
           </div>
-          {selectionTool === "understand" && <div
-            id={`${id}-understand`}
-            className="selection-ai-actions"
-            aria-label="Understand this passage"
-          >
-            <Button
-              icon="sparkle"
-              disabled={busy}
-              onClick={() => onAssist("explain")}
-            >
-              explain
-            </Button>
-            <Button disabled={busy} onClick={() => onAssist("define")}>
-              define
-            </Button>
-            <Button disabled={busy} onClick={() => onAssist("translate")}>
-              translate to English
-            </Button>
+          {selectionTool === "understand" && <div id={`${id}-understand`} className="selection-ai-actions" aria-label="Passage tools">
+            <Button disabled={busy} onClick={() => onAssist("define")}>Define</Button>
+            <Button disabled={busy} onClick={() => onAssist("translate")}>Translate</Button>
           </div>}
           {selectionTool === "highlight" && <div
             id={`${id}-highlight`}
             className="selection-highlight-actions"
             aria-label="Highlight color"
           >
-            <span className="selection-tool-hint">Save in</span>
+
             {(["yellow", "green", "blue", "pink"] as const).map((color) => (
               <button
                 key={color}
@@ -175,7 +181,7 @@ export function ReaderMarks({
               value={note}
               maxLength={10000}
               rows={3}
-              placeholder="What would you like to remember?"
+              placeholder="A thought to keep…"
               onChange={(event) => setNote(event.currentTarget.value)}
             />
             <Button
@@ -196,7 +202,7 @@ export function ReaderMarks({
       {open && (
         <section
           id={id}
-          className="reader-popover marks-panel"
+          className="reader-popover marks-panel notebook-simple"
           data-closing={closing || undefined}
           aria-hidden={closing || undefined}
           aria-label="Highlights, notes, and bookmarks"
@@ -204,7 +210,7 @@ export function ReaderMarks({
           ref={panelRef}
         >
           <header className="reader-panel-heading">
-            <div><span className="notebook-eyebrow">THE WORDS YOU KEPT</span><h2>Your notebook</h2></div>
+            <div className="notebook-title"><Icon name="book" /><h2>Notebook</h2></div>
             <Button
               variant="ghost"
               className="icon-button"
@@ -216,29 +222,29 @@ export function ReaderMarks({
           </header>
           <label className="notebook-search focus-field">
             <Icon name="search" size={17} />
-            <input type="search" aria-label="Search your notebook" placeholder="Find a thought or a passage…" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <input type="search" aria-label="Search your notebook" placeholder="Find something…" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
           <div className="notebook-filters" role="group" aria-label="Filter notebook">
             {([
               ["all", "All"], ["highlight", "Highlights"],
-              ["annotation", "Notes"], ["bookmark", "Bookmarks"],
+              ["annotation", "Notes"], ["bookmark", "Bookmarks"], ["pip", "Pip"],
             ] as const).map(([value, title]) => (
               <button
                 key={value}
                 type="button"
                 aria-pressed={filter === value}
                 onClick={() => setFilter(value)}
-              >{title}<span>{value === "all" ? marks.length : marks.filter((mark) => mark.kind === value).length}</span></button>
+              >{title}</button>
             ))}
           </div>
           <form className="bookmark-form" onSubmit={saveBookmark}>
-            <label htmlFor={`${id}-label`}>Bookmark this page</label>
+            <label className="sr-only" htmlFor={`${id}-label`}>Bookmark label</label>
             <div>
               <input
                 id={`${id}-label`}
                 value={label}
                 maxLength={500}
-                placeholder="Optional label"
+                placeholder="Bookmark label (optional)"
                 onChange={(event) => setLabel(event.currentTarget.value)}
               />
               <Button
@@ -246,63 +252,45 @@ export function ReaderMarks({
                 variant="primary"
                 disabled={!currentAnchor || busy}
               >
-                bookmark
+                <Icon name="bookmark" size={16} /> Keep page
               </Button>
             </div>
           </form>
           <p className="marks-status" role="status" aria-live="polite">
             {status}
           </p>
-          {visibleMarks.length ? (
-            <ol className="marks-list">
-              {visibleMarks.map((mark, index) => (
-                <li key={`${mark.kind}-${mark.id}`} data-mark-kind={mark.kind} data-mark-color={mark.kind === "highlight" ? mark.color : undefined}>
-                  {(index === 0 || visibleMarks[index - 1].anchor.atom !== mark.anchor.atom) && <h3 className="notebook-chapter">Chapter {mark.anchor.atom}<span>{visibleMarks.filter(item => item.anchor.atom === mark.anchor.atom).length} saved</span></h3>}
-                  <button
-                    type="button"
-                    className="plain mark-location"
-                    onClick={() => {
-                      onNavigate(mark);
-                      close();
-                    }}
-                  >
-                    <span className="smallcaps">
-                      {mark.kind} · chapter {mark.anchor.atom}
-                    </span>
-                    {mark.pending && (
-                      <span className="smallcaps">queued for sync</span>
-                    )}
-                    <span>
-                      {mark.kind === "highlight"
-                        ? mark.selected_text
-                        : mark.kind === "annotation"
-                          ? mark.body
-                          : mark.label || "Bookmarked page"}
-                    </span>
-                  </button>
-                  <Button
-                    variant="ghost"
-                    className="mark-delete"
-                    aria-label={`Delete ${mark.kind}`}
-                    disabled={busy}
-                    onClick={() => onDelete(mark)}
-                  >
-                    delete
-                  </Button>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="quiet">
-              {query.trim() ? "No saved passages match your search." : marks.length ? "Nothing saved in this view yet." : "Your favorite words belong here. Highlight a passage, add a thought, or bookmark a page as you read."}
-            </p>
-          )}
+          {filter !== "pip" && <section className="notebook-section" aria-label="Your notes and passages">
+            {filter === "all" && (visibleMarks.length > 0 || visibleReplies.length > 0) && <h3>Your pages</h3>}
+            {visibleMarks.length ? <ol className="marks-list">
+              {visibleMarks.map(mark => <li key={`${mark.kind}-${mark.id}`} data-mark-kind={mark.kind} data-mark-color={mark.kind === "highlight" ? mark.color : undefined}>
+                <button type="button" className="plain mark-location" onClick={() => { onSourceJump?.(); onNavigate(mark); close(); }}>
+                  <span className="notebook-mark-meta"><Icon name={mark.kind === "bookmark" ? "bookmark" : mark.kind === "annotation" ? "list" : "book"} size={14} />
+                    <span>{mark.kind === "annotation" ? "Note" : mark.kind === "highlight" ? "Highlight" : "Bookmark"} · {mark.anchor.atom}</span>
+                    {mark.pending && <span title="Waiting to sync"><Icon name="cloud" size={14} /><span className="sr-only">Queued for sync</span></span>}
+                  </span>
+                  <span>{mark.kind === "highlight" ? mark.selected_text : mark.kind === "annotation" ? mark.body : mark.label || "Bookmarked page"}</span>
+                </button>
+                <Button variant="ghost" className="mark-delete icon-button" aria-label={`Delete ${mark.kind}`} disabled={busy} onClick={() => onDelete(mark)}><Icon name="close" size={15} /></Button>
+              </li>)}
+            </ol> : (filter !== "all" || !visibleReplies.length) && <div className="notebook-empty"><Icon name="book" size={30} /><p>{query.trim() ? "Nothing found." : "A little space for your favorite pages."}</p></div>}
+          </section>}
+          {(filter === "all" || filter === "pip") && <section className="notebook-section notebook-pip-keeps" aria-label="Saved from Pip">
+            {(visibleReplies.length > 0 || filter === "pip") && <h3><Icon name="sparkle" size={15} /> From Pip</h3>}
+            {visibleReplies.length ? <ol className="marks-list">
+              {visibleReplies.map(reply => <li key={reply.id}>
+                <div className="notebook-saved-reply"><span className="notebook-reply-question">{reply.question}</span><p>{reply.body}</p>
+                  {onNavigateReply && reply.citations.length > 0 && <Button variant="ghost" icon="book" onClick={() => { onSourceJump?.(); onNavigateReply(reply); close(); }}>Passage</Button>}
+                </div>
+                {onDeleteReply && <Button variant="ghost" className="mark-delete icon-button" aria-label="Delete saved reply" onClick={() => onDeleteReply(reply.id)}><Icon name="close" size={15} /></Button>}
+              </li>)}
+            </ol> : filter === "pip" && <div className="notebook-empty"><Icon name="sparkle" size={30} /><p>{query.trim() ? "Nothing found." : "Keep a favorite reply here."}</p></div>}
+          </section>}
           <a
             className="plain marks-export"
             href={exportUrl}
             download="litlet-reader-marks.json"
           >
-            <Icon name="download" size={16} /> export marks
+            <Icon name="download" size={16} /> Export pages
           </a>
         </section>
       )}

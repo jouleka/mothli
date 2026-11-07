@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
+from app.ask import ConversationMessage, conversation_question
+
 
 SelectionAction = Literal["explain", "define", "translate"]
 
@@ -18,6 +20,8 @@ class SelectionActionRequest(BaseModel):
     atom: StrictInt = Field(ge=1, le=2**31 - 1)
     cfi: str = Field(min_length=1, max_length=4096)
     target_language: Literal["English"] | None = None
+    question: str | None = Field(default=None, min_length=2, max_length=500)
+    history: list[ConversationMessage] = Field(default_factory=list, max_length=8)
 
     @field_validator("text")
     @classmethod
@@ -33,6 +37,8 @@ class SelectionActionRequest(BaseModel):
             self.target_language = "English"
         if self.action != "translate" and self.target_language is not None:
             raise ValueError("target_language is valid only for translate")
+        if self.action != "explain" and (self.question is not None or self.history):
+            raise ValueError("conversation is valid only for explain")
         return self
 
 
@@ -96,6 +102,10 @@ CLOSEOUT_SYSTEM = (
 def selection_prompt(request: SelectionActionRequest) -> str:
     if request.action == "explain":
         instruction = "Explain the meaning of this passage in plain language."
+        if request.question:
+            instruction = ("Answer this question about the selected passage only. "
+                           "Conversation context is not evidence.\n" + conversation_question(
+                               request.question, request.history, request.atom))
     elif request.action == "define":
         instruction = (
             "Define the selected word or phrase as it is used here. If several senses remain possible, "

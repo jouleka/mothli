@@ -12,6 +12,7 @@ from app.ask_selection import (
     SourceSelection,
     SourceSelectionError,
     select_sources,
+    select_sources_bounded,
     selection_prompt,
     validate_selection,
 )
@@ -191,3 +192,22 @@ def test_zero_evidence_is_valid_and_empty_pool_has_no_paid_call():
     assert select_sources("Where was it hidden?", [],
                           complete=lambda *a, **kw: calls.append((a, kw))) == ([], {"in": 0, "out": 0})
     assert calls == []
+
+
+def test_large_selection_pool_is_batched_without_dropping_or_renumbering_sources():
+    from app.cost.limits import estimate_input_tokens
+    candidates = [dict(SOURCES[0], id=i, text=(f"Passage {i}. " + "a" * 1450)) for i in range(1, 25)]
+    calls = []
+    def fits(prompt):
+        return estimate_input_tokens(SOURCE_SELECTION_SYSTEM, prompt, SourceSelection) + 24_000 <= 60_000
+    def complete(prompt):
+        assert fits(prompt)
+        ids = [source["id"] for source in _payload(prompt)["candidates"]]
+        calls.append(ids)
+        return {"source_ids": ids[:6]}
+    selected = select_sources_bounded("What happened?", candidates, fits=fits, complete=complete)
+    assert len(calls) == 3  # two disjoint batches, then a final choice from their union
+    assert calls[0] + calls[1] == list(range(1, 25))
+    assert calls[2] == calls[0][:6] + calls[1][:6]
+    assert [source["id"] for source in selected] == calls[2][:6]
+    assert all(source == candidates[source["id"] - 1] for source in selected)

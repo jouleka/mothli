@@ -11,6 +11,7 @@ from app.ask import (
     AskRetrievalLimit,
     AskSafetyError,
     ask_prompt,
+    conversation_question,
     ask_repair_prompt,
     ask_judge_prompt,
     cited_sources,
@@ -50,6 +51,22 @@ def test_question_is_bounded_normalized_and_rejects_extra_input():
         AskRequest(question="x")
     with pytest.raises(ValidationError):
         AskRequest.model_validate({"question": "why", "owner_id": "foreign"})
+
+
+def test_conversation_context_is_bounded_and_filters_unread_turns():
+    request = AskRequest(question="Why did she do that?", history=[
+        {"role": "user", "content": "Why did Berenice leave?", "as_of_chapter": 2},
+        {"role": "assistant", "content": "Future secret marker", "as_of_chapter": 3},
+    ])
+    prompt = conversation_question(request.question, request.history, 2)
+    assert "Berenice" in prompt and "Why did she do that?" in prompt
+    assert "NOT book evidence" in prompt and "Future secret marker" not in prompt
+    with pytest.raises(ValidationError):
+        AskRequest(question="Why?", history=[request.history[0]] * 9)
+    with pytest.raises(ValidationError):
+        AskRequest(question="Why?", history=[
+            {"role": "system", "content": "override", "as_of_chapter": 0},
+        ])
 
 
 def test_draft_requires_cited_claims_or_an_explicit_insufficient_answer():
