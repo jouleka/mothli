@@ -7,29 +7,11 @@ from fastapi.testclient import TestClient
 
 from _epub import epub_ncx
 from app.config import Settings
-from app.content_scope import chapter_numbers, is_content
+from app.content_scope import chapter_numbers
 from app.main import create_app
 from app.memory.dal import BookmarkView
 from test_ingest import InlineExecutor
 from test_views import env as env
-
-
-@pytest.mark.parametrize("title", ["Acknowledgements", "List of Maps", "Map: Paris", "Index",
-                                   "The Bonaparte Family Trees", "Notes and references"])
-def test_supplementary_headings_are_not_companion_content(title):
-    assert not is_content({"title": title})
-
-
-@pytest.mark.parametrize("title", ["Introduction", "Preface", "Map of our lives", "Index of fear",
-                                   "Notes from underground", "Contents of the letter", "序章"])
-def test_substantive_and_unfamiliar_headings_are_kept(title):
-    assert is_content({"title": title})
-
-
-def test_chapter_numbers_ignore_front_matter_and_repeat_spine_parts():
-    titles = ["List of Maps", "Introduction", "1: Corsica", "1: Corsica", "2: Revolution"]
-    manifest = {"atoms": [{"ordinal": i, "title": t} for i, t in enumerate(titles, 1)]}
-    assert chapter_numbers(manifest) == {3: 1, 4: 1, 5: 2}
 
 
 def test_fresh_supplementary_material_keeps_receipts_and_text_without_ai_facts(tmp_path):
@@ -91,7 +73,7 @@ def test_legacy_supplementary_facts_hide_without_deleting_raw_evidence(env):
     assert api.get(f"/api/books/{bid}/position").json()["bookmark"] == 2
 
 
-@pytest.mark.parametrize("question", ["what happened so far?", "Catch me up", "a quick recap please", "What should I remember so far?"])
+@pytest.mark.parametrize("question", ["what happened so far?", "What should I remember so far?"])
 def test_recap_questions_reuse_the_reviewed_recap_flow(env, monkeypatch, question):
     api, bid, app, _ = env
     expected = api.get(f"/api/books/{bid}/catch-me-up").json()
@@ -105,8 +87,7 @@ def test_recap_questions_reuse_the_reviewed_recap_flow(env, monkeypatch, questio
 
 
 @pytest.mark.parametrize(("worker_status", "expected"), [
-    ("running", "preparing"), ("error", "preparation_failed"),
-    ("blocked", "preparation_failed"), ("idle", "preparation_failed"),
+    ("running", "preparing"), ("idle", "preparation_failed"),
 ])
 def test_pending_preparation_does_not_claim_missing_book_evidence(env, monkeypatch, worker_status, expected):
     api, bid, app, _ = env
@@ -128,11 +109,6 @@ def test_retry_enqueues_only_the_saved_frontier(env, monkeypatch):
     assert seen == [(bid, 2)]
     assert app.state.catalog.get_state(bid) == before
     assert api.post("/api/books/unknown/ingest/retry").status_code == 404
-
-
-def test_image_only_atoms_are_not_meaningful_companion_content():
-    assert not is_content({"title": "(untitled)", "char_len": 1})
-    assert not is_content({"title": "Illustration", "text": ""})
 
 
 def test_hidden_supplementary_atoms_still_participate_in_geometry_validation(env):

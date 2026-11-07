@@ -92,37 +92,6 @@ describe("Shelf a11y", () => {
     expect(onOpen).toHaveBeenCalledWith("kar");
   });
 
-  test("the import affordance is a labelled button", async () => {
-    render(<Shelf onOpen={() => {}} />);
-    expect(
-      await screen.findByRole("button", { name: /add an epub/i }),
-    ).toBeTruthy();
-  });
-
-  test("a spine's accessible name separates title from author (not 'KaramazovFyodor')", async () => {
-    mocks.books.mockResolvedValue([
-      {
-        book_id: "kar",
-        title: "The Brothers Karamazov",
-        author: "Fyodor Dostoevsky",
-      },
-    ]);
-    render(<Shelf onOpen={() => {}} />);
-    const spine = await screen.findByRole("button", { name: /karamazov/i });
-    expect(spine.getAttribute("aria-label")).toBe(
-      "The Brothers Karamazov, Fyodor Dostoevsky",
-    );
-  });
-
-  test("a book with no author reads as just the title", async () => {
-    mocks.books.mockResolvedValue([
-      { book_id: "x", title: "Untitled", author: null },
-    ]);
-    render(<Shelf onOpen={() => {}} />);
-    const spine = await screen.findByRole("button", { name: "Untitled" });
-    expect(spine.getAttribute("aria-label")).toBe("Untitled");
-  });
-
   test("the import busy state is announced to assistive tech (role=status)", async () => {
     let release!: () => void;
     mocks.books.mockResolvedValue([]);

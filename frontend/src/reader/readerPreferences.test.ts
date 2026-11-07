@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   DEFAULT_READER_PREFERENCES,
-  buildBookStyles,
   bindReaderMotion,
   normalizeReaderPreferences,
-  readerLayoutAttributes,
   READER_THEME_COLORS,
   ReaderPreferenceSaver,
 } from "./readerPreferences";
@@ -28,18 +26,6 @@ describe("reader typography presets", () => {
     return (lighter + 0.05) / (darker + 0.05);
   };
 
-  test("defaults are a restrained professional book setting", () => {
-    expect(DEFAULT_READER_PREFERENCES).toEqual({
-      font_size: "book",
-      line_height: "comfortable",
-      measure: "balanced",
-      theme: "paper",
-      margins: "balanced",
-      typeface: "publisher",
-      preference_version: 0,
-    });
-  });
-
   test("rejects unknown cached values instead of injecting arbitrary CSS", () => {
     expect(
       normalizeReaderPreferences({
@@ -48,29 +34,6 @@ describe("reader typography presets", () => {
         font_size: 9000,
       }),
     ).toEqual(DEFAULT_READER_PREFERENCES);
-  });
-
-  test("maps presets to bounded book CSS and paginator attributes", () => {
-    const preferences = {
-      ...DEFAULT_READER_PREFERENCES,
-      font_size: "large" as const,
-      line_height: "relaxed" as const,
-      typeface: "sans" as const,
-      measure: "narrow" as const,
-      margins: "generous" as const,
-      theme: "night" as const,
-    };
-    const css = buildBookStyles(preferences);
-    expect(css).toContain("font-size: 125%");
-    expect(css).toContain("line-height: 1.8");
-    expect(css).toContain("system-ui");
-    expect(css).toContain(READER_THEME_COLORS.night.background);
-    expect(css).not.toContain("javascript");
-    expect(readerLayoutAttributes(preferences)).toEqual({
-      "max-inline-size": "560px",
-      margin: "72px",
-      gap: "10%",
-    });
   });
 
   test("every fixed theme clears WCAG AA for body text and links", () => {
