@@ -34,11 +34,12 @@ def chapter_numbers(manifest):
     for atom in manifest["atoms"]:
         title = " ".join(atom.get("title", "").split())
         if is_content(atom) and re.match(r"^(?:chapter\s+(?:\d+|[ivxlcdm]+)\b|\d+\s*[:.\-]\s*\w)", title, re.I):
-            if title != last:
+            label = (atom.get("part_label", ""), title)
+            if label != last:
                 number += 1
             numbers[atom["ordinal"]] = number
-            last = title
-        else:
+            last = label
+        elif is_content(atom):
             last = None
     return numbers
 

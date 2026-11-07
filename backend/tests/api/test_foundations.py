@@ -184,3 +184,13 @@ def test_background_preparation_can_call_the_real_updated_answer_route(env, monk
     monkeypatch.setattr(views, "ask_the_book", answer)
     prepare(app, scope)
     assert len(responses) == 1 and responses[0]["as_of_chapter"] == 2
+
+
+def test_illustrations_do_not_split_a_publisher_chapter_but_new_parts_do():
+    manifest = {"atoms": [
+        {"ordinal": 1, "title": "Chapter I", "part_label": "Part One"},
+        {"ordinal": 2, "title": "An illustration", "char_len": 1},
+        {"ordinal": 3, "title": "Chapter I", "part_label": "Part One"},
+        {"ordinal": 4, "title": "Chapter I", "part_label": "Part Two"},
+    ]}
+    assert chapter_numbers(manifest) == {1: 1, 3: 1, 4: 2}
