@@ -24,8 +24,8 @@ native controls. Opening another reader modal pauses speech. Leaving the book ca
 the synchronized selection. Browser or engine failure produces a generic status and never blocks
 ordinary reading.
 
-No Litlet backend or configured AI provider receives text for this feature. The UI therefore states
-`Litlet provider cost: $0.00` and explains that there are no Litlet API tokens or paid book-text
+No Mothli backend or configured AI provider receives text for this feature. The UI therefore states
+`Mothli provider cost: $0.00` and explains that there are no Mothli API tokens or paid book-text
 requests. A voice is called on-device only when the browser reports `localService=true`; otherwise the
 UI says the browser or operating system may use a platform network service. This is a capability and
 cost boundary, not a promise about third-party platform behavior.

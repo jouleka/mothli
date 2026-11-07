@@ -76,13 +76,16 @@ export type AskCost = {
 export type AskAnswer = {
   as_of_chapter: number; insufficient_evidence: boolean; claims: AskClaim[];
   citations: AskCitation[]; cost: AskCost | null;
-  answer_type?: "recap";
+  answer_type?: "recap" | "conversation";
+  message?: string;
+  acknowledgment?: string | null;
   recap?: string | null;
   status?: "ready" | "preparing" | "preparation_failed" | "not_started" | "paratext_only";
 };
 export type SelectionAction = "explain" | "define" | "translate";
 export type SelectionAssistAnswer = {
   action: SelectionAction; as_of_chapter: number; insufficient_evidence: boolean;
+  acknowledgment?: string | null;
   text: string | null; citation: (AskCitation & { cfi: string }) | null; cost: AskCost;
 };
 export type ChapterCloseout = AskAnswer & { chapter: number };

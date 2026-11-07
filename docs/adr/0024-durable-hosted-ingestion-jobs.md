@@ -80,7 +80,7 @@ are indistinguishable from missing UUIDs.
 
 ## Operation
 
-The installed command is `reading-companion-hosted-worker`. It requires `HOSTED_WORKER_DSN` and a
+The installed command is `mothli-hosted-worker`. It requires `HOSTED_WORKER_DSN` and a
 `HOSTED_JOB_HANDLER=module.path:callable` implementation. The callable receives the fenced claim and
 worker repository, heartbeats during long provider calls, stops when heartbeat reports cancellation,
 and publishes through the atomic commit primitive. This ticket provides and verifies the durable

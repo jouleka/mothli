@@ -1,6 +1,7 @@
-const SHELL_CACHE = "litlet-shell-v2";
+const SHELL_CACHE = "litlet-shell-v3-mothli";
+// Existing offline libraries keep their owner-scoped cache identity across the rename.
 const OWNER_CACHE_PREFIX = "litlet-reader-owner-";
-const SHELL_ASSETS = ["/", "/index.html", "/manifest.webmanifest", "/litlet-icon.svg"];
+const SHELL_ASSETS = ["/", "/index.html", "/manifest.webmanifest", "/mothli-icon.svg", "/mothli-icon-192.png", "/mothli-icon-512.png", "/mothli-icon-180.png"];
 let activeOwner = null;
 const OWNER = /^(local|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
 

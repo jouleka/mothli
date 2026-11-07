@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible Reading Companion defect
+description: Report a reproducible Mothli defect
 title: "bug: "
 labels: [bug]
 body:

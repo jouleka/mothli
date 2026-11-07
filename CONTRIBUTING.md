@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve Reading Companion.
+Thanks for helping improve Mothli.
 
 ## Before opening a change
 

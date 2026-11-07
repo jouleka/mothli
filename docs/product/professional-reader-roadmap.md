@@ -9,7 +9,7 @@ LIT-36 professional reader experience
 
 ## Product standard
 
-Litlet should earn its place as the reader for books that are hard to return to. The dependable reader
+Mothli should earn its place as the reader for books that are hard to return to. The dependable reader
 comes first: import, navigation, position, typography, mobile use, offline recovery, and annotations.
 The companion is the differentiator: it should reduce confusion at the exact point the reader asks
 “where am I, who is this, and what did I miss?” without revealing the future.
@@ -55,7 +55,7 @@ production, and raw keys never pass through the durable job payload.
 4. LIT-51 / UX-1: mobile reading shell with a companion
    bottom sheet that never covers or loses the place.
 
-This wave makes Litlet credible as a primary reader even when AI is disabled.
+This wave makes Mothli credible as a primary reader even when AI is disabled.
 
 ### Reader wave 2 — Keep and use what matters
 

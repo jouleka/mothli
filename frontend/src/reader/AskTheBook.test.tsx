@@ -38,8 +38,8 @@ const props = {
   onClose: vi.fn(),
 };
 function submit(value: string) {
-  fireEvent.change(screen.getByLabelText("Message Pip"), { target: { value } });
-  fireEvent.submit(screen.getByLabelText("Message Pip").closest("form")!);
+  fireEvent.change(screen.getByLabelText("Message Mothli"), { target: { value } });
+  fireEvent.submit(screen.getByLabelText("Message Mothli").closest("form")!);
 }
 beforeEach(() => {
   vi.clearAllMocks();
@@ -52,21 +52,21 @@ beforeEach(() => {
   });
 });
 
-describe("Pip conversation", () => {
+describe("Mothli conversation", () => {
   test("persists conversation and draft per book, owner and reading pass; advancing retains useful context", async () => {
     const first = render(<AskTheBook {...props} />);
     submit("Where did they meet?");
     await screen.findByText(answer.claims[0].text);
-    fireEvent.change(screen.getByLabelText("Message Pip"), {
+    fireEvent.change(screen.getByLabelText("Message Mothli"), {
       target: { value: "And why?" },
     });
     first.unmount();
     const second = render(<AskTheBook {...props} bookmark={3} />);
     expect(
-      (screen.getByLabelText("Message Pip") as HTMLTextAreaElement).value,
+      (screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value,
     ).toBe("And why?");
     expect(screen.getByText("Where did they meet?")).toBeTruthy();
-    fireEvent.submit(screen.getByLabelText("Message Pip").closest("form")!);
+    fireEvent.submit(screen.getByLabelText("Message Mothli").closest("form")!);
     await screen.findByText("And why?");
     expect(mocks.askBook).toHaveBeenLastCalledWith("b", "And why?", 3, [
       { role: "user", content: "Where did they meet?", as_of_chapter: 2 },
@@ -100,7 +100,7 @@ describe("Pip conversation", () => {
       screen.getByRole("region", { name: "Book conversation" }).scrollTop,
     ).toBe(120);
     expect(
-      (screen.getByLabelText("Message Pip") as HTMLTextAreaElement).disabled,
+      (screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).disabled,
     ).toBe(true);
     expect(mocks.askBook).toHaveBeenCalledTimes(1);
     second.rerender(
@@ -126,7 +126,7 @@ describe("Pip conversation", () => {
     submit("Who else was there?");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(
-      (screen.getByLabelText("Message Pip") as HTMLTextAreaElement).value,
+      (screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value,
     ).toBe("Who else was there?");
     await act(async () =>
       finish({
@@ -141,7 +141,7 @@ describe("Pip conversation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
     expect(screen.queryByText(answer.claims[0].text)).toBeNull();
     expect(
-      (screen.getByLabelText("Message Pip") as HTMLTextAreaElement).value,
+      (screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value,
     ).toBe("");
     mocks.askBook.mockRejectedValueOnce(
       new ApiError("book cost ceiling reached", 429),
@@ -149,12 +149,12 @@ describe("Pip conversation", () => {
     submit("Who else was there?");
     expect(
       await screen.findByText(
-        "Pip is paused for this book: its usage limit has been reached.",
+        "Mothli is paused for this book: its usage limit has been reached.",
       ),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(
-      (screen.getByLabelText("Message Pip") as HTMLTextAreaElement).value,
+      (screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value,
     ).toBe("Who else was there?");
   });
 
@@ -292,4 +292,16 @@ describe("Pip conversation", () => {
     expect(document.activeElement).toBe(opener);
     opener.remove();
   });
+});
+
+// Clarifications are conversation, never an unsupported book fact or a saved AI finding.
+test("shows a reaction clarification and retains it for the next turn without a source/save action", async () => {
+  mocks.askBook.mockResolvedValueOnce({ ...answer, answer_type: "conversation", message: "Oof. Which part felt unfair to you?", claims: [], citations: [] });
+  render(<AskTheBook {...props} onSaveReply={vi.fn()} />);
+  submit("That was so unfair!");
+  await screen.findByText("Oof. Which part felt unfair to you?");
+  expect(screen.queryByRole("button", { name: "Save reply to Notebook" })).toBeNull();
+  submit("When Mara was blamed for the key.");
+  await screen.findByText(answer.claims[0].text);
+  expect(mocks.askBook.mock.calls[1][3][1].content).toBe("Oof. Which part felt unfair to you?");
 });

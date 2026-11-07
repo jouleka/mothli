@@ -9,6 +9,7 @@ import {
 } from "../pwa/offline";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
+import { MothliMark } from "../ui/MothliMark";
 import { ProviderSettings } from "./ProviderSettings";
 import "./shelf-redesign.css";
 
@@ -277,13 +278,13 @@ export function Shelf({
         Skip to your library
       </a>
       <header className="room-header">
-        <a className="brand" href="/" aria-label="Reading Companion home">
-          <span className="brand-mark"><Icon name="book" size={24} /></span>
-          <span>reading<span className="brand-second">companion</span></span>
+        <a className="brand" href="/" aria-label="Mothli home">
+          <MothliMark className="brand-moth" />
+          <span>mothli</span>
         </a>
         <nav className="room-top-links" aria-label="Reading room">
           <a href="#collection-title" aria-current="page">My library</a>
-          <button aria-expanded={showGuide} aria-controls="companion-guide" onClick={() => setShowGuide((value) => !value)}>Meet your companion <Icon name="sparkle" size={15} /></button>
+          <button aria-expanded={showGuide} aria-controls="companion-guide" onClick={() => setShowGuide((value) => !value)}>Meet Mothli <Icon name="sparkle" size={15} /></button>
         </nav>
         <div className="room-header-actions">
           <span className="safe-label"><Icon name="shield" size={15} /> Spoiler safe</span>
@@ -395,11 +396,11 @@ export function Shelf({
               </div>
             </section>
           )}
-          <section className="room-guide" id="companion-guide" hidden={!showGuide} aria-label="Meet your companion">
-            <div className="room-guide-heading"><h2>Meet Pip</h2><p>Your AI reading companion. Just the pages you’ve read.</p><button className="room-guide-close" aria-label="Close companion introduction" onClick={() => { setShowGuide(false); document.querySelector<HTMLButtonElement>('[aria-controls="companion-guide"]')?.focus(); }}><Icon name="close" size={18} /></button></div>
+          <section className="room-guide" id="companion-guide" hidden={!showGuide} aria-label="Meet Mothli">
+            <div className="room-guide-heading"><h2>Meet Mothli</h2><p>Your AI reading companion. Just the pages you’ve read.</p><button className="room-guide-close" aria-label="Close companion introduction" onClick={() => { setShowGuide(false); document.querySelector<HTMLButtonElement>('[aria-controls="companion-guide"]')?.focus(); }}><Icon name="close" size={18} /></button></div>
             <div className="room-guide-grid">
               <article><span className="room-guide-icon"><Icon name="book" size={23} /></span><h3>Read</h3><p>Your book. Your pace.</p></article>
-              <article><span className="room-guide-icon"><Icon name="sparkle" size={23} /></span><h3>Talk to Pip</h3><p>“Wait, who was that?”</p></article>
+              <article><span className="room-guide-icon"><Icon name="sparkle" size={23} /></span><h3>Talk to Mothli</h3><p>“Wait, who was that?”</p></article>
               <article><span className="room-guide-icon"><Icon name="bookmark" size={23} /></span><h3>Notebook</h3><p>Keep the good bits.</p></article>
             </div>
           </section>

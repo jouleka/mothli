@@ -6,7 +6,7 @@
 
 **Status:** historical approved direction; working MVP implemented (see the amendment above)
 **Date:** 2026-06-25
-**Historical project prefix:** `LIT` ("Litlet")
+**Historical project prefix:** `LIT` (from the earlier name "Litlet")
 
 ---
 

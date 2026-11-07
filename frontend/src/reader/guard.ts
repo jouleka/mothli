@@ -15,7 +15,7 @@ export function jumpsAhead(target: number, lastAtom: number, maxAtom: number): b
  * scrollable companion, the confirm dialog). Non-Element targets (window/document/null — as when a
  * key event is synthesised, or focus is nowhere) are safe and never block. */
 const ARROW_EXEMPT =
-  "input, textarea, select, [contenteditable], [role='alertdialog'], [role='dialog'], .companion, .pip-conversation";
+  "input, textarea, select, [contenteditable], [role='alertdialog'], [role='dialog'], .companion, .mothli-conversation";
 export function arrowPagingBlocked(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest(ARROW_EXEMPT) != null;
 }

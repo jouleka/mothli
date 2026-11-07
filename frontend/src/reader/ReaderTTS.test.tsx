@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 describe("ReaderTTS", () => {
-  test("offers synchronized native controls and states the browser source and zero Litlet cost", async () => {
+  test("offers synchronized native controls and states the browser source and zero Mothli cost", async () => {
     const user = userEvent.setup();
     const doc = document.implementation.createHTMLDocument("chapter");
     doc.body.innerHTML = "<p>Hello world</p>";
@@ -62,7 +62,7 @@ describe("ReaderTTS", () => {
     const { container } = render(<ReaderTTS getView={() => view} resetKey="book" />);
     await user.click(screen.getByRole("button", { name: "read aloud" }));
     expect(screen.getByRole("region", { name: "Read aloud controls" })).toBeTruthy();
-    expect(screen.getByText(/Litlet provider cost: \$0\.00/)).toBeTruthy();
+    expect(screen.getByText(/Mothli provider cost: \$0\.00/)).toBeTruthy();
     await user.selectOptions(screen.getByLabelText("Voice"), "local");
     expect(screen.getByText(/on-device voice reported by this browser/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Play" }));

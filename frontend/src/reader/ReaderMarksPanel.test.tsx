@@ -61,7 +61,7 @@ describe("ReaderMarks", () => {
     fireEvent.click(screen.getByRole("button", { name: /^highlight$/i }));
     fireEvent.click(screen.getByRole("button", { name: /yellow highlight/i }));
     expect(onHighlight).toHaveBeenCalledWith("yellow");
-    fireEvent.click(screen.getByRole("button", { name: /^talk to pip$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^talk to mothli$/i }));
     expect(onTalkAboutSelection).toHaveBeenCalledOnce();
     expect(onAssist).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /^note$/i }));
@@ -121,18 +121,18 @@ describe("ReaderMarks", () => {
     );
   });
 
-  test("keeps reader notes and saved Pip replies distinct, with passage navigation", () => {
+  test("keeps reader notes and saved Mothli replies distinct, with passage navigation", () => {
     const reply = {id: "reply", body: "A checked reply.", question: "Why?", citations: [{id:1, ordinal:1, chapter_key:"one", href:"one.xhtml", title:"One", excerpt:"A passage"}], asOfChapter: 1};
     const navigate = vi.fn();
     const sourceJump = vi.fn();
     const { rerender } = render(<ReaderMarks {...props} savedReplies={[reply]} onNavigateReply={navigate} onSourceJump={sourceJump} />);
     fireEvent.click(screen.getByRole("button", { name: "Notebook" }));
     expect(screen.getByRole("region", { name: "Your notes and passages" }).textContent).toContain("A <dangerous> passage");
-    expect(screen.getByRole("region", { name: "Saved from Pip" }).textContent).toContain("A checked reply.");
+    expect(screen.getByRole("region", { name: "Saved from Mothli" }).textContent).toContain("A checked reply.");
     fireEvent.click(screen.getByRole("button", { name: "Passage" }));
     expect(navigate).toHaveBeenCalledWith(reply);
     expect(sourceJump).toHaveBeenCalledOnce();
     rerender(<ReaderMarks {...props} savedReplies={[reply]} onNavigateReply={navigate} openRequest={1} />);
-    expect(screen.getByRole("region", { name: "Saved from Pip" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Saved from Mothli" })).toBeTruthy();
   });
 });

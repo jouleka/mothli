@@ -1271,3 +1271,23 @@ def test_recap_cache_includes_content_policy_without_changing_book_type_roles():
     assert _recap_prompt_version("reference") == "recap-v4:reference:content-scope-v1"
     assert _recap_prompt_version("novel", "en") == "recap-v3:content-scope-v1"
     assert _recap_prompt_version("novel", "ru") == "recap-v3:content-scope-v1:source-ru"
+
+
+def test_bare_reaction_clarifies_without_model_calls_or_unread_claims(env, monkeypatch):
+    c, bid, app, _ = env
+
+    def no_completion(*args, **kwargs):
+        raise AssertionError("clarifying the reader's reaction needs no generated book facts")
+
+    monkeypatch.setattr(app.state.client, "complete", no_completion)
+    response = c.post(f"/api/books/{bid}/ask", json={
+        "question": "omg why did he do that?", "bookmark": 99,
+        "history": [{"role": "user", "content": "Corvus revealed a future secret", "as_of_chapter": 3}],
+    })
+    assert response.status_code == 200
+    value = response.json()
+    assert value["as_of_chapter"] == 2 and value["answer_type"] == "conversation"
+    assert value["message"] == "Let’s untangle it. Who do you mean, and which moment?"
+    assert value["claims"] == value["citations"] == []
+    assert "Corvus" not in str(value)
+    assert c.post("/api/books/missing/ask", json={"question": "omg"}).status_code == 404

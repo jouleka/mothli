@@ -4,7 +4,7 @@
 
 ## Context
 
-Litlet is a production-shaped **local, single-user** application. Its safety core is strong: chapter
+Mothli is a production-shaped **local, single-user** application. Its safety core is strong: chapter
 atoms define the spoiler frontier, memory reads go through one bookmark-bounded funnel, ingestion is
 idempotent, and the local library has durable backup and recovery. Its process and persistence
 boundaries are intentionally not multi-user: one global SQLite catalog, one process-wide Store and
