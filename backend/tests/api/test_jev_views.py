@@ -68,7 +68,7 @@ def test_jev_evidence_route_keeps_spoiler_boundary_fallback_and_independent_judg
     response = api.post(f"/api/books/{bid}/{route}", json=body)
     assert "Corvus" not in response.text and "private-test-key" not in response.text
     if mode == "budget":
-        assert response.status_code == 429
+        assert response.status_code == (413 if route == "ask" else 429)
         assert not jev_calls
         return
     assert response.status_code == (502 if mode == "reject_final" else 200), response.text
