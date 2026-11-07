@@ -12,6 +12,7 @@ import { Icon } from "./Icon";
 type RuntimeState = {
   data: AiRuntime | null;
   failed: boolean;
+  checking: boolean;
   retry: () => void;
 };
 const RuntimeContext = createContext<RuntimeState | null>(null);
@@ -27,17 +28,20 @@ export function AiRuntimeProvider({
   const [data, setData] = useState<AiRuntime | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [checking, setChecking] = useState(false);
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();
     let active = true;
-    const timeout = window.setTimeout(() => controller.abort(), 5000);
-    setFailed(false);
-    void api
-      .aiRuntime(controller.signal)
+    const manual = attempt > 0;
+    const timeout = window.setTimeout(() => controller.abort(), manual ? 90000 : 5000);
+    if (!manual) setFailed(false);
+    setChecking(manual);
+    const request = manual ? api.checkAiRuntime(controller.signal) : api.aiRuntime(controller.signal);
+    void request
       .then(
         (value) => {
-          if (active) setData(value);
+          if (active) { setData(value); setFailed(false); }
         },
         (error: unknown) => {
           // Older/local versions and hosted mode may not expose the local runtime endpoint.
@@ -45,7 +49,10 @@ export function AiRuntimeProvider({
             setFailed(true);
         },
       )
-      .finally(() => window.clearTimeout(timeout));
+      .finally(() => {
+        window.clearTimeout(timeout);
+        if (active) setChecking(false);
+      });
     return () => {
       active = false;
       controller.abort();
@@ -56,7 +63,7 @@ export function AiRuntimeProvider({
     <RuntimeContext.Provider
       value={
         enabled
-          ? { data, failed, retry: () => setAttempt((value) => value + 1) }
+          ? { data, failed, checking, retry: () => setAttempt((value) => value + 1) }
           : null
       }
     >
@@ -72,8 +79,8 @@ export function AiStatus({ compact = false }: { compact?: boolean }) {
     return (
       <div className="ai-status" role="status">
         <strong>AI status unavailable</strong>
-        <Button variant="ghost" onClick={runtime.retry}>
-          Check connection
+        <Button variant="ghost" onClick={runtime.retry} disabled={runtime.checking}>
+          {runtime.checking ? "Checking…" : "Check connection"}
         </Button>
       </div>
     );
@@ -86,7 +93,9 @@ export function AiStatus({ compact = false }: { compact?: boolean }) {
       <details className="ai-status ai-status-compact" data-mode="live">
         <summary><Icon name="sparkle" size={14} /> AI connected <Icon name="chevronDown" size={13} /></summary>
         <p>{data.models.synthesis} · Answers use evidence from your completed pages.</p>
-        <Button variant="ghost" onClick={runtime.retry}>Check connection</Button>
+        {data.local_testing && <p>Local testing · Using your ChatGPT account.</p>}
+        {data.reasoning && <p>Low effort for extraction and selection · Medium for answers and review.</p>}
+        <Button variant="ghost" onClick={runtime.retry} disabled={runtime.checking}>{runtime.checking ? "Checking…" : "Check connection"}</Button>
       </details>
     );
   return (
@@ -129,14 +138,16 @@ export function AiStatus({ compact = false }: { compact?: boolean }) {
                 ? " · Not yet checked by a successful request."
                 : " · Answers still depend on the evidence in your completed pages."}
           </p>
+          {data.local_testing && <p>Local testing · Using your ChatGPT account.</p>}
+          {data.reasoning && <p>Low effort for extraction and selection · Medium for answers and review.</p>}
           {data.embedding_mode === "demo" && (
             <p>
               Search is using test embeddings. Configure a real embedding
               provider before judging retrieval quality.
             </p>
           )}
-          <Button variant="ghost" onClick={runtime.retry}>
-            Check connection
+          <Button variant="ghost" onClick={runtime.retry} disabled={runtime.checking}>
+            {runtime.checking ? "Checking…" : "Check connection"}
           </Button>
         </>
       )}

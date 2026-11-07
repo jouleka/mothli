@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from app.answer_bank import answer_scope, valid_answer
 from app.ask import AskRequest
 from app.cost import CostCeilingExceeded, budgeted_completion
+from app.content_scope import ContentStore
 from app.preparation_plan import (
     PLAN_OUTPUT_TOKENS, PLAN_SYSTEM, PREPARATION_VERSION, REVIEW_OUTPUT_TOKENS, REVIEW_SYSTEM,
     PreparedQuestions, PreparationReview,
@@ -139,6 +140,7 @@ def prepare(app, scope):
     """Run outside request gates: scrolling/reset/delete may proceed during every provider call."""
     from app.api.views import ask_the_book, catch_me_up
     st = app.state
+    store = ContentStore(st.store, st.settings.data_dir)
     scope.check(app)
     catalog = PreparationCatalog(app, scope)
     client = copy(st.reader_client)
@@ -150,7 +152,7 @@ def prepare(app, scope):
         if not st.settings.recap_prewarm:
             return
         try:
-            catch_me_up(scope.book_id, request, scope.frontier, catalog, st.store,
+            catch_me_up(scope.book_id, request, scope.frontier, catalog, store,
                         st.settings, client, st.worker)
         except Exception:
             scope.check(app)  # A failed recap does not prevent independently reviewed answers.
@@ -167,7 +169,7 @@ def prepare(app, scope):
     finished = False
     try:
         scope.check(app, snapshot=True)
-        with st.store.book(scope.book_id) as mem:
+        with store.book(scope.book_id) as mem:
             facts = preparation_facts(mem, scope.frontier,
                 byte_limit=min(18000, st.settings.cost_max_input_tokens_per_call//2))
         if not facts:
@@ -224,7 +226,7 @@ def prepare(app, scope):
             try:
                 question = item["question"]
                 value = ask_the_book(scope.book_id, AskRequest(question=question, bookmark=scope.frontier),
-                                     catalog, st.store, st.settings, client, st.worker)
+                                     catalog, store, st.settings, client, st.worker, request=request)
                 # Only a premise-reviewed question with a cleared complete answer is offered.
                 # A refusal, failed answer or unrelated foreground cache row grants no suggestion.
                 if value.get("as_of_chapter") == scope.frontier and valid_answer(value):

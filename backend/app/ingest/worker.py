@@ -55,7 +55,7 @@ from app.ingest.extraction.validation import (
     merge_reviewed_extractions,
     review_extraction,
 )
-from app.ingest.manifest import load_manifest
+from app.ingest.manifest import load_manifest, position_length
 from app.llm import versioning
 from app.llm import jev_tasks
 from app.llm.jev import JevUnavailable
@@ -126,10 +126,19 @@ def _usd_of(model, usage):
     return usd_of(model, usage)
 
 
+def _empty_extraction(text):
+    empty = {"chapter_summary": "", "entities": [], "relationships": [], "events": [], "themes": []}
+    def no_generation(*args, **kwargs):
+        raise RuntimeError("an empty extraction must not generate AI claims")
+    clearance = review_extraction(text, empty, [], complete=no_generation)
+    return empty, {"in": 0, "out": 0}, 0.0, [], clearance
+
+
 class IngestWorker:
     def __init__(self, store, catalog, client, settings, executor=None, sleep=None):
+        from app.content_scope import ContentStore
         self.on_complete = None
-        self._store = store
+        self._store = ContentStore(store, settings.data_dir) if store is not None else None
         self._catalog = catalog
         self._client = client
         self._settings = settings
@@ -374,7 +383,7 @@ class IngestWorker:
                 and manifest["_content_language_recorded"]):
             return ["ATOM-SET MISMATCH: the stored source.epub declares a different content "
                     "language than the import-time manifest (D-A10) — re-import the book"]
-        fresh = [(c["ordinal"], c["key"], len(c.get("text", "") or "")) for c in chapters]
+        fresh = [(c["ordinal"], c["key"], position_length(c.get("text"))) for c in chapters]
         want = [(a["ordinal"], a["key"], a["char_len"]) for a in manifest["atoms"]]
         if fresh != want:
             return ["ATOM-SET MISMATCH: the stored source.epub segments differently than the "
@@ -383,36 +392,58 @@ class IngestWorker:
 
     def _complete_extraction(self, book_id, ordinal, title, roster, text, *, book_type="novel",
                              content_language="und"):
-        """Allow one fresh chapter pass only for an explicit grounding rejection.
+        """Allow one fresh extraction of the affected chunk for an explicit grounding rejection.
 
         Each failed pass settles its own reservations before returning here. Provider failures,
         invalid review verdicts, cost ceilings and integrity failures never enter this repair path.
-        This bound is per extraction operation; enqueue-generation scheduling is unchanged.
+        Earlier clearances stay private and are reused; every chunk must pass before commit.
         """
-        feedback = ()
-        for repair in (False, True):
-            self._check_stopping()
-            try:
-                return self._complete_extraction_once(
-                    book_id, ordinal, title, roster, text, book_type=book_type,
-                    content_language=content_language, repair=repair, repair_feedback=feedback,
-                )
-            except ExtractionGroundingRejected as exc:
-                if repair:
-                    raise
-                feedback = exc.repair_feedback
+        if not text.strip():
+            return _empty_extraction(text)
+        _system, chunks, _review_limit = self._extraction_chunks(title, roster, text, book_type, content_language)
+        parts, reservations = [], []
+        usage_total, usd_total = {"in": 0, "out": 0}, 0.0
+        try:
+            for chunk in chunks:
+                feedback = ()
+                for repair in (False, True):
+                    self._check_stopping()
+                    try:
+                        value, usage, usd, ids, clearance = self._complete_extraction_once(
+                            book_id, ordinal, title, roster, chunk, book_type=book_type,
+                            content_language=content_language, repair=repair, repair_feedback=feedback,
+                        )
+                        break
+                    except ExtractionGroundingRejected as exc:
+                        if repair:
+                            raise
+                        feedback = exc.repair_feedback
+                parts.append((chunk, value, clearance))
+                reservations.extend(ids)
+                usage_total = {key: usage_total[key] + usage[key] for key in ("in", "out")}
+                usd_total += usd
+            extraction, clearance = merge_reviewed_extractions(text, parts)
+            return extraction, usage_total, usd_total, reservations, clearance
+        except Exception:
+            # Cleared chunks stay private until the whole chapter is ready. A later failure
+            # settles their actual spend but cannot publish partial facts or a completion receipt.
+            for reservation_id in reservations:
+                self._catalog.settle_cost(book_id, reservation_id, phase="extraction-partial")
+            raise
 
-    def _complete_extraction_once(self, book_id, ordinal, title, roster, text, *, book_type="novel",
-                                  content_language="und", repair=False, repair_feedback=()):
-        """Chunk huge chapters, budget every call, and merge validated parts before any write."""
+    def _extraction_chunks(self, title, roster, text, book_type, content_language):
+        """Keep chunk boundaries stable across one source chunk's bounded factual repair."""
         system = extract_system_for(book_type, content_language)
         empty_prompt = extract_user_prompt(
             title, roster, "", book_type=book_type, content_language=content_language
         )
-        chunk_input_limit = self._settings.cost_max_input_tokens_per_call
+        from app.cost.limits import completion_input_overhead
+        chunk_input_limit = (self._settings.cost_max_input_tokens_per_call
+                             - completion_input_overhead(self._client))
         if (self._client.provider == "openai-compatible"
                 and not getattr(self._client, "_is_native_openai", False)):
             chunk_input_limit -= self._settings.cost_max_output_tokens_per_call + 512
+        review_input_limit = chunk_input_limit
         # Leave room for the extraction alongside its source in the review call. The exact review
         # input is checked by budgeted_completion too; oversized output fails closed, never truncated.
         overhead = estimate_input_tokens(system, empty_prompt, Extraction)
@@ -423,6 +454,10 @@ class IngestWorker:
         # independent review and all pieces must clear before any chapter memory is published.
         chunk_input_limit = min(chunk_input_limit,
                                 overhead + 3 * self._settings.cost_max_output_tokens_per_call)
+        if self._client.provider == "codex-local":
+            # Dense biography extracts can otherwise leave no space for the full review
+            # context, even after splitting its field list. Bound local source chunks too.
+            chunk_input_limit = min(chunk_input_limit, overhead + 6000)
         chunks = split_text_for_prompt(
             text,
             prompt_without_text=empty_prompt,
@@ -430,6 +465,13 @@ class IngestWorker:
             max_input_tokens=chunk_input_limit,
             schema=Extraction,
         )
+        return system, chunks, review_input_limit
+
+    def _complete_extraction_once(self, book_id, ordinal, title, roster, text, *, book_type="novel",
+                                  content_language="und", repair=False, repair_feedback=()):
+        """Chunk huge chapters, budget every call, and merge validated parts before any write."""
+        system, chunks, review_input_limit = self._extraction_chunks(
+            title, roster, text, book_type, content_language)
         # Keep the exact same source chunks and prior roster on a repair. The call budget still
         # includes the fixed instruction and capped private diagnostics; rejected output is absent.
         if repair:
@@ -507,6 +549,7 @@ class IngestWorker:
                         clearance = review_extraction(
                             chunk, validated, roster, complete=reviewed_complete,
                             max_output_tokens=self._settings.cost_max_output_tokens_per_call,
+                            max_input_tokens=review_input_limit, repair_invalid=True,
                             screen=(screen_extraction if getattr(self._settings, "jev_extraction_enabled", False)
                                     and getattr(self._client, "jev", None) is not None else None),
                         )
@@ -613,10 +656,14 @@ class IngestWorker:
                 identity = versioning.current_identity(self._client, embed_call=embed_call)
                 real_embed = not self._client.embed_identity().startswith("stub:")
             versioning.assert_compatible_identity(pinned, identity)
-            extraction, usage, usd, reservation_ids, clearance = self._complete_extraction(
-                book_id, ch["ordinal"], ch.get("title", ""), roster, text, book_type=book_type,
-                content_language=content_language,
-            )                                                           # (2) ALL IO OUTSIDE the lock
+            from app.content_scope import is_content
+            if is_content(ch):
+                extraction, usage, usd, reservation_ids, clearance = self._complete_extraction(
+                    book_id, ch["ordinal"], ch.get("title", ""), roster, text, book_type=book_type,
+                    content_language=content_language,
+                )
+            else:
+                extraction, usage, usd, reservation_ids, clearance = _empty_extraction(text)
             memo = _MemoEmbed(self._client, embed_call=embed_call)
             identity_attempts = 0
 

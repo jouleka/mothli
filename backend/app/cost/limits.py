@@ -26,6 +26,7 @@ _USD = {
     # Keep the longer mini name first: identities include the provider and model name.
     "gpt-6-luna": (0.10e-6, 0.50e-6),
     "gpt-6.1-sol": (2.00e-6, 10.0e-6),
+    "gpt-6.1-terra": (1.00e-6, 5.00e-6),  # Official model page, 2026-11-07.
     "gpt-5.4-mini": (0.75e-6, 4.50e-6),
     "gpt-5.4": (2.50e-6, 15.0e-6),
     "gpt-4o-mini": (0.15e-6, 0.60e-6),
@@ -35,11 +36,14 @@ _USD = {
 _CACHE_INPUT_USD = {
     "gpt-6-luna": (0.01e-6, 0.125e-6),
     "gpt-6.1-sol": (0.10e-6, 2.50e-6),
+    "gpt-6.1-terra": (0.05e-6, 1.25e-6),
 }
 
 
 def _price_name(model):
     identity = model or ""
+    if identity.startswith("chatgpt-plan:"):
+        return None  # Subscription consumption is not an API dollar charge.
     for name in _USD:
         # Do not accidentally price a future GPT-6 suffix/tier as an established model.
         if (identity.rsplit(":", 1)[-1] == name if name in _CACHE_INPUT_USD else name in identity):
@@ -95,6 +99,11 @@ def pricing_known(model: str | None) -> bool:
     """Whether the advisory table can truthfully price this provider model."""
     identity = model or ""
     return identity.startswith(("stub:", "stub-")) or _price_name(identity) is not None
+
+
+def completion_input_overhead(client):
+    """Transport framing reserved in both prompt splitting and per-call accounting."""
+    return 24_000 if getattr(client, "provider", None) == "codex-local" else 0
 
 
 def estimate_input_tokens(system: str, user: str, schema=None) -> int:
@@ -192,6 +201,7 @@ def budgeted_completion(catalog, settings, client, book_id, *, phase, system, us
     """
     model = getattr(client, "billing_model", client._model_for)(tier)
     estimated_input = estimate_input_tokens(system, user, schema)
+    estimated_input += completion_input_overhead(client)
     generic_reask = bool(
         schema is not None
         and getattr(client, "provider", None) == "openai-compatible"

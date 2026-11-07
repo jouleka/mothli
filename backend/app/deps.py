@@ -68,6 +68,11 @@ def get_store(request: Request) -> Store:
     return request.app.state.store
 
 
+def get_content_store(request: Request):
+    from app.content_scope import ContentStore
+    return ContentStore(request.app.state.store, request.app.state.settings.data_dir)
+
+
 def get_catalog(request: Request) -> Catalog:
     return request.app.state.catalog
 
@@ -114,7 +119,7 @@ async def book_lifecycle(book_id: str, request: Request):
         position_write = method == "PUT" and path.endswith("/position")
         shared_read = (getattr(request, "recap_preparation", False)
                        or method == "GET"
-                       or (method == "POST" and path.endswith(("/ask", "/chapter-closeout")))
+                       or (method == "POST" and path.endswith(("/ask", "/chapter-closeout", "/selection-action", "/ingest/retry")))
                        or position_write)
         if shared_read:
             async with entry.lock:

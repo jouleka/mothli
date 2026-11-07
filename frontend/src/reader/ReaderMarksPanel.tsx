@@ -214,7 +214,7 @@ export function ReaderMarks({
               <Icon name="close" />
             </Button>
           </header>
-          <label className="notebook-search">
+          <label className="notebook-search focus-field">
             <Icon name="search" size={17} />
             <input type="search" aria-label="Search your notebook" placeholder="Find a thought or a passage…" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>

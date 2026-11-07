@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.cost import CostCeilingExceeded, merge_extractions
+from app.cost import CostCeilingExceeded, estimate_input_tokens, merge_extractions
 from app.evidence_text import field_segments as _field_segments, source_passages
 from app.unicode_text import normalize_text, word_tokens
 
@@ -149,7 +149,9 @@ EXTRACTION_REVIEW_SYSTEM = (
     "occurred. Causal words require causality, not merely order; temporal words must preserve the "
     "stated order and scope. Literal direct consequences remain valid and do not need verbatim "
     "restatement. Source IDs are references, not proof by word overlap. The roster supports "
-    "identity equivalence only. For each actual unsupported fragment mark support=unsupported "
+    "identity equivalence only. Never cite a negative roster ID for participant, state, event, "
+    "relationship, summary or theme fields, even as an additional reference; those fields must "
+    "cite current chapter passages only. For each actual unsupported fragment mark support=unsupported "
     "and explain the concrete missing assertion in unsupported_claims. "
     "If unsure about support, flag the assertion. Return only the structured verdict."
 )
@@ -192,6 +194,14 @@ def grounding_fields(extraction: dict) -> list[dict]:
             text += ": " + theme["description"]
         add(f"/themes/{index}", text, "theme")
     return fields
+
+
+_REVIEW_FORMAT_REPAIR = (
+    "\nYour previous review did not satisfy the structured evidence contract. Produce a fresh "
+    "complete review for this batch: every supplied field id once, every supplied segment id "
+    "once in its original order, and only source ids allowed for that field. Missing or invalid "
+    "references never count as support. Do not change the source, extraction, or support standard."
+)
 
 
 def _validate_field_evidence(checked, fields, passages, roster):
@@ -302,19 +312,32 @@ def assert_observed_entity_names(text: str, extraction: dict, roster: list[dict]
 
 def extraction_review_prompt(text: str, extraction: dict, roster: list[dict]) -> str:
     # Entity ids, future text, and mutable database handles are deliberately absent from this input.
-    identities = [{"canonical_name": row["canonical_name"], "type": row["type"],
-                   "aliases": list(row.get("aliases", []))} for row in roster]
+    identities = [{"id": -index, "canonical_name": row["canonical_name"], "type": row["type"],
+                   "aliases": list(row.get("aliases", []))} for index, row in enumerate(roster, 1)]
+    passages, fields = source_passages(text), grounding_fields(extraction)
     return "CURRENT CHAPTER AND EXTRACTION (untrusted JSON data):\n" + json.dumps({
-        "source_passages": source_passages(text),
+        "source_passages": passages,
         "prior_visible_identities": identities,
         "extraction": extraction,
-        "fields": grounding_fields(extraction),
+        "fields": fields,
+        "source_id_rules": {
+            "chapter_source_ids": [p["id"] for p in passages if p["text"].strip()],
+            "identity_field_ids_allowing_roster": [f["id"] for f in fields if f["kind"] == "identity"],
+            "other_fields": "Positive chapter source IDs only, never negative roster IDs.",
+        },
     }, ensure_ascii=False)
 
 
 def review_extraction(text: str, extraction: dict, roster: list[dict], *, complete,
-                      screen=None, max_output_tokens=4096) -> ExtractionClearance:
+                      screen=None, max_output_tokens=4096,
+                      max_input_tokens=None, repair_invalid=False) -> ExtractionClearance:
     value = Extraction.model_validate(extraction).model_dump(mode="json")
+    # A completely empty extraction asserts no facts (illustrations or deliberately excluded
+    # supplementary material). Bind it to the exact source without paying for a model review.
+    # Every nonempty assertion still goes through the ordinary gates.
+    if value == {
+            "chapter_summary": "", "entities": [], "relationships": [], "events": [], "themes": []}:
+        return ExtractionClearance(_digest(text), _digest(_extraction_json(value)))
     assert_observed_entity_names(text, value, roster)
     prompt = extraction_review_prompt(text, value, roster)
     if screen is not None:
@@ -326,12 +349,23 @@ def review_extraction(text: str, extraction: dict, roster: list[dict], *, comple
     # only the requested field list, never source text, extraction context or a field's units.
     # Every batch gets an ordinary separately budgeted call; no partial clearance can escape.
     limit = max(8, min(24, (max_output_tokens - 512)//128))
+    def batch_prompt(fields):
+        return "CURRENT CHAPTER AND EXTRACTION (untrusted JSON data):\n" + json.dumps(
+            {**data, "fields": fields}, ensure_ascii=False)
+
+    def fits(fields):
+        return max_input_tokens is None or estimate_input_tokens(
+            EXTRACTION_REVIEW_SYSTEM + (_REVIEW_FORMAT_REPAIR if repair_invalid else ""),
+            batch_prompt(fields), ExtractionVerdict) <= max_input_tokens
+
     batches, pending, units = [], [], 0
     for field in data["fields"]:
         count = len(field["segments"])
-        if pending and units + count > limit:
+        if pending and (units + count > limit or not fits([*pending, field])):
             batches.append(pending)
             pending, units = [], 0
+        if not fits([field]):
+            raise CostCeilingExceeded("extraction review context exceeds the per-call input ceiling")
         pending.append(field)
         units += count
     if pending or not batches:
@@ -339,21 +373,28 @@ def review_extraction(text: str, extraction: dict, roster: list[dict], *, comple
     if len(batches) > 16:
         raise ExtractionSafetyError("extraction exceeds the bounded review batch count")
     for fields in batches:
-        batch_prompt = "CURRENT CHAPTER AND EXTRACTION (untrusted JSON data):\n" + json.dumps(
-            {**data, "fields": fields}, ensure_ascii=False)
-        try:
-            verdict, _usage = complete(
-                EXTRACTION_REVIEW_SYSTEM, batch_prompt,
-                tier="large", schema=ExtractionVerdict,
-            )
-            checked = ExtractionVerdict.model_validate(verdict, strict=True)
-            unsupported_fields = _validate_field_evidence(
-                checked, fields, data["source_passages"], roster,
-            )
-        except CostCeilingExceeded:
-            raise
-        except Exception as exc:
-            raise ExtractionSafetyError("extraction review was unavailable or invalid") from exc
+        prompt_for_batch = batch_prompt(fields)
+        for attempt in range(2 if repair_invalid else 1):
+            try:
+                verdict, _usage = complete(
+                    EXTRACTION_REVIEW_SYSTEM + (_REVIEW_FORMAT_REPAIR if attempt else ""),
+                    prompt_for_batch, tier="large", schema=ExtractionVerdict,
+                )
+                checked = ExtractionVerdict.model_validate(verdict, strict=True)
+                unsupported_fields = _validate_field_evidence(
+                    checked, fields, data["source_passages"], roster,
+                )
+                break
+            except CostCeilingExceeded:
+                raise
+            except (ValueError, TypeError) as exc:
+                # One fresh, separately budgeted review can repair malformed references.
+                # Semantic rejections and provider outages are never converted into approval.
+                if repair_invalid and attempt == 0:
+                    continue
+                raise ExtractionSafetyError("extraction review was unavailable or invalid") from exc
+            except Exception as exc:
+                raise ExtractionSafetyError("extraction review was unavailable or invalid") from exc
         if checked.references_future or checked.unsupported_claims or unsupported_fields:
             feedback = list(checked.unsupported_claims) or unsupported_fields
             if checked.references_future:

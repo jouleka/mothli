@@ -175,7 +175,7 @@ def test_paused_plan_resumes_after_restart_without_repaying_cleared_stages(env, 
         if name == pause_after:
             scope.cancelled.set()
         return SimpleNamespace(value=value)
-    def answer(book_id, body, catalog, store, settings, copy_client, worker):
+    def answer(book_id, body, catalog, store, settings, copy_client, worker, *, request=None):
         key = (*scope.answer_key, body.question)
         cached = copy_client.answers.get(key)
         if cached:

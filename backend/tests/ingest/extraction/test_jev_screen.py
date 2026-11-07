@@ -71,7 +71,7 @@ def test_field_budget_keeps_full_context_and_prioritizes_risky_theme_without_tru
         assert all(f["path"] != "/chapter_summary" for f in state["fields"])
         assert state["fields"][0]["kind"] == "theme"
         assert "private_future_state" not in json.dumps(state) and "entity_id" not in json.dumps(state)
-        assert state["prior_visible_identities"] == [{"canonical_name": "Nell", "type": "character", "aliases": ["Rook"]}]
+        assert state["prior_visible_identities"] == [{"id": -1, "canonical_name": "Nell", "type": "character", "aliases": ["Rook"]}]
         assert all("never actions" in q["instructions"] for q in questions.values())
         return {k: answer(q["criteria"], choice="supported") for k, q in questions.items()}
     assert jev_tasks.extraction_issues(payload, run=run) == []

@@ -136,7 +136,7 @@ def test_budget_failure_keeps_reviewed_plan_without_restart_spend_and_resumes_af
     prepare(app, scope)
     assert len(calls) == 3  # Restart is not permission to purchase another failed attempt.
     settings.cost_max_input_tokens_per_book += 1
-    def answer(_bid, body, _catalog, _store, _settings, prepared_client, _worker):
+    def answer(_bid, body, _catalog, _store, _settings, prepared_client, _worker, *, request=None):
         prepared_client.answers.set((*scope.answer_key, body.question), payload())
         return payload()
     monkeypatch.setattr("app.api.views.ask_the_book", answer)

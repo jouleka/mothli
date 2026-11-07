@@ -155,8 +155,8 @@ def test_one_grounding_repair_reuses_exact_context_commits_once_and_accounts_bot
         assert schema is ExtractionVerdict
         payload = json.loads(user.split("(untrusted JSON data):\n", 1)[1])
         assert reviewed_source(user) == runtime.chapter["text"]
-        expected_roster = [{key: entity[key] for key in ("canonical_name", "type", "aliases")}
-                           for entity in runtime.roster]
+        expected_roster = [{"id": -index, **{key: entity[key] for key in ("canonical_name", "type", "aliases")}}
+                           for index, entity in enumerate(runtime.roster, 1)]
         assert payload["prior_visible_identities"] == expected_roster
         assert "Corvus" not in user and "future verdict" not in user
         assert "REJECTED JUDGE PROSE" not in system + user
@@ -262,7 +262,7 @@ def test_capped_injection_shaped_criticism_stays_private_json_and_never_reaches_
         assert "bounded filler" not in user
         assert worker_module._REPAIR_FEEDBACK_START not in user
         payload = json.loads(user.split("(untrusted JSON data):\n", 1)[1])
-        assert set(payload) == {"source_passages", "prior_visible_identities", "extraction", "fields"}
+        assert set(payload) == {"source_passages", "prior_visible_identities", "extraction", "fields", "source_id_rules"}
         assert reviewed_source(user) == runtime.chapter["text"]
         assert "Corvus" not in user and "invented source" not in user
         reviews.append(payload)
@@ -326,15 +326,16 @@ def test_operational_or_invalid_failures_do_not_start_grounding_repair(
     assert _memory(runtime) == baseline
     assert runtime.catalog.get_state(runtime.book_id)["ingest_progress"] == 1
     assert all(worker_module._GROUNDING_REPAIR_INSTRUCTION not in system for system, _ in calls)
-    # Invalid extraction shapes retain the pre-existing one shape retry, never a grounding pass.
-    expected = 2 if stage == "review" or kind == "invalid" else 1
+    # Invalid shapes get one bounded format retry, never a new extraction/grounding pass.
+    expected = (3 if stage == "review" and kind == "invalid"
+                else 2 if stage == "review" or kind == "invalid" else 1)
     assert len(admission_calls) == expected
     assert len(calls) == expected - (kind == "budget")
     if kind in ("network", "authentication"):
         phase = "extraction" if stage == "extraction" else "extraction-review"
         assert any(row["phase"] == phase + "-failed-reserved" for row in _costs(runtime))
     elif kind == "invalid":
-        assert _totals(_costs(runtime)) == {"in": 22, "out": 6}
+        assert _totals(_costs(runtime)) == {"in": expected * 11, "out": expected * 3}
     elif stage == "review":
         assert _totals(_costs(runtime)) == {"in": 11, "out": 3}
     else:
@@ -418,7 +419,7 @@ def test_actual_repair_input_budget_includes_capped_multibyte_diagnostics(runtim
     _assert_no_pending(runtime)
 
 
-def test_late_chunk_rejection_restarts_whole_source_and_settles_all_failed_chunks(
+def test_late_chunk_rejection_repairs_only_that_chunk_without_publishing_partial_facts(
         runtime, monkeypatch):
     baseline, calls, extraction_prompts, review_sources = _memory(runtime), [], [], []
     system = extract_system_for(runtime.book_type, runtime.language)
@@ -434,8 +435,8 @@ def test_late_chunk_rejection_restarts_whole_source_and_settles_all_failed_chunk
         if schema is Extraction:
             extraction_prompts.append(user)
             if len(extraction_prompts) == 3:
-                assert len(_costs(runtime)) == 4
-                assert _totals(_costs(runtime)) == {"in": 50, "out": 10}
+                assert len(_costs(runtime)) == 3
+                assert _totals(_costs(runtime)) == {"in": 39, "out": 9}
             return _extraction(empty_entities=True), usage
         review_sources.append(reviewed_source(user))
         return _verdict(reject=len(review_sources) == 2, user=user), usage
@@ -443,30 +444,30 @@ def test_late_chunk_rejection_restarts_whole_source_and_settles_all_failed_chunk
     monkeypatch.setattr(runtime.client, "complete", complete)
     status = _advance(runtime)
     assert status["status"] == "done" and status["error"] is None
-    assert len(review_sources) >= 5, "fixture must span at least three chunks"
-    assert extraction_prompts[:2] == [_repair_prompt_parts(prompt)[0]
-                                      for prompt in extraction_prompts[2:4]]
-    assert all(_repair_prompt_parts(prompt)[1] for prompt in extraction_prompts[2:])
-    assert review_sources[:2] == review_sources[2:4]
-    assert "".join(review_sources[2:]) == runtime.chapter["text"]
-    assert all(worker_module._GROUNDING_REPAIR_INSTRUCTION not in call[0] for call in calls[:4])
-    assert all(worker_module._GROUNDING_REPAIR_INSTRUCTION in call[0]
-               for call in calls[4:] if call[2] is Extraction)
+    assert len(review_sources) >= 4, "fixture must span at least three chunks"
+    assert extraction_prompts[1] == _repair_prompt_parts(extraction_prompts[2])[0]
+    assert _repair_prompt_parts(extraction_prompts[2])[1]
+    assert all(not _repair_prompt_parts(p)[1] for i, p in enumerate(extraction_prompts) if i != 2)
+    assert review_sources[1] == review_sources[2]
+    assert "".join([review_sources[0], *review_sources[2:]]) == runtime.chapter["text"]
+    extraction_calls = [call for call in calls if call[2] is Extraction]
+    assert [worker_module._GROUNDING_REPAIR_INSTRUCTION in call[0] for call in extraction_calls] == [
+        i == 2 for i in range(len(extraction_calls))]
     rows = _costs(runtime)
-    assert len(rows) == len(review_sources) + 3
-    assert [row["phase"] for row in rows[:4]] == ["extraction-review"] * 2 + ["extraction-partial"] * 2
-    assert all(row["phase"] == "extraction-review" for row in rows[4:-1])
+    assert len(rows) == len(review_sources) + 2
+    assert [row["phase"] for row in rows[:3]] == ["extraction-review"] * 2 + ["extraction-partial"]
+    assert all(row["phase"] == "extraction-review" for row in rows[3:-1])
     assert rows[-1]["phase"] == "extraction"
     assert _totals(rows) == {key: sum(call[3][key] for call in calls) for key in ("in", "out")}
     assert {"in": rows[-1]["input_tokens"], "out": rows[-1]["output_tokens"]} == {
-        key: sum(call[3][key] for call in calls[4:] if call[2] is Extraction)
+        key: sum(call[3][key] for i, call in enumerate(extraction_calls) if i != 1)
         for key in ("in", "out")
     }
     assert sum(row["usd"] for row in rows) == pytest.approx(sum(
         usd_of(runtime.client._model_for(call[4]), call[3]) for call in calls))
     assert rows[-1]["usd"] == pytest.approx(sum(
         usd_of(runtime.client._model_for(call[4]), call[3])
-        for call in calls[4:] if call[2] is Extraction))
+        for i, call in enumerate(extraction_calls) if i != 1))
     with runtime.app.state.store.book(runtime.book_id) as mem:
         receipt = mem.chapter_completion(runtime.chapter["key"], 2,
                                          content_hash_of(runtime.chapter["text"]))
@@ -476,9 +477,9 @@ def test_late_chunk_rejection_restarts_whole_source_and_settles_all_failed_chunk
         summaries = [row for row in mem._audit_all("chapter_summaries") if row["revealed_at"] == 2]
         assert len(summaries) == 1
         assert summaries[0]["summary"] == " ".join(
-            [_extraction()["chapter_summary"]] * len(review_sources[2:]))
+            [_extraction()["chapter_summary"]] * (len(review_sources) - 1))
         events = [row for row in mem._audit_all("events") if row["revealed_at"] == 2]
-        assert len(events) == len(review_sources[2:]), "cleared parts from the rejected pass must not leak"
+        assert len(events) == len(review_sources) - 1, "cleared parts from the rejected pass must not leak"
     _assert_no_pending(runtime)
 
 
@@ -537,4 +538,26 @@ def test_mixed_model_review_charge_is_not_replayed_during_receipt_crash_recovery
     assert _advance(runtime)["status"] == "done"
     assert _costs(runtime) == rows, "replaying a receipt must duplicate neither model's charge"
     assert calls == [Extraction, ExtractionVerdict]
+    _assert_no_pending(runtime)
+
+
+def test_late_chunk_repair_failure_withholds_previously_cleared_chunks(runtime, monkeypatch):
+    baseline, reviews, calls = _memory(runtime), [], []
+    system = extract_system_for(runtime.book_type, runtime.language)
+    empty = extract_user_prompt(runtime.chapter["title"], runtime.roster, "",
+                                book_type=runtime.book_type, content_language=runtime.language)
+    runtime.settings.cost_max_input_tokens_per_call = estimate_input_tokens(system, empty, Extraction) + 8000
+    def complete(system, user, *, tier, schema):
+        calls.append(schema)
+        if schema is Extraction:
+            return _extraction(empty_entities=True), {"in": 11, "out": 3}
+        reviews.append(reviewed_source(user))
+        return _verdict(reject=len(reviews) in {2, 3}, user=user), {"in": 13, "out": 2}
+    monkeypatch.setattr(runtime.client, "complete", complete)
+    status = _advance(runtime)
+    assert status["status"] == "error" and "could not be grounded" in status["error"]
+    assert len(reviews) == 3 and reviews[1] == reviews[2] and reviews[0] != reviews[1]
+    assert _memory(runtime) == baseline
+    assert runtime.catalog.get_state(runtime.book_id)["ingest_progress"] == 1
+    assert _totals(_costs(runtime)) == {"in": 3 * (11 + 13), "out": 3 * (3 + 2)}
     _assert_no_pending(runtime)

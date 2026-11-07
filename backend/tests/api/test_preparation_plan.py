@@ -270,7 +270,7 @@ def test_broader_preparation_never_offers_failed_or_stale_questions(env, monkeyp
             value["audits"].pop()
         return SimpleNamespace(value=value)
 
-    def answer(book_id, body, catalog, store, settings, client, worker):
+    def answer(book_id, body, catalog, store, settings, client, worker, *, request=None):
         calls.append(body.question)
         if failure == "answer_fails":
             raise RuntimeError("provider unavailable")
@@ -321,7 +321,7 @@ def test_eight_safe_answers_use_normal_route_and_only_reviewed_questions_are_off
             return SimpleNamespace(value={"questions": rows})
         return SimpleNamespace(value=audit(json.loads(kwargs["user"])["questions"]))
 
-    def answer(book_id, body, catalog, store, settings, client, worker):
+    def answer(book_id, body, catalog, store, settings, client, worker, *, request=None):
         assert client.preparing and body.bookmark == 2
         calls.append(body.question)
         client.answers.set((*scope.answer_key, body.question), payload())

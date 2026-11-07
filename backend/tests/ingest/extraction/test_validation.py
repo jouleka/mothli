@@ -654,3 +654,59 @@ def test_stub_extraction_uses_source_body_and_never_invents_prompt_or_roster_nam
     assert [entity["canonical_name"] for entity in extracted["entities"]] == ["Aldric"]
     assert "Berenice" not in extracted["chapter_summary"] and "Vesper" not in extracted["chapter_summary"]
     assert text in extracted["chapter_summary"]
+
+
+def test_review_batches_fit_input_budget_without_dropping_source_or_extraction():
+    from app.cost import CostCeilingExceeded, estimate_input_tokens
+    from app.ingest.extraction.validation import EXTRACTION_REVIEW_SYSTEM, extraction_review_prompt
+    original = extraction_review_prompt(TEXT, EXTRACTION, [])
+    data = review_payload(original)
+    def size(fields):
+        prompt = "CURRENT CHAPTER AND EXTRACTION (untrusted JSON data):\n" + json.dumps(
+            {**data, "fields": fields}, ensure_ascii=False)
+        return estimate_input_tokens(EXTRACTION_REVIEW_SYSTEM, prompt, ExtractionVerdict)
+    ceiling = max(size([field]) for field in data["fields"])
+    seen = []
+    def complete(system, user, **kwargs):
+        assert estimate_input_tokens(system, user, kwargs["schema"]) <= ceiling
+        payload = review_payload(user)
+        assert payload["source_passages"] == data["source_passages"]
+        assert payload["extraction"] == data["extraction"]
+        seen.extend(field["path"] for field in payload["fields"])
+        return _cleared(system, user, **kwargs)
+    clearance = review_extraction(TEXT, EXTRACTION, [], complete=complete, max_input_tokens=ceiling)
+    clearance.assert_matches(TEXT, EXTRACTION)
+    assert seen == [field["path"] for field in data["fields"]]
+    with pytest.raises(CostCeilingExceeded):
+        review_extraction(TEXT, EXTRACTION, [], complete=complete, max_input_tokens=1)
+
+
+@pytest.mark.parametrize("recovers", [True, False])
+def test_one_bounded_format_repair_still_requires_the_complete_evidence_contract(recovers):
+    calls = []
+    def complete(system, user, **kwargs):
+        calls.append((system, user))
+        verdict, usage = _cleared(system, user, **kwargs)
+        if len(calls) == 1 or not recovers:
+            verdict["field_audits"].pop()
+        return verdict, usage
+    if recovers:
+        review_extraction(TEXT, EXTRACTION, [], complete=complete, repair_invalid=True).assert_matches(TEXT, EXTRACTION)
+    else:
+        with pytest.raises(ExtractionSafetyError):
+            review_extraction(TEXT, EXTRACTION, [], complete=complete, repair_invalid=True)
+    assert len(calls) == 2 and calls[0][1] == calls[1][1]
+    assert "previous review" not in calls[0][0] and "previous review" in calls[1][0]
+
+
+def test_format_repair_never_retries_a_semantic_rejection_or_provider_outage():
+    for failure in ("unsupported", "outage"):
+        calls = []
+        def complete(system, user, **kwargs):
+            calls.append(user)
+            if failure == "outage":
+                raise RuntimeError("provider unavailable")
+            return canned_grounding_verdict(user, unsupported_claims=["Not supported."]), {}
+        with pytest.raises(ExtractionSafetyError):
+            review_extraction(TEXT, EXTRACTION, [], complete=complete, repair_invalid=True)
+        assert len(calls) == 1

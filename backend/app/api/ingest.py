@@ -8,6 +8,16 @@ from app.ingest.manifest import AtomSetMismatch, assert_matches_store, load_mani
 router = APIRouter(prefix="/api/books/{book_id}", tags=["ingest"])
 
 
+@router.post("/ingest/retry", dependencies=[Depends(book_lifecycle)])
+def retry_ingest(book_id: str, catalog=Depends(get_catalog), worker=Depends(get_worker)):
+    state = catalog.get_state(book_id)
+    if state is None:
+        raise HTTPException(404, "unknown book")
+    if worker.status(book_id)["status"] != "running":
+        worker.enqueue(book_id, state["bookmark"])
+    return {"status": worker.status(book_id)["status"]}
+
+
 @router.get("/ingest", dependencies=[Depends(book_lifecycle)])
 def ingest_status(book_id: str, catalog=Depends(get_catalog), worker=Depends(get_worker),
                   store=Depends(get_store), settings=Depends(get_settings)):

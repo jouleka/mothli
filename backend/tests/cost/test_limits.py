@@ -180,3 +180,32 @@ def test_operator_reconcile_converts_crash_reservation_to_conservative_ledger_en
     assert reopened.get_cost_reservations("b") == []
     [row] = reopened.get_costs("b")
     assert row["phase"] == "synthesis-reconciled-reserved" and row["usd"] == 0.1
+
+
+def test_local_transport_chunking_reserves_harness_headroom_with_a_large_roster(tmp_path):
+    catalog = _catalog(tmp_path)
+    settings = _settings(cost_max_input_tokens_per_call=60_000,
+                         cost_max_output_tokens_per_call=4096,
+                         cost_max_input_tokens_per_book=2_000_000,
+                         cost_max_output_tokens_per_book=200_000)
+    class LocalClient(FakeClient):
+        provider = "codex-local"
+        def complete(self, system, user, tier="cheap", schema=None, **kwargs):
+            assert estimate_input_tokens(system, user, schema) + 24_000 <= 60_000
+            self.prompts.append(user)
+            return {"chapter_summary": "", "entities": [], "relationships": [],
+                    "events": [], "themes": []}, {"in": 100, "out": 5}
+    client = LocalClient()
+    client.prompts = []
+    worker = IngestWorker(None, catalog, client, settings, executor=SimpleNamespace())
+    roster = [{"entity_id": i, "canonical_name": f"Person {i}" + "x" * 180,
+               "type": "character", "aliases": []} for i in range(95)]
+    text = "Aldric crossed the long valley. " * 2000
+    result = worker._complete_extraction("b", 1, "Long chapter", roster, text)
+    sent = [p.split("CHAPTER TEXT:\n", 1)[1].split("\n\nExtract entities", 1)[0]
+            for p in client.prompts]
+    assert len(sent) > 1 and "".join(sent) == text
+    assert max(map(len, sent)) <= 6000
+    for reservation in result[3]:
+        catalog.settle_cost("b", reservation, phase="test-cleanup")
+    catalog.close()

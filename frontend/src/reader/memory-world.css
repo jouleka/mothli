@@ -59,7 +59,7 @@
 .memory-world .journey-stop-label { font: 500 10px/1.3 var(--sans); text-transform: capitalize; margin-top: 3px; }
 .memory-world .journey-stop-detail { color: #a79ebd; font: 400 9px/1.3 var(--sans); }
 .memory-world .is-current .journey-stop { color: #312343; background: #d9c5f4; border-color: #e2d2fa; box-shadow: 0 0 0 5px #ccaff51c, 0 8px 24px #0003; }
-.memory-world .journey-rail button:hover .journey-stop { transform: translateY(-3px); border-color: #e9d9fa; }
+.memory-world .journey-rail button:hover .journey-stop { border-color: #e9d9fa; }
 .memory-world .journey-spotlight, .memory-world .people-studio, .memory-world .memory-correction-history {
   --surface: #f9f7fd; --accent-wash: #e8def7; --madder: #6450a5; --accent-hover: #4d3e81; --wash: #eeebf5; --ink: #26283e; --ink-soft: #5e5c73; --ink-muted: #6c697d; --paper: #f9f7fd; --paper-deep: #eeebf6; --canvas: #eeebf5; --hairline: #ddd8e9; --accent: #6450a5;
   color: var(--ink); background: var(--paper); border-radius: 22px;
@@ -131,7 +131,7 @@
 .memory-world .constellation-person[data-tone="1"] > span { background: #becac7; color: #485853; box-shadow: 0 0 0 1px #b6cac5; }
 .memory-world .constellation-person[data-tone="2"] > span { background: #e0b6a4; color: #6b4b40; box-shadow: 0 0 0 1px #d4a997; }
 .memory-world .constellation-person > strong { display: block; max-width: 116px; font: 500 10px/1.35 var(--sans); overflow-wrap: anywhere; text-shadow: 0 2px 8px #171020; }
-.memory-world .constellation-person:hover > span, .memory-world .constellation-person:focus-visible > span { transform: scale(1.12); box-shadow: 0 0 0 4px #d8c0ef30, 0 0 20px #d8c0ef35; }
+.memory-world .constellation-person:hover:not(:disabled) > span { filter: brightness(1.08); }
 .memory-world .people-constellation figcaption { padding: 11px 17px 14px; color: #bcb0cd; text-align: center; font: 400 10px/1.6 var(--sans); }
 .memory-world .people-studio .connection-ledger > ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .memory-world .people-studio .connection-ledger > ul > li { display: block; padding: 16px; background: #efebf5; border: 1px solid #e0d8e9; border-radius: 13px; }

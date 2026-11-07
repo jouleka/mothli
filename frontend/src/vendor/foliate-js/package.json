@@ -43,5 +43,8 @@
     "dictd",
     "stardict",
     "opds"
-  ]
+  ],
+  "overrides": {
+    "deepmerge": "4.1.1"
+  }
 }

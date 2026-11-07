@@ -69,8 +69,7 @@ button {
     color var(--fast),
     background var(--fast),
     border-color var(--fast),
-    box-shadow var(--fast),
-    transform var(--fast);
+    box-shadow var(--fast);
 }
 button:disabled {
   cursor: not-allowed;
@@ -117,8 +116,19 @@ input[type="checkbox"] {
   accent-color: var(--madder);
 }
 :focus-visible {
-  outline: 2px solid var(--madder);
-  outline-offset: 3px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Composite fields own one focus indicator, including their icon and padding.
+   Only text entry activates it; buttons inside a composer keep their own keyboard focus. */
+.focus-field:has(:is(input, textarea):focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+.focus-field :is(input, textarea):focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 main:focus,
 [tabindex="-1"]:focus {
@@ -210,10 +220,6 @@ main:focus,
   background: var(--paper-deep);
   border-color: var(--ink-muted);
 }
-.ui-button:active:not(:disabled),
-.icon-button:active:not(:disabled) {
-  transform: translateY(1px);
-}
 .ui-button--primary {
   background: var(--madder);
   border-color: var(--madder);
@@ -246,7 +252,7 @@ main:focus,
   border-color: transparent;
   background: transparent;
 }
-.icon-button:hover {
+.icon-button:hover:not(:disabled) {
   background: var(--paper-deep);
 }
 .safe-label {
@@ -572,10 +578,6 @@ main:focus,
   background: var(--paper);
   color: var(--ink-soft);
 }
-.library-search:focus-within {
-  outline: 2px solid var(--madder);
-  outline-offset: 2px;
-}
 .library-search input {
   width: 175px;
   border: 0 !important;
@@ -717,7 +719,6 @@ main:focus,
   overflow: hidden;
 }
 .book-open:hover .book-cover {
-  transform: translateY(-4px);
   box-shadow:
     1px 9px 15px #16261019,
     inset 5px 0 0 #0000000d;

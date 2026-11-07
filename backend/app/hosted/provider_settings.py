@@ -17,12 +17,12 @@ PROVIDERS: tuple[Provider, ...] = ("openai-compatible", "anthropic", "offline")
 DEFAULTS: dict[str, dict[str, str | None]] = {
     "extraction": {
         "provider": "openai-compatible",
-        "model": "gpt-4o-mini",
+        "model": "gpt-6.1-terra",
         "base_url": "https://api.openai.com/v1",
     },
     "synthesis": {
         "provider": "openai-compatible",
-        "model": "gpt-4o",
+        "model": "gpt-6.1-terra",
         "base_url": "https://api.openai.com/v1",
     },
     "embedding": {
@@ -32,7 +32,7 @@ DEFAULTS: dict[str, dict[str, str | None]] = {
     },
     "judge": {
         "provider": "openai-compatible",
-        "model": "gpt-4o-mini",
+        "model": "gpt-6.1-terra",
         "base_url": "https://api.openai.com/v1",
     },
 }
