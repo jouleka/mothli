@@ -3,6 +3,8 @@ serve EPUB bytes, delete. Import is the ONLY place the atom set is authored: ato
 atom_set_version the D-A10 version check keys on."""
 import json
 import os
+import io
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,6 +25,44 @@ def env(tmp_path):
 def _import(c, blob=None, name="book.epub"):
     blob = blob or three_chapter_book()
     return c.post("/api/books", files={"file": (name, blob, "application/epub+zip")})
+
+
+def test_image_only_chapter_opens_and_has_a_distinct_spoiler_boundary(env):
+    c, settings = env
+    original = three_chapter_book()
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(original)) as src, zipfile.ZipFile(output, "w") as dst:
+        for entry in src.infolist():
+            data = src.read(entry.filename)
+            if entry.filename == "c2.xhtml":
+                data = b'<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="map.png"/></body></html>'
+            dst.writestr(entry, data)
+    imported = _import(c, output.getvalue())
+    assert imported.status_code == 201
+    bid = imported.json()["book_id"]
+    manifest = c.get(f"/api/books/{bid}/manifest").json()
+    assert len(manifest["atoms"]) == 3
+    assert manifest["atoms"][1]["char_len"] == 1
+    # Empty pages advance geometry without buying an AI call or inventing source facts.
+    empty, usage, usd, reservations, clearance = c.app.state.worker._complete_extraction(
+        bid, 2, "Chapter II", [], "",
+    )
+    assert empty == {"chapter_summary": "", "entities": [], "relationships": [],
+                     "events": [], "themes": []}
+    clearance.assert_matches("", empty)
+    assert usage == {"in": 0, "out": 0} and usd == 0 and reservations == []
+    initial = c.get(f"/api/books/{bid}/position")
+    assert initial.status_code == 200
+    assert initial.json()["bookmark"] == 0
+    first_length = manifest["atoms"][0]["char_len"]
+    first = c.put(f"/api/books/{bid}/position", json={
+        "cfi": "map-start", "offset": first_length, "position_epoch": 0,
+    })
+    assert first.status_code == 200 and first.json()["bookmark"] == 1
+    second = c.put(f"/api/books/{bid}/position", json={
+        "cfi": "after-map", "offset": first_length + 1, "position_epoch": 0,
+    })
+    assert second.status_code == 200 and second.json()["bookmark"] == 2
 
 
 def test_import_shelves_the_book_with_manifest_and_store(env):

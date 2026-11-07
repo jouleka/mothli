@@ -315,6 +315,12 @@ def extraction_review_prompt(text: str, extraction: dict, roster: list[dict]) ->
 def review_extraction(text: str, extraction: dict, roster: list[dict], *, complete,
                       screen=None, max_output_tokens=4096) -> ExtractionClearance:
     value = Extraction.model_validate(extraction).model_dump(mode="json")
+    # A completely empty extraction asserts no facts (illustrations or deliberately excluded
+    # supplementary material). Bind it to the exact source without paying for a model review.
+    # Every nonempty assertion still goes through the ordinary gates.
+    if value == {
+            "chapter_summary": "", "entities": [], "relationships": [], "events": [], "themes": []}:
+        return ExtractionClearance(_digest(text), _digest(_extraction_json(value)))
     assert_observed_entity_names(text, value, roster)
     prompt = extraction_review_prompt(text, value, roster)
     if screen is not None:

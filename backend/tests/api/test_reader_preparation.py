@@ -229,7 +229,7 @@ def test_preparation_uses_only_completed_facts_and_normal_reviewed_answer_route(
         return SimpleNamespace(value={"questions": [{"question": q, "kind": "character",
             "basis_ids": [1], "follow_up_to": None} for q in ["Who is Berenice?", "Who is Berenice?",
                                                      "Where did Berenice meet Aldric?"]]})
-    def reviewed(book_id, body, catalog, store, settings, client, worker):
+    def reviewed(book_id, body, catalog, store, settings, client, worker, *, request=None):
         assert client.preparing and book_id == bid and body.bookmark == 2
         questions.append(body.question)
         client.answers.set((*scope.answer_key, body.question), payload())
@@ -263,7 +263,7 @@ def test_failed_parent_answer_keeps_safe_followup_but_budget_exhaustion_stops(en
         return SimpleNamespace(value={"questions": [
             {"question": questions[0], "kind": "event", "basis_ids": [1], "follow_up_to": None},
             {"question": questions[1], "kind": "follow_up", "basis_ids": [1], "follow_up_to": 1}]})
-    def answer(book_id, body, catalog, store, settings, client, worker):
+    def answer(book_id, body, catalog, store, settings, client, worker, *, request=None):
         attempted.append(body.question)
         if len(attempted) == 1:
             raise HTTPException(failure_status, "controlled failure")

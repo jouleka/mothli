@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     embed_model: str | None = None
     llm_cheap_model: str | None = None
     llm_large_model: str | None = None
+    llm_transport: Literal["api", "codex-local"] = "api"
 
     # Local typed decisions; prose and extraction keep their configured generative provider.
     jev_enabled: bool = False
@@ -123,6 +124,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
+        if self.llm_transport == "codex-local" and self.deployment_mode != "local":
+            raise ValueError("codex-local is only supported for local testing")
         if self.deployment_mode != "hosted":
             return self
 
@@ -216,5 +219,6 @@ class Settings(BaseSettings):
             "EMBED_MODEL": self.embed_model,
             "LLM_CHEAP_MODEL": self.llm_cheap_model,
             "LLM_LARGE_MODEL": self.llm_large_model,
+            "LLM_TRANSPORT": self.llm_transport,
         }
         return {k: v for k, v in pairs.items() if v}

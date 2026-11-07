@@ -9,6 +9,7 @@ from pathlib import Path
 import threading
 
 from app.ask import AskDraft
+from app.content_scope import CONTENT_POLICY_VERSION, excluded_ordinals
 from app.eval.spoiler_gate import validity_snapshot
 from app.preparation_plan import valid_saved_plan
 
@@ -30,7 +31,7 @@ def answer_scope(book_id, eff, state, manifest, *, catalog, store, settings, cli
                 getattr(getattr(client, "jev", None), "model", None),
                 settings.jev_min_probability, settings.jev_min_confidence,
                 settings.reader_reuse_min_probability, settings.reader_reuse_min_confidence,
-                ANSWER_VERSION]
+                ANSWER_VERSION, CONTENT_POLICY_VERSION, excluded_ordinals(manifest)]
     identity.append(settings.reader_reuse_fast_review)
     return (book_id, catalog.get_book(book_id)["incarnation"],
             hashlib.sha256(json.dumps(identity).encode()).hexdigest())

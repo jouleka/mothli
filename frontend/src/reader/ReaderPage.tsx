@@ -1315,7 +1315,7 @@ export function ReaderPage({
         <footer className="reader-footer">
           <span>
             {pos && manifest
-              ? `${unit[0].toUpperCase() + unit.slice(1)} ${Math.min(pos.current_chapter, manifest.atoms.length)} of ${manifest.atoms.length}`
+              ? manifest.atoms[Math.min(pos.current_chapter, manifest.atoms.length) - 1]?.title || `${unit[0].toUpperCase() + unit.slice(1)} ${Math.min(pos.current_chapter, manifest.atoms.length)}`
               : "Preparing your pages"}
           </span>
           <span className="reader-page-hint">Use ← → to turn the page</span>
@@ -1362,6 +1362,11 @@ export function ReaderPage({
         </footer>
       </main>
       <Companion
+        completedTitle={manifest?.atoms.find((a) => a.ordinal === pos?.bookmark)?.title}
+        chapterProgress={manifest?.content_chapters ? {
+          completed: Math.max(0, ...manifest.atoms.filter((a) => a.ordinal <= (pos?.bookmark ?? 0)).map((a) => a.chapter_number ?? 0)),
+          total: manifest.content_chapters,
+        } : undefined}
         bookId={bookId}
         bookmark={pos?.bookmark ?? null}
         totalAtoms={manifest?.atoms.length ?? 0}

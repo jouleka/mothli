@@ -291,6 +291,28 @@ describe("AskTheBook", () => {
     expect(await axeAA(container)).toHaveNoViolations();
   });
 
+  test("renders a routed recap without requiring fact claims or a fake zero charge", async () => {
+    mocks.askBook.mockResolvedValue({ ...answer, answer_type: "recap", recap: "Aldric arrived in the valley.", claims: [], citations: [], cost: null, status: "ready" });
+    render(<AskTheBook bookId="b" bookmark={2} onNavigate={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText(/your question/i), { target: { value: "Catch me up" } });
+    fireEvent.submit(screen.getByLabelText(/your question/i).closest("form")!);
+    expect(await screen.findByText("Aldric arrived in the valley.")).toBeTruthy();
+    expect(screen.queryByText(/Provider cost/i)).toBeNull();
+  });
+
+  test.each([
+    ["preparing", /still catching up/i],
+    ["preparation_failed", /couldn.t finish preparing/i],
+    ["paratext_only", /opening material/i],
+  ])("distinguishes %s from unsupported evidence", async (status, message) => {
+    mocks.askBook.mockResolvedValue({ ...answer, insufficient_evidence: true, status, claims: [], citations: [] });
+    render(<AskTheBook bookId="b" bookmark={2} onNavigate={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText(/your question/i), { target: { value: "Why?" } });
+    fireEvent.submit(screen.getByLabelText(/your question/i).closest("form")!);
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.queryByText(/story hasn.t told us yet/i)).toBeNull();
+  });
+
   test("states insufficient evidence without inventing an answer", async () => {
     mocks.askBook.mockResolvedValue({
       ...answer,
@@ -311,7 +333,7 @@ describe("AskTheBook", () => {
     });
     fireEvent.submit(screen.getByLabelText(/your question/i).closest("form")!);
     expect(
-      await screen.findByText(/do not establish an answer yet/i),
+      await screen.findByText(/couldn.t find a supported answer/i),
     ).toBeTruthy();
     expect(screen.queryByText(/Berenice met/)).toBeNull();
   });
@@ -337,7 +359,7 @@ describe("AskTheBook", () => {
       await screen.findByText(/^Berenice met Aldric at the forge\.$/),
     ).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe(
-      "Your cited answer is ready.",
+      "Your answer is ready.",
     );
     expect(mocks.askBook).toHaveBeenLastCalledWith(
       "b",

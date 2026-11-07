@@ -40,12 +40,21 @@ def _version(atom_rows):
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
+def position_length(text):
+    """Reserve a positive reading span for retained image-only atoms, without inventing text.
+
+    The segmenter preserves labeled illustrated pages. One virtual position unit lets the reader
+    move through them while keeping chapter identities and spoiler boundaries distinct.
+    """
+    return max(1, len(text or ""))
+
+
 def build_manifest(book_id, result, chapters):
     """From ``segment_for_ingest``'s (SegmentResult, chapters): the light, position-layer view of the
     atom set (no text — the worker re-segments the stored source.epub and cross-checks)."""
     atoms = [{"ordinal": ch["ordinal"], "key": ch["key"], "href": ch.get("href", ""),
               "title": ch.get("title", ""), "part_label": ch.get("part_label", ""),
-              "char_len": len(ch.get("text", "") or "")} for ch in chapters]
+              "char_len": position_length(ch.get("text"))} for ch in chapters]
     return {
         "book_id": book_id,
         "mode": result.mode,
@@ -95,6 +104,8 @@ def load_manifest(data_dir, book_id):
         raise AtomSetMismatch(f"atom manifest for {book_id!r} has malformed content language")
     m["content_language"] = language
     ords = [a["ordinal"] for a in m["atoms"]]
+    if any(type(a.get("char_len")) is not int or a["char_len"] <= 0 for a in m["atoms"]):
+        raise AtomSetMismatch("atom manifest contains a non-positive reading span")
     if ords != list(range(1, len(ords) + 1)):
         raise AtomSetMismatch(f"atom manifest for {book_id!r} ordinals are not contiguous 1..N")
     return m

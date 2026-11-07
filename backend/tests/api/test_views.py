@@ -1253,10 +1253,10 @@ def test_notes_future_event_alone_never_surfaces(env):
     assert all("xyzzy" not in ev["summary"] for ev in tl["events"])
 
 
-def test_lit9_keeps_the_existing_novel_recap_cache_identity():
+def test_recap_cache_includes_content_policy_without_changing_book_type_roles():
     from app.api.views import _recap_prompt_version
 
-    assert _recap_prompt_version("novel") == "recap-v3"
-    assert _recap_prompt_version("reference") == "recap-v4:reference"
-    assert _recap_prompt_version("novel", "en") == "recap-v3"
-    assert _recap_prompt_version("novel", "ru") == "recap-v3:source-ru"
+    assert _recap_prompt_version("novel") == "recap-v3:content-scope-v1"
+    assert _recap_prompt_version("reference") == "recap-v4:reference:content-scope-v1"
+    assert _recap_prompt_version("novel", "en") == "recap-v3:content-scope-v1"
+    assert _recap_prompt_version("novel", "ru") == "recap-v3:content-scope-v1:source-ru"

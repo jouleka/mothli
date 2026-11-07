@@ -104,7 +104,7 @@ def test_reviewed_answer_cache_is_free_and_frontier_and_reset_scoped(env, monkey
     assert reset["as_of_chapter"] == 0 and reset["claims"] == []
 
 
-@pytest.mark.parametrize("assist_path", ["/ask", "/chapter-closeout"])
+@pytest.mark.parametrize("assist_path", ["/ask", "/chapter-closeout", "/selection-action", "/ingest/retry"])
 def test_preparation_and_answers_share_reads_but_reset_waits_and_cancel_releases(assist_path):
     async def scenario():
         app = SimpleNamespace(state=SimpleNamespace(book_request_locks={}))
@@ -232,7 +232,7 @@ def test_recap_and_progress_share_lifecycle_but_mutations_wait_and_cancellation_
 
 
 @pytest.mark.parametrize("mutation", ["reset", "delete"])
-@pytest.mark.parametrize("experience", ["recap", "reflection"])
+@pytest.mark.parametrize("experience", ["recap", "reflection", "selection"])
 def test_slow_recap_does_not_block_reader_status_or_progress_but_lifecycle_mutation_waits(
     env, monkeypatch, mutation, experience,
 ):
@@ -242,8 +242,9 @@ def test_slow_recap_does_not_block_reader_status_or_progress_but_lifecycle_mutat
     entered, release = threading.Event(), threading.Event()
 
     def slow_recap(system, user, tier="cheap", schema=None, **kwargs):
-        if tier == "large" and (schema is None if experience == "recap"
-                                else getattr(schema, "__name__", "") == "AskDraft"):
+        if ((experience == "selection" and "citation_ids" in getattr(schema, "model_fields", {}))
+                or (tier == "large" and (schema is None if experience == "recap"
+                                        else getattr(schema, "__name__", "") == "AskDraft"))):
             entered.set()
             assert release.wait(5), "test did not release the simulated recap provider"
         return original_complete(system, user, tier=tier, schema=schema, **kwargs)
@@ -256,7 +257,10 @@ def test_slow_recap_does_not_block_reader_status_or_progress_but_lifecycle_mutat
                                      base_url="http://testserver") as requests:
             recap = asyncio.create_task(
                 requests.get(f"/api/books/{bid}/catch-me-up") if experience == "recap" else
-                requests.post(f"/api/books/{bid}/chapter-closeout", json={"chapter": 2}))
+                requests.post(f"/api/books/{bid}/chapter-closeout", json={"chapter": 2})
+                if experience == "reflection" else requests.post(
+                    f"/api/books/{bid}/selection-action",
+                    json={"action": "define", "text": "magistrate", "atom": 3, "cfi": "cfi"}))
             mutation_request = None
             try:
                 assert await asyncio.to_thread(entered.wait, 2)

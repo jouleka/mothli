@@ -21,6 +21,16 @@ import "./ask-reflect-world.css";
 
 type AskExchange = { question: string; answer: AskAnswer };
 
+function unavailableMessage(answer: AskAnswer): string {
+  switch (answer.status) {
+    case "preparing": return "I'm still catching up with the pages you've finished. Try again shortly, or select a passage to discuss now.";
+    case "preparation_failed": return "I couldn't finish preparing your last chapter. Retry the companion, or keep reading for now.";
+    case "not_started": return "We're at the beginning. Select a passage and we can talk about it.";
+    case "paratext_only": return "You've read the opening material. Once you finish some of the main text, I can help you revisit it.";
+    default: return "I couldn't find a supported answer in the pages I've checked. Try a more specific question or select a passage.";
+  }
+}
+
 type AskSnapshot = {
   question: string;
   answer: AskAnswer | null;
@@ -249,10 +259,10 @@ export function AskTheBook({
               <section className="ask-exchange" key={exchangeIndex} data-latest-exchange={exchangeIndex === exchanges.length - 1 || undefined} aria-label={`Question ${exchangeIndex + 1}`}>
                 <div className="ask-question-bubble"><span>You wondered</span><p>{exchange.question}</p></div>
                 <section className="ask-answer world-answer" aria-label="Answer">
-                  <h3><Icon name={exchange.answer.insufficient_evidence ? "book" : "sparkle"} size={16} /> {exchange.answer.insufficient_evidence ? "The story hasn't told us yet" : "From the pages you've read"}</h3>
+                  <h3><Icon name={exchange.answer.insufficient_evidence ? "book" : "sparkle"} size={16} /> {exchange.answer.insufficient_evidence ? "Let's find our place" : exchange.answer.answer_type === "recap" ? "Your reading so far" : "From the pages you've read"}</h3>
                   {exchange.answer.insufficient_evidence ? (
-                    <p>The pages you have completed do not establish an answer yet.</p>
-                  ) : (
+                    <p>{unavailableMessage(exchange.answer)}</p>
+                  ) : exchange.answer.answer_type === "recap" ? <p>{exchange.answer.recap}</p> : (
                     <>
                       {exchange.answer.claims.map((claim, index) => (
                         <p key={`${index}-${claim.text}`}>
@@ -284,7 +294,7 @@ export function AskTheBook({
                       </details>
                     </>
                   )}
-                  <ProviderCost cost={exchange.answer.cost} />
+                  {exchange.answer.cost && <ProviderCost cost={exchange.answer.cost} />}
                 </section>
               </section>
             );
@@ -298,9 +308,9 @@ export function AskTheBook({
         </div>
 
         <div className="ask-status" role="status" aria-live="polite" aria-atomic="true" data-busy={busy || undefined} data-error={error ? true : undefined}>
-          {busy ? "Searching only the chapters you have completed…" : error || (answer ? answer.insufficient_evidence ? "There is not enough evidence in your completed chapters yet." : "Your cited answer is ready." : "")}
+          {busy ? "Checking the pages you've read…" : error || (answer ? answer.insufficient_evidence ? "" : "Your answer is ready." : "")}
         </div>
-        <form className="ask-form world-composer" onSubmit={(event) => void submit(event)}>
+        <form className="ask-form world-composer focus-field" onSubmit={(event) => void submit(event)}>
           <div className="ask-composer-head"><label htmlFor={`${titleId}-question`}>Your question</label><span>{question.length} / 500</span></div>
           <textarea
             ref={inputRef}

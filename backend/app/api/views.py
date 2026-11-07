@@ -18,6 +18,7 @@ from copy import copy, deepcopy
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
@@ -67,7 +68,7 @@ from app.deps import (
     get_client,
     get_reader_client,
     get_settings,
-    get_store,
+    get_content_store as get_store,
     get_worker,
 )
 from app.eval.spoiler_gate import (
@@ -117,18 +118,37 @@ router = APIRouter(
     prefix="/api/books/{book_id}", tags=["views"], dependencies=[Depends(book_lifecycle)]
 )
 
-RECAP_PROMPT_VERSION = "recap-v3"                 # unchanged novel prompt/cache identity (LIT-29)
+RECAP_PROMPT_VERSION = "recap-v3"                 # novel synthesis prompt (LIT-29)
 NON_NOVEL_RECAP_PROMPT_VERSION = "recap-v4"       # LIT-9 profile-aware neutral wording
 RECAP_FAILURE_TTL_S = 60.0                        # negative cache: a double-rejected key 502s without
 #                                                   re-paying until the TTL lapses (pass-2 convoy fix)
 _log = logging.getLogger(__name__)
 
 
+def _recap_request(question):
+    value = re.sub(r"[^\w\s]", "", question.casefold()).strip()
+    return bool(re.fullmatch(
+        r"(?:please )?(?:catch me up|(?:give me |can you give me )?(?:a |the )?(?:quick |brief )?recap|"
+        r"what(?:s| has)? happened (?:so far|up to now)|what should i remember so far|"
+        r"remind me what happened|summari[sz]e (?:what ive read|the story so far))"
+        r"(?: please)?", value))
+
+
+def _preparation_state(state, requested, worker, book_id):
+    target = state["bookmark"] if requested is None else min(requested, state["bookmark"])
+    if state["ingest_progress"] < target:
+        return ("preparation_failed" if worker.status(book_id)["status"] not in {"running", "queued"}
+                else "preparing")
+    return "not_started" if target == 0 else None
+
+
 def _recap_prompt_version(book_type, content_language="und"):
-    # Novel generation is byte-identical and deliberately retains its cache key: upgrading LIT-9 must
-    # not repurchase Karamazov recaps. Other profiles key by type because their wording differs.
+    from app.content_scope import CONTENT_POLICY_VERSION
+    # Include content policy so cached recaps cannot resurrect excluded supplementary material.
+    # Other profiles also key by type because their wording differs.
     base = (RECAP_PROMPT_VERSION if book_type == "novel"
             else f"{NON_NOVEL_RECAP_PROMPT_VERSION}:{book_type}")
+    base += f":{CONTENT_POLICY_VERSION}"
     return base if content_language in {"und", "en"} or content_language.startswith("en-") \
         else f"{base}:source-{content_language}"
 
@@ -520,10 +540,21 @@ def ask_the_book(
     settings=Depends(get_settings),
     client=Depends(get_reader_client),
     worker=Depends(get_worker),
+    *, request: Request = None,
 ):
+    eff, state, manifest = _effective(book_id, body.bookmark, catalog, store, settings, worker)
+    waiting = _preparation_state(state, body.bookmark, worker, book_id)
+    if waiting:
+        return {"as_of_chapter": eff, "insufficient_evidence": True, "status": waiting,
+                "claims": [], "citations": [], "cost": _ask_cost_payload([])}
+    if _recap_request(body.question):
+        recap = catch_me_up(book_id, request, body.bookmark, catalog, store, settings, client, worker)
+        return {"as_of_chapter": recap["as_of_chapter"], "answer_type": "recap",
+                "recap": recap["recap"], "insufficient_evidence": recap["recap"] is None,
+                "status": "ready" if recap["recap"] else "paratext_only",
+                "claims": [], "citations": [], "cost": None}
     bank = getattr(client, "answers", None)
     if settings.reader_answer_cache and hasattr(bank, "run_once"):
-        eff, state, manifest = _effective(book_id, body.bookmark, catalog, store, settings, worker)
         eff = min(eff, state["ingest_progress"])
         if eff > 0:
             scope = answer_scope(book_id, eff, state, manifest, catalog=catalog, store=store,
@@ -1222,6 +1253,9 @@ def catch_me_up(book_id: str, request: Request, bookmark: int | None = _BM,
 
     recaps = request.app.state.recaps
     with store.book(book_id) as mem:
+        if not mem.view(eff).chapters():
+            return {"recap": None, "now": None, "as_of_chapter": eff, "cast_size": 0,
+                    "open_threads": 0, "cast": [], "cached": False, "status": "paratext_only"}
         cmu = mem.view(eff).catch_me_up()
         facts = supplied_facts(mem, eff)
         snap = validity_snapshot(mem, eff)

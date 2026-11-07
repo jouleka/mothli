@@ -3,8 +3,40 @@
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.llm.client import ProviderUnavailable
 from app.main import create_app
 from test_ingest import InlineExecutor
+
+
+def test_explicit_local_check_runs_a_real_completion_path_not_just_a_status_read(tmp_path, monkeypatch):
+    from app.llm import codex_local
+    calls = []
+    def complete(system, user, **kwargs):
+        calls.append((system, user, kwargs))
+        return "OK", {"in": 10, "out": 1}
+    monkeypatch.setattr(codex_local, "complete", complete)
+    app = create_app(Settings(_env_file=None, llm_transport="codex-local", data_dir=str(tmp_path)))
+    with TestClient(app) as client:
+        assert client.get("/api/health/ai").json()["completion_status"] == "unchecked"
+        assert not calls
+        checked = client.post("/api/health/ai/check")
+        assert checked.status_code == 200
+        assert checked.json()["completion_status"] == "ready"
+        assert len(calls) == 1
+        assert calls[0][1] == "Check the connection."
+        assert calls[0][2]["model"] == "gpt-6.1-terra"
+
+
+def test_local_connection_failure_is_reported_without_exposing_provider_details(tmp_path, monkeypatch):
+    from app.llm import codex_local
+    def fail(*args, **kwargs):
+        raise ProviderUnavailable("authentication", service="completion")
+    monkeypatch.setattr(codex_local, "complete", fail)
+    app = create_app(Settings(_env_file=None, llm_transport="codex-local", data_dir=str(tmp_path)))
+    with TestClient(app) as client:
+        checked = client.post("/api/health/ai/check")
+        assert checked.status_code == 200
+        assert checked.json()["completion_status"] == "degraded"
 
 
 def test_health_is_live_while_provider_readiness_is_degraded(tmp_path):
@@ -37,6 +69,7 @@ def test_ai_runtime_distinguishes_ready_demo_from_real_ai_without_secrets(tmp_pa
             "mode": "demo", "provider": "stub",
             "models": {"extraction": "stub-cheap", "synthesis": "stub-large"},
             "completion_status": "ready", "embedding_mode": "demo",
+            "local_testing": False, "reasoning": None,
         }
         app.state.client.provider = "openai-compatible"
         app.state.client.cheap_model = "gpt-5.4-mini"

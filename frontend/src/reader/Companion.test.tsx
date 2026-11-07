@@ -14,10 +14,11 @@ import { axeAA } from "../test-a11y";
 
 const mocks = vi.hoisted(() => ({
   ingest: vi.fn(),
+  retryIngest: vi.fn(),
   catchMeUp: vi.fn(),
 }));
 vi.mock("../api", () => ({
-  api: { ingest: mocks.ingest, catchMeUp: mocks.catchMeUp },
+  api: { ingest: mocks.ingest, catchMeUp: mocks.catchMeUp, retryIngest: mocks.retryIngest },
 }));
 
 import { Companion } from "./Companion";
@@ -41,6 +42,7 @@ const cmu = (as_of: number, over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   mocks.ingest.mockReset();
+  mocks.retryIngest.mockReset().mockResolvedValue({status: "running"});
   mocks.catchMeUp.mockReset();
 });
 afterEach(() => {
@@ -49,6 +51,15 @@ afterEach(() => {
 });
 
 describe("Companion", () => {
+  test("uses publisher chapter progress rather than spine-section counts", async () => {
+    mocks.ingest.mockResolvedValue(ingestDone);
+    mocks.catchMeUp.mockResolvedValue(cmu(8));
+    render(<Companion bookId="b" bookmark={8} totalAtoms={131} completedTitle="1: Corsica" chapterProgress={{completed: 1, total: 31}} />);
+    expect(await screen.findByText("Through 1: Corsica")).toBeTruthy();
+    expect(screen.getByText("1 / 31")).toBeTruthy();
+    expect(screen.queryByText("8 / 131")).toBeNull();
+  });
+
   test("shows the tight 'right now' one-liner, NOT the full flowing recap (surfaces differ)", async () => {
     mocks.ingest.mockResolvedValue(ingestDone);
     mocks.catchMeUp.mockResolvedValue(cmu(3));
@@ -281,11 +292,11 @@ describe("Companion", () => {
     expect(screen.queryByText(/just met at the forge/i)).toBeNull();
   });
 
-  test("bounded polling that is still behind shows updating with an explicit check-again action", async () => {
+  test("long preparation keeps polling without generating a stale recap, then refreshes automatically", async () => {
     vi.useFakeTimers();
     mocks.ingest.mockResolvedValue({
       ingest_progress: 1,
-      status: "working",
+      status: "running",
       flags: [],
       error: null,
     });
@@ -295,11 +306,15 @@ describe("Companion", () => {
       await vi.advanceTimersByTimeAsync(8 * 1200);
     });
     expect(screen.getByText(/The companion is still updating/i)).toBeTruthy();
-    expect(screen.getByText(/through chapter I ·/i)).toBeTruthy();
+    expect(mocks.catchMeUp).not.toHaveBeenCalled();
     expect(
       screen.getByRole("button", { name: "Retry companion" }),
     ).toBeTruthy();
-    expect(screen.queryByText("Reading your chapters…")).toBeNull();
+    mocks.ingest.mockResolvedValue(ingestDone);
+    mocks.catchMeUp.mockResolvedValue(cmu(3));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(screen.getByText(/just met at the forge/i)).toBeTruthy();
+    expect(mocks.catchMeUp).toHaveBeenCalledTimes(1);
   });
 
   test("the one-liner arrives inside a polite live region (a screen reader announces it)", async () => {

@@ -38,6 +38,10 @@ config.local.toml
 *.db
 data/
 books/
+*.reading-companion.lock
+
+# Local QA artifacts
+output/
 
 # OS / editor
 .DS_Store

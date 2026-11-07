@@ -1019,7 +1019,7 @@ class BookmarkView:
     """A read-only window onto the memory AS OF a chapter ordinal. The only way views and RAG touch
     the store. Must be USED only while the Store's per-book lock is held (ADR 0007 D-A2)."""
 
-    def __init__(self, db, book_id, bookmark):
+    def __init__(self, db, book_id, bookmark, *, excluded_ordinals=()):
         # Fail-closed at the view boundary too (defense in depth with _select): an int ordinal only —
         # a non-int (None, '', 'abc', float, bool) would otherwise leak the whole book (pass-2 BLOCKER).
         if not isinstance(bookmark, int) or isinstance(bookmark, bool):
@@ -1027,19 +1027,30 @@ class BookmarkView:
         self._db = db
         self.book_id = book_id
         self.bookmark = bookmark
+        self._excluded = tuple(excluded_ordinals)
+
+    def _content_clause(self):
+        if not self._excluded:
+            return "", []
+        return " AND revealed_at NOT IN (" + ",".join("?" for _ in self._excluded) + ")", list(self._excluded)
 
     def _sel(self, table, cols, where="", params=(), order=""):
-        return self._db._select(table, cols, self.bookmark, where, params, order)
+        clause, excluded = self._content_clause()
+        if clause:
+            where = (f"({where}) AND " if where else "") + clause.removeprefix(" AND ")
+        return self._db._select(table, cols, self.bookmark, where, [*params, *excluded], order)
 
     # referential-closure helpers ------------------------------------------
     def _vis_entities(self):
+        clause, excluded = self._content_clause()
         return ("SELECT entity_id FROM entities WHERE book_id=? AND revealed_at<=? "
-                "AND retracted_at IS NULL AND (invalid_at IS NULL OR invalid_at>?)",
-                [self.book_id, self.bookmark, self.bookmark])
+                "AND retracted_at IS NULL AND (invalid_at IS NULL OR invalid_at>?)" + clause,
+                [self.book_id, self.bookmark, self.bookmark, *excluded])
 
     def _live_chapters(self):
+        clause, excluded = self._content_clause()
         return ("SELECT chapter_key FROM chapters WHERE book_id=? AND revealed_at<=? "
-                "AND retracted_at IS NULL", [self.book_id, self.bookmark])
+                "AND retracted_at IS NULL" + clause, [self.book_id, self.bookmark, *excluded])
 
     # --- structured reads --------------------------------------------------
     def chapters(self):
@@ -1074,26 +1085,28 @@ class BookmarkView:
                          order="revealed_at, order_idx, event_id")
 
     def participants_of(self, event_id):
+        clause, excluded = self._content_clause()
         return self._sel(
             "entities", "entity_id, canonical_name, type",
             where="EXISTS (SELECT 1 FROM events ev WHERE ev.event_id=? AND ev.book_id=? "
                   "AND ev.revealed_at<=? AND ev.retracted_at IS NULL "
-                  "AND (ev.invalid_at IS NULL OR ev.invalid_at>?)) "
+                  "AND (ev.invalid_at IS NULL OR ev.invalid_at>?)" + clause + ") "
                   "AND entity_id IN (SELECT entity_id FROM event_participants "
                   "WHERE event_id=? AND book_id=? AND revealed_at<=?)",
-            params=[event_id, self.book_id, self.bookmark, self.bookmark,
+            params=[event_id, self.book_id, self.bookmark, self.bookmark, *excluded,
                     event_id, self.book_id, self.bookmark],
             order="revealed_at, entity_id")
 
     def events_for(self, entity_id):
+        clause, excluded = self._content_clause()
         return self._sel(
             "events", "event_id, revealed_at, summary",
             where="EXISTS (SELECT 1 FROM entities e WHERE e.entity_id=? AND e.book_id=? "
                   "AND e.revealed_at<=? AND e.retracted_at IS NULL "
-                  "AND (e.invalid_at IS NULL OR e.invalid_at>?)) "
+                  "AND (e.invalid_at IS NULL OR e.invalid_at>?)" + clause + ") "
                   "AND event_id IN (SELECT event_id FROM event_participants "
                   "WHERE entity_id=? AND book_id=? AND revealed_at<=?)",
-            params=[entity_id, self.book_id, self.bookmark, self.bookmark,
+            params=[entity_id, self.book_id, self.bookmark, self.bookmark, *excluded,
                     entity_id, self.book_id, self.bookmark],
             order="revealed_at, event_id")
 
@@ -1156,7 +1169,7 @@ class BookmarkView:
         if embed_model is None:
             pin = self._db.pinned_identity() if hasattr(self._db, "pinned_identity") else None
             embed_model = pin["embed_model"] if (pin and pin.get("embed_model")) else None
-        if self._db._vector_backend == "vec0":
+        if self._db._vector_backend == "vec0" and not self._excluded:
             return self._db._vec0_search(query_vec, self.bookmark, k, embed_model)
         csub, cp = self._live_chapters()
         where, params = f"chapter_key IN ({csub})", list(cp)

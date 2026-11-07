@@ -23,6 +23,8 @@ export type AiRuntime = {
   models: { extraction: string; synthesis: string };
   completion_status: "ready" | "unchecked" | "degraded";
   embedding_mode: "demo" | "live";
+  local_testing?: boolean;
+  reasoning?: { extraction: string; selection: string; synthesis: string; review: string } | null;
 };
 export type BookType = "novel" | "anthology" | "drama" | "poetry" | "nonfiction" | "reference" | "unknown";
 export type BookProfile = {
@@ -31,7 +33,7 @@ export type BookProfile = {
   detector_version: string;
   signals: string[];
 };
-export type Atom = { ordinal: number; href: string; title: string; part_label: string; char_len: number };
+export type Atom = { ordinal: number; href: string; title: string; part_label: string; char_len: number; chapter_number?: number | null; content_role?: string | null };
 export type Manifest = {
   book_id: string;
   atom_set_version: string;
@@ -39,6 +41,7 @@ export type Manifest = {
   content_language: string;
   book_profile: BookProfile;
   atoms: Atom[];
+  content_chapters?: number;
 };
 export type Position = {
   bookmark: number; cfi: string | null; ingest_progress?: number; position_epoch: number; atoms?: number;
@@ -71,7 +74,10 @@ export type AskCost = {
 };
 export type AskAnswer = {
   as_of_chapter: number; insufficient_evidence: boolean; claims: AskClaim[];
-  citations: AskCitation[]; cost: AskCost;
+  citations: AskCitation[]; cost: AskCost | null;
+  answer_type?: "recap";
+  recap?: string | null;
+  status?: "ready" | "preparing" | "preparation_failed" | "not_started" | "paratext_only";
 };
 export type SelectionAction = "explain" | "define" | "translate";
 export type SelectionAssistAnswer = {
@@ -267,6 +273,9 @@ function requestRecap(id: string, bookmark?: number): Promise<CatchMeUp> {
 export const api = {
   aiRuntime: (signal?: AbortSignal) =>
     fetch("/api/health/ai", { signal, cache: "no-store" }).then((r) => j<AiRuntime>(r)),
+  checkAiRuntime: (signal?: AbortSignal) =>
+    fetch("/api/health/ai/check", { method: "POST", headers: csrfHeaders(), signal, cache: "no-store" })
+      .then((r) => j<AiRuntime>(r)),
   books: () => fetch("/api/books").then((r) => j<Book[]>(r)),
   importBook: (file: File) => {
     const fd = new FormData();
@@ -480,6 +489,8 @@ export const api = {
       `/api/books/${id}/character/${entityId}${bookmark != null ? `?bookmark=${bookmark}` : ""}`,
     ).then((r) => j<Character>(r)),
   ingest: (id: string) => fetch(`/api/books/${id}/ingest`).then((r) => j<IngestStatus>(r)),
+  retryIngest: (id: string) => fetch(`/api/books/${id}/ingest/retry`, { method: "POST", headers: csrfHeaders() })
+    .then((r) => j<{status: string}>(r)),
   // the character graph as of `bookmark` (the scrubber's point); server clamps to the high-water
   graph: (id: string, bookmark?: number) =>
     fetch(`/api/books/${id}/graph${bookmark != null ? `?bookmark=${bookmark}` : ""}`).then(

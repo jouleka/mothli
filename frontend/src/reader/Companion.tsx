@@ -16,6 +16,8 @@ export function Companion({
   bookId,
   bookmark,
   totalAtoms,
+  completedTitle,
+  chapterProgress,
   bookType = "novel",
   onOpenHero,
   onOpenCodex,
@@ -28,6 +30,8 @@ export function Companion({
   bookId: string;
   bookmark: number | null;
   totalAtoms: number;
+  completedTitle?: string;
+  chapterProgress?: { completed: number; total: number };
   bookType?: BookType;
   onOpenHero?: () => void;
   onOpenCodex?: () => void;
@@ -111,10 +115,19 @@ export function Companion({
         const st = await api.ingest(bookId);
         if (cancelled) return;
         setIngestSnapshot({ bookId, data: st });
+        // A long local preparation must not stop polling or compete with itself by
+        // starting recap synthesis after a fixed number of status reads.
+        if (st.status === "running" && st.ingest_progress < bookmark) {
+          setRefreshState(attempts >= 8 ? "updating" : "polling");
+          attempts += 1;
+          timer = window.setTimeout(tick, attempts <= 8 ? 1200 : 5000);
+          return;
+        }
+        const interrupted = st.status === "idle" && st.ingest_progress < bookmark;
         if (
           st.ingest_progress >= bookmark ||
           st.status === "blocked" ||
-          st.status === "error" ||
+          st.status === "error" || interrupted ||
           attempts >= 8
         ) {
           try {
@@ -127,7 +140,7 @@ export function Companion({
           }
           if (!cancelled)
             setRefreshState(
-              st.status === "blocked" || st.status === "error"
+              st.status === "blocked" || st.status === "error" || interrupted
                 ? "unavailable"
                 : st.ingest_progress < bookmark
                   ? "updating"
@@ -233,6 +246,7 @@ export function Companion({
             <div className="asof">
               {bookmark == null || bookmark === 0
                 ? "Your companion grows as you read."
+                : completedTitle ? `Through ${completedTitle}`
                 : `as of ${presentation.unit} ${roman(bookmark)} · ${bookmark} of ${totalAtoms}`}
             </div>
           </div>
@@ -253,11 +267,11 @@ export function Companion({
         </div>
         <div className="companion-progress-label">
           <span>
-            {presentation.unit === "chapter" ? "Chapters" : "Sections"}{" "}
+            {chapterProgress || presentation.unit === "chapter" ? "Chapters" : "Sections"}{" "}
             completed
           </span>
           <span>
-            {bookmark ?? 0} / {totalAtoms}
+            {chapterProgress?.completed ?? bookmark ?? 0} / {chapterProgress?.total ?? totalAtoms}
           </span>
         </div>
         <div className="companion-safety">
@@ -402,7 +416,11 @@ export function Companion({
             className="companion-retry"
             aria-disabled={refreshState === "polling"}
             onClick={() => {
-              if (refreshState !== "polling") setRetry((value) => value + 1);
+              if (refreshState !== "polling") {
+                setRefreshState("polling");
+                void api.retryIngest(bookId).then(() => setRetry((value) => value + 1))
+                  .catch(() => setRefreshState("unavailable"));
+              }
             }}
           >
             {refreshState === "polling"

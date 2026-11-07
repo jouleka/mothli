@@ -418,7 +418,7 @@ export function Shelf({
                 <span>{books ? filtered.length : ""}</span>
               </h2></div>
               <div className="collection-tools">
-                <label className="library-search">
+                <label className="library-search focus-field">
                   <Icon name="search" size={17} />
                   <span className="sr-only">Search your library</span>
                   <input

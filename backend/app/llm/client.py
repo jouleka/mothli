@@ -42,11 +42,12 @@ from pydantic import ValidationError
 # tier -> model, per provider. Overridable by env (LLM_CHEAP_MODEL / LLM_LARGE_MODEL) or kwargs.
 _DEFAULT_MODELS = {
     "anthropic": {"cheap": "claude-haiku-4-5-20251001", "large": "claude-sonnet-4-6"},
-    "openai-compatible": {"cheap": "gpt-4o-mini", "large": "gpt-4o"},
+    "openai-compatible": {"cheap": "gpt-6.1-terra", "large": "gpt-6.1-terra"},
+    "codex-local": {"cheap": "gpt-6.1-terra", "large": "gpt-6.1-terra"},
     "stub": {"cheap": "stub-cheap", "large": "stub-large"},
 }
 _OPENAI_DEFAULT_BASE = "https://api.openai.com/v1"
-_NATIVE_REASONING_EFFORT = {"gpt-6-luna": "medium", "gpt-6.1-sol": "low"}
+_NATIVE_REASONING_EFFORT = {"gpt-6-luna": "medium", "gpt-6.1-sol": "low", "gpt-6.1-terra": "medium"}
 _ANTHROPIC_RETRY_STATUS = (429, 500, 502, 503, 504)
 
 
@@ -91,6 +92,8 @@ def _provider_failure_kind(exc: Exception) -> str:
 
 
 def detect_provider(env):
+    if env.get("LLM_TRANSPORT") == "codex-local":
+        return "codex-local"
     if env.get("ANTHROPIC_API_KEY"):
         return "anthropic"
     if any(env.get(k) for k in ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY",
@@ -212,19 +215,36 @@ class LLMClient:
 
     def billing_model(self, tier):
         model = self._model_for(tier)
+        if self.provider == "codex-local":
+            return f"chatgpt-plan:{model}"
         return (f"fast:{model}" if self._is_native_openai
                 and getattr(self, "service_tier", "default") == "fast" else model)
 
     # ---- completion --------------------------------------------------------
+    def reasoning_effort(self, tier, schema=None):
+        """Terra: low for bounded extraction/selection; medium for prose and audits."""
+        if self._model_for(tier) != "gpt-6.1-terra":
+            return _NATIVE_REASONING_EFFORT.get(self._model_for(tier))
+        if schema is not None and schema.__name__ in {
+                "Extraction", "SourceSelection", "PreparedQuestions"}:
+            return "low"
+        return "medium"
+
     def complete(self, system, user, tier="cheap", schema=None, max_output_tokens=None):
         try:
-            if self.provider == "anthropic":
+            if self.provider == "codex-local":
+                from app.llm.codex_local import complete
+                result = complete(system, user, model=self._model_for(tier),
+                                  effort=self.reasoning_effort(tier, schema), schema=schema,
+                                  max_output_tokens=max_output_tokens, timeout=self.timeout)
+            elif self.provider == "anthropic":
                 result = self._complete_anthropic(system, user, tier, schema, max_output_tokens)
             elif self.provider == "openai-compatible":
                 result = self._complete_openai(system, user, tier, schema, max_output_tokens)
             else:
                 result = self._complete_stub(system, user, tier, schema, max_output_tokens)
-        except ProviderUnavailable:
+        except ProviderUnavailable as exc:
+            self._record_provider_failure("completion", exc.kind)
             raise
         except (APIStatusError, APIConnectionError, APITimeoutError, httpx.HTTPError) as exc:
             kind = _provider_failure_kind(exc)
@@ -298,7 +318,7 @@ class LLMClient:
             # billing_model preserves its premium in the durable cost ledger. Extraction and
             # hosted clients retain Standard processing.
             cap = {"max_completion_tokens": max_output_tokens if max_output_tokens is not None else 4096,
-                   "reasoning_effort": ("none" if unreasoned else _NATIVE_REASONING_EFFORT[model]),
+                   "reasoning_effort": ("none" if unreasoned else self.reasoning_effort(tier, schema)),
                    "service_tier": getattr(self, "service_tier", "default")}
             if unreasoned:
                 cap["temperature"] = 0

@@ -119,7 +119,7 @@ export function ChapterBreakdown({
     <div className="journey-workspace">
       <div className="journey-toolbar">
         <div><span className="memory-eyebrow">THE PATH YOU’VE TAKEN</span><p>{chapters.length} completed {unit}{chapters.length === 1 ? "" : "s"}. Every detail is yours to revisit.</p></div>
-        <label className="chapter-search">
+        <label className="chapter-search focus-field">
           <Icon name="search" size={17} />
           <span className="sr-only">Find a chapter</span>
           <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Find a ${unit}…`} />

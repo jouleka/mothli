@@ -127,7 +127,6 @@
   background: var(--paper);
 }
 .companion-studio .companion-action:hover:not(:disabled) {
-  transform: translateY(-2px);
   border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline));
   background: var(--paper);
   box-shadow: 0 5px 14px color-mix(in srgb, var(--ink) 5%, transparent);
@@ -195,7 +194,6 @@
   box-shadow: 0 4px 15px color-mix(in srgb, var(--ink) 3%, transparent);
   transition: border-color 150ms, box-shadow 150ms;
 }
-.ask-studio .ask-form:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 8%, transparent); }
 .ask-composer-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .ask-studio .ask-composer-head label { font-size: 11px; font-weight: 600; }
 .ask-composer-head > span { color: var(--ink-muted); font-size: 10px; }
@@ -232,7 +230,7 @@
   font-weight: 400;
   color: var(--ink);
 }
-.ask-studio .ask-suggestions .ui-button:hover { border-color: color-mix(in srgb, var(--accent) 30%, var(--hairline)); background: var(--accent-wash); transform: translateY(-2px); }
+.ask-studio .ask-suggestions .ui-button:hover { border-color: color-mix(in srgb, var(--accent) 30%, var(--hairline)); background: var(--accent-wash); }
 .ask-studio .ask-suggestions .ui-button > svg { color: var(--accent); }
 .ask-studio .ask-status { min-height: 0; margin: 14px 0; font-size: 12px; }
 .ask-studio .ask-status:empty { margin: 0; }

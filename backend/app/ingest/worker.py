@@ -55,7 +55,7 @@ from app.ingest.extraction.validation import (
     merge_reviewed_extractions,
     review_extraction,
 )
-from app.ingest.manifest import load_manifest
+from app.ingest.manifest import load_manifest, position_length
 from app.llm import versioning
 from app.llm import jev_tasks
 from app.llm.jev import JevUnavailable
@@ -126,10 +126,19 @@ def _usd_of(model, usage):
     return usd_of(model, usage)
 
 
+def _empty_extraction(text):
+    empty = {"chapter_summary": "", "entities": [], "relationships": [], "events": [], "themes": []}
+    def no_generation(*args, **kwargs):
+        raise RuntimeError("an empty extraction must not generate AI claims")
+    clearance = review_extraction(text, empty, [], complete=no_generation)
+    return empty, {"in": 0, "out": 0}, 0.0, [], clearance
+
+
 class IngestWorker:
     def __init__(self, store, catalog, client, settings, executor=None, sleep=None):
+        from app.content_scope import ContentStore
         self.on_complete = None
-        self._store = store
+        self._store = ContentStore(store, settings.data_dir) if store is not None else None
         self._catalog = catalog
         self._client = client
         self._settings = settings
@@ -374,7 +383,7 @@ class IngestWorker:
                 and manifest["_content_language_recorded"]):
             return ["ATOM-SET MISMATCH: the stored source.epub declares a different content "
                     "language than the import-time manifest (D-A10) — re-import the book"]
-        fresh = [(c["ordinal"], c["key"], len(c.get("text", "") or "")) for c in chapters]
+        fresh = [(c["ordinal"], c["key"], position_length(c.get("text"))) for c in chapters]
         want = [(a["ordinal"], a["key"], a["char_len"]) for a in manifest["atoms"]]
         if fresh != want:
             return ["ATOM-SET MISMATCH: the stored source.epub segments differently than the "
@@ -389,6 +398,8 @@ class IngestWorker:
         invalid review verdicts, cost ceilings and integrity failures never enter this repair path.
         This bound is per extraction operation; enqueue-generation scheduling is unchanged.
         """
+        if not text.strip():
+            return _empty_extraction(text)
         feedback = ()
         for repair in (False, True):
             self._check_stopping()
@@ -409,7 +420,9 @@ class IngestWorker:
         empty_prompt = extract_user_prompt(
             title, roster, "", book_type=book_type, content_language=content_language
         )
-        chunk_input_limit = self._settings.cost_max_input_tokens_per_call
+        from app.cost.limits import completion_input_overhead
+        chunk_input_limit = (self._settings.cost_max_input_tokens_per_call
+                             - completion_input_overhead(self._client))
         if (self._client.provider == "openai-compatible"
                 and not getattr(self._client, "_is_native_openai", False)):
             chunk_input_limit -= self._settings.cost_max_output_tokens_per_call + 512
@@ -613,10 +626,14 @@ class IngestWorker:
                 identity = versioning.current_identity(self._client, embed_call=embed_call)
                 real_embed = not self._client.embed_identity().startswith("stub:")
             versioning.assert_compatible_identity(pinned, identity)
-            extraction, usage, usd, reservation_ids, clearance = self._complete_extraction(
-                book_id, ch["ordinal"], ch.get("title", ""), roster, text, book_type=book_type,
-                content_language=content_language,
-            )                                                           # (2) ALL IO OUTSIDE the lock
+            from app.content_scope import is_content
+            if is_content(ch):
+                extraction, usage, usd, reservation_ids, clearance = self._complete_extraction(
+                    book_id, ch["ordinal"], ch.get("title", ""), roster, text, book_type=book_type,
+                    content_language=content_language,
+                )
+            else:
+                extraction, usage, usd, reservation_ids, clearance = _empty_extraction(text)
             memo = _MemoEmbed(self._client, embed_call=embed_call)
             identity_attempts = 0
 

@@ -207,7 +207,7 @@ export function ChapterCloseout({
           </section>
         )}
         <footer className="reflection-return"><p>Keep the thought.<br /><strong>See where the story goes.</strong></p><Button variant="primary" icon="arrowRight" onClick={requestClose}>Back to reading</Button></footer>
-        {answer && <ProviderCost cost={answer.cost} />}
+        {answer?.cost && <ProviderCost cost={answer.cost} />}
       </article>
     </div>
   );

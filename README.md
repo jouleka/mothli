@@ -91,6 +91,39 @@ A ready server using the offline stub does not establish working AI or correct a
 [backend acceptance sample](backend/README.md#provider-status-and-live-acceptance-sample) before
 evaluating a new provider configuration.
 
+### GPT-6.1 Terra and local ChatGPT testing
+
+The default OpenAI completion model is `gpt-6.1-terra` for both roles. Extraction, passage selection,
+and question planning use low reasoning effort; answer/recap synthesis and structured evidence,
+identity, and spoiler reviews use medium. Other explicitly configured models retain their profiles.
+
+For local testing through your ChatGPT account, install the Codex CLI, run `codex login`, and add
+this to the ignored `.env` file:
+
+```dotenv
+LLM_TRANSPORT=codex-local
+LLM_CHEAP_MODEL=gpt-6.1-terra
+LLM_LARGE_MODEL=gpt-6.1-terra
+ALLOW_STUB=false
+```
+
+This uses the existing ChatGPT sign-in without copying its credentials into the project or browser.
+Each completion runs an ephemeral CLI session in a temporary directory, with user configuration,
+shell, plugins, and web search disabled. The existing validation and spoiler gates still apply.
+The adapter is local-only, serializes requests, and has no fallback to another model or API billing.
+It requires a CLI version supporting `--ignore-user-config`, `--ignore-rules`, and `--ephemeral`.
+
+ChatGPT completions do **not** provide embeddings. Configure `EMBED_PROVIDER=openai-compatible`,
+`EMBED_BASE_URL`, `EMBED_MODEL`, and a valid `EMBED_API_KEY` independently. With no embedding provider,
+new test books use clearly labeled demo embeddings. Existing books keep their pinned model space:
+changing extraction or embedding models requires an explicit rebuild of AI memory, while reading
+and saved progress remain available.
+
+This testing adapter has CLI overhead and subscription limits. Its token ledger includes CLI usage;
+USD entries for `chatgpt-plan:` are not API charges or a subscription price estimate. Unlike the API
+transport, the CLI cannot enforce a provider-side output-token cap; excessive output is rejected
+after completion. Use `LLM_TRANSPORT=api` and an API credential for normal API budget guarantees.
+
 ### Single-process local build
 
 ```bash
@@ -106,6 +139,26 @@ FRONTEND_DIST_DIR="$(pwd)/../frontend/dist" \
 The application sets a restrictive Content Security Policy because EPUB markup is untrusted. Do not
 serve the built frontend through a different proxy or static host unless it preserves equivalent
 security headers.
+
+## Companion foundations
+
+Reading coordinates remain the original EPUB atoms, including illustrated pages (each retained
+image-only atom reserves one position unit). The companion uses a separate content scope:
+recognized supplementary headings such as acknowledgements, map lists and indexes, and empty
+illustrated pages do not supply its recap, cast or search answers. Source text, completion receipts,
+notes and backups retain their original coordinates. Introductions and unfamiliar headings remain
+included. Heading recognition is deliberately conservative and currently uses English labels;
+this is not a universal EPUB structure classifier.
+
+`POST /api/books/{book_id}/ingest/retry` resumes preparation through the saved bookmark. It cannot
+advance reading progress. Questions distinguish pending/interrupted preparation from unsupported
+answers, and common recap requests reuse the reviewed recap flow. Content-policy versions scope
+both recap and answer caches. Selected-text AI requests allow navigation/status reads while reset
+and deletion still wait for their lifecycle lease.
+
+Publisher chapter numbers are display metadata rather than replacements for internal ordinals.
+The local ChatGPT transport can take several minutes to prepare long chapters; reading remains
+available throughout. Its harness allowance is included in prompt splitting and cost reservations.
 
 ## Verification
 

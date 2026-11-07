@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { AiRuntimeProvider, AiStatus } from "./AiStatus";
 
-const mock = vi.hoisted(() => ({ aiRuntime: vi.fn() }));
+const mock = vi.hoisted(() => ({ aiRuntime: vi.fn(), checkAiRuntime: vi.fn() }));
 vi.mock("../api", () => ({
   api: mock,
   ApiError: class ApiError extends Error {
@@ -11,7 +11,7 @@ vi.mock("../api", () => ({
     }
   },
 }));
-beforeEach(() => mock.aiRuntime.mockReset());
+beforeEach(() => { mock.aiRuntime.mockReset(); mock.checkAiRuntime.mockReset(); });
 const live = {
   mode: "live",
   provider: "openai-compatible",
@@ -21,6 +21,17 @@ const live = {
 };
 
 describe("AI runtime honesty", () => {
+  test("identifies ChatGPT local testing and its effort routing", async () => {
+    mock.aiRuntime.mockResolvedValue({
+      ...live, provider: "codex-local", local_testing: true,
+      reasoning: { extraction: "low", selection: "low", synthesis: "medium", review: "medium" },
+      models: { extraction: "gpt-6.1-terra", synthesis: "gpt-6.1-terra" },
+    });
+    render(<AiRuntimeProvider><AiStatus /></AiRuntimeProvider>);
+    expect(await screen.findByText(/Using your ChatGPT account/)).toBeTruthy();
+    expect(screen.getByText(/Medium for answers and review/)).toBeTruthy();
+    expect(screen.getByText("AI configured")).toBeTruthy();
+  });
   test("does not describe a ready stub as working AI", async () => {
     mock.aiRuntime.mockResolvedValue({
       ...live,
@@ -51,9 +62,8 @@ describe("AI runtime honesty", () => {
     expect(mock.aiRuntime).toHaveBeenCalledTimes(1);
   });
   test("connection status failure has a usable retry", async () => {
-    mock.aiRuntime
-      .mockRejectedValueOnce(new Error("offline"))
-      .mockResolvedValueOnce({ ...live, completion_status: "ready" });
+    mock.aiRuntime.mockRejectedValueOnce(new Error("offline"));
+    mock.checkAiRuntime.mockResolvedValueOnce({ ...live, completion_status: "ready" });
     render(
       <AiRuntimeProvider>
         <AiStatus />
@@ -62,6 +72,8 @@ describe("AI runtime honesty", () => {
     await screen.findByText("AI status unavailable");
     fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
     expect(await screen.findByText("AI connected")).toBeTruthy();
+    expect(mock.checkAiRuntime).toHaveBeenCalledTimes(1);
+    expect(mock.aiRuntime).toHaveBeenCalledTimes(1);
   });
   test("hosted mode does not query or claim the local provider state", async () => {
     render(
