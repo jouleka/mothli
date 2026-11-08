@@ -53,6 +53,25 @@ beforeEach(() => {
 });
 
 describe("Mothli conversation", () => {
+  test("confirms the visible page before sending and rejects a different source boundary", async () => {
+    const point = {id:"a".repeat(64), atom:2, offset:120, position_epoch:0, available_chapter:2};
+    let confirm!: (value: typeof point) => void;
+    const prepare = vi.fn(() => new Promise<typeof point>((resolve) => { confirm = resolve; }));
+    mocks.askBook.mockResolvedValue({...answer, read_frontier:point});
+    const view = render(<AskTheBook {...props} bookmark={1} prepareReadContext={prepare} />);
+    submit("Where did they meet?");
+    expect(mocks.askBook).not.toHaveBeenCalled();
+    // ReaderPage publishes the admitted chapter while confirming its exact text boundary.
+    view.rerender(<AskTheBook {...props} bookmark={2} prepareReadContext={prepare} />);
+    await act(async () => confirm(point));
+    await screen.findByText(answer.claims[0].text);
+    expect(mocks.askBook).toHaveBeenCalledWith("b", "Where did they meet?", 2, [], point);
+    mocks.askBook.mockResolvedValue({...answer, read_frontier:{...point,id:"b".repeat(64)}});
+    submit("And then?");
+    await act(async () => confirm(point));
+    await screen.findByText("I couldn’t get a reply. Try again?");
+    expect(screen.getAllByText(answer.claims[0].text)).toHaveLength(1);
+  });
   test("persists conversation and draft per book, owner and reading pass; advancing retains useful context", async () => {
     const first = render(<AskTheBook {...props} />);
     submit("Where did they meet?");

@@ -63,6 +63,8 @@ export type CatchMeUp = {
   cast_size: number; open_threads: number; cast: CastMember[]; cached: boolean;
 };
 export type ConversationMessage = { role: "user" | "assistant"; content: string; as_of_chapter: number };
+export type ReadFrontier = { id: string; atom: number; offset: number; position_epoch: number; available_chapter: number };
+export type ReadAnchor = { atom: number; quote: string; prefix: string; cfi: string; position_epoch: number };
 export type AskClaim = { text: string; citation_ids: number[] };
 export type AskCitation = {
   id: number; ordinal: number; chapter_key: string; href: string; title: string; excerpt: string; cfi?: string;
@@ -81,6 +83,7 @@ export type AskAnswer = {
   acknowledgment?: string | null;
   recap?: string | null;
   status?: "ready" | "preparing" | "preparation_failed" | "not_started" | "paratext_only";
+  read_frontier?: ReadFrontier;
 };
 export type SelectionAction = "explain" | "define" | "translate";
 export type SelectionAssistAnswer = {
@@ -464,11 +467,14 @@ export const api = {
     fetch(`/api/books/${id}/prepared-questions?bookmark=${bookmark}`).then(
       (r) => j<{ as_of_chapter: number; questions: string[] }>(r),
     ),
-  askBook: (id: string, question: string, bookmark?: number, history?: ConversationMessage[]) =>
+  readFrontier: (id: string, anchor?: ReadAnchor) => fetch(`/api/books/${id}/read-frontier`, anchor ? {
+    method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders() }, body: JSON.stringify(anchor),
+  } : {}).then((r) => j<ReadFrontier>(r)),
+  askBook: (id: string, question: string, bookmark?: number, history?: ConversationMessage[], readFrontier?: ReadFrontier) =>
     fetch(`/api/books/${id}/ask`, {
       method: "POST",
       headers: { "content-type": "application/json", ...csrfHeaders() },
-      body: JSON.stringify({ question, ...(bookmark != null ? { bookmark } : {}), ...(history?.length ? { history } : {}) }),
+      body: JSON.stringify({ question, ...(bookmark != null ? { bookmark } : {}), ...(history?.length ? { history } : {}), ...(readFrontier ? {read_frontier:readFrontier} : {}) }),
     }).then((r) => j<AskAnswer>(r)),
   selectionAction: (
     id: string,

@@ -18,7 +18,7 @@ The live follow-up revealed and fixed an internal 500-character validator mismat
 
 Branch `codex/mothli-conversation-pipeline`, based on pulled main `1cbe79d`. Opt in with
 `READER_CONVERSATION_PIPELINE=true` and `READER_CONVERSATION_REVIEW_EFFORT=low`.
-The validated local run also enables native Terra `READER_FAST_MODE=true`; this has premium
+The earlier API benchmark enabled native Terra `READER_FAST_MODE=true`; this has premium
 pricing and retains every existing spend/token ceiling. Ingestion keeps its original model profile.
 
 Retain hybrid lexical/semantic rank fusion and full completed-text coverage: a 96-chapter retrieval
@@ -89,3 +89,46 @@ Research: [OpenAI latency optimization](https://developers.openai.com/api/docs/g
 [Self-RAG](https://arxiv.org/abs/2310.11511). Retaining RRF and independent review, rather than adding
 another query rewrite/critic call, is an engineering choice from the measurements above; those
 sources do not establish this application's quality or latency.
+
+## Current local run: page context and ChatGPT subscription
+
+The running preview now uses ChatGPT-authenticated Codex CLI 0.167.0 with Terra. Its launcher loads
+no production environment file or API keys. API credentials are stripped from CLI subprocesses;
+authentication must report ChatGPT and there is no API fallback. Native API configuration remains
+available for production. The historical API timings above do not measure this transport.
+
+Page turns persist a unique exact EPUB body-text anchor for text before the visible page. Sending a
+question additionally confirms text through that visible page, labeled “Through this page.” The
+server resolves a Unicode source offset, verifies the source digest and import manifest/store, and
+clips the chapter before retrieval, names, drafting, review or caching. No chapter extraction or
+embedding call is needed for this route. A bounded parse cache and exact recent scene windows keep
+preparation deterministic; the existing bounded lexical search still covers earlier read text.
+
+Drafting and source choice stay fused when the candidate pool fits, followed by two independent
+overlapping reviews. Foreground subscription calls have two slots; background extraction has a
+separate single-call lane. Speculative model prewarming is disabled locally. Only checked standalone
+answers enter the reusable cache, keyed by exact source prefix, incarnation, reset epoch, model and
+review policy. Private conversation and selections are not shared. Old in-flight snapshots stay
+narrow during a forward page turn. Resets remove their durable boundary without deleting memory.
+
+A synthetic EPUB was read and discussed in real Chrome with completed bookmark and ingest progress
+both **zero**. The first answer located a key; the follow-up treated distrust as tentative and offered
+independence as an alternative, with exact source citations. That follow-up took **11.825 s** over
+the wire. Additional full HTTP requests: mid-chapter recap **13.552 s**, disagreement **10.748 s**,
+unread-outcome refusal **3.533 s**, exact checked repeat **12.6 ms / zero model calls**. Both substantive
+requests used three calls (draft plus parallel evidence and spoiler/completeness checks); refusal
+used one. The unread ending and next-chapter canaries were absent from all outputs. Unit tests also
+assert their absence from every model prompt. This is a small synthetic acceptance sample, not an
+instant-cold-reply claim or a controlled speed comparison against the earlier API transport.
+
+Existing source data is untouched; the preview still uses its copied library. Existing vector spaces
+are not rebuilt or repinned. New local test books use offline lexical embeddings for chapter memory;
+older pinned stores may need their original embedder for further ingestion, while prefix chat works
+independently. Hosted page-context synchronization is not implemented; the flag defaults off.
+
+Final checks: **1719 backend passed / 83 skipped**, **210 frontend passed**, clean Ruff,
+TypeScript/Vite build and diff checks. After restart the durable page boundary and checked cache
+survived; the cached reply returned in **13.2 ms**, explicitly attributed to the ChatGPT subscription.
+The preview is left running locally on this branch, with no merge or push.
+
+Authentication reference: [Codex authentication](https://learn.chatgpt.com/docs/auth).

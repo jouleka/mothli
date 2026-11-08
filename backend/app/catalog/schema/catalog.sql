@@ -35,6 +35,17 @@ CREATE TABLE IF NOT EXISTS reading_state (
   updated_at        TEXT
 );
 
+-- Exact primary-text boundary for conversation, separate from chapter-stamped story memory.
+CREATE TABLE IF NOT EXISTS conversation_frontier (
+  book_id TEXT PRIMARY KEY REFERENCES reading_state(book_id) ON DELETE CASCADE,
+  position_epoch INTEGER NOT NULL,
+  atom INTEGER NOT NULL,
+  source_offset INTEGER NOT NULL,
+  source_hash TEXT NOT NULL,
+  cfi TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Per-book spend (cost-to-date; feeds LIT-21 ceilings).
 CREATE TABLE IF NOT EXISTS cost_ledger (
   entry_id          INTEGER PRIMARY KEY,

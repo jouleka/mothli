@@ -14,6 +14,7 @@ import {
   type PutPosition,
   type ReaderMark,
   type ReaderMarkAnchor,
+  type ReadFrontier,
   type SelectionAction,
 } from "../api";
 import { AskTheBook, type AskSession } from "./AskTheBook";
@@ -52,6 +53,7 @@ import {
   type ReaderPreferences,
 } from "./readerPreferences";
 import { PositionReporter, type PendingPosition, type PositionSyncState } from "./reporter";
+import { atomAtRange, pageAnchor, ReadFrontierReporter } from "./readFrontier";
 import { StartOverNote } from "./StartOverNote";
 import { useWelcomeBack } from "./welcomeBack";
 import { useCompactReaderShell } from "./mobileShell";
@@ -219,6 +221,25 @@ export function ReaderPage({
   const positionVersionRef = useRef(0); // optimistic clock returned by the hosted merge protocol
   const positionReportingPausedRef = useRef(false); // the reset decision freezes old relocations
   const visibleRangeRef = useRef<Range | null>(null); // Foliate's exact current viewport anchor for TTS
+  const [readFrontier, setReadFrontier] = useState<ReadFrontier | null>(null);
+  const readReporterRef = useRef<ReadFrontierReporter | null>(null);
+  const readAnchorRef = useRef<((edge: "start" | "end") => ReturnType<typeof pageAnchor>) | null>(null);
+
+  const prepareReadContext = useCallback(async () => {
+    if (positionReportingPausedRef.current) throw new Error("Finish changing the reading pass first.");
+    const anchor = readAnchorRef.current?.("end");
+    if (anchor) readReporterRef.current?.schedule(anchor);
+    await readReporterRef.current?.flush();
+    try {
+      const point = await api.readFrontier(bookId);
+      if (point && point.position_epoch !== positionEpochRef.current)
+        throw new Error("Your reading pass changed. Reload before continuing.");
+      return point;
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    }
+  }, [bookId]);
 
   const report = useCallback(
     (cfi: string, offset: number, completedChapter: number) => {
@@ -270,6 +291,27 @@ export function ReaderPage({
     setReaderReady(false);
     setFinishCandidate(null);
     setFatal(null);
+    setReadFrontier(null);
+    readAnchorRef.current = null;
+    let pageContextDisabled = false;
+    const publishFrontier = (point: ReadFrontier | null) => {
+      if (dead || !point || point.position_epoch !== positionEpochRef.current) return;
+      setReadFrontier((previous) => !previous || previous.position_epoch !== point.position_epoch
+        || point.atom > previous.atom || (point.atom === previous.atom && point.offset >= previous.offset)
+        ? point : previous);
+    };
+    const readReporter = new ReadFrontierReporter(async (anchor) => {
+      if (dead || pageContextDisabled || anchor.position_epoch !== positionEpochRef.current) return null;
+      try {
+        const point = await api.readFrontier(bookId, anchor);
+        publishFrontier(point);
+        return point;
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) { pageContextDisabled = true; return null; }
+        throw error;
+      }
+    });
+    readReporterRef.current = readReporter;
     let disposeHistory = () => {};
     let disposeMotion = () => {};
     const download = new AbortController();
@@ -544,6 +586,7 @@ export function ReaderPage({
         setManifest(m);
         manifestBmRef.current = saved.bookmark;
         positionEpochRef.current = saved.position_epoch ?? 0;
+        void api.readFrontier(bookId).then(publishFrontier).catch(() => {});
         positionVersionRef.current = saved.position_version ?? 0;
         setTitle(books.find((b) => b.book_id === bookId)?.title ?? bookId);
         // seed the companion with the SAVED position so a resumed session shows the memory
@@ -653,7 +696,8 @@ export function ReaderPage({
           };
           const idx = d.section?.current;
           if (d.cfi == null || idx == null) return;
-          const atom = sectionAtom[idx] ?? -1;
+          const atom = d.range ? atomAtRange(m.atoms, bookSections[idx]?.id ?? "", d.range, "start")
+            ?? sectionAtom[idx] ?? -1 : sectionAtom[idx] ?? -1;
           if (atom < 0) return; // front/back matter: report nothing, never guess
           visibleRangeRef.current = d.range?.cloneRange() ?? null;
           const verdict = admitRelocation(
@@ -668,6 +712,17 @@ export function ReaderPage({
           maxAtomRef.current = Math.max(maxAtomRef.current, atom);
           setCurrentAtom(atom);
           setCurrentAnchor({ cfi: d.cfi, atom: atom + 1 });
+          if (d.range) {
+            const readRange = d.range.cloneRange();
+            const cfi = d.cfi;
+            readAnchorRef.current = (edge) => {
+              if (positionReportingPausedRef.current || dead) return null;
+              const exactAtom = atomAtRange(m.atoms, bookSections[idx]?.id ?? "", readRange, edge);
+              return exactAtom === null ? null : pageAnchor(readRange, exactAtom, cfi, positionEpochRef.current, edge);
+            };
+            const anchor = readAnchorRef.current("start");
+            if (anchor) readReporter.schedule(anchor);
+          }
           const r = view.renderer;
           const page = r.page ?? 1;
           const pages = r.pages ?? 1;
@@ -690,7 +745,8 @@ export function ReaderPage({
         // must be a deliberate act, because the bookmark it would set cannot be lowered again
         view.addEventListener("link", (e) => {
           const le = e as CustomEvent<{ href: string }>;
-          const target = sectionAtom[sectionIndexOf(le.detail.href)] ?? -1;
+          const exact = m.atoms.findIndex((candidate) => candidate.href === le.detail.href);
+          const target = exact >= 0 ? exact : sectionAtom[sectionIndexOf(le.detail.href)] ?? -1;
           if (jumpsAhead(target, lastAtomRef.current, maxAtomRef.current)) {
             e.preventDefault();
             setPendingJump({ href: le.detail.href, chapter: target + 1 });
@@ -762,6 +818,9 @@ export function ReaderPage({
     })();
     return () => {
       dead = true;
+      readReporter.dispose();
+      if (readReporterRef.current === readReporter) readReporterRef.current = null;
+      readAnchorRef.current = null;
       download.abort();
       window.removeEventListener("pagehide", flush);
       window.removeEventListener("online", retry);
@@ -823,6 +882,8 @@ export function ReaderPage({
       setAskOpen(false);
       setInitialAction(null);
       positionEpochRef.current = reset.position_epoch;
+      setReadFrontier(null);
+      readAnchorRef.current = null;
       positionVersionRef.current =
         reset.position_version ?? positionVersionRef.current + 1;
       lastAtomRef.current = 0;
@@ -1341,7 +1402,9 @@ export function ReaderPage({
       {askOpen && (
         <AskTheBook
           bookId={bookId}
-          bookmark={pos?.bookmark ?? 0}
+          bookmark={Math.max(pos?.bookmark ?? 0, readFrontier?.available_chapter ?? 0)}
+          prepareReadContext={prepareReadContext}
+          throughCurrentPage={readFrontier !== null}
           readingPass={readingPass}
           initialAction={initialAction}
           embedded

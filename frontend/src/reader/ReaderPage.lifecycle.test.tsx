@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   manifest: vi.fn(),
   books: vi.fn(),
   position: vi.fn(),
+  readFrontier: vi.fn(async () => null),
   readerPreferences: vi.fn(),
   readerMarks: vi.fn(),
   putPosition: vi.fn(),

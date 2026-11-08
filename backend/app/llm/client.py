@@ -239,7 +239,9 @@ class LLMClient:
                 from app.llm.codex_local import complete
                 result = complete(system, user, model=self._model_for(tier),
                                   effort=self.reasoning_effort(tier, schema), schema=schema,
-                                  max_output_tokens=max_output_tokens, timeout=self.timeout)
+                                  max_output_tokens=max_output_tokens, timeout=self.timeout,
+                                  background=bool(getattr(self, "preparing", False)
+                                                  or getattr(self, "background_inference", False)))
             elif self.provider == "anthropic":
                 result = self._complete_anthropic(system, user, tier, schema, max_output_tokens)
             elif self.provider == "openai-compatible":

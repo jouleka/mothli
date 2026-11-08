@@ -10,8 +10,37 @@ from pydantic import BaseModel, Field, StrictInt
 from app.deps import book_lifecycle, get_catalog, get_settings, get_store, get_worker
 from app.ingest.manifest import AtomSetMismatch, assert_matches_store, bounds_of, load_manifest
 from app.reader import frontier
+from app.read_frontier import ReadAnchor, confirm_anchor, current_snapshot
 
 router = APIRouter(prefix="/api/books/{book_id}", tags=["reading"])
+
+
+@router.get("/read-frontier", dependencies=[Depends(book_lifecycle)])
+def get_read_frontier(book_id: str, catalog=Depends(get_catalog), settings=Depends(get_settings),
+                      worker=Depends(get_worker)):
+    if not settings.reader_page_context:
+        raise HTTPException(404, "page context is not enabled")
+    try:
+        return current_snapshot(book_id, catalog, settings, worker)[0]
+    except LookupError as exc:
+        raise HTTPException(404, "unknown book") from exc
+    except (ValueError, AtomSetMismatch) as exc:
+        raise HTTPException(409, "read boundary could not be verified against the source") from exc
+
+
+@router.put("/read-frontier", dependencies=[Depends(book_lifecycle)])
+def put_read_frontier(book_id: str, body: ReadAnchor, catalog=Depends(get_catalog),
+                      settings=Depends(get_settings), worker=Depends(get_worker)):
+    if not settings.reader_page_context:
+        raise HTTPException(404, "page context is not enabled")
+    try:
+        return confirm_anchor(book_id, body, catalog, settings, worker)
+    except LookupError as exc:
+        raise HTTPException(404, "unknown book") from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, "reading pass changed; reload before continuing") from exc
+    except (ValueError, AtomSetMismatch) as exc:
+        raise HTTPException(422, "page anchor could not be verified against the source") from exc
 
 
 class PositionIn(BaseModel):

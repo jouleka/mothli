@@ -8,7 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { api, ApiError, type AskAnswer, type AskCitation } from "../api";
+import { api, ApiError, type AskAnswer, type AskCitation, type ReadFrontier } from "../api";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { MothliMark } from "../ui/MothliMark";
@@ -185,6 +185,8 @@ export function AskTheBook({
   onClearSelection,
   onSaveReply,
   initialAction,
+  prepareReadContext,
+  throughCurrentPage = false,
 }: {
   bookId: string;
   bookmark: number;
@@ -199,6 +201,8 @@ export function AskTheBook({
   onClearSelection?: () => void;
   onSaveReply?: (reply: SavedCompanionReply) => void;
   initialAction?: "recap" | null;
+  prepareReadContext?: () => Promise<ReadFrontier | null>;
+  throughCurrentPage?: boolean;
 }) {
   const localSessionRef = useRef<AskSession | null>(null);
   const retainedSession = sessionRef ?? localSessionRef;
@@ -363,12 +367,15 @@ export function AskTheBook({
             "I couldn’t check that passage. Please select it again.",
           );
       } else {
+        const readPoint = prepareReadContext ? await prepareReadContext() : null;
+        if (!isCurrentRequest()) return;
+        const requestBookmark = Math.max(bookmark, readPoint?.available_chapter ?? 0);
         const history = session
           .getSnapshot()
           .exchanges.filter(
             (exchange) =>
               !exchange.passage &&
-              exchange.answer.as_of_chapter <= bookmark &&
+              exchange.answer.as_of_chapter <= requestBookmark &&
               !exchange.answer.insufficient_evidence,
           )
           .flatMap((exchange) => [
@@ -384,10 +391,13 @@ export function AskTheBook({
             },
           ])
           .slice(-8);
-        result = await api.askBook(bookId, value, bookmark, history);
+        result = readPoint
+          ? await api.askBook(bookId, value, requestBookmark, history, readPoint)
+          : await api.askBook(bookId, value, requestBookmark, history);
         if (
-          result.as_of_chapter > bookmark ||
-          result.citations.some((citation) => citation.ordinal > bookmark)
+          result.as_of_chapter > requestBookmark ||
+          result.citations.some((citation) => citation.ordinal > requestBookmark) ||
+          (readPoint && result.read_frontier?.id !== readPoint.id)
         )
           throw new Error(
             "I couldn’t check that reply against your read pages. Try again?",
@@ -792,7 +802,7 @@ export function AskTheBook({
             <span title="Mothli only uses the pages you’ve read">
               <Icon name="shield" size={12} />
               <span>
-                {selection ? "This passage only" : "Only your read pages"}
+                {selection ? "This passage only" : throughCurrentPage ? "Through this page" : "Only your read pages"}
               </span>
             </span>
             <Button

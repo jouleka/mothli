@@ -6,6 +6,7 @@ The CLI has no provider-side output-token cap: reject excess usage after complet
 adapter is deliberately excluded from hosted mode and API cost/latency guarantees.
 """
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -16,20 +17,26 @@ from openai.lib._pydantic import to_strict_json_schema
 
 from app.llm.client import ProviderUnavailable
 
-_SERIAL = threading.Lock()
+_FOREGROUND = threading.BoundedSemaphore(2)
+_BACKGROUND = threading.BoundedSemaphore(1)
 
 
-def complete(system, user, *, model, effort, schema, max_output_tokens, timeout):
+def complete(system, user, *, model, effort, schema, max_output_tokens, timeout, background=False):
     if model != "gpt-6.1-terra" or effort not in {"low", "medium"}:
         raise ValueError("codex-local requires GPT-6.1 Terra with low or medium effort")
     executable = shutil.which("codex")
     if not executable:
         raise ProviderUnavailable("configuration", service="completion")
-    with _SERIAL, tempfile.TemporaryDirectory(prefix="litlet-inference-") as directory:
+    # The CLI owns subscription credentials. Never inherit an API-key override into inference.
+    environment = {k: v for k, v in os.environ.items() if k.upper() not in {
+        "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY", "GROQ_API_KEY", "TOGETHER_API_KEY", "EMBED_API_KEY"}}
+    gate = _BACKGROUND if background else _FOREGROUND
+    with gate, tempfile.TemporaryDirectory(prefix="litlet-inference-") as directory:
         root = Path(directory)
         try:
             status = subprocess.run([executable, "login", "status"], capture_output=True,
-                                    text=True, timeout=10, check=False)
+                                    text=True, encoding="utf-8", timeout=10, check=False, env=environment)
             if status.returncode or "Logged in using ChatGPT" not in status.stdout + status.stderr:
                 raise ProviderUnavailable("authentication", service="completion")
             instructions = root / "instructions.txt"
@@ -62,7 +69,7 @@ def complete(system, user, *, model, effort, schema, max_output_tokens, timeout)
                 schema_path.write_text(json.dumps(to_strict_json_schema(schema)), encoding="utf-8")
                 command += ["--output-schema", str(schema_path)]
             result = subprocess.run(command + ["-"], input=user, capture_output=True,
-                                    text=True, timeout=timeout, check=False)
+                                    text=True, encoding="utf-8", timeout=timeout, check=False, env=environment)
             if result.returncode:
                 raise ProviderUnavailable("service", service="completion")
             events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]

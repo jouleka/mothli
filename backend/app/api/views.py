@@ -548,6 +548,11 @@ def ask_the_book(
     worker=Depends(get_worker),
     *, request: Request = None,
 ):
+    if body.read_frontier is not None:
+        if not settings.reader_page_context:
+            raise HTTPException(422, "page context is not enabled")
+        from app.page_conversation import answer_read_prefix
+        return answer_read_prefix(book_id, body, catalog, store, settings, client, worker)
     eff, state, manifest = _effective(book_id, body.bookmark, catalog, store, settings, worker)
     clarification = reaction_clarification(body.question, body.history, eff)
     if clarification:

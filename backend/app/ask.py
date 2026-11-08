@@ -19,6 +19,7 @@ from app.eval.spoiler_gate.judge import JudgeUnavailable, JudgeVerdict
 from app.ingest.extraction.resolve import ROLE_NOUNS
 from app.llm.client import ProviderUnavailable
 from app.retrieval_passages import PASSAGE_CHARS, passage_windows
+from app.read_frontier import ReadBoundary
 from app.unicode_text import normalize_text, proper_words, word_tokens, words
 
 
@@ -65,6 +66,7 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=2, max_length=500)
     bookmark: StrictInt | None = Field(default=None, ge=0, le=2**31 - 1)
     history: list[ConversationMessage] = Field(default_factory=list, max_length=8)
+    read_frontier: ReadBoundary | None = None
 
     @field_validator("question")
     @classmethod

@@ -97,27 +97,39 @@ The default OpenAI completion model is `gpt-6.1-terra` for both roles. Extractio
 and question planning use low reasoning effort; answer/recap synthesis and structured evidence,
 identity, and spoiler reviews use medium. Other explicitly configured models retain their profiles.
 
-For local testing through your ChatGPT account, install the Codex CLI, run `codex login`, and add
-this to the ignored `.env` file:
+For local testing through your ChatGPT account, use the Codex CLI (tested with 0.167.0), run
+`codex login` and verify `codex login status` reports ChatGPT. Use a separate local configuration:
 
 ```dotenv
 LLM_TRANSPORT=codex-local
 LLM_CHEAP_MODEL=gpt-6.1-terra
 LLM_LARGE_MODEL=gpt-6.1-terra
 ALLOW_STUB=false
+EMBED_PROVIDER=stub
+READER_PAGE_CONTEXT=true
+READER_CONVERSATION_PIPELINE=true
+READER_CONVERSATION_REVIEW_EFFORT=low
+READER_ANSWER_CACHE=true
 ```
 
 This uses the existing ChatGPT sign-in without copying its credentials into the project or browser.
 Each completion runs an ephemeral CLI session in a temporary directory, with user configuration,
 shell, plugins, and web search disabled. The existing validation and spoiler gates still apply.
-The adapter is local-only, serializes requests, and has no fallback to another model or API billing.
+The adapter is local-only, overlaps two foreground reviews, and gives background extraction a separate
+single-call lane. It strips API-key environment overrides and has no fallback to API billing.
 It requires a CLI version supporting `--ignore-user-config`, `--ignore-rules`, and `--ephemeral`.
 
-ChatGPT completions do **not** provide embeddings. Configure `EMBED_PROVIDER=openai-compatible`,
-`EMBED_BASE_URL`, `EMBED_MODEL`, and a valid `EMBED_API_KEY` independently. With no embedding provider,
-new test books use clearly labeled demo embeddings. Existing books keep their pinned model space:
-changing extraction or embedding models requires an explicit rebuild of AI memory, while reading
-and saved progress remain available.
+Current-page conversation matches an exact EPUB body-text anchor and clips the source before
+retrieval or model calls. Page turns confirm text before the current page; sending a question also
+confirms the visible page. The UI says “Through this page.” It works before chapter extraction and
+uses lexical retrieval plus recent source windows, with no embedding API calls. Ambiguous anchors
+fail closed. Reading-pass resets invalidate old boundaries; backward turns retain already-read text.
+
+ChatGPT completions do **not** provide embeddings. `EMBED_PROVIDER=stub` keeps new local test books
+offline for embeddings; it does not make conversation generation a stub. Existing books retain their
+pinned vectors and derived memory. Further chapter ingestion may require their original compatible
+embedding provider or an explicit rebuild; current-page conversation does not wait for it. Keep API
+keys in the production configuration, which the local subscription launcher must not load.
 
 This testing adapter has CLI overhead and subscription limits. Its token ledger includes CLI usage;
 USD entries for `chatgpt-plan:` are not API charges or a subscription price estimate. Unlike the API

@@ -57,6 +57,8 @@ def _fake_cli(monkeypatch, *, output='{"text":"Supported."}', tokens=25, authent
     monkeypatch.setattr(codex_local.shutil, "which", lambda name: "/fake/codex")
     calls = []
     def run(command, **kwargs):
+        assert not any(key in kwargs["env"] for key in (
+            "OPENAI_API_KEY", "CODEX_API_KEY", "EMBED_API_KEY"))
         if command[1] == "login":
             return subprocess.CompletedProcess(command, 0, "Logged in using ChatGPT" if authenticated
                                                else "Logged in using an API key", "")
@@ -73,6 +75,9 @@ def _fake_cli(monkeypatch, *, output='{"text":"Supported."}', tokens=25, authent
 
 
 def test_local_chatgpt_transport_validates_schema_and_reports_real_usage(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "production-key-must-not-be-inherited")
+    monkeypatch.setenv("CODEX_API_KEY", "production-key-must-not-be-inherited")
+    monkeypatch.setenv("EMBED_API_KEY", "production-key-must-not-be-inherited")
     calls = _fake_cli(monkeypatch)
     client = LLMClient(env={"LLM_TRANSPORT": "codex-local"})
     value, usage = client.complete("Review carefully.", "Evidence only.", schema=Result,
