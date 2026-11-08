@@ -16,9 +16,10 @@ from app.deps import build_state
 from app.llm.client import LLMClient
 
 
-def test_reader_fast_mode_is_isolated_and_bills_the_fast_premium(tmp_path):
+@pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-6.1-terra"])
+def test_reader_fast_mode_is_isolated_and_bills_the_fast_premium(tmp_path, model):
     settings = Settings(_env_file=None, openai_api_key="unit-test-only",
-                        llm_cheap_model="gpt-6-luna", llm_large_model="gpt-6-luna",
+                        llm_cheap_model=model, llm_large_model=model,
                         reader_fast_mode=True, data_dir=str(tmp_path / "data"))
     state = build_state(settings)
     try:
@@ -28,10 +29,10 @@ def test_reader_fast_mode_is_isolated_and_bills_the_fast_premium(tmp_path):
         assert reader.extractor_version() == primary.extractor_version()
         assert reader._embed_oai is primary._embed_oai
         assert reader.embed_identity() == primary.embed_identity()
-        assert reader.billing_model("large") == "fast:gpt-6-luna"
+        assert reader.billing_model("large") == f"fast:{model}"
         usage = {"in": 1000, "out": 200, "cache_read": 100}
-        assert usd_of(reader.billing_model("large"), usage) == 2 * usd_of("gpt-6-luna", usage)
-        assert reserved_usd_of(reader.billing_model("large"), usage) == 2 * reserved_usd_of("gpt-6-luna", usage)
+        assert usd_of(reader.billing_model("large"), usage) == 2 * usd_of(model, usage)
+        assert reserved_usd_of(reader.billing_model("large"), usage) == 2 * reserved_usd_of(model, usage)
     finally:
         state["store"].close()
         state["catalog"].close()

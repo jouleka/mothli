@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     recap_prewarm: bool = False
     recap_disk_cache: bool = False
     reader_answer_cache: bool = False
+    reader_conversation_pipeline: bool = False
+    reader_conversation_review_effort: Literal["low", "medium"] = "medium"
     reader_fast_mode: bool = False
     reader_reuse_enabled: bool = False
     reader_reuse_fast_review: bool = True  # Local GPT-6 Luna reuse checks only; normal preparation is unchanged.

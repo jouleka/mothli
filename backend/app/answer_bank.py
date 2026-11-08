@@ -14,7 +14,7 @@ from app.eval.spoiler_gate import validity_snapshot
 from app.preparation_plan import valid_saved_plan
 
 
-ANSWER_VERSION = "reviewed-answer-v9-natural-reactions"
+ANSWER_VERSION = "reviewed-answer-v10-conversation-pipeline"
 
 
 class AnswerBusy(RuntimeError):
@@ -33,6 +33,7 @@ def answer_scope(book_id, eff, state, manifest, *, catalog, store, settings, cli
                 settings.reader_reuse_min_probability, settings.reader_reuse_min_confidence,
                 ANSWER_VERSION, CONTENT_POLICY_VERSION, excluded_ordinals(manifest)]
     identity.append(settings.reader_reuse_fast_review)
+    identity.extend([settings.reader_conversation_pipeline, settings.reader_conversation_review_effort])
     return (book_id, catalog.get_book(book_id)["incarnation"],
             hashlib.sha256(json.dumps(identity).encode()).hexdigest())
 

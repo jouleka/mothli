@@ -105,12 +105,15 @@ from app.llm import jev_tasks
 from app.reading_assist import (
     CLOSEOUT_SYSTEM,
     SELECTION_SYSTEM,
+    SELECTION_REVIEW_SYSTEM,
     ChapterCloseoutRequest,
     SelectionActionRequest,
     SelectionDraft,
+    SelectionVerdict,
     chapter_closeout_prompt,
     chapter_passages,
     selection_prompt,
+    selection_review_prompt,
 )
 from app.recap_grounding import (
     PRIMARY_RECAP_VERSION, primary_generation_prompt, primary_repair_context,
@@ -548,6 +551,8 @@ def ask_the_book(
     eff, state, manifest = _effective(book_id, body.bookmark, catalog, store, settings, worker)
     clarification = reaction_clarification(body.question, body.history, eff)
     if clarification:
+        if settings.reader_conversation_pipeline:
+            clarification = reaction_copy(body.question)[1]
         return {"as_of_chapter": eff, "answer_type": "conversation", "message": clarification,
                 "insufficient_evidence": False, "claims": [], "citations": [],
                 "cost": _ask_cost_payload([])}
@@ -662,7 +667,7 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
 
     def finish(payload):
         reaction = reaction_copy(body.question)
-        if reaction and not payload["insufficient_evidence"]:
+        if reaction and not payload["insufficient_evidence"] and not settings.reader_conversation_pipeline:
             payload["acknowledgment"] = reaction[0]
         if answer_cache is not None and not payload["insufficient_evidence"]:
             answer_cache.set(answer_key, deepcopy(payload))
@@ -705,6 +710,46 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
         raise HTTPException(
             413, "completed text is too large to search at once; choose an earlier chapter"
         ) from exc
+    if (sources and client.provider != "stub" and settings.reader_conversation_pipeline
+            and not getattr(client, "preparing", False)):
+        from app.conversation_pipeline import (
+            DRAFT_SYSTEM, ConversationDraft, answer_conversation, compact_candidates,
+        )
+        # Fuse selection and drafting only when EVERY candidate fits. Never silently truncate
+        # the pool, raise a ceiling, or replace the original all-candidate selection fallback.
+        compacted = compact_candidates(sources)
+        if _recap_input_fits(settings, client, DRAFT_SYSTEM,
+                             ask_prompt(question, compacted, frontier=eff), schema=ConversationDraft):
+            reviewer = copy(client)
+            reviewer.conversation_review_effort = settings.reader_conversation_review_effort
+
+            def conversation_complete(system, user, *, schema, phase, tier="cheap"):
+                result = budgeted_completion(catalog, settings, reviewer, book_id,
+                    phase=phase, system=system, user=user, tier=tier, schema=schema)
+                remember(result, provider=reviewer.provider, model=reviewer.billing_model(tier))
+                return result.value
+
+            def conversation_score(text):
+                with store.book(book_id) as mem:
+                    return score_recap(mem, eff, text, read_text=read_text_upto(mem, eff))
+
+            try:
+                draft, used, clarification = answer_conversation(question, compacted, frontier=eff,
+                    known_names=known_names, complete=conversation_complete,
+                    score=conversation_score, max_output_tokens=settings.cost_max_output_tokens_per_call)
+            except CostCeilingExceeded as exc:
+                raise _conversation_limit_error(exc) from exc
+            except (AskSafetyError, AskEvidenceError, ValueError) as exc:
+                raise HTTPException(502, "answer could not be cleared against the pages you have read") from exc
+            if clarification:
+                return {"as_of_chapter": eff, "answer_type": "conversation", "message": clarification,
+                        "insufficient_evidence": False, "claims": [], "citations": [],
+                        "cost": _ask_cost_payload(calls)}
+            return finish({"as_of_chapter": eff,
+                "insufficient_evidence": draft.insufficient_evidence,
+                "claims": [claim.model_dump(mode="json") for claim in draft.claims],
+                "citations": [_public_ask_source(source) for source in used],
+                "cost": _ask_cost_payload(calls)})
     if sources and client.provider != "stub":
         candidates = sources
         try:
@@ -888,7 +933,7 @@ def selection_action(
     catalog=Depends(get_catalog),
     store=Depends(get_store),
     settings=Depends(get_settings),
-    client=Depends(get_client),
+    client=Depends(get_reader_client),
     worker=Depends(get_worker),
 ):
     """Explain, define, or translate only the reader-supplied visible selection."""
@@ -918,6 +963,9 @@ def selection_action(
         })
 
     prompt = selection_prompt(body)
+    if settings.reader_conversation_pipeline:
+        client = copy(client)
+        client.conversation_review_effort = settings.reader_conversation_review_effort
     for _attempt in range(2):
         try:
             generated = budgeted_completion(
@@ -964,18 +1012,19 @@ def selection_action(
             return result.value, result.usage
 
         try:
-            verdict, _usage = judge_recap(
-                client,
-                draft.text or "",
-                source_facts([source]),
-                tier="cheap",
-                complete=judge_complete,
-            )
+            if settings.reader_conversation_pipeline and client.provider != "stub":
+                verdict, _usage = judge_complete(SELECTION_REVIEW_SYSTEM,
+                    selection_review_prompt(body, draft), schema=SelectionVerdict)
+                verdict = SelectionVerdict.model_validate(verdict, strict=True).model_dump(mode="json")
+            else:
+                verdict, _usage = judge_recap(
+                    client, draft.text or "", source_facts([source]), tier="cheap", complete=judge_complete)
         except CostCeilingExceeded as exc:
             raise HTTPException(429, "book cost ceiling reached") from exc
-        except JudgeUnavailable:
+        except (JudgeUnavailable, ValueError):
             continue
-        if verdict["references_future"] or verdict["unsupported_claims"]:
+        if (verdict["references_future"] or verdict["unsupported_claims"]
+                or verdict.get("missing_details")):
             continue
         citation = _public_ask_source(source)
         citation["cfi"] = body.cfi
@@ -985,7 +1034,8 @@ def selection_action(
             "insufficient_evidence": False,
             "text": draft.text,
             "acknowledgment": (reaction_copy(body.question)[0]
-                               if body.question and reaction_copy(body.question) else None),
+                               if not settings.reader_conversation_pipeline
+                               and body.question and reaction_copy(body.question) else None),
             "citation": citation,
             "cost": _ask_cost_payload(calls),
         }
