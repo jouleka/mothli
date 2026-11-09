@@ -50,11 +50,16 @@ def source_state(book_id, catalog, settings, worker):
     state, book = catalog.get_state(book_id), catalog.get_book(book_id)
     if state is None or book is None:
         raise LookupError("unknown book")
+    storage_id = book["book_id"]
+    if storage_id != book_id:
+        raise ValueError("source does not belong to the requested book")
     manifest = load_manifest(settings.data_dir, book_id)
     # A cached parse must never keep authorizing text after its source has changed on disk.
     try:
         books_root = (Path(settings.data_dir) / "books").resolve()
-        source_path = Path(source_epub_path(settings.data_dir, book_id)).resolve()
+        # The catalog owns storage identity. Never derive a filesystem path directly
+        # from the route parameter, even after separately checking its manifest.
+        source_path = Path(source_epub_path(settings.data_dir, storage_id)).resolve()
         source_path.relative_to(books_root)
         with source_path.open("rb") as source:
             digest = hashlib.file_digest(source, "sha256").hexdigest()

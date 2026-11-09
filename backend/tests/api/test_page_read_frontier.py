@@ -141,7 +141,7 @@ def test_source_hashing_rejects_symlink_escape_before_opening_it(tmp_path, monke
     except OSError:
         pytest.skip("symlink creation not available")
     monkeypatch.setattr(module,"load_manifest",lambda *a: {})
-    catalog = SimpleNamespace(get_state=lambda _: {}, get_book=lambda _: {})
+    catalog = SimpleNamespace(get_state=lambda _: {}, get_book=lambda _: {"book_id":"bksafe"})
     worker = SimpleNamespace(source_chapters=lambda _:pytest.fail("escaped source was parsed"))
     original_open = Path.open
     def checked_open(path, *args, **kwargs):
@@ -150,6 +150,15 @@ def test_source_hashing_rejects_symlink_escape_before_opening_it(tmp_path, monke
     monkeypatch.setattr(Path,"open",checked_open)
     with pytest.raises(ValueError,match="source is unavailable"):
         module.source_state("bksafe",catalog,SimpleNamespace(data_dir=str(data)),worker)
+
+
+def test_source_storage_identity_cannot_differ_from_requested_book(monkeypatch):
+    from types import SimpleNamespace
+    import app.read_frontier as module
+    catalog = SimpleNamespace(get_state=lambda _: {}, get_book=lambda _: {"book_id":"bkother"})
+    monkeypatch.setattr(module,"load_manifest",lambda *a:pytest.fail("wrong book reached storage"))
+    with pytest.raises(ValueError,match="does not belong"):
+        module.source_state("bkrequested",catalog,SimpleNamespace(data_dir="unused"),None)
 
 
 @pytest.mark.parametrize("escalation", [False, True])
