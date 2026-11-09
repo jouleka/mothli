@@ -63,6 +63,8 @@ export type CatchMeUp = {
   cast_size: number; open_threads: number; cast: CastMember[]; cached: boolean;
 };
 export type ConversationMessage = { role: "user" | "assistant"; content: string; as_of_chapter: number };
+export type ReadFrontier = { id: string; atom: number; offset: number; position_epoch: number; available_chapter: number };
+export type ReadAnchor = { atom: number; quote: string; prefix: string; cfi: string; position_epoch: number };
 export type AskClaim = { text: string; citation_ids: number[] };
 export type AskCitation = {
   id: number; ordinal: number; chapter_key: string; href: string; title: string; excerpt: string; cfi?: string;
@@ -77,13 +79,16 @@ export type AskAnswer = {
   as_of_chapter: number; insufficient_evidence: boolean; claims: AskClaim[];
   citations: AskCitation[]; cost: AskCost | null;
   answer_type?: "recap" | "conversation";
+  calculation?: string;
   message?: string;
   acknowledgment?: string | null;
   recap?: string | null;
   status?: "ready" | "preparing" | "preparation_failed" | "not_started" | "paratext_only";
+  read_frontier?: ReadFrontier;
 };
 export type SelectionAction = "explain" | "define" | "translate";
 export type SelectionAssistAnswer = {
+  message?: string | null;
   action: SelectionAction; as_of_chapter: number; insufficient_evidence: boolean;
   acknowledgment?: string | null;
   text: string | null; citation: (AskCitation & { cfi: string }) | null; cost: AskCost;
@@ -464,23 +469,30 @@ export const api = {
     fetch(`/api/books/${id}/prepared-questions?bookmark=${bookmark}`).then(
       (r) => j<{ as_of_chapter: number; questions: string[] }>(r),
     ),
-  askBook: (id: string, question: string, bookmark?: number, history?: ConversationMessage[]) =>
+  readFrontier: (id: string, anchor?: ReadAnchor) => fetch(`/api/books/${id}/read-frontier`, anchor ? {
+    method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders() }, body: JSON.stringify(anchor),
+  } : {}).then((r) => j<ReadFrontier>(r)),
+  askBook: (id: string, question: string, bookmark?: number, history?: ConversationMessage[], readFrontier?: ReadFrontier) =>
     fetch(`/api/books/${id}/ask`, {
       method: "POST",
       headers: { "content-type": "application/json", ...csrfHeaders() },
-      body: JSON.stringify({ question, ...(bookmark != null ? { bookmark } : {}), ...(history?.length ? { history } : {}) }),
+      body: JSON.stringify({ question, ...(bookmark != null ? { bookmark } : {}), ...(history?.length ? { history } : {}), ...(readFrontier ? {read_frontier:readFrontier} : {}) }),
     }).then((r) => j<AskAnswer>(r)),
   selectionAction: (
     id: string,
     value: { action: SelectionAction; text: string; atom: number; cfi: string; question?: string; history?: ConversationMessage[] },
-  ) => fetch(`/api/books/${id}/selection-action`, {
+  ) => {
+    if (Array.from(value.text).length > 2000)
+      return Promise.reject(new ApiError("Select a shorter passage (up to 2,000 characters).",413,"selection_too_large"));
+    return fetch(`/api/books/${id}/selection-action`, {
     method: "POST",
     headers: { "content-type": "application/json", ...csrfHeaders() },
     body: JSON.stringify({
       ...value,
       ...(value.action === "translate" ? { target_language: "English" } : {}),
     }),
-  }).then((r) => j<SelectionAssistAnswer>(r)),
+  }).then((r) => j<SelectionAssistAnswer>(r));
+  },
   chapterCloseout: (id: string, chapter: number) =>
     fetch(`/api/books/${id}/chapter-closeout`, {
       method: "POST",
@@ -500,6 +512,9 @@ export const api = {
     fetch(`/api/books/${id}/graph${bookmark != null ? `?bookmark=${bookmark}` : ""}`).then(
       (r) => j<Graph>(r),
     ),
+  visiblePeople: (id: string, point: ReadFrontier) => fetch(`/api/books/${id}/people`,{
+    method:"POST",headers:{"content-type":"application/json",...csrfHeaders()},body:JSON.stringify(point),
+  }).then((r)=>j<{read_frontier:ReadFrontier;names:string[]}>(r)),
   memoryCorrections: (id: string, bookmark?: number) =>
     fetch(
       `/api/books/${id}/memory-corrections${bookmark != null ? `?bookmark=${bookmark}` : ""}`,

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 from app.cost.limits import CostCeilingExceeded
 
@@ -36,6 +37,38 @@ def passage_windows(text: str):
         next_start = max(start + 1, end - PASSAGE_OVERLAP)
         boundary = text.find(" ", next_start, end)
         start = boundary + 1 if boundary >= 0 else next_start
+
+
+SCENE_WINDOWS_VERSION = "sentence-tail-v1"
+_SENTENCE_START = re.compile(r'''[.!?。！？]["'”’」』）)]*\s+''')
+
+
+def recent_scene_windows(text: str):
+    """Four bounded exact tail slices, aligned to sentence ends where possible.
+
+    This is source layout, not a generated summary or a claim of resolved coreference.
+    The reader's unfinished final sentence stays unfinished. No unread suffix is consulted.
+    """
+    text = normalize_source(text)
+    boundaries = [0, *(m.end() for m in _SENTENCE_START.finditer(text))]
+    result, end = [], len(text)
+    for _ in range(4):
+        if not end:
+            break
+        minimum = max(0, end - PASSAGE_CHARS)
+        starts = [b for b in boundaries if minimum <= b < end]
+        start = starts[0] if starts else minimum
+        if not starts and start:
+            space = text.find(" ", start, min(end, start + PASSAGE_CHARS // 2))
+            start = space + 1 if space >= 0 else start
+        result.append((start, end, text[start:end]))
+        if not start:
+            break
+        # Repeat up to one short sentence for local speaker/pronoun context, retaining
+        # chronological overlap. Long sentences are bounded mechanically, never rewritten.
+        overlaps = [b for b in boundaries if start < b <= min(end - 1, start + PASSAGE_OVERLAP)]
+        end = overlaps[-1] if overlaps else start
+    yield from reversed(result)
 
 
 def embedding_text(title: str, passage: str) -> str:

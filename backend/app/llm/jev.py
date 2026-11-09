@@ -81,6 +81,14 @@ class JevClient:
                 raise ValueError("model or answer coverage")
             for name, question in questions.items():
                 answer = value["answers"][name]
+                if question["type"] == "noul":
+                    probability = answer.get("noul")
+                    if (answer.get("type") != "noul" or type(probability) not in (int, float)
+                            or not 0 <= probability <= 1):
+                        raise ValueError("invalid typed probability")
+                    continue
+                if question["type"] != "choice":
+                    raise ValueError("unsupported question type")
                 options = set(question["criteria"])
                 probabilities = answer.get("probabilities", {})
                 if (answer.get("type") != "choice" or answer.get("choice") not in options

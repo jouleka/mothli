@@ -51,12 +51,37 @@ def test_native_terra_sends_effort_and_shared_reasoning_output_cap():
     assert [body["reasoning_effort"] for body in calls] == ["medium", "medium"]
     assert all(body["model"] == "gpt-6.1-terra" and body["max_completion_tokens"] == 900
                and "temperature" not in body for body in calls)
+    assert all(body["store"] is False and "tools" not in body for body in calls)
+
+
+@pytest.mark.parametrize("finish,reason", [("length", "output_limit"), ("content_filter", "content_filter")])
+def test_native_incomplete_output_is_withheld_as_provider_failure(finish, reason):
+    def handler(request):
+        return httpx.Response(200, json={
+            "id": "test", "object": "chat.completion", "created": 0,
+            "model": "gpt-6.1-terra",
+            "choices": [{"index": 0, "finish_reason": finish, "message": {
+                "role": "assistant", "content": '{"text":"unchecked partial'}}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+        })
+    client = LLMClient(provider="openai-compatible", api_key="synthetic", env={},
+                       http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    try:
+        with pytest.raises(ProviderUnavailable) as exc:
+            client.complete("Write.", "Evidence.", schema=Result, max_output_tokens=128)
+        assert exc.value.kind == reason
+        assert "unchecked partial" not in str(exc.value)
+        assert client.provider_status()["completion"]["reason"] == reason
+    finally:
+        client._oai.close()
 
 
 def _fake_cli(monkeypatch, *, output='{"text":"Supported."}', tokens=25, authenticated=True):
     monkeypatch.setattr(codex_local.shutil, "which", lambda name: "/fake/codex")
     calls = []
     def run(command, **kwargs):
+        assert not any(key in kwargs["env"] for key in (
+            "OPENAI_API_KEY", "CODEX_API_KEY", "EMBED_API_KEY"))
         if command[1] == "login":
             return subprocess.CompletedProcess(command, 0, "Logged in using ChatGPT" if authenticated
                                                else "Logged in using an API key", "")
@@ -73,6 +98,9 @@ def _fake_cli(monkeypatch, *, output='{"text":"Supported."}', tokens=25, authent
 
 
 def test_local_chatgpt_transport_validates_schema_and_reports_real_usage(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "production-key-must-not-be-inherited")
+    monkeypatch.setenv("CODEX_API_KEY", "production-key-must-not-be-inherited")
+    monkeypatch.setenv("EMBED_API_KEY", "production-key-must-not-be-inherited")
     calls = _fake_cli(monkeypatch)
     client = LLMClient(env={"LLM_TRANSPORT": "codex-local"})
     value, usage = client.complete("Review carefully.", "Evidence only.", schema=Result,
@@ -99,6 +127,30 @@ def test_local_transport_fails_closed(monkeypatch, output, tokens, authenticated
 def test_local_transport_cannot_be_enabled_for_hosted_mode():
     with pytest.raises(ValueError, match="only supported for local testing"):
         Settings(_env_file=None, llm_transport="codex-local", deployment_mode="hosted")
+
+
+def test_windows_cli_uses_native_child_so_timeouts_do_not_only_kill_the_npm_shim(tmp_path, monkeypatch):
+    shim = tmp_path / "codex.cmd"
+    shim.write_text("@echo off")
+    native = tmp_path / "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+    native.parent.mkdir(parents=True)
+    native.write_bytes(b"synthetic path probe, never executed")
+    monkeypatch.setattr(codex_local.shutil,"which",lambda _:str(shim))
+    monkeypatch.setattr(codex_local.platform,"machine",lambda:"AMD64")
+    assert codex_local._executable() == str(native)
+
+
+def test_cli_timeout_is_unavailable_review_not_an_approval(monkeypatch):
+    _fake_cli(monkeypatch)
+    original = codex_local.subprocess.run
+    def run(command, **kwargs):
+        if command[1] == "login":
+            return original(command, **kwargs)
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+    monkeypatch.setattr(codex_local.subprocess,"run",run)
+    with pytest.raises(ProviderUnavailable):
+        LLMClient(env={"LLM_TRANSPORT":"codex-local"}).complete(
+            "Review carefully.","Evidence only.",schema=Result,max_output_tokens=100)
 
 
 def test_terra_api_cost_is_separate_from_chatgpt_plan_usage():

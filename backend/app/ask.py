@@ -5,6 +5,7 @@ from __future__ import annotations
 import heapq
 import json
 import re
+from functools import lru_cache
 from collections.abc import Callable, Iterable
 from typing import Any, Literal
 
@@ -19,6 +20,7 @@ from app.eval.spoiler_gate.judge import JudgeUnavailable, JudgeVerdict
 from app.ingest.extraction.resolve import ROLE_NOUNS
 from app.llm.client import ProviderUnavailable
 from app.retrieval_passages import PASSAGE_CHARS, passage_windows
+from app.read_frontier import ReadBoundary
 from app.unicode_text import normalize_text, proper_words, word_tokens, words
 
 
@@ -65,6 +67,7 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=2, max_length=500)
     bookmark: StrictInt | None = Field(default=None, ge=0, le=2**31 - 1)
     history: list[ConversationMessage] = Field(default_factory=list, max_length=8)
+    read_frontier: ReadBoundary | None = None
 
     @field_validator("question")
     @classmethod
@@ -336,6 +339,16 @@ def judge_ask_draft(client, draft, sources, *, tier="cheap", complete=None, ques
 _passage_windows = passage_windows
 
 
+@lru_cache(maxsize=2048)
+def _source_terms(text):
+    """Immutable lexical work only, keyed by exact body bytes. No IDs, facts or answers.
+
+    Callers must still fence and verify source text before lookup. This never authorizes a
+    cached chapter or reading position; changed/clipped bodies use different keys.
+    """
+    return frozenset(content_words(text))
+
+
 def retrieve_ask_sources(
     question: str,
     *,
@@ -406,7 +419,7 @@ def retrieve_ask_sources(
         nonlocal serial
         if not text:
             return None
-        terms = content_words(text)
+        terms = _source_terms(text) if len(text) <= 6000 else frozenset(content_words(text))
         shared = len(query_words & terms)
         # Preserve the named subject before generic wording such as 'the text read so far'. The
         # independent semantic ranking below still retrieves paraphrases with no shared words.

@@ -86,6 +86,10 @@ class _MemoEmbed:
 
     def __init__(self, client, embed_call=None):
         self._client = client
+        if getattr(client, "provider", None) == "codex-local":
+            from copy import copy
+            self._client = copy(client)
+            self._client.background_inference = True
         self._embed_call = embed_call or client.embed
         self._cache = {}
         self._sealed = False
@@ -372,6 +376,16 @@ class IngestWorker:
             while len(self._segcache) > self._segcache_max:
                 self._segcache.popitem(last=False)
             return segmented
+
+    def source_chapters(self, book_id):
+        """Exact canonical source, shared bounded parse cache; callers MUST apply a read boundary."""
+        result, chapters = self._segmented(book_id)
+        if self._gate(book_id, result, chapters):
+            raise ValueError("source no longer matches its import manifest")
+        from app.ingest.manifest import assert_matches_store
+        with self._store.book(book_id) as mem:
+            assert_matches_store(load_manifest(self._settings.data_dir, book_id), mem)
+        return chapters
 
     def _gate(self, book_id, result, chapters):
         """The fail-closed pre-ingest gates. Returns the blocking reason or None."""

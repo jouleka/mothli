@@ -27,6 +27,7 @@ export class PositionReporter {
   private inFlight = false;
   private active: { report: PendingPosition; generation: number } | null = null;
   private delivery: Promise<void> | null = null;
+  private deliveryFailure: Error | null = null;
   private retryAttempt = 0;
   private generation = 0;
   private closed = false;
@@ -76,6 +77,24 @@ export class PositionReporter {
     if ((this.pending || this.completion) && !this.closed) void this.fire();
   }
 
+  /** A page-source confirmation must follow the position PUT that admits its chapter. */
+  async flushAndWait(): Promise<void> {
+    const generation = this.generation;
+    while (!this.closed && generation === this.generation) {
+      if (!this.inFlight && !this.pending && !this.completion) {
+        if (this.deliveryFailure) throw this.deliveryFailure;
+        return;
+      }
+      await this.fire();
+      if (this.closed || generation !== this.generation)
+        throw new Error("The reading pass changed while saving its position.");
+      if (this.deliveryFailure) throw this.deliveryFailure;
+      // A newer relocation may have arrived during the PUT. Drain that report too;
+      // waiting for only the original request could authorize an outdated page.
+    }
+    throw new Error("The reading position reporter is no longer active.");
+  }
+
   /** Persist both the high-water affirmation and the newest cursor before page teardown. */
   retain(persist: (report: Readonly<PendingPosition>) => void): void {
     if (this.closed) return;
@@ -118,6 +137,7 @@ export class PositionReporter {
   /** Discard pre-reset work and invalidate the result of a write already in flight. */
   cancel(): void {
     this.generation += 1;
+    this.deliveryFailure = null;
     clearTimeout(this.timer);
     this.timer = undefined;
     this.pending = null;
@@ -142,6 +162,7 @@ export class PositionReporter {
     if (completing) this.completion = null;
     else this.pending = null;
     this.inFlight = true;
+    this.deliveryFailure = null;
     const generation = this.generation;
     this.active = { report, generation };
     this.onState("saving");
@@ -162,6 +183,8 @@ export class PositionReporter {
         report.positionEpoch,
       );
       if (generation !== this.generation || this.closed) return;
+      if (result === "queued" || result === "conflict")
+        this.deliveryFailure = new Error("The reading position has not been confirmed by the server.");
       this.retryAttempt = 0;
       if (this.pending || this.completion) {
         this.onState("pending");
@@ -177,6 +200,7 @@ export class PositionReporter {
       }
     } catch (error) {
       if (generation !== this.generation || this.closed) return;
+      this.deliveryFailure = error instanceof Error ? error : new Error("The reading position could not be confirmed.");
       // A newer relocation is more representative than the failed one; otherwise retain the failure.
       if (completing) this.completion ??= report;
       else this.pending ??= report;

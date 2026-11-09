@@ -225,6 +225,40 @@ class Catalog:
             self._conn.commit()
         return dict(row)
 
+    def get_conversation_frontier(self, book_id):
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT position_epoch,atom,source_offset,source_hash,cfi FROM conversation_frontier "
+                "WHERE book_id=?", (book_id,)).fetchone()
+        return dict(row) if row else None
+
+    def set_conversation_frontier(self, book_id, *, epoch, atom, offset, source_hash, cfi):
+        for value in (epoch, atom, offset):
+            self._check_int(value, "source position")
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO conversation_frontier "
+                "SELECT book_id,position_epoch,?,?,?,?,? FROM reading_state "
+                "WHERE book_id=? AND position_epoch=? "
+                "ON CONFLICT(book_id) DO UPDATE SET atom=excluded.atom, "
+                "source_offset=excluded.source_offset,source_hash=excluded.source_hash, "
+                "cfi=excluded.cfi,updated_at=excluded.updated_at "
+                "WHERE excluded.position_epoch=conversation_frontier.position_epoch AND "
+                "(excluded.atom>conversation_frontier.atom OR "
+                "(excluded.atom=conversation_frontier.atom AND "
+                "excluded.source_offset>conversation_frontier.source_offset))",
+                (atom, offset, source_hash, cfi, _now(), book_id, epoch))
+            state = self._conn.execute(
+                "SELECT position_epoch FROM reading_state WHERE book_id=?", (book_id,)).fetchone()
+            if state is None or state["position_epoch"] != epoch:
+                self._conn.rollback()
+                raise ValueError("position epoch changed; the reading position was reset")
+            row = self._conn.execute(
+                "SELECT position_epoch,atom,source_offset,source_hash,cfi FROM conversation_frontier "
+                "WHERE book_id=?", (book_id,)).fetchone()
+            self._conn.commit()
+        return dict(row)
+
     def reset_position(self, book_id, *, expected_epoch):
         """Start a new reading pass without deleting memory or ingest receipts.
 
@@ -248,6 +282,7 @@ class Catalog:
                 if epoch_row["position_epoch"] >= 2**63 - 1:
                     raise ValueError("position epoch is exhausted")
                 raise ValueError("position epoch changed; the reading position was reset")
+            self._conn.execute("DELETE FROM conversation_frontier WHERE book_id=?", (book_id,))
             row = self._conn.execute(
                 "SELECT bookmark,cfi,ingest_progress,position_epoch "
                 "FROM reading_state WHERE book_id=?", (book_id,)

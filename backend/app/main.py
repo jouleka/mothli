@@ -3,7 +3,9 @@ around the per-process singletons; the lifespan owns their startup/shutdown (Sto
 against in-flight sessions; the D-A7 fail-loud predicate fires during startup, refusing a stub deploy
 unless ALLOW_STUB is explicitly set)."""
 import logging
+import json
 import tempfile
+from time import perf_counter
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -80,6 +82,28 @@ class _SecurityHeaders:
             await send(message)
 
         await self.app(scope, receive, add_headers)
+
+
+class _ReadingToolTiming:
+    """Measure tool requests without retaining book IDs, passages or dialogue."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        parts = scope.get("path", "").split("/")
+        if scope["type"] != "http" or len(parts) != 5 or parts[1:3] != ["api", "books"] or parts[4] not in {"graph", "selection-action", "people"}:
+            return await self.app(scope, receive, send)
+        started, status = perf_counter(), 500
+        async def observed(message):
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            await send(message)
+        try:
+            await self.app(scope, receive, observed)
+        finally:
+            logging.getLogger("mothli.conversation").info(json.dumps({"event":"reading-tool",
+                "operation":parts[4],"status":status,"elapsed_ms":round((perf_counter()-started)*1000,2)}))
 
 
 class _LocalOriginGuard:
@@ -459,6 +483,7 @@ def create_app(
         app.add_middleware(_CredentialBodyLimit)
         app.add_middleware(_HostedNoStore)
     else:
+        app.add_middleware(_ReadingToolTiming)
         app.add_middleware(_EpubUploadBodyLimit, max_file_bytes=settings.epub_max_upload_bytes)
         app.add_middleware(_LocalOriginGuard)
         app.include_router(health.router)

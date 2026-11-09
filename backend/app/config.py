@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     recap_prewarm: bool = False
     recap_disk_cache: bool = False
     reader_answer_cache: bool = False
+    reader_conversation_pipeline: bool = False
+    reader_page_context: bool = False
+    reader_memory_ingest: bool = True  # Local source-first preview can defer paid memory backfill.
+    reader_conversation_jev: bool = False
+    reader_conversation_routing: bool = False
+    reader_conversation_draft_effort: Literal["low", "medium"] = "medium"
+    reader_conversation_review_effort: Literal["low", "medium"] = "medium"
     reader_fast_mode: bool = False
     reader_reuse_enabled: bool = False
     reader_reuse_fast_review: bool = True  # Local GPT-6 Luna reuse checks only; normal preparation is unchanged.
@@ -124,6 +131,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
+        if not self.reader_memory_ingest and (self.deployment_mode != "local" or not self.reader_page_context):
+            raise ValueError("deferred memory ingestion requires local page context")
+        if self.reader_conversation_routing and not self.reader_conversation_jev:
+            raise ValueError("turn routing requires the local conversation Jev pipeline")
+        if self.reader_conversation_jev and (self.deployment_mode != "local" or not self.reader_page_context
+                                             or not self.jev_enabled):
+            raise ValueError("conversation Jev experiment requires local page context and Jev")
         if self.llm_transport == "codex-local" and self.deployment_mode != "local":
             raise ValueError("codex-local is only supported for local testing")
         if self.deployment_mode != "hosted":

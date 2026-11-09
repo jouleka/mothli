@@ -35,9 +35,9 @@ def build_state(settings: Settings) -> dict:
     reader = client
     if settings.reader_fast_mode:
         if (client.provider != "openai-compatible" or not client._is_native_openai
-                or any(client._model_for(t) not in {"gpt-6-luna", "gpt-6.1-sol"}
+                or any(client._model_for(t) not in {"gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra"}
                        for t in ("cheap", "large"))):
-            raise ValueError("Reader Fast mode requires native OpenAI GPT-6 Luna or GPT-6.1 Sol")
+            raise ValueError("Reader Fast mode requires native OpenAI GPT-6 Luna, Sol or Terra")
         reader = copy(client)
         reader._oai = client._oai.with_options(max_retries=0)
         reader.service_tier = "fast"
@@ -116,10 +116,10 @@ async def book_lifecycle(book_id: str, request: Request):
     try:
         path = getattr(getattr(request, "url", None), "path", "")
         method = getattr(request, "method", "")
-        position_write = method == "PUT" and path.endswith("/position")
+        position_write = method == "PUT" and path.endswith(("/position", "/read-frontier"))
         shared_read = (getattr(request, "recap_preparation", False)
                        or method == "GET"
-                       or (method == "POST" and path.endswith(("/ask", "/chapter-closeout", "/selection-action", "/ingest/retry")))
+                       or (method == "POST" and path.endswith(("/ask", "/chapter-closeout", "/selection-action", "/people", "/ingest/retry")))
                        or position_write)
         if shared_read:
             async with entry.lock:

@@ -35,7 +35,8 @@ import threading
 import time
 
 import httpx
-from openai import APIConnectionError, APIStatusError, APITimeoutError, BadRequestError, OpenAI
+from openai import (APIConnectionError, APIStatusError, APITimeoutError, BadRequestError, OpenAI,
+                    LengthFinishReasonError, ContentFilterFinishReasonError)
 from openai.lib._pydantic import to_strict_json_schema
 from pydantic import ValidationError
 
@@ -225,6 +226,11 @@ class LLMClient:
         """Terra: low for bounded extraction/selection; medium for prose and audits."""
         if self._model_for(tier) != "gpt-6.1-terra":
             return _NATIVE_REASONING_EFFORT.get(self._model_for(tier))
+        if schema is not None and schema.__name__ in {"ConversationDraft", "SceneConversationDraft", "ConversationReply", "SelectionDraft"}:
+            return getattr(self, "conversation_draft_effort", "medium")
+        if schema is not None and schema.__name__ in {
+                "ConversationEvidenceReview", "ConversationVerdict", "ConversationEscalation", "SelectionVerdict"}:
+            return getattr(self, "conversation_review_effort", "medium")
         if schema is not None and schema.__name__ in {
                 "Extraction", "SourceSelection", "PreparedQuestions"}:
             return "low"
@@ -236,7 +242,9 @@ class LLMClient:
                 from app.llm.codex_local import complete
                 result = complete(system, user, model=self._model_for(tier),
                                   effort=self.reasoning_effort(tier, schema), schema=schema,
-                                  max_output_tokens=max_output_tokens, timeout=self.timeout)
+                                  max_output_tokens=max_output_tokens, timeout=self.timeout,
+                                  background=bool(getattr(self, "preparing", False)
+                                                  or getattr(self, "background_inference", False)))
             elif self.provider == "anthropic":
                 result = self._complete_anthropic(system, user, tier, schema, max_output_tokens)
             elif self.provider == "openai-compatible":
@@ -246,6 +254,10 @@ class LLMClient:
         except ProviderUnavailable as exc:
             self._record_provider_failure("completion", exc.kind)
             raise
+        except (LengthFinishReasonError,ContentFilterFinishReasonError) as exc:
+            kind="output_limit" if isinstance(exc,LengthFinishReasonError) else "content_filter"
+            self._record_provider_failure("completion",kind)
+            raise ProviderUnavailable(kind,service="completion") from exc
         except (APIStatusError, APIConnectionError, APITimeoutError, httpx.HTTPError) as exc:
             kind = _provider_failure_kind(exc)
             self._record_provider_failure("completion", kind)
@@ -323,6 +335,8 @@ class LLMClient:
             if unreasoned:
                 cap["temperature"] = 0
         requested_fast = cap.get("service_tier") == "fast"
+        if self._is_native_openai:
+            cap["store"] = False
         allowed_tiers = ((None, "fast", "priority", "default") if requested_fast
                          else (None, "default"))
         if schema is None:

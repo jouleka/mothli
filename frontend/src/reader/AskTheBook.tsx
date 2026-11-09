@@ -8,7 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { api, ApiError, type AskAnswer, type AskCitation } from "../api";
+import { api, ApiError, type AskAnswer, type AskCitation, type ReadFrontier } from "../api";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { MothliMark } from "../ui/MothliMark";
@@ -58,6 +58,9 @@ function storageKey(bookId: string, owner: string, pass: string) {
   return `${STORAGE_PREFIX}${encodeURIComponent(owner)}:${encodeURIComponent(bookId)}:${encodeURIComponent(pass)}`;
 }
 function readableAnswer(answer: AskAnswer): string {
+  return [answer.calculation, readableBookAnswer(answer)].filter(Boolean).join("\n\n");
+}
+function readableBookAnswer(answer: AskAnswer): string {
   if (answer.answer_type === "conversation") return answer.message ?? "Which moment do you mean?";
   if (answer.insufficient_evidence) {
     switch (answer.status) {
@@ -185,6 +188,8 @@ export function AskTheBook({
   onClearSelection,
   onSaveReply,
   initialAction,
+  prepareReadContext,
+  throughCurrentPage = false,
 }: {
   bookId: string;
   bookmark: number;
@@ -199,6 +204,8 @@ export function AskTheBook({
   onClearSelection?: () => void;
   onSaveReply?: (reply: SavedCompanionReply) => void;
   initialAction?: "recap" | null;
+  prepareReadContext?: () => Promise<ReadFrontier | null>;
+  throughCurrentPage?: boolean;
 }) {
   const localSessionRef = useRef<AskSession | null>(null);
   const retainedSession = sessionRef ?? localSessionRef;
@@ -348,6 +355,7 @@ export function AskTheBook({
           as_of_chapter: selected.as_of_chapter,
           acknowledgment: selected.acknowledgment,
           insufficient_evidence: selected.insufficient_evidence,
+          ...(selected.message ? {answer_type: "conversation" as const, message: selected.message} : {}),
           claims: selected.text
             ? [{ text: selected.text, citation_ids: [1] }]
             : [],
@@ -363,12 +371,15 @@ export function AskTheBook({
             "I couldn’t check that passage. Please select it again.",
           );
       } else {
+        const readPoint = prepareReadContext ? await prepareReadContext() : null;
+        if (!isCurrentRequest()) return;
+        const requestBookmark = Math.max(bookmark, readPoint?.available_chapter ?? 0);
         const history = session
           .getSnapshot()
           .exchanges.filter(
             (exchange) =>
               !exchange.passage &&
-              exchange.answer.as_of_chapter <= bookmark &&
+              exchange.answer.as_of_chapter <= requestBookmark &&
               !exchange.answer.insufficient_evidence,
           )
           .flatMap((exchange) => [
@@ -384,10 +395,13 @@ export function AskTheBook({
             },
           ])
           .slice(-8);
-        result = await api.askBook(bookId, value, bookmark, history);
+        result = readPoint
+          ? await api.askBook(bookId, value, requestBookmark, history, readPoint)
+          : await api.askBook(bookId, value, requestBookmark, history);
         if (
-          result.as_of_chapter > bookmark ||
-          result.citations.some((citation) => citation.ordinal > bookmark)
+          result.as_of_chapter > requestBookmark ||
+          result.citations.some((citation) => citation.ordinal > requestBookmark) ||
+          (readPoint && result.read_frontier?.id !== readPoint.id)
         )
           throw new Error(
             "I couldn’t check that reply against your read pages. Try again?",
@@ -418,6 +432,12 @@ export function AskTheBook({
             ? /cost ceiling/i.test(reason.message)
               ? BOOK_USAGE_LIMIT_MESSAGE
               : "Mothli needs a short break. Try again shortly."
+            : reason instanceof ApiError && reason.status === 502 && /cleared against (your read pages|the selected passage)/i.test(reason.message)
+            ? scopeSelection
+              ? "I couldn’t verify that from the selected passage. Try selecting a little more context."
+              : "I couldn’t verify that against your read pages. Try naming the person or moment you mean."
+            : reason instanceof ApiError && reason.status === 409
+            ? "Your reading position changed. Please try again from this page."
             : "I couldn’t get a reply. Try again?";
         session.update({ error: message });
       }
@@ -428,16 +448,29 @@ export function AskTheBook({
   };
   const openPeople = async () => {
     if (peopleBusy) return;
+    let expectedBookmark=bookmark;
+    const currentPeople = () => isCurrent() && session.bookmark === expectedBookmark;
     setPeopleOpen(true);
     setPeopleBusy(true);
     setPeopleError("");
     try {
-      const recap = await api.catchMeUp(bookId, bookmark);
-      if (isCurrent() && recap.as_of_chapter <= bookmark) setPeople(recap.cast);
+      const graph = await api.graph(bookId, bookmark);
+      if (!currentPeople() || graph.as_of_chapter>bookmark) return;
+      if (graph.characters.length) {
+        setPeople(graph.characters.map((person) => ({name:person.canonical_name, entity_id:person.entity_id})));
+      } else if (prepareReadContext) {
+        const point=await prepareReadContext();
+        if (!isCurrent() || !point) return;
+        expectedBookmark=Math.max(bookmark,point.available_chapter);
+        if (!currentPeople()) return;
+        const result=await api.visiblePeople(bookId,point);
+        if(currentPeople() && result.read_frontier.id===point.id)
+          setPeople(result.names.map((name,index)=>({name,entity_id:-(index+1)})));
+      } else setPeople([]);
     } catch {
-      if (isCurrent()) setPeopleError("Couldn’t find the names. Try again?");
+      if (currentPeople()) setPeopleError("Couldn’t find the names. Try again?");
     } finally {
-      if (isCurrent()) setPeopleBusy(false);
+      if (currentPeople()) setPeopleBusy(false);
     }
   };
   const submit = (event: FormEvent) => {
@@ -792,7 +825,7 @@ export function AskTheBook({
             <span title="Mothli only uses the pages you’ve read">
               <Icon name="shield" size={12} />
               <span>
-                {selection ? "This passage only" : "Only your read pages"}
+                {selection ? "This passage only" : throughCurrentPage ? "Through this page" : "Only your read pages"}
               </span>
             </span>
             <Button
