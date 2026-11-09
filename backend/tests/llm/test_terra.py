@@ -51,6 +51,29 @@ def test_native_terra_sends_effort_and_shared_reasoning_output_cap():
     assert [body["reasoning_effort"] for body in calls] == ["medium", "medium"]
     assert all(body["model"] == "gpt-6.1-terra" and body["max_completion_tokens"] == 900
                and "temperature" not in body for body in calls)
+    assert all(body["store"] is False and "tools" not in body for body in calls)
+
+
+@pytest.mark.parametrize("finish,reason", [("length", "output_limit"), ("content_filter", "content_filter")])
+def test_native_incomplete_output_is_withheld_as_provider_failure(finish, reason):
+    def handler(request):
+        return httpx.Response(200, json={
+            "id": "test", "object": "chat.completion", "created": 0,
+            "model": "gpt-6.1-terra",
+            "choices": [{"index": 0, "finish_reason": finish, "message": {
+                "role": "assistant", "content": '{"text":"unchecked partial'}}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+        })
+    client = LLMClient(provider="openai-compatible", api_key="synthetic", env={},
+                       http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    try:
+        with pytest.raises(ProviderUnavailable) as exc:
+            client.complete("Write.", "Evidence.", schema=Result, max_output_tokens=128)
+        assert exc.value.kind == reason
+        assert "unchecked partial" not in str(exc.value)
+        assert client.provider_status()["completion"]["reason"] == reason
+    finally:
+        client._oai.close()
 
 
 def _fake_cli(monkeypatch, *, output='{"text":"Supported."}', tokens=25, authenticated=True):

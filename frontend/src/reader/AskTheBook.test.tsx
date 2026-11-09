@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   askBook: vi.fn(),
   selectionAction: vi.fn(),
   catchMeUp: vi.fn(),
+  graph: vi.fn(),
+  visiblePeople: vi.fn(),
   owner: vi.fn(),
 }));
 vi.mock("../api", async (importOriginal) => ({
@@ -50,9 +52,53 @@ beforeEach(() => {
     as_of_chapter: 2,
     cast: [{ name: "Aldric", entity_id: 1 }],
   });
+  mocks.graph.mockResolvedValue({as_of_chapter:2,characters:[{canonical_name:"Aldric",entity_id:1}],relationships:[]});
 });
 
 describe("Mothli conversation", () => {
+  test("shows a computed answer alongside the separately cited book answer", async () => {
+    mocks.askBook.mockResolvedValueOnce({...answer, calculation:"2 + 2 = 4."});
+    render(<AskTheBook {...props} />);
+    submit("What is 2 + 2, and who met at the forge?");
+    await screen.findByText(/2 \+ 2 = 4\./);
+    expect(screen.getByText(/Berenice met Aldric at the forge/)).toBeTruthy();
+    expect(screen.getByText("Pages")).toBeTruthy();
+  });
+  test("finds names from confirmed pages when cold memory has no graph", async () => {
+    const point={id:"a".repeat(64),atom:1,offset:100,position_epoch:0,available_chapter:1};
+    mocks.graph.mockResolvedValueOnce({as_of_chapter:0,characters:[],relationships:[]});
+    mocks.visiblePeople.mockResolvedValue({read_frontier:point,names:["Mara"]});
+    render(<AskTheBook {...props} bookmark={1} prepareReadContext={vi.fn(async()=>point)} />);
+    fireEvent.click(screen.getByRole("button",{name:"Who was that?"}));
+    await screen.findByRole("button",{name:"Mara"});
+    expect(mocks.visiblePeople).toHaveBeenCalledWith("b",point);
+    expect(mocks.catchMeUp).not.toHaveBeenCalled();
+    expect(mocks.askBook).not.toHaveBeenCalled();
+  });
+
+  test("shows a fact-free passage clarification without citations or generic failure", async () => {
+    const message = "Do you mean the name’s meaning, or whether the character was based on a real person?";
+    mocks.selectionAction.mockResolvedValue({as_of_chapter:2,insufficient_evidence:true,
+      text:null,citation:null,message,cost:null});
+    render(<AskTheBook {...props} selection={{text:"What is it, Kolya? said Alyosha.",
+      anchor:{atom:2,cfi:"cfi"}}} />);
+    submit("What is Kolya in real life?");
+    await screen.findByText(message);
+    expect(screen.queryByText("I couldn’t get a reply. Try again?")).toBeNull();
+    expect(screen.queryByText("Pages")).toBeNull();
+  });
+
+  test("discards a people list returned after rewinding", async () => {
+    let resolve!: (value: unknown) => void;
+    mocks.graph.mockImplementationOnce(() => new Promise((done) => {resolve=done;}));
+    const view=render(<AskTheBook {...props} />);
+    fireEvent.click(screen.getByRole("button",{name:"Who was that?"}));
+    view.rerender(<AskTheBook {...props} bookmark={1} />);
+    await act(async () => resolve({as_of_chapter:2,characters:[{canonical_name:"Future name",entity_id:3}]}));
+    expect(screen.queryByText("Future name")).toBeNull();
+    expect(mocks.catchMeUp).not.toHaveBeenCalled();
+  });
+
   test("explains a source verification failure without publishing an unchecked answer", async () => {
     mocks.askBook.mockRejectedValue(new ApiError("reply could not be cleared against your read pages", 502));
     render(<AskTheBook {...props} />);
@@ -210,6 +256,8 @@ describe("Mothli conversation", () => {
     expect(mocks.askBook).toHaveBeenCalledWith("b", "Catch me up", 2, []);
     fireEvent.click(screen.getByRole("button", { name: "Who was that?" }));
     fireEvent.click(await screen.findByRole("button", { name: "Aldric" }));
+    expect(mocks.graph).toHaveBeenCalledWith("b",2);
+    expect(mocks.catchMeUp).not.toHaveBeenCalled();
     expect(await screen.findByText("Remind me who Aldric is.")).toBeTruthy();
     expect(mocks.askBook).toHaveBeenLastCalledWith(
       "b",

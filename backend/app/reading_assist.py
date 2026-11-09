@@ -49,6 +49,9 @@ class SelectionDraft(BaseModel):
     insufficient_evidence: bool
     text: str | None = Field(default=None, max_length=2400)
     citation_ids: list[StrictInt] = Field(default_factory=list, max_length=1)
+    clarification: Literal["reference", "meaning", "real_world"] | None = Field(default=None,
+        description="Only when an explain question is ambiguous: reference, wording versus story "
+        "meaning, or name meaning versus real-world identity. Not for unavailable plot evidence.")
 
     @field_validator("text")
     @classmethod
@@ -60,12 +63,21 @@ class SelectionDraft(BaseModel):
 
     @model_validator(mode="after")
     def result_shape(self) -> "SelectionDraft":
+        if self.clarification is not None and not self.insufficient_evidence:
+            raise ValueError("a clarification cannot contain an answer")
         if self.insufficient_evidence:
             if self.text is not None or self.citation_ids:
                 raise ValueError("insufficient selection result must be empty")
         elif self.text is None or self.citation_ids != [1]:
             raise ValueError("selection result must cite the selected passage as source 1")
         return self
+
+
+SELECTION_CLARIFICATIONS = {
+    "reference": "Who or what do you mean in this passage?",
+    "meaning": "Do you mean the wording, or what is happening in the story?",
+    "real_world": "Do you mean the name’s meaning, or whether the character was based on a real person?",
+}
 
 
 class ChapterCloseoutRequest(BaseModel):
@@ -85,7 +97,11 @@ SELECTION_SYSTEM = (
     "pretend to share human emotions, or append a follow-up question on every reply. "
     "Mark a reading of the wording as a reading, never a proven hidden motive. "
     "Be concise. A completed result must cite source id 1. If the "
-    "requested action cannot be done from the passage without guessing, return insufficient evidence."
+    "requested action cannot be done from the passage without guessing, return insufficient evidence. "
+    "For an ambiguous explain question, set clarification to reference, meaning or real_world; "
+    "real_world means the reader might mean a name's meaning or a real-world person. "
+    "Otherwise clarification must be null. Any insufficient or clarification result must use "
+    "insufficient_evidence=true, text=null and citation_ids=[]. Never put refusal prose in text."
 )
 
 

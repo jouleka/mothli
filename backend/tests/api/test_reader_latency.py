@@ -112,7 +112,7 @@ def test_reviewed_answer_cache_is_free_and_frontier_and_reset_scoped(env, monkey
     assert reset["as_of_chapter"] == 0 and reset["claims"] == []
 
 
-@pytest.mark.parametrize("assist_path", ["/ask", "/chapter-closeout", "/selection-action", "/ingest/retry"])
+@pytest.mark.parametrize("assist_path", ["/ask", "/chapter-closeout", "/selection-action", "/people", "/ingest/retry"])
 def test_preparation_and_answers_share_reads_but_reset_waits_and_cancel_releases(assist_path):
     async def scenario():
         app = SimpleNamespace(state=SimpleNamespace(book_request_locks={}))
@@ -157,8 +157,11 @@ def test_preparation_and_answers_share_reads_but_reset_waits_and_cancel_releases
 @pytest.mark.parametrize(("method", "suffix"), [
     ("POST", "/position/reset"), ("DELETE", ""), ("POST", "/memory-corrections"),
 ])
+@pytest.mark.parametrize(("reader_method", "reader_suffix"), [
+    ("GET", "/catch-me-up"), ("POST", "/people"),
+])
 def test_recap_and_progress_share_lifecycle_but_mutations_wait_and_cancellation_cleans_up(
-    method, suffix,
+    method, suffix, reader_method, reader_suffix,
 ):
     async def scenario():
         app = SimpleNamespace(state=SimpleNamespace(book_request_locks={}))
@@ -183,7 +186,7 @@ def test_recap_and_progress_share_lifecycle_but_mutations_wait_and_cancellation_
 
         tasks = []
         try:
-            recap = asyncio.create_task(hold("GET", "/catch-me-up", recap_entered, release_recap))
+            recap = asyncio.create_task(hold(reader_method, reader_suffix, recap_entered, release_recap))
             tasks.append(recap)
             await asyncio.wait_for(recap_entered.wait(), timeout=1)
             position = asyncio.create_task(hold("PUT", "/position", position_entered, release_position))

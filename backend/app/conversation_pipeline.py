@@ -42,7 +42,7 @@ class ConversationDraft(BaseModel):
 
     @model_validator(mode="after")
     def clarification_has_no_claims(self):
-        AskDraft.model_validate(self.model_dump(mode="json", exclude={"clarification"}))
+        AskDraft.model_validate(self.model_dump(mode="json", exclude={"clarification", "alternative_claim"}))
         if self.clarification is not None and not self.insufficient_evidence:
             raise ValueError("a clarification cannot contain book claims")
         return self
@@ -50,6 +50,27 @@ class ConversationDraft(BaseModel):
 
 CLARIFICATIONS = {"person": "Who do you mean here?", "moment": "Which moment do you mean?",
                   "meaning": "Which part would you like to unpack?"}
+
+
+class SceneClaim(AskClaim):
+    text: str = Field(min_length=2,max_length=180,pattern=r"[.!?。！？][\"'”’」』）)]?$",
+        description="One complete sentence ending in punctuation. Condense the wording; never "
+        "truncate a word or clause to meet the length limit. Omit secondary detail instead. "
+        "Each claim is a separate paragraph: name its subject explicitly rather than using "
+        "a pronoun that needs an earlier answer claim. Prefer a simple direct assertion; "
+        "avoid packing actions or speeches into relative where/when clauses.")
+
+
+class SceneConversationDraft(ConversationDraft):
+    """Brief catch-ups cannot grow into a dense, many-claim biography."""
+    claims: list[SceneClaim] = Field(max_length=2)
+    alternative_claim: SceneClaim | None = Field(default=None, description=(
+        "A private alternative catch-up, not an extra paragraph. Write a simpler independently "
+        "useful sentence about the same recent material, with its own complete citations. "
+        "Choose one directly stated action, observation or topic. Name the subject; avoid "
+        "combining events, inferred motives, or unnecessary place/time qualifiers. This must "
+        "make sense without the main answer. Use null if there is no supported alternative, "
+        "or when insufficient_evidence is true. Neither version is trusted until reviewed."))
 
 
 DRAFT_SYSTEM = (
@@ -75,7 +96,10 @@ DRAFT_SYSTEM = (
     "include purpose, recipient, timing and conditions. Preserve occasions in repeated scenes. Missing "
     "evidence is not proof of none. Report instructions and predictions as what a named speaker said "
     "in past tense, never as future events. Do not foreshadow or confirm any unread outcome. If the "
-    "answer is not established, use insufficient_evidence=true, claims=[] and clarification=null."
+    "answer is not established, use insufficient_evidence=true, claims=[] and clarification=null. "
+    "When the reader asserts a theory unsupported by the supplied passages, you may instead explain "
+    "that evidence limit and offer the supported account with citations. This does not establish "
+    "that the theory is false elsewhere in the book. Never use this to discuss unread outcomes."
 )
 
 INTERPRETATION_REVIEW = (
@@ -83,6 +107,9 @@ INTERPRETATION_REVIEW = (
     "or an unestablished book fact. Saying the supplied evidence does not establish the reader's "
     "theory is an assessment of that evidence, not an assertion that the opposite is true in the book. "
     "Do not require a passage literally denying the theory to permit this careful uncertainty. "
+    "An unfinished word or clause is not a publishable claim; flag it as unsupported. "
+    "A later destination never proves where or when an earlier speech/action happened. "
+    "Reject unsupported where/when attachments even if the action and destination are both mentioned. "
     "All concrete assertions, including factual clauses inside an interpretation, still need their "
     "own complete cited support. An unsupported definite motive or outcome must fail."
 )
@@ -215,7 +242,8 @@ def review_draft(draft, sources, *, question, frontier, scene_sources, coverage_
     complete_evidence_citations(value, sources, {"claim_audits": audits})
 
 
-def review_escalation(draft, sources, *, question, complete, max_output_tokens, claim_ids=None, **_unused):
+def review_escalation(draft, sources, *, question, complete, max_output_tokens, claim_ids=None,
+                      standalone=False, **_unused):
     """Review the unchanged draft without Jev's verdicts, scores, or suggested explanations.
 
     This is an explicit exception path, not another routine generation or a silent repair.
@@ -228,7 +256,10 @@ def review_escalation(draft, sources, *, question, complete, max_output_tokens, 
     batches = evidence_review_batches(value, sources, max_output_tokens=max_output_tokens, claim_ids=claim_ids)
     if len(batches) != 1:
         raise AskEvidenceError()
-    result = complete(ASK_EVIDENCE_SYSTEM + "\n" + ASK_JUDGE_SYSTEM + INTERPRETATION_REVIEW,
+    independent = (" This is the entire proposed answer. Flag missing_details if it needs "
+        "another answer assertion to identify its subject or communicate a complete point. "
+        "No other proposed answer is evidence or context.") if standalone else ""
+    result = complete(ASK_EVIDENCE_SYSTEM + "\n" + ASK_JUDGE_SYSTEM + INTERPRETATION_REVIEW + independent,
         _own_evidence_prompt(draft, sources, question, batches[0], semantic_context=True),
         schema=ConversationEscalation, phase="conversation-escalation", tier="large")
     parsed = ConversationEscalation.model_validate(result, strict=True)
@@ -246,53 +277,80 @@ def review_escalation(draft, sources, *, question, complete, max_output_tokens, 
 
 def answer_conversation(question, candidates, *, frontier, known_names, complete,
                         score, max_output_tokens, review=None, max_attempts=2, context_notes="",
-                        draft_system=DRAFT_SYSTEM, allow_verified_prefix=False):
+                        draft_system=DRAFT_SYSTEM, allow_verified_prefix=False,draft_schema=ConversationDraft):
     prompt = ask_prompt(question, candidates, frontier=frontier)
     if context_notes:
         prompt += "\n" + context_notes
     feedback = []
+
+    def checked_candidate(value, *, prefixes=False):
+        value = complete_ask_citations(value, candidates, known_names=known_names)
+        sizes = range(len(value.claims), 0, -1) if prefixes else [len(value.claims)]
+        for size in sizes:
+            candidate = AskDraft(insufficient_evidence=False, claims=value.claims[:size])
+            sources = cited_sources(candidate, candidates)
+            try:
+                if len(sources) > 6:
+                    raise AskSafetyError("draft needs more than six source passages")
+                candidate = validate_ask_draft(candidate, sources, known_names=known_names,
+                                                defer_lexical_to_judge=True)
+                safety = score(draft_text(candidate))
+                if any(safety[key] for key in (
+                        "future_entity_leaks", "prolepsis_hits", "unsupported_event_bindings")):
+                    raise AskSafetyError("draft failed the completed-source safety checks")
+                return candidate, sources
+            except AskSafetyError:
+                if not prefixes or size == 1:
+                    raise
+
     for _attempt in range(max_attempts):
-        generated = complete(draft_system, ask_repair_prompt(prompt, feedback),
-                             schema=ConversationDraft, phase="synthesis", tier="large")
         try:
-            generated = ConversationDraft.model_validate(generated, strict=True)
-            draft = AskDraft.model_validate(generated.model_dump(mode="json", exclude={"clarification"}))
+            generated = complete(draft_system, ask_repair_prompt(prompt, feedback),
+                                 schema=draft_schema,phase="synthesis",tier="large")
+            generated = draft_schema.model_validate(generated, strict=True)
+            draft = AskDraft.model_validate(generated.model_dump(mode="json", exclude={"clarification", "alternative_claim"}))
             if draft.insufficient_evidence:
                 return draft, [], CLARIFICATIONS.get(generated.clarification)
-            draft = complete_ask_citations(draft, candidates, known_names=known_names)
-            original = draft
-            sizes = range(len(draft.claims), 0, -1) if allow_verified_prefix else [len(draft.claims)]
-            for size in sizes:
-                draft = AskDraft(insufficient_evidence=False, claims=original.claims[:size])
-                sources = cited_sources(draft, candidates)
+            alternative = None
+            alternative_claim = getattr(generated, "alternative_claim", None)
+            if review and alternative_claim is not None:
                 try:
-                    if len(sources) > 6:
-                        raise AskSafetyError("draft needs more than six source passages")
-                    draft = validate_ask_draft(draft, sources, known_names=known_names,
-                                               defer_lexical_to_judge=True)
-                    safety = score(draft_text(draft))
-                    if any(safety[key] for key in (
-                            "future_entity_leaks", "prolepsis_hits", "unsupported_event_bindings")):
-                        raise AskSafetyError("draft failed the completed-source safety checks")
-                    break
-                except AskSafetyError:
-                    if not allow_verified_prefix or size == 1:
-                        raise
+                    alternative = checked_candidate(AskDraft(insufficient_evidence=False,
+                        claims=[alternative_claim]))
+                except (AskSafetyError, ValueError):
+                    pass
+            require_standalone = False
+            try:
+                draft, sources = checked_candidate(draft, prefixes=allow_verified_prefix)
+            except AskSafetyError:
+                if alternative is None:
+                    raise
+                # The rejected primary is discarded, never supplied to either reviewer.
+                # Its independently checked alternative still needs the full usual review
+                # and the extra standalone-meaning gate before anything is published.
+                draft, sources = alternative
+                alternative = None
+                require_standalone = True
+            options = {"alternative": alternative} if alternative else {}
+            if require_standalone:
+                options["require_standalone"] = True
             reviewed = (review or review_draft)(draft, sources, question=question, frontier=frontier,
                          scene_sources=[s for s in candidates if s["ordinal"] == frontier],
                          coverage_sources=sources, complete=complete,
-                         max_output_tokens=max_output_tokens)
+                         max_output_tokens=max_output_tokens, **options)
             if reviewed is not None:
-                if not isinstance(reviewed, AskDraft) or reviewed != AskDraft(
-                        insufficient_evidence=False, claims=draft.claims[:len(reviewed.claims)]):
+                if not isinstance(reviewed, AskDraft) or reviewed.insufficient_evidence or not reviewed.claims:
+                    raise AskEvidenceError()
+                if (reviewed != AskDraft(insufficient_evidence=False,claims=draft.claims[:len(reviewed.claims)])
+                        and (alternative is None or reviewed != alternative[0])):
                     raise AskEvidenceError()
                 draft = reviewed
                 sources = cited_sources(draft, candidates)
             return draft, sources, None
-        except (AskSafetyError, AskEvidenceError) as exc:
+        except (AskSafetyError, AskEvidenceError,ValueError) as exc:
             if isinstance(exc, AskEvidenceError) and not exc.repairable:
                 raise
-            feedback = [*exc.review_feedback] or [
+            feedback = [*getattr(exc,"review_feedback",())] or [
                 "Use fewer, narrower claims with complete own citations; preserve qualifications. "
                 "Report instructions in past tense. Do not infer motives or repeat unsupported asides."
             ]

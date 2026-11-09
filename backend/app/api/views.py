@@ -22,6 +22,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from app.read_frontier import ReadBoundary
 
 from app.reader_reactions import reaction_clarification, reaction_copy
 
@@ -251,6 +252,35 @@ def _coalesce_honorific_characters(characters, relationships):
             seen.add(key)
             merged_relationships.append(relationship)
     return merged_characters, merged_relationships
+
+
+@router.post("/people")
+def people(book_id: str, body: ReadBoundary, catalog=Depends(get_catalog),
+           settings=Depends(get_settings),client=Depends(get_reader_client),worker=Depends(get_worker)):
+    from app.read_frontier import requested_snapshot
+    from app.people import visible_names
+    if not settings.reader_page_context:
+        raise HTTPException(422,"confirmed page context is required")
+    try:
+        point,chapters,*_ = requested_snapshot(book_id,body,catalog,settings,worker)
+        def run(state,questions):
+            return budgeted_jev(catalog,settings,client.jev,book_id,phase="people-jev",
+                state=state,questions=questions).value
+        if not chapters:
+            names=[]
+        elif not getattr(client,"jev",None):
+            raise HTTPException(503,"Jev name classification is not configured")
+        else:
+            names=visible_names(chapters,run=run)
+        return {"read_frontier":point,"names":names}
+    except LookupError as exc:
+        raise HTTPException(404,"unknown book") from exc
+    except (ValueError,RuntimeError) as exc:
+        if isinstance(exc,CostCeilingExceeded):
+            raise HTTPException(429,"book cost ceiling reached") from exc
+        if isinstance(exc,JevUnavailable):
+            raise HTTPException(503,"name classification is unavailable") from exc
+        raise HTTPException(409,"reading context changed") from exc
 
 
 @router.get("/graph")
@@ -548,10 +578,25 @@ def ask_the_book(
     worker=Depends(get_worker),
     *, request: Request = None,
 ):
-    if body.read_frontier is not None:
+    if body.read_frontier is not None or settings.reader_page_context:
         if not settings.reader_page_context:
             raise HTTPException(422, "page context is not enabled")
         from app.page_conversation import answer_read_prefix
+        if body.read_frontier is None:
+            from app.read_frontier import ReadBoundary, current_snapshot
+            try:
+                point = current_snapshot(book_id,catalog,settings,worker)[0]
+            except LookupError as exc:
+                raise HTTPException(404,"unknown book") from exc
+            except (ValueError,RuntimeError) as exc:
+                raise HTTPException(409,"read boundary could not be verified against the source") from exc
+            if body.bookmark is not None and body.bookmark < point["available_chapter"]:
+                from app.read_frontier import snapshot
+                state = catalog.get_state(book_id)
+                point = snapshot(book_id,{**state,"bookmark":min(state["bookmark"],body.bookmark)},
+                    catalog.get_book(book_id),load_manifest(settings.data_dir,book_id),
+                    worker.source_chapters(book_id),None)[0]
+            body = body.model_copy(update={"read_frontier":ReadBoundary.model_validate(point)})
         return answer_read_prefix(book_id, body, catalog, store, settings, client, worker)
     eff, state, manifest = _effective(book_id, body.bookmark, catalog, store, settings, worker)
     clarification = reaction_clarification(body.question, body.history, eff)
@@ -942,7 +987,24 @@ def selection_action(
     worker=Depends(get_worker),
 ):
     """Explain, define, or translate only the reader-supplied visible selection."""
-    eff, _state, manifest = _effective(book_id, None, catalog, store, settings, worker)
+    from app.reading_assist import SELECTION_CLARIFICATIONS
+    if settings.reader_page_context:
+        from app.read_frontier import current_snapshot
+        from app.retrieval_passages import normalize_source
+        try:
+            point,_,_state,manifest = current_snapshot(book_id,catalog,settings,worker)
+        except LookupError as exc:
+            raise HTTPException(404,"unknown book") from exc
+        except (ValueError,RuntimeError) as exc:
+            raise HTTPException(409,"read boundary could not be verified against the source") from exc
+        eff=point["available_chapter"]
+        if body.atom>min(len(manifest["atoms"]),max(point["atom"],_state["bookmark"])+1):
+            raise HTTPException(422,"selection is outside the current reading position")
+        original=worker.source_chapters(book_id)[body.atom-1]["text"]
+        if normalize_source(body.text) not in normalize_source(original):
+            raise HTTPException(422,"selection could not be matched to its source")
+    else:
+        eff, _state, manifest = _effective(book_id, None, catalog, store, settings, worker)
     if body.atom > min(len(manifest["atoms"]), eff + 1):
         raise HTTPException(422, "selection is outside the current reading position")
     atom = manifest["atoms"][body.atom - 1]
@@ -967,10 +1029,17 @@ def selection_action(
             "pricing_known": pricing_known(model),
         })
 
+    def run_selection(state,questions):
+        result=budgeted_jev(catalog,settings,client.jev,book_id,phase="selection-jev",
+            state=state,questions=questions)
+        remember(result,model=client.jev.model,provider="typesafe")
+        return result.value
+
     prompt = selection_prompt(body)
     if settings.reader_conversation_pipeline:
         client = copy(client)
         client.conversation_review_effort = settings.reader_conversation_review_effort
+        client.conversation_draft_effort = settings.reader_conversation_draft_effort
     for _attempt in range(2):
         try:
             generated = budgeted_completion(
@@ -986,6 +1055,10 @@ def selection_action(
             )
         except CostCeilingExceeded as exc:
             raise HTTPException(429, "book cost ceiling reached") from exc
+        except ValueError:
+            # The SDK validates structured output before returning. Malformed output must
+            # follow the bounded failure path rather than escape as an unhandled HTTP 500.
+            continue
         remember(generated, model=client._model_for("large"))
         try:
             draft = SelectionDraft.model_validate(generated.value)
@@ -998,6 +1071,8 @@ def selection_action(
                 "insufficient_evidence": True,
                 "text": None,
                 "citation": None,
+                "message": (SELECTION_CLARIFICATIONS.get(draft.clarification)
+                            if body.action == "explain" else None),
                 "cost": _ask_cost_payload(calls),
             }
 
@@ -1017,7 +1092,17 @@ def selection_action(
             return result.value, result.usage
 
         try:
-            if settings.reader_conversation_pipeline and client.provider != "stub":
+            fast_clear=False
+            if (body.action=="translate" and draft.text != body.text and settings.reader_conversation_jev
+                    and getattr(client,"jev",None)):
+                from app.selection_jev import review_selection
+                try:
+                    fast_clear=review_selection(body,draft,run=run_selection)
+                except JevUnavailable:
+                    pass  # Typed provider uncertainty/failure never clears the draft.
+            if fast_clear:
+                verdict={"references_future":False,"unsupported_claims":[],"missing_details":[]}
+            elif settings.reader_conversation_pipeline and client.provider != "stub":
                 verdict, _usage = judge_complete(SELECTION_REVIEW_SYSTEM,
                     selection_review_prompt(body, draft), schema=SelectionVerdict)
                 verdict = SelectionVerdict.model_validate(verdict, strict=True).model_dump(mode="json")

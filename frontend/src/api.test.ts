@@ -10,6 +10,13 @@ afterEach(() => {
 });
 
 describe("API errors", () => {
+  test("rejects oversized selections locally with a useful message and no request", async () => {
+    const request=vi.spyOn(globalThis,"fetch");
+    await expect(api.selectionAction("book",{action:"define",text:"word ".repeat(500),atom:1,cfi:"cfi"}))
+      .rejects.toMatchObject({status:413,code:"selection_too_large"});
+    expect(request).not.toHaveBeenCalled();
+  });
+
   test("shares a recap request between the sidebar and dialog at the same reading boundary", async () => {
     let finish!: (response: Response) => void;
     const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise((resolve) => { finish = resolve; }));

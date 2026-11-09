@@ -79,14 +79,27 @@ export class ReadFrontierReporter {
   }
   async flush(): Promise<ReadFrontier | null> {
     clearTimeout(this.timer);
-    if (this.active) await this.active;
-    if (!this.pending || this.closed) return null;
-    const candidate = this.pending;
-    this.pending = null;
-    this.active = this.put(candidate);
-    try { return await this.active; }
-    catch (error) { if (!this.pending) this.pending = candidate; throw error; }
-    finally { this.active = null; }
+    let latest: ReadFrontier | null = null;
+    while (!this.closed) {
+      if (this.active) {
+        latest = await this.active;
+        // Another caller may have begun the trailing write while we awaited this
+        // one. Recheck the active barrier before treating an empty queue as saved.
+        continue;
+      }
+      if (!this.pending) return latest;
+      const candidate = this.pending;
+      this.pending = null;
+      const delivery = this.put(candidate);
+      this.active = delivery;
+      try { latest = await delivery; }
+      catch (error) {
+        if (!this.closed && !this.pending) this.pending = candidate;
+        throw error; // Explicit retry only; never spin on a failed delivery.
+      }
+      finally { if (this.active === delivery) this.active = null; }
+    }
+    return latest;
   }
   dispose() { this.closed = true; clearTimeout(this.timer); this.pending = null; }
 }

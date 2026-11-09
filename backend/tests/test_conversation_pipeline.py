@@ -8,6 +8,8 @@ import pytest
 from app.ask import AskDraft, AskSafetyError
 from app.ask_evidence import AskEvidenceError
 from app.conversation_pipeline import answer_conversation, compact_candidates, review_draft, review_escalation
+from app.conversation_pipeline import SceneConversationDraft
+from app.conversation_jev import JevNeedsReasoning, review_recap_prefix
 from app.evidence_text import field_segments
 
 
@@ -217,3 +219,45 @@ def test_optional_recap_prefix_still_passes_every_deterministic_and_citation_che
         with pytest.raises(AskSafetyError):
             invoke()
         assert not reviewed
+
+
+@pytest.mark.parametrize("primary_failure", ["future", "unknown-citation"])
+@pytest.mark.parametrize("alternative_status", ["safe", "unsafe", "review-reject", "dependent"])
+def test_deterministically_rejected_primary_cannot_hide_or_authorize_alternative(primary_failure, alternative_status):
+    reviewed = []
+    def complete(*args, **kwargs):
+        return {"clarification":None,"insufficient_evidence":False,
+            "claims":[{"text":"Nell died at the gate.",
+                       "citation_ids":[99 if primary_failure == "unknown-citation" else 1]}],
+            "alternative_claim":{"text":"Nell died at the gate." if alternative_status == "unsafe"
+                                  else "Mara lent Jonas a key.","citation_ids":[1]}}
+    def score(text):
+        return {"future_entity_leaks":["Nell"] if "Nell" in text else [],
+                "prolepsis_hits":[],"unsupported_event_bindings":[]}
+    def run(state, questions):
+        assert state["claim_1"]["assertion"] == "Mara lent Jonas a key."
+        assert "Nell died" not in json.dumps(state)
+        assert "primary_independent" in questions
+        result = {k:({"choice":"supported","probabilities":{"supported":.999}}
+                     if q["type"] == "choice" else {"noul":.99 if k.endswith("_scene")
+                        or k == "primary_independent" else .001}) for k,q in questions.items()}
+        if alternative_status == "review-reject":
+            result["c0_relation"]["probabilities"]["supported"] = .5
+        if alternative_status == "dependent":
+            result["primary_independent"]["noul"] = .5
+        return result
+    def review(draft, sources, **kwargs):
+        reviewed.append(draft)
+        assert kwargs["require_standalone"] is True
+        return review_recap_prefix(draft,sources,run=run,settings=None,**kwargs)
+    def invoke():
+        return answer_conversation("Catch me up",SOURCES,frontier=1,known_names=[],complete=complete,
+            score=score,max_output_tokens=4096,review=review,max_attempts=1,
+            draft_schema=SceneConversationDraft,allow_verified_prefix=True)
+    if alternative_status == "safe":
+        assert invoke()[0].model_dump() == DRAFT.model_dump()
+        assert len(reviewed) == 1
+    else:
+        with pytest.raises(AskSafetyError if alternative_status == "unsafe" else JevNeedsReasoning):
+            invoke()
+        assert len(reviewed) == (0 if alternative_status == "unsafe" else 1)

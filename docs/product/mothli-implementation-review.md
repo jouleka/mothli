@@ -1,207 +1,122 @@
-# Mothli implementation review — 7 November 2026
+# Mothli conversation implementation and verification
 
-User reviewed the local implementation and approved merging on 7 November 2026. Implementation branch: `feat/companion-simple-shell`.
+## Reader behavior and data
 
-The reader now has Contents, Notebook, Mothli, and compact reading settings. The old Recap, People & sections, and Reflect destinations and their unused UI/test tree were removed. Existing book positions, marks, preparation, and backend correction data are preserved.
+The reader has Contents, Notebook, Mothli and compact settings. Conversations and saved Mothli
+replies are browser data scoped to owner, book and reading pass; they are cleared on sign-out.
+They are not server-synced. Clearing chat does not delete explicitly saved replies. Existing source
+files, positions, marks, annotations and correction data remain intact.
 
-Mothli uses real requests, a bounded recent conversation, contextual passage questions, recap/person shortcuts, expandable sources, and explicit saves to Notebook. Model names, usage receipts, and technical status cards are absent from the reading flow. Short labels remain alongside unfamiliar icons. The bookmark mascot respects the quiet page without looping animation.
+## Source and spoiler contracts
 
-Conversation and saved Mothli replies are local browser data scoped to owner, book, and reading pass. They are cleared with the existing sign-out purge. They are not server-synced. Existing marks retain their previous hosted/offline behavior. The marks export contains marks, not saved Mothli replies. Clearing a chat does not delete explicitly saved replies.
+- General conversation receives only a verified primary-text prefix, independent of extraction
+  progress. Snapshot identity binds book incarnation, source/atom hashes, reset epoch and exact
+  offset. Stale, forged or changed-source boundaries fail before inference. An admitted older
+  boundary remains narrow while a page turn is in flight. Reading progress is a monotonic high-water
+  mark; moving backward does not authorize an unseen suffix or reset the reading pass.
+- Selected passages are a separate explicitly authorized scope: only the exact reader-supplied
+  selection is sent, after membership/location checks. No surrounding unread chapter body is added.
+  Selection history is reference context, not evidence. This permits a visible selection before
+  chapter extraction finishes; it does not authorize using the rest of that chapter.
+- Recent conversation may resolve references but never proves a book fact. Retrieval keeps
+  conflicting premises eligible. Every answer claim retains its own citations; another claim's
+  proof, a chapter title or pretrained plot knowledge cannot fill a gap.
+- Drafts remain private. Positive proof, semantic checks, fixed source references and spoiler
+  checks must pass before publication. Uncertainty is not approval. SDK truncation, malformed
+  output or content-filter stops never display partial drafts.
 
-Review repaired contextual-query length limits, prevented private contextual requests entering reusable answer caches, restored source-return paths, protected phone chat from inert background handling, and exempted desktop chat controls from reader arrow keys. Retained tests cover those meaningful boundaries and existing reading behavior; obsolete destination tests were removed.
+## Coordination
 
-Local validation: TypeScript/Vite build; 204 remaining frontend tests; 300 focused backend question, evidence, selection, cache, and route tests; full backend Ruff checks. Desktop and simulated phone browser checks covered opening/closing Mothli, a real Napoleon recap, saving it to Notebook, existing note navigation and return, and draft preservation after failed follow-up. This is not physical-phone keyboard validation or a deployed/hosted acceptance run.
+1. Validate source and reading snapshot, then classify the turn with typed Jev judgments.
+2. Exact bounded arithmetic runs in code. A recognized calculation followed by an explicit second
+   request is separated: the remaining book question still follows ordinary evidence checks.
+   Computation has no book citations and cannot mark an unanswered book question as answered.
+3. Brief catch-ups use bounded sentence-aligned exact tail slices. Proven overlaps coalesce in
+   chronological order; gaps stay separate. Other questions keep hybrid retrieval and bounded
+   source preparation. Sources are clipped before retrieval, prompting, scoring and caching.
+4. Terra drafts concise prose. A scene catch-up may include one private, simpler alternative from
+   the same call. Both are checked against their own sources. A separately safe alternative is
+   still eligible when the main draft fails validation, but must retain its standalone-meaning gate.
+5. Jev supplies narrow support, qualification, place, timing, cause and usefulness judgments.
+   Ordinary factual/multipart requests also require whole-request coverage. Rejections or uncertain
+   coverage receive a full independent semantic review, not selective proof of only one detail.
+6. If reasoning is necessary for a catch-up, prefer the simpler complete candidate when eligible.
+   Terra receives no Jev scores and must prove every selected claim and its independent meaning.
+   A verified main prefix or the exact verified alternative may publish; unchecked fragments may not.
+   Requests batch within Jev's 24-question limit without dropping checks.
 
-The live follow-up revealed and fixed an internal 500-character validator mismatch. A later request exceeded the per-call input estimate, although the server mislabeled it as a book cost ceiling. Source-selection batching now retains every candidate within the existing cap. No account spend or book-budget exhaustion was established. The original Carlo follow-up returned HTTP 200 with checked citations after the repair (35.8 seconds on the local Codex transport). No cap was raised.
+The people shortcut reads the bookmark-clamped graph, or asks Jev to classify bounded exact-source
+name candidates when memory is cold. It does not generate a recap. The active UI does not call legacy
+whole-recap or chapter-closeout routes; those remain compatibility APIs. Definitions/explanations
+retain Terra review; changed translations may clear a tested Jev gate with Terra fallback.
 
-## Conversation pipeline — 8 November 2026, local and unmerged
+## Caching, lifecycle and defaults
 
-Branch `codex/mothli-conversation-pipeline`, based on pulled main `1cbe79d`. Opt in with
-`READER_CONVERSATION_PIPELINE=true` and `READER_CONVERSATION_REVIEW_EFFORT=low`.
-The earlier API benchmark enabled native Terra `READER_FAST_MODE=true`; this has premium
-pricing and retains every existing spend/token ceiling. Ingestion keeps its original model profile.
+Reviewed answer keys are four-part `(book, incarnation, policy/source scope, question)` tuples.
+The scene namespace lives inside the scope digest so persistence remains compatible. Source, epoch,
+model and review-policy changes invalidate reuse. Contextual replies are not persisted as general
+answers; an explicitly history-independent catch-up has its own scoped entry. Only checked answers
+are cached, never drafts or personal conversation to manufacture cache hits.
 
-Retain hybrid lexical/semantic rank fusion and full completed-text coverage: a 96-chapter retrieval
-scan measured about 0.54 seconds, while serial reviews dominated response time. Coalesce an excerpt
-only when another exact excerpt contains it at the same recorded chapter offset, preserving all text
-and remapping location hints. Fuse source selection with a concise conversational draft when the
-entire pool fits; otherwise retain all-candidate, budgeted source selection. Conversation is reference
-context, never evidence. Ambiguous references can return a claim-free clarification from a closed
-enum. Tentative readings must remain grounded; their factual clauses get the normal checks.
+Read-only chat, people suggestions and preparation share lifecycle leases. Reset, delete and
+correction mutations wait for active reads. Reader position persistence must finish before admitting
+an exact page anchor, including the trailing latest report after a far jump. Backend admission guards
+remain authoritative; UI ordering must not relax them.
 
-Freeze each claim's own citations before overlapping positive span coverage with an independent
-semantic/completeness review. Every original claim unit and exact source reference must validate;
-neither review can borrow another claim's proof. Join and account for all started work before failure
-or publication, admit at most two reviews, and stop scheduling after a rejection. A malformed audit
-fails closed; a valid substantive rejection permits the existing one repair. No draft is displayed.
-Selected-passage review now also checks the actual question and bounded conversation, allowing
-linguistic explanation without importing book facts.
+The Jev conversation experiment requires explicit local page-context settings. Production defaults
+retain the existing guarded pipeline and automatic memory ingestion. The local test launcher uses
+native Terra API inference, Jev 1.14, low draft/review effort, a shared $0.25 session ceiling and a
+30-second provider timeout; it disables automatic extraction backlog/prewarming. No premium Fast
+service tier or Codex subprocess is used by that launcher. Credentials stay outside the repository.
+The API transport, legacy local Codex transport and old endpoints retain their compatibility contracts.
 
-The existing reviewed-answer bank and off-request preparation remain. Its scope now includes the
-pipeline/review policy and a new version, as well as the original book incarnation, reset epoch,
-source/memory snapshot and model identity. Private contextual turns and selections never enter it.
-Do not speculate on a typed message or persist personal conversation to gain cache hits.
+## Measured evidence and limits
 
-Native OpenAI API, same Terra model, two runs of six cases through eight completed Karamazov chapters,
-cache disabled; one run alternated baseline/candidate order. Timings include the complete checked
-response, clarification/refusal, and the baseline's one 502. This small sample is not a population p95.
+Historical native Terra baseline versus the first fused/parallel Fast experiment: median 15.206 s
+versus 4.724 s over 12 requests each; Fast pricing and generation variance were not isolated. Later
+standard Terra/Jev source preparation is the retained local path. Three repeated full-end catch-ups
+measured 5.78 s median before the source/alternative changes versus 2.81 s after them. Median Terra
+input fell 6,482 to 2,635 tokens and output 273 to 90. Standard Terra token-rate estimate fell about
+61%, excluding Jev and provider cache discounts/write surcharges. These small samples are not p95s.
 
-| Measure | Terra baseline | Conversation + Terra Fast |
-|---|---:|---:|
-| Requests | 12 | 12 |
-| Median response | 15.206 s | 4.724 s |
-| Slowest in those runs | 48.216 s, withheld | 7.964 s |
-| HTTP 200 | 11/12 | 12/12 |
+Cold QA covered 26 cases with extraction progress zero: unopened books, incremental pages, chapter
+completion, immediate middle/end jumps, selections, compound questions, forged history, fabricated
+selections and stale/future boundaries. All expected outcomes passed; no unread canaries reached
+provider payloads. Early-page novel checks were about 2–4 s; cold novel middle/end jumps 2.93/2.37 s.
+Fifteen unsupported factual controls were withheld, including invented identity, settings, causes,
+attribution, certainty and outcomes. Conservative checks also withheld some supported controls.
 
-An additional running-service cold request needed repair and took **17.180 s**; its next exact checked
-cache hits took **17.3 and 14.8 ms**, with zero model calls. Three selected-passage replies took
-2.15–3.31 seconds versus baseline 2.53–3.00 seconds; this did not establish a selection speed win.
-The benefit there is question-aware verification. Fast's effect is not isolated from generative
-variance. Standard processing remains available. Earlier merged-review and higher-effort prototypes
-were not retained: the former saved little while combining two independent checks, and the latter
-produced more false withholding and much longer replies in the exploratory run.
+Seventeen additional unusual questions covered reactions, contextual references, disagreement,
+false premises, translation/explanation, arithmetic plus book facts, another novel, nonsense and
+Spanish. The retained replay had no server errors: median 2.489 s, range 1.983–6.051 s. Some responses
+correctly lacked evidence; HTTP 200 does not imply a substantive answer. The 9.220-second mixed-math
+failure was fixed by separating calculation from book proof. More helpful partial-answer prompt
+wording caused inconsistent structured output and was rejected. Source-layout-only and fresh-repair
+experiments also failed to establish reliable gains and were not retained as complete solutions.
 
-In the direct proof comparison, both paths rejected all fourteen unsupported assertions and accepted
-six supported controls (including a tentative reading after correcting its fixture question). A
-separate swapped-citation case was repaired by the original audit; immutable own citations caused the
-new path to withhold it instead. Scope included roles, cause, kinship, quantities, speaker attribution,
-negation, lost uncertainty, fabricated history and future outcomes. These synthetic checks and one
-novel are limited evidence, not a substitute for a blinded reader study.
+The historical 8.745-second failure retained timings, not rejected text, so its exact wording cannot
+be reconstructed. Four later catch-up probes passed in 2.523–3.418 s with one Terra call each. Fresh
+running-app checks passed at 3.688 s for catch-up and 3.613 s for arithmetic plus an Alyosha identity
+question. Controlled independent verification rejected an unsupported setting, cleared a simpler
+sentence and rejected an invented resurrection. Uncertain future replies can still require slower
+reasoning or fail closed; there is no instant-response guarantee or production error-rate claim.
 
-Final verification: **1710 backend passed / 83 skipped**, **205 frontend passed**, clean Ruff,
-TypeScript/Vite build and diff checks. Real Chrome rendered the EPUB and a cited reply; pending UI
-showed only the reader's question and checking state. The in-app browser did not render the EPUB's
-blob frame, although its conversation worked; use Chrome for this local preview. Existing source data
-was preserved; the service uses a SQLite-backup copy. No merge or push.
-Existing dependencies were reused to avoid a duplicate installation: Python 3.13, OpenAI SDK 2.45.0,
-Vite 6.4.3 and Vitest 3.2.7. The frontend suite passed in that environment; the newer locked Vitest
-4.1.11 environment was not installed or separately verified.
+## Pre-merge review
 
-Re-run paired requests with `backend/scripts/benchmark_conversation.py` and an explicit copied data
-directory, book ID and JSON case plan (or the retained validation record). It records real provider
-spend but never changes reading positions. Follow-up evidence should broaden books, languages and
-real reader reactions before changing defaults or claiming instant cold replies.
+Three independent reviewers examined safety, architecture/concurrency and API/frontend behavior.
+Confirmed issues: recap cache persistence, exclusive people-list locking, page-jump/anchor ordering,
+unsafe-primary suppression of a safe alternative, and missing whole-request completeness review.
+All received focused regressions and independent rechecks with no unresolved blockers. Local
+backend validation passed 1,842 tests with 83 skipped; frontend tests/build, Ruff and Bandit passed.
+Final CI results are recorded with the pull request; the existing local verification JSON retains detailed
+measurements. Disposable intermediate report content was compacted instead of adding reports.
 
-Research: [OpenAI latency optimization](https://developers.openai.com/api/docs/guides/latency-optimization),
-[prompt cache boundaries](https://developers.openai.com/api/docs/guides/prompt-caching),
-[Fast processing](https://developers.openai.com/api/docs/guides/fast-mode),
-[reciprocal rank fusion](https://cormack.uwaterloo.ca/cormack/cormacksigir09-rrf.pdf), and
-[Self-RAG](https://arxiv.org/abs/2310.11511). Retaining RRF and independent review, rather than adding
-another query rewrite/critic call, is an engineering choice from the measurements above; those
-sources do not establish this application's quality or latency.
+Reproduce measurements with the existing `backend/scripts/benchmark_*` scripts using explicit
+isolated input/data directories and small spend ceilings. Local verification used shared Python 3.13
+and Vitest 3.2; CI validates locked Python 3.12 and Vitest 4 dependencies, PostgreSQL parity, dependency
+and secret scans. This is not a deployed or physical-device acceptance run.
 
-## Current local run: page context and ChatGPT subscription
-
-The running preview now uses ChatGPT-authenticated Codex CLI 0.167.0 with Terra. Its launcher loads
-no production environment file or API keys. API credentials are stripped from CLI subprocesses;
-authentication must report ChatGPT and there is no API fallback. Native API configuration remains
-available for production. The historical API timings above do not measure this transport.
-
-Page turns persist a unique exact EPUB body-text anchor for text before the visible page. Sending a
-question additionally confirms text through that visible page, labeled “Through this page.” The
-server resolves a Unicode source offset, verifies the source digest and import manifest/store, and
-clips the chapter before retrieval, names, drafting, review or caching. No chapter extraction or
-embedding call is needed for this route. A bounded parse cache and exact recent scene windows keep
-preparation deterministic; the existing bounded lexical search still covers earlier read text.
-
-Drafting and source choice stay fused when the candidate pool fits, followed by two independent
-overlapping reviews. Foreground subscription calls have two slots; background extraction has a
-separate single-call lane. Speculative model prewarming is disabled locally. Only checked standalone
-answers enter the reusable cache, keyed by exact source prefix, incarnation, reset epoch, model and
-review policy. Private conversation and selections are not shared. Old in-flight snapshots stay
-narrow during a forward page turn. Resets remove their durable boundary without deleting memory.
-
-A synthetic EPUB was read and discussed in real Chrome with completed bookmark and ingest progress
-both **zero**. The first answer located a key; the follow-up treated distrust as tentative and offered
-independence as an alternative, with exact source citations. That follow-up took **11.825 s** over
-the wire. Additional full HTTP requests: mid-chapter recap **13.552 s**, disagreement **10.748 s**,
-unread-outcome refusal **3.533 s**, exact checked repeat **12.6 ms / zero model calls**. Both substantive
-requests used three calls (draft plus parallel evidence and spoiler/completeness checks); refusal
-used one. The unread ending and next-chapter canaries were absent from all outputs. Unit tests also
-assert their absence from every model prompt. This is a small synthetic acceptance sample, not an
-instant-cold-reply claim or a controlled speed comparison against the earlier API transport.
-
-Existing source data is untouched; the preview still uses its copied library. Existing vector spaces
-are not rebuilt or repinned. New local test books use offline lexical embeddings for chapter memory;
-older pinned stores may need their original embedder for further ingestion, while prefix chat works
-independently. Hosted page-context synchronization is not implemented; the flag defaults off.
-
-Final checks: **1719 backend passed / 83 skipped**, **210 frontend passed**, clean Ruff,
-TypeScript/Vite build and diff checks. After restart the durable page boundary and checked cache
-survived; the cached reply returned in **13.2 ms**, explicitly attributed to the ChatGPT subscription.
-The preview is left running locally on this branch, with no merge or push.
-
-Authentication reference: [Codex authentication](https://learn.chatgpt.com/docs/auth).
-
-## Current local conversation — 9 November 2026, field follow-up
-
-The original v7 comparison used eight read chapters and was not representative of the user's
-96-chapter session. Replaying the actual conversation exposed four failures in eight ordinary
-turns: every message entered evidence retrieval; identity retrieval overfavoured recent scenes;
-clarifications were model-generated; and the fallback refused more than eight proof units before
-making its verification call. The forced two-sentence draft default encouraged unnecessary clauses.
-The subscription CLI also carries substantial harness context: even the arithmetic reply below
-used 7,981 ChatGPT input tokens. These counts are not production API cost estimates.
-
-The current local candidate uses typed Jev questions over separate latest-message and dialogue
-fields. Explicit ambiguous-reference questions can ask a factual-claim-free clarification directly.
-Greetings, thanks, emotional reactions needing no story assertions, and unrelated messages get a
-brief Terra response plus an independent concrete-story-information check. A contaminated response
-gets at most one independently checked repair. Jev does not write prose or arbitrate literary meaning.
-
-Brief current-scene catch-ups use exact windows ending at the confirmed read offset, without global
-search or source reranking. They ignore prior dialogue and may retain only a useful verified PREFIX
-of complete claims: no edited words, reordered claims, removed qualifications inside a claim or
-unchecked text. Every published claim still passes deterministic boundaries, its own cited-body
-support, conditionality, location and causal checks. Detailed/multipart questions cannot use this
-pruning policy. A scene recap can be reused across dialogue only at the identical source/reset/read
-point and question; source identity is revalidated before reuse. Other contextual replies stay private.
-
-Named-identity requests seed introductory primary-text windows instead of recent-action windows.
-Other book questions retain the full bounded retrieval route. Terra drafts with low effort locally,
-using one sentence when sufficient. When Jev cannot settle a claim, Terra audits that claim's exact
-source spans while still checking the WHOLE answer for semantics and completeness. Previously
-Jev-cleared claims keep their original citations; no fabricated span audits stand in for Jev decisions.
-Dense requests remain bounded and can still be withheld. No accuracy thresholds were lowered.
-
-Pure immutable lexical/visibility caches avoid rescanning the same exact permitted body. They contain
-word sets, not generated story facts or cached authorization. One bounded CPU worker prepares visibility
-while Terra drafts; the authoritative safety check still waits for and verifies the exact same prefix.
-The field table below predates this last CPU overlap; the final local smoke timing is recorded separately.
-Source hashes, reading epochs and exact
-prefix checks still run on every request. Selected-passage assistance is unchanged. Per-phase timing,
-tokens and sanitized failure traces are logged locally without source text or dialogue. Cache hits
-report their own current timings. The UI distinguishes verification and reading-boundary failures.
-
-### Measured field replay
-
-Same fixed user turns, isolated full-book copies, caches/prewarm off. The v7 baseline was collected
-in an alternating-order run; the final candidate was run afterward against that same baseline to
-avoid repeated subscription spend. This is a small pilot with provider variability, not a p95 claim.
-
-| Eight turns each | v7 baseline | Current candidate |
-|---|---:|---:|
-| Median complete HTTP response, including failures | 7.353 s | 4.402 s |
-| HTTP failures | 4 | 0 |
-| Unhelpful empty evidence refusals | 1 | 0 |
-| ChatGPT input tokens | 100,756 | 61,044 |
-| ChatGPT output tokens | 1,165 | 389 |
-
-The fresh catch-up remained **7.375 s**, including **5.820 s** drafting; explicit ambiguous follow-up
-was **0.201 s** with no Terra call. The arithmetic reply took **4.115 s**, including **3.732 s** drafting.
-This fixes routing/reliability and avoids unnecessary verification, but does not solve instant fresh
-generation through the subscription CLI. A separate eight-case factual/instruction/spoiler run returned
-8/8 HTTP 200; its median was 6.359 s versus the retained original baseline's 10.294 s, with 95,945 versus
-241,380 ChatGPT input tokens. More complex interpretations still used two Terra calls and took 10–11 s.
-
-Source/safety contracts passed the backend suite (**1773 passed / 83 skipped**) and subsequent affected
-checks; frontend **211 passed**, production build successful, Ruff/diff checks clean. Live uncited-dialogue
-guards blocked all seven injected story-detail assertions; one harmless named clarification was
-conservatively withheld in a fixed-response probe. Compiled clarifications avoid that failure mode;
-actual generated dialogue can make one checked repair. Earlier v7 controls rejected 9/9 unsafe drafts
-in both pipelines and accepted 7/7 supported controls versus baseline 5/7. These samples do not establish
-a universal error rate. The single existing verification JSON retains current measurements and limitations.
-
-Use this candidate only in the local preview. Production defaults and keys are unchanged; Terra uses
-the ChatGPT subscription and Jev its encrypted existing credential. The installed app-server alternative
-lacked the CLI configuration-isolation flags used here, so it was not adopted. Leave the branch unmerged.
+References: [TypeSafe citation checks](https://docs.typesafe.ai/cookbooks/citation_check.md),
+[TypeSafe model limitations](https://docs.typesafe.ai/go/jaggedness.md),
+[OpenAI latency guidance](https://developers.openai.com/api/docs/guides/latency-optimization),
+[prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).

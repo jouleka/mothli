@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-
-from app.llm.client import LLMClient
+import inspect
 
 
 class CostCeilingExceeded(RuntimeError):
@@ -185,7 +184,8 @@ class BudgetedResult:
 def _production_complete(client, system, user, *, tier, schema, max_output_tokens):
     """Honor monkey-patched test doubles while capping every unmodified production client call."""
     method = client.complete
-    if getattr(method, "__func__", None) is LLMClient.complete:
+    parameters=inspect.signature(method).parameters.values()
+    if any(p.name=="max_output_tokens" or p.kind==inspect.Parameter.VAR_KEYWORD for p in parameters):
         return method(system, user, tier=tier, schema=schema,
                       max_output_tokens=max_output_tokens)
     return method(system, user, tier=tier, schema=schema)

@@ -11,7 +11,8 @@ const mocks = vi.hoisted(() => ({
   manifest: vi.fn(),
   books: vi.fn(),
   position: vi.fn(),
-  readFrontier: vi.fn(async () => null),
+  readFrontier: vi.fn(async (..._args: unknown[]) => null),
+  askBook: vi.fn(),
   readerPreferences: vi.fn(),
   readerMarks: vi.fn(),
   putPosition: vi.fn(),
@@ -90,6 +91,7 @@ function deferred() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.readFrontier.mockReset().mockResolvedValue(null);
   localStorage.clear();
   const sections = [{ id: "c1.html" }, { id: "c2.html" }, { id: "c3.html" }];
   mocks.manifest.mockResolvedValue({
@@ -132,6 +134,41 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("reader startup and search boundaries", () => {
+  test("an immediate conversation confirms the jump's position before its page source", async () => {
+    const gate = deferred();
+    let positionCommitted = false;
+    mocks.putPosition.mockImplementationOnce(async () => {
+      await gate.promise;
+      positionCommitted = true;
+      return {bookmark:2,current_chapter:3,chapter_progress:0,position_epoch:0,cfi:"jump"};
+    });
+    mocks.readFrontier.mockImplementation(async (...args: unknown[]) => {
+      if (args[1]) expect(positionCommitted).toBe(true);
+      return null;
+    });
+    mocks.askBook.mockResolvedValue({as_of_chapter:2,insufficient_evidence:true,
+      claims:[],citations:[],cost:null});
+    const {unmount} = render(<ReaderPage bookId="b" onBack={() => {}} />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+    const doc = document.implementation.createHTMLDocument("chapter");
+    doc.body.innerHTML = "<p>Visible chapter three sentence.</p>";
+    const range = doc.createRange();
+    range.setStart(doc.querySelector("p")!.firstChild!,0);
+    range.setEnd(doc.querySelector("p")!.firstChild!,10);
+    act(() => document.querySelector("foliate-view")!.dispatchEvent(new CustomEvent("relocate", {
+      detail:{cfi:"epubcfi(/6/6!/4/2/1:0)",section:{current:2},range},
+    })));
+    fireEvent.click(screen.getByRole("button",{name:"Talk to Mothli"}));
+    fireEvent.change(screen.getByLabelText("Message Mothli"),{target:{value:"Catch me up"}});
+    fireEvent.submit(screen.getByLabelText("Message Mothli").closest("form")!);
+    await waitFor(() => expect(mocks.putPosition).toHaveBeenCalled());
+    expect(mocks.readFrontier.mock.calls.filter((args) => args[1])).toHaveLength(0);
+    expect(mocks.askBook).not.toHaveBeenCalled();
+    await act(async () => { gate.resolve(); await gate.promise; });
+    await waitFor(() => expect(mocks.askBook).toHaveBeenCalled());
+    expect(mocks.readFrontier.mock.calls.some((args) => args[1])).toBe(true);
+    unmount();
+  });
   test.each([
     { bookmark: 1, target: "c2.html" },
     { bookmark: 3, target: "c3.html" },

@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     reader_answer_cache: bool = False
     reader_conversation_pipeline: bool = False
     reader_page_context: bool = False
+    reader_memory_ingest: bool = True  # Local source-first preview can defer paid memory backfill.
     reader_conversation_jev: bool = False
     reader_conversation_routing: bool = False
     reader_conversation_draft_effort: Literal["low", "medium"] = "medium"
@@ -130,6 +131,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
+        if not self.reader_memory_ingest and (self.deployment_mode != "local" or not self.reader_page_context):
+            raise ValueError("deferred memory ingestion requires local page context")
         if self.reader_conversation_routing and not self.reader_conversation_jev:
             raise ValueError("turn routing requires the local conversation Jev pipeline")
         if self.reader_conversation_jev and (self.deployment_mode != "local" or not self.reader_page_context

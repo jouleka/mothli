@@ -19,14 +19,14 @@ from app.ask_context import complete_ask_context
 from app.ask_evidence import ASK_EVIDENCE_SYSTEM, AskEvidenceError
 from app.ask_selection import SOURCE_SELECTION_SYSTEM, SourceSelection, select_sources_bounded
 from app.content_scope import CONTENT_POLICY_VERSION
-from app.conversation_pipeline import (ConversationDraft, DRAFT_SYSTEM, answer_conversation,
+from app.conversation_pipeline import (ConversationDraft, SceneConversationDraft, DRAFT_SYSTEM, answer_conversation,
                                        compact_candidates, review_escalation, CLARIFICATIONS, BRIEF_DRAFT_SYSTEM)
 from app.cost import CostCeilingExceeded, budgeted_completion, pricing_known
 from app.eval.spoiler_gate import score_recap
 from app.eval.spoiler_gate.synthesis import _read_visibility
 from app.eval.spoiler_gate.binding import unsupported_event_bindings
 from app.read_frontier import requested_snapshot
-from app.retrieval_passages import passage_windows
+from app.retrieval_passages import passage_windows, recent_scene_windows, SCENE_WINDOWS_VERSION
 from app.unicode_text import word_tokens, proper_words, normalize_text
 from app.eval.spoiler_gate.grounding import STOPWORDS
 from app.conversation_jev import (DECISION_LIMITS, FIT, SUPPORT, RELEVANCE, POLICY_VERSION,
@@ -69,11 +69,15 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
     eff = point["available_chapter"]
     timings["snapshot"] = round((perf_counter() - started_request) * 1000, 2)
     use_jev = settings.reader_conversation_jev
+    calculation, reader_message = None, body.question
+    if settings.reader_conversation_routing:
+        from app.arithmetic import arithmetic_prefix
+        combined = arithmetic_prefix(body.question)
+        if combined:
+            calculation, reader_message = combined
     draft_system = BRIEF_DRAFT_SYSTEM if settings.reader_conversation_routing else DRAFT_SYSTEM
-    if use_jev and not getattr(client, "jev", None):
-        raise HTTPException(503, "Jev review is not configured")
-    question = conversation_question(body.question, body.history, eff)
-    query = conversation_retrieval_question(body.question, body.history, eff)
+    question = conversation_question(reader_message, body.history, eff)
+    query = conversation_retrieval_question(reader_message, body.history, eff)
     calls = []
     reviewer = copy(client)
     reviewer.conversation_review_effort = settings.reader_conversation_review_effort
@@ -110,9 +114,10 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         return result.value
 
     scope = (book_id, book["incarnation"], hashlib.sha256(json.dumps([
-        point["id"], CONTENT_POLICY_VERSION, "page-conversation-v1", DRAFT_SYSTEM,
+        point["id"], CONTENT_POLICY_VERSION, "page-conversation-v1", SCENE_WINDOWS_VERSION, DRAFT_SYSTEM,
         ASK_EVIDENCE_SYSTEM, ASK_JUDGE_SYSTEM,
-        [POLICY_VERSION, POLICY, FIT, SUPPORT, RELEVANCE, DECISION_LIMITS, client.jev.model]
+        [POLICY_VERSION, POLICY, FIT, SUPPORT, RELEVANCE, DECISION_LIMITS,
+         getattr(getattr(client,"jev",None),"model","unavailable")]
         if use_jev else "parallel-gpt-review",
         client.extractor_version("large"), client.extractor_version("cheap"),
         getattr(client, "base_url", ""), settings.reader_conversation_review_effort,
@@ -144,6 +149,8 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             "citations": [_public_ask_source(s) for s in sources], "cost": cost_payload(calls)}
         if clarification:
             value.update(answer_type="conversation", message=clarification, insufficient_evidence=False)
+        if calculation:
+            value["calculation"] = calculation
         value["timing"] = timing_payload()
         if bank is not None and valid_answer(value):
             bank.set(key, value)
@@ -154,10 +161,20 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             cached = bank.get(key)
             if cached and cached.get("read_frontier") == point and valid_answer(cached):
                 return {**cached, "cached": True, "cost": cost_payload([]), "timing":timing_payload()}
-        route = classify_turn(body.question, run=jev_run, history=[m.model_dump(mode="json")
+        if settings.reader_conversation_routing:
+            from app.arithmetic import arithmetic_reply
+            calculated=arithmetic_reply(body.question)
+            if calculated is not None:
+                return payload(AskDraft(insufficient_evidence=True,claims=[]),[],calculated)
+        if use_jev and not getattr(client,"jev",None):
+            raise HTTPException(503,"Jev review is not configured")
+        route = classify_turn(reader_message, run=jev_run, history=[m.model_dump(mode="json")
             for m in body.history if m.as_of_chapter <= eff]) if settings.reader_conversation_routing else "evidence"
         scene_bank = getattr(client, "answers", None) if settings.reader_answer_cache and route == "recent_recap" else None
-        scene_key = (*scope, "scene-recap-no-dialogue", body.question)
+        # AnswerBank persists exactly (book, incarnation, scope, question). Keep the
+        # scene namespace inside the scope digest, never as an extra key component.
+        scene_scope = hashlib.sha256(json.dumps([scope[2], "scene-recap-no-dialogue"]).encode()).hexdigest()
+        scene_key = (*scope[:2], scene_scope, body.question)
         if scene_bank is not None:
             cached = scene_bank.get(scene_key)
             if cached and cached.get("read_frontier") == point and valid_answer(cached):
@@ -195,7 +212,7 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             atom = atoms[latest["key"]]
             candidates = [{"id":i, "ordinal":latest["ordinal"], "chapter_key":latest["key"],
                 "href":atom.get("href", ""), "title":atom.get("title", ""), "source_offset":offset,
-                "text":text} for i, (offset, _, text) in enumerate(tail, 1)]
+                "text":text} for i, (offset, _, text) in enumerate(recent_scene_windows(latest["text"]), 1)]
         else:
             candidates = retrieve_ask_sources(query, bookmark=eff, chapters=chapters,
                 read_chapter=texts.get, semantic_hits=scene_hits, atoms=atoms, candidate_pool=True,
@@ -207,7 +224,16 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         context_notes = ""
         if route == "recent_recap":
             # Fixed recent scene, already clipped to the exact read offset. No global reranking.
-            context_notes = "Give a brief catch-up on the current reading scene. Earlier dialogue is not a request to recap a previously discussed character."
+            context_notes = ("Give a brief catch-up on the material currently being presented. "
+                f"Lead with the most recent substantive detail in SOURCE [{candidates[-1]['id']}], "
+                "at the end of the permitted text; use earlier passages for necessary context. "
+                "Do not repeat an opening introduction when newer material is available. "
+                "Select one salient point; a catch-up need not catalogue every action or speech. "
+                "Prefer a single simple sentence, adding a second only if essential. "
+                "Do not add a location from a chapter title. If a pronoun's referent needs an "
+                "earlier passage, cite that passage too or omit the unnecessary qualifier. "
+                "Preserve the narrator's uncertainty and attributed opinions. Earlier dialogue "
+                "is not a request to recap a previously discussed character.")
         elif use_jev:
             original = candidates
             selected, context_notes = prepare_context(question, candidates, frontier=eff,
@@ -257,18 +283,28 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         def jev_review(draft, sources, **kwargs):
             try:
                 if route == "recent_recap":
-                    return review_recap_prefix(draft, sources, run=jev_run, settings=settings, **kwargs)
+                    return review_recap_prefix(draft, sources, run=jev_run, settings=settings,
+                                               trace_id=request_id, **kwargs)
                 return review_with_jev(draft, sources, run=jev_run, settings=settings,
                     complete_instruction=route not in {"recent_recap", "identity"}, **kwargs)
             except JevNeedsReasoning as exc:
-                return review_escalation(draft, sources, claim_ids=exc.claim_ids, **kwargs)
+                if exc.review_alternative is not None:
+                    candidate, candidate_sources = exc.review_alternative
+                    review_escalation(candidate, candidate_sources, claim_ids=None,
+                                      standalone=True, **kwargs)
+                    return candidate
+                standalone = bool(kwargs.get("require_standalone",False))
+                return review_escalation(draft, sources,
+                    claim_ids=None if standalone else exc.claim_ids, standalone=standalone, **kwargs)
 
-        draft_question = body.question if route == "recent_recap" else question
+        draft_question = reader_message if route == "recent_recap" else question
         draft, sources, clarification = answer_conversation(draft_question, candidates, frontier=eff,
             known_names=[], complete=complete, score=score,
             max_output_tokens=settings.cost_max_output_tokens_per_call,
-            review=jev_review if use_jev else None, max_attempts=1 if use_jev else 2,
+            review=jev_review if use_jev else None,
+            max_attempts=1 if use_jev else 2,
             context_notes=context_notes, draft_system=draft_system,
+            draft_schema=SceneConversationDraft if route=="recent_recap" else ConversationDraft,
             allow_verified_prefix=route == "recent_recap")
         result = payload(draft, sources, clarification)
         if scene_bank is not None and valid_answer(result):

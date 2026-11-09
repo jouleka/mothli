@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.ask_evidence import AskEvidenceError
 from app.llm.jev import JevUnavailable
 
-VERSION = "conversation-turns-v8"
+VERSION = "conversation-turns-v10"
 CLARIFICATION_KINDS = {"person":"Which person is meant.", "moment":"Which event or scene is meant.",
                        "meaning":"Which idea or aspect is meant."}
 QUESTIONS = {
@@ -13,7 +13,8 @@ QUESTIONS = {
         "It is a greeting, thanks, small talk, an emotional reaction needing no book assertions, or an unrelated request."),
     "recent_recap": ("Does the latest reader message ask for a brief catch-up on the current reading scene?",
         "It asks for a brief catch-up around the current reading position without selecting another topic.",
-        "It asks about a specific person, earlier scene, comprehensive coverage or a whole-book summary."),
+        "It asks about a specific person, earlier scene, comprehensive coverage, multiple specific parts, "
+        "an additional explanation, or a whole-book summary."),
     "unclear_reference": ("Does the latest message use a pronoun or demonstrative whose referent remains ambiguous after reading the recent dialogue?",
         "A pronoun such as 'him' or a demonstrative such as 'that' has multiple plausible referents or no identifiable one.",
         "There is no such proform, or its referent is clear. Asking who did something does not by itself make a reference ambiguous."),
@@ -58,6 +59,11 @@ def classify_turn(message, *, run, history=()):
         raise JevUnavailable("Invalid turn routing")
     # Unsettled judgments take the full evidence path. Routing cannot clear a book claim.
     if probabilities["unclear_reference"] >= .7 and probabilities["reference_question"] >= .7:
+        if history:
+            # A cheap ambiguity judgment may overlook a clear conversational antecedent.
+            # Let the evidence-backed writer resolve it or ask its own clarification;
+            # supplied dialogue still cannot establish the answer's book facts.
+            return "evidence"
         kind = answers["clarification_kind"].get("choice")
         if kind not in CLARIFICATION_KINDS:
             raise JevUnavailable("Invalid clarification type")

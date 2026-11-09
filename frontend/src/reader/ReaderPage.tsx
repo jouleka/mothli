@@ -227,6 +227,7 @@ export function ReaderPage({
 
   const prepareReadContext = useCallback(async () => {
     if (positionReportingPausedRef.current) throw new Error("Finish changing the reading pass first.");
+    await reporterRef.current?.flushAndWait();
     const anchor = readAnchorRef.current?.("end");
     if (anchor) readReporterRef.current?.schedule(anchor);
     await readReporterRef.current?.flush();
@@ -303,6 +304,10 @@ export function ReaderPage({
     const readReporter = new ReadFrontierReporter(async (anchor) => {
       if (dead || pageContextDisabled || anchor.position_epoch !== positionEpochRef.current) return null;
       try {
+        // The exact source endpoint deliberately rejects an anchor whose chapter has
+        // not been admitted by /position yet. Its debounce is shorter than position's.
+        await reporterRef.current?.flushAndWait();
+        if (dead || anchor.position_epoch !== positionEpochRef.current) return null;
         const point = await api.readFrontier(bookId, anchor);
         publishFrontier(point);
         return point;

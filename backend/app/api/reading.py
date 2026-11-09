@@ -115,7 +115,7 @@ def put_position(book_id: str, pos: PositionIn, request: Request, catalog=Depend
     except ValueError as error:
         _position_conflict(error)
     bookmark = state["bookmark"]  # SQL MAX may have observed a newer cross-instance report.
-    if bookmark > 0:
+    if bookmark > 0 and settings.reader_memory_ingest:
         # The worker validates explicit v2 completion markers even when legacy catalog progress
         # already reaches this bookmark; matching durable receipts replay idempotently.
         worker.enqueue(book_id, bookmark)

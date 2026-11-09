@@ -213,13 +213,16 @@ def test_routed_dialogue_never_searches_book_or_publishes_unchecked_assertions(p
         assert "jev-intent" in response.json()["timing"]["stages_ms"]
 
 
-def test_scene_recap_cache_is_independent_of_dialogue_but_reset_still_invalidates_it(page_env, monkeypatch):
+def test_scene_recap_cache_is_independent_of_dialogue_but_reset_still_invalidates_it(page_env, monkeypatch, tmp_path):
     from types import SimpleNamespace
+    from app.answer_bank import AnswerBank
     import app.page_conversation as module
     api, bid, app, settings = page_env
     point = confirm(api,bid)
     settings.reader_conversation_jev = True
     settings.reader_conversation_routing = True
+    cache_path = tmp_path / "answers.json"
+    app.state.client.answers = AnswerBank(persist_path=cache_path)
     paid=[]
     def evaluate(state, questions):
         paid.append("jev")
@@ -241,6 +244,13 @@ def test_scene_recap_cache_is_independent_of_dialogue_but_reset_still_invalidate
     first=api.post(f"/api/books/{bid}/ask",json=request)
     assert first.status_code == 200,first.text
     assert paid == ["jev","draft","jev"]
+    bank = app.state.client.answers
+    # A recap must not poison persistence of the entire shared answer bank.
+    normal_key = (bid, "incarnation", "normal-scope", "Where is the key?")
+    bank.set(normal_key, first.json())
+    assert all(len(key) == 4 for key in bank.rows)
+    app.state.client.answers = AnswerBank(persist_path=cache_path)
+    assert app.state.client.answers.get(normal_key) == first.json()
     second=api.post(f"/api/books/{bid}/ask",json=request)
     assert second.status_code == 200 and second.json()["cached"]
     assert paid == ["jev","draft","jev","jev"]

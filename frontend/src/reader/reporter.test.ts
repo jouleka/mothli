@@ -50,6 +50,54 @@ describe("PositionReporter", () => {
     expect(sent).toEqual([{ cfi: "cfi-1", offset: 10 }]);
   });
 
+  test("awaitable flush commits a jump and its trailing relocation before page confirmation", async () => {
+    const calls: string[] = [];
+    let releaseFirst!: () => void;
+    let releaseLatest!: () => void;
+    r = new PositionReporter(async (cfi) => {
+      calls.push(cfi);
+      await new Promise<void>((resolve) => {
+        if (cfi === "jump") releaseFirst = resolve;
+        else releaseLatest = resolve;
+      });
+      return "saved" as const;
+    });
+    r.schedule("jump", 700, 7);
+    let committed = false;
+    const barrier = r.flushAndWait().then(() => { committed = true; });
+    expect(calls).toEqual(["jump"]);
+    r.schedule("latest", 720, 7);
+    releaseFirst();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual(["jump", "latest"]);
+    expect(committed).toBe(false);
+    releaseLatest();
+    await barrier;
+    expect(committed).toBe(true);
+  });
+
+  test.each(["queued", "conflict"] as const)("awaitable flush rejects %s positions", async (result) => {
+    const put = vi.fn(async () => result);
+    r = new PositionReporter(put);
+    r.schedule("not-confirmed", 700, 7);
+    await expect(r.flushAndWait()).rejects.toThrow("not been confirmed");
+    // A second source request must not mistake an empty local queue for a saved PUT.
+    await expect(r.flushAndWait()).rejects.toThrow("not been confirmed");
+    expect(put).toHaveBeenCalledTimes(1);
+    r.cancel();
+    await expect(r.flushAndWait()).resolves.toBeUndefined();
+  });
+
+  test("awaitable flush cannot carry a pre-reset page into the new pass", async () => {
+    let release!: () => void;
+    r = new PositionReporter(async () => new Promise<void>((resolve) => { release = resolve; }));
+    r.schedule("old", 700, 7, 0);
+    const barrier = r.flushAndWait();
+    r.cancel();
+    release();
+    await expect(barrier).rejects.toThrow("reading pass changed");
+  });
+
   test("cancel() discards a pre-reset report so it cannot race a new reading pass", () => {
     r.schedule("old-pass", 9000);
     r.cancel();

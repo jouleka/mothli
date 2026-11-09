@@ -29,7 +29,8 @@ def test_own_citations_are_frozen_and_uncited_body_cannot_be_borrowed():
     assert SOURCES[1]["text"] not in str(state)
     assert "claim_1.cited_passages" in questions["c0_relation"]["instructions"]
     assert "c0_omitted_qualification" in questions
-    assert len(questions) == 4 and "candidate_response" not in state
+    assert len(questions) == 5 and "candidate_response" not in state
+    assert "c0_unestablished_time" in questions
 
 
 @pytest.mark.parametrize("failure", ["missing", "rejected", "uncertain", "low-probability", "invalid-probability"])
@@ -124,8 +125,9 @@ def test_recap_keeps_only_a_useful_verified_prefix_with_original_citations(first
     def invoke():
         return review_recap_prefix(draft,SOURCES,question="Catch me up",frontier=1,run=run,settings=SETTINGS)
     if first_bad:
-        with pytest.raises(JevNeedsReasoning):
+        with pytest.raises(JevNeedsReasoning) as exc:
             invoke()
+        assert exc.value.claim_ids == [1]
     else:
         value = invoke()
         assert value.claims == draft.claims[:1]
@@ -143,3 +145,88 @@ def test_only_unsettled_claim_ids_are_sent_for_reasoning():
     with pytest.raises(JevNeedsReasoning) as exc:
         review_with_jev(draft,SOURCES,question="What happened?",frontier=1,run=run,settings=SETTINGS)
     assert exc.value.claim_ids == [2]
+
+
+@pytest.mark.parametrize("alt_clear,independent", [(True, True), (False, True), (True, False)])
+def test_speculative_alternative_needs_own_full_review_and_independent_meaning(alt_clear, independent):
+    alt = AskDraft(insufficient_evidence=False,claims=[
+        {"text":"Nell kept three coins.","citation_ids":[2]}])
+
+    def run(state, questions):
+        assert state["claim_1"]["cited_passages"] == [SOURCES[0]["text"]]
+        assert state["claim_2"]["cited_passages"] == [SOURCES[1]["text"]]
+        result = positive(questions)
+        result["c0_unestablished_location"]["noul"] = .5
+        if not alt_clear:
+            result["c1_relation"]["probabilities"]["supported"] = .5
+        for k in result:
+            if k.endswith("_scene"):
+                result[k]["noul"] = .99
+        result["alternative_independent"]["noul"] = .99 if independent else .5
+        return result
+
+    def invoke():
+        return review_recap_prefix(DRAFT,SOURCES[:1],question="Catch me up",frontier=1,
+            run=run,settings=SETTINGS,alternative=(alt,SOURCES[1:]))
+    if alt_clear and independent:
+        assert invoke() == alt
+    else:
+        with pytest.raises(JevNeedsReasoning) as exc:
+            invoke()
+        assert exc.value.claim_ids == [1]
+
+
+def test_six_claim_review_checks_every_question_within_provider_batch_limit():
+    draft = AskDraft(insufficient_evidence=False, claims=[DRAFT.claims[0]] * 6)
+    seen = []
+    def run(state, questions):
+        assert len(questions) <= 24
+        seen.extend(questions)
+        return positive(questions)
+    review_with_jev(draft,SOURCES[:1],question="Explain all six points",frontier=1,
+                    run=run,settings=SETTINGS)
+    assert len(seen) == len(set(seen)) == 31
+
+
+@pytest.mark.parametrize("omission", [.5, .99])
+def test_supported_partial_answer_requires_full_request_coverage_review(omission):
+    def run(state, questions):
+        assert state["proposed_answer"] == [DRAFT.claims[0].text]
+        assert "answer_omission" in questions
+        values = positive(questions)
+        values["answer_omission"]["noul"] = omission
+        return values
+    with pytest.raises(JevNeedsReasoning) as exc:
+        review_with_jev(DRAFT,SOURCES,question="Who lent Jonas a key, and how many coins did Nell keep?",
+                        frontier=1,run=run,settings=SETTINGS)
+    assert exc.value.claim_ids is None
+
+
+@pytest.mark.parametrize("limit", [False, True])
+def test_every_requested_part_can_be_answered_or_explicitly_evidence_limited(limit):
+    texts = [DRAFT.claims[0].text, "The cited passage does not establish how many coins Nell kept."
+             if limit else "Nell kept three coins."]
+    draft = AskDraft(insufficient_evidence=False,claims=[
+        {"text":texts[0],"citation_ids":[1]},
+        {"text":texts[1],"citation_ids":[1 if limit else 2]}])
+    def run(state, questions):
+        assert state["proposed_answer"] == texts
+        assert "explicitly explaining" in questions["answer_omission"]["criteria"]["false"]
+        return positive(questions)
+    review_with_jev(draft,SOURCES[:1] if limit else SOURCES,
+        question="Who lent Jonas a key, and how many coins did Nell keep?",
+        frontier=1,run=run,settings=SETTINGS)
+
+
+@pytest.mark.parametrize("failure", ["missing", "invalid"])
+def test_whole_answer_coverage_cannot_be_skipped_or_malformed(failure):
+    def run(state,questions):
+        values = positive(questions)
+        if failure == "missing":
+            values.pop("answer_omission")
+        else:
+            values["answer_omission"]["noul"] = True
+        return values
+    with pytest.raises(AskEvidenceError):
+        review_with_jev(DRAFT,SOURCES,question="Who lent Jonas a key and how many coins?",
+                        frontier=1,run=run,settings=SETTINGS)

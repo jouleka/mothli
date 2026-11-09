@@ -79,6 +79,7 @@ export type AskAnswer = {
   as_of_chapter: number; insufficient_evidence: boolean; claims: AskClaim[];
   citations: AskCitation[]; cost: AskCost | null;
   answer_type?: "recap" | "conversation";
+  calculation?: string;
   message?: string;
   acknowledgment?: string | null;
   recap?: string | null;
@@ -87,6 +88,7 @@ export type AskAnswer = {
 };
 export type SelectionAction = "explain" | "define" | "translate";
 export type SelectionAssistAnswer = {
+  message?: string | null;
   action: SelectionAction; as_of_chapter: number; insufficient_evidence: boolean;
   acknowledgment?: string | null;
   text: string | null; citation: (AskCitation & { cfi: string }) | null; cost: AskCost;
@@ -479,14 +481,18 @@ export const api = {
   selectionAction: (
     id: string,
     value: { action: SelectionAction; text: string; atom: number; cfi: string; question?: string; history?: ConversationMessage[] },
-  ) => fetch(`/api/books/${id}/selection-action`, {
+  ) => {
+    if (Array.from(value.text).length > 2000)
+      return Promise.reject(new ApiError("Select a shorter passage (up to 2,000 characters).",413,"selection_too_large"));
+    return fetch(`/api/books/${id}/selection-action`, {
     method: "POST",
     headers: { "content-type": "application/json", ...csrfHeaders() },
     body: JSON.stringify({
       ...value,
       ...(value.action === "translate" ? { target_language: "English" } : {}),
     }),
-  }).then((r) => j<SelectionAssistAnswer>(r)),
+  }).then((r) => j<SelectionAssistAnswer>(r));
+  },
   chapterCloseout: (id: string, chapter: number) =>
     fetch(`/api/books/${id}/chapter-closeout`, {
       method: "POST",
@@ -506,6 +512,9 @@ export const api = {
     fetch(`/api/books/${id}/graph${bookmark != null ? `?bookmark=${bookmark}` : ""}`).then(
       (r) => j<Graph>(r),
     ),
+  visiblePeople: (id: string, point: ReadFrontier) => fetch(`/api/books/${id}/people`,{
+    method:"POST",headers:{"content-type":"application/json",...csrfHeaders()},body:JSON.stringify(point),
+  }).then((r)=>j<{read_frontier:ReadFrontier;names:string[]}>(r)),
   memoryCorrections: (id: string, bookmark?: number) =>
     fetch(
       `/api/books/${id}/memory-corrections${bookmark != null ? `?bookmark=${bookmark}` : ""}`,

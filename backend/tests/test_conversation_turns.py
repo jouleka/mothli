@@ -25,6 +25,14 @@ def test_invalid_routing_is_not_a_no_evidence_decision(bad):
         classify_turn("reader text",run=lambda state,q:{k:{"noul":bad} for k in q})
 
 
+def test_ambiguous_followup_with_history_is_resolved_only_against_book_evidence():
+    def run(state,questions):
+        return {**{k:{"noul":.99} for k in questions if k!="clarification_kind"},
+                "clarification_kind":{"choice":"person"}}
+    assert classify_turn("Who was that?",run=run,history=[
+        {"role":"assistant","content":"Nell counted three coins."}]) == "evidence"
+
+
 @pytest.mark.parametrize("risk,allowed", [(.01,True),(.5,False),(.99,False),(True,False)])
 def test_uncited_dialogue_must_pass_its_own_no_book_fact_check(risk, allowed):
     phases=[]

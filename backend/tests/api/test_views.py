@@ -579,6 +579,32 @@ def test_explicit_citation_review_is_budgeted_fail_closed_and_followed_by_fresh_
     assert len(review_rows) == len(evidence_prompts)
 
 
+@pytest.mark.parametrize("malformed", [False,True])
+def test_selection_clarification_and_invalid_sdk_output_never_publish_unchecked_text(env,malformed):
+    from app.reading_assist import SelectionDraft, SELECTION_CLARIFICATIONS
+    c,bid,app,_ = env
+    calls=[]
+    def complete(system,user,tier="cheap",schema=None):
+        calls.append(schema)
+        if malformed:
+            # Reproduce the native SDK's validation error before complete() returns.
+            SelectionDraft.model_validate({"insufficient_evidence":True,
+                "text":"Unchecked plot claim", "citation_ids":[1]})
+        return {"insufficient_evidence":True,"text":None,"citation_ids":[],
+                "clarification":"real_world"},{"in":20,"out":10}
+    app.state.client.complete=complete
+    response=c.post(f"/api/books/{bid}/selection-action",json={"action":"explain",
+        "text":"What is it, Kolya? said Alyosha.","atom":2,"cfi":"cfi",
+        "question":"What is Kolya in real life?"})
+    assert "Unchecked plot claim" not in response.text
+    if malformed:
+        assert response.status_code == 502 and len(calls) == 2
+    else:
+        assert response.status_code == 200 and len(calls) == 1
+        assert response.json()["message"] == SELECTION_CLARIFICATIONS["real_world"]
+        assert response.json()["text"] is None and response.json()["citation"] is None
+
+
 def test_selection_actions_use_only_the_visible_selection_and_return_its_anchor(env):
     c, bid, app, _ = env
     original = app.state.client.complete
