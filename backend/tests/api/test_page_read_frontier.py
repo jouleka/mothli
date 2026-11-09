@@ -128,13 +128,23 @@ def test_source_replacement_invalidates_even_an_already_cached_parse(page_env, m
     assert api.post(f"/api/books/{bid}/ask", json={"question":"Why?", "read_frontier":point}).status_code == 409
 
 
-def test_jev_candidate_uses_one_draft_one_batch_and_separate_cache_policy(page_env, monkeypatch):
+@pytest.mark.parametrize("escalation", [False, True])
+def test_jev_candidate_prepares_evidence_then_drafts_and_checks_own_citations(page_env, monkeypatch, escalation):
     from types import SimpleNamespace
     api, bid, app, settings = page_env
     point = confirm(api, bid)
     settings.reader_conversation_jev = True
     paid = []
     def complete(system, user, tier="cheap", schema=None):
+        if schema.__name__ == "ConversationEscalation":
+            paid.append("escalation")
+            assert "probabilities" not in user
+            packet = json.loads(user.split("\n", 1)[1])
+            return {"references_future":False, "unsupported_claims":[], "missing_details":[],
+                "claim_audits":[{"claim_id":c["claim_id"], "units":[
+                    {"unit_id":u["unit_id"], "supported":True, "diagnostic":None,
+                     "evidence":[{"source_id":c["sources"][0]["source_id"], "passage_ids":[1]}]}
+                    for u in c["units"]]} for c in packet["claims"]]}, {"in":100,"out":50}
         assert schema.__name__ == "ConversationDraft"
         paid.append("draft")
         assert "UNREAD_CANARY" not in user and "FUTURE_CHAPTER_CANARY" not in user
@@ -148,9 +158,9 @@ def test_jev_candidate_uses_one_draft_one_batch_and_separate_cache_policy(page_e
         answers = {}
         for k, q in questions.items():
             if q["type"] == "noul":
-                answers[k] = {"type":"noul", "noul":.999 if k == "addresses_message" else .001}
+                answers[k] = {"type":"noul", "noul":.5 if escalation and "claim_1" in state else .001}
                 continue
-            choice = "supported"
+            choice = "direct" if "passages" in state else "supported"
             answers[k] = {"type":"choice", "choice":choice, "confidence":.999,
                 "probabilities":{option:.999 if option == choice else .0005 for option in q["criteria"]}}
         return answers, {"in":200,"out":40}
@@ -159,9 +169,9 @@ def test_jev_candidate_uses_one_draft_one_batch_and_separate_cache_policy(page_e
     body = {"question":"Where is the key?", "read_frontier":point}
     result = api.post(f"/api/books/{bid}/ask", json=body)
     assert result.status_code == 200, result.text
-    assert paid == ["draft", "jev"]
+    assert paid == ["jev", "draft", "jev"] + (["escalation"] if escalation else [])
     assert api.post(f"/api/books/{bid}/ask", json=body).json()["cached"]
-    assert paid == ["draft", "jev"]
+    assert paid == ["jev", "draft", "jev"] + (["escalation"] if escalation else [])
     settings.reader_conversation_jev = False
     monkeypatch.setattr(app.state.client, "complete", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("not a cache hit")))
     # A baseline request must not reuse approval from the experimental reviewer.

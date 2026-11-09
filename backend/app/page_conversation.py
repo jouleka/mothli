@@ -15,14 +15,15 @@ from app.ask_evidence import ASK_EVIDENCE_SYSTEM, AskEvidenceError
 from app.ask_selection import SOURCE_SELECTION_SYSTEM, SourceSelection, select_sources_bounded
 from app.content_scope import CONTENT_POLICY_VERSION
 from app.conversation_pipeline import (ConversationDraft, DRAFT_SYSTEM, answer_conversation,
-                                       compact_candidates)
+                                       compact_candidates, review_escalation)
 from app.cost import CostCeilingExceeded, budgeted_completion, pricing_known
 from app.eval.spoiler_gate import score_recap
 from app.eval.spoiler_gate.binding import unsupported_event_bindings
 from app.read_frontier import requested_snapshot
 from app.retrieval_passages import passage_windows
 from app.unicode_text import word_tokens
-from app.conversation_jev import DECISION_LIMITS, FIT, SUPPORT, POLICY_VERSION, POLICY, review_with_jev
+from app.conversation_jev import (DECISION_LIMITS, FIT, SUPPORT, RELEVANCE, POLICY_VERSION,
+                                  POLICY, review_with_jev, prepare_context, JevNeedsReasoning)
 from app.llm.jev import JevUnavailable
 from app.llm.jev_budget import budgeted_jev
 
@@ -60,7 +61,7 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
 
     def jev_run(state, questions):
         started = perf_counter()
-        phase = "jev-source-selection" if "candidates" in state else "conversation-jev"
+        phase = "jev-source-selection" if "passages" in state else "conversation-jev"
         result = budgeted_jev(catalog, settings, client.jev, book_id,
             phase=phase, state=state, questions=questions)
         calls.append({"provider": "typesafe", "model": client.jev.model, "phase":phase,
@@ -72,8 +73,8 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
     scope = (book_id, book["incarnation"], hashlib.sha256(json.dumps([
         point["id"], CONTENT_POLICY_VERSION, "page-conversation-v1", DRAFT_SYSTEM,
         ASK_EVIDENCE_SYSTEM, ASK_JUDGE_SYSTEM,
-        [POLICY_VERSION, POLICY, FIT, SUPPORT, DECISION_LIMITS, client.jev.model, settings.jev_min_probability,
-         settings.jev_min_confidence] if use_jev else "parallel-gpt-review",
+        [POLICY_VERSION, POLICY, FIT, SUPPORT, RELEVANCE, DECISION_LIMITS, client.jev.model]
+        if use_jev else "parallel-gpt-review",
         client.extractor_version("large"), client.extractor_version("cheap"),
         getattr(client, "base_url", ""), settings.reader_conversation_review_effort,
     ]).encode()).hexdigest())
@@ -119,15 +120,17 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         candidates = compact_candidates(candidates)
         if not candidates:
             return payload(AskDraft(insufficient_evidence=True, claims=[]), [])
+        context_notes = ""
+        if use_jev:
+            original = candidates
+            selected, context_notes = prepare_context(question, candidates, frontier=eff,
+                                                       run=jev_run, settings=settings)
+            candidates = complete_ask_context(query, selected, original, allow_named_fallback=True)
         if not _recap_input_fits(settings, reviewer, DRAFT_SYSTEM,
-                                 ask_prompt(question, candidates, frontier=eff), schema=ConversationDraft):
+                                 ask_prompt(question, candidates, frontier=eff) + "\n" + context_notes,
+                                 schema=ConversationDraft):
             if use_jev:
-                from app.llm.jev_tasks import select
-                selected = select(question, candidates, run=jev_run, settings=settings, frontier=eff)
-                candidates = complete_ask_context(query, selected, candidates, allow_named_fallback=True)
-                if not _recap_input_fits(settings, reviewer, DRAFT_SYSTEM,
-                        ask_prompt(question, candidates, frontier=eff), schema=ConversationDraft):
-                    raise HTTPException(413, "source context exceeds the one-draft experiment limit")
+                raise HTTPException(413, "source context exceeds the one-draft experiment limit")
             else:
                 original = candidates
                 selected = select_sources_bounded(question, candidates,
@@ -156,12 +159,16 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             return result
 
         def jev_review(draft, sources, **kwargs):
-            return review_with_jev(draft, sources, run=jev_run, settings=settings, **kwargs)
+            try:
+                return review_with_jev(draft, sources, run=jev_run, settings=settings, **kwargs)
+            except JevNeedsReasoning:
+                return review_escalation(draft, sources, **kwargs)
 
         draft, sources, clarification = answer_conversation(question, candidates, frontier=eff,
             known_names=[], complete=complete, score=score,
             max_output_tokens=settings.cost_max_output_tokens_per_call,
-            review=jev_review if use_jev else None, max_attempts=1 if use_jev else 2)
+            review=jev_review if use_jev else None, max_attempts=1 if use_jev else 2,
+            context_notes=context_notes)
         return payload(draft, sources, clarification)
 
     try:

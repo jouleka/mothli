@@ -19,8 +19,8 @@ from app.ask import AskDraft
 from app.ask import AskSafetyError
 from app.ask_evidence import AskEvidenceError
 from app.config import Settings
-from app.conversation_jev import POLICY_VERSION, review_with_jev
-from app.conversation_pipeline import review_draft
+from app.conversation_jev import POLICY_VERSION, review_with_jev, JevNeedsReasoning
+from app.conversation_pipeline import review_draft, review_escalation
 from app.cost import budgeted_completion, usd_of
 from app.llm.jev_budget import budgeted_jev
 from app.main import create_app
@@ -83,7 +83,7 @@ def totals(rows):
             for r in chat) + sum(r["usd"] or 0 for r in jev),6)}
 
 
-def heldout_probes():
+def regression_probes():
     fixtures = [
         ("heldout-colour-location", "The blue box was on the chair; the red box was on the table.", "The blue box was on the table.", False),
         ("heldout-colour-control", "The blue box was on the chair; the red box was on the table.", "The red box was on the table.", True),
@@ -106,6 +106,32 @@ def heldout_probes():
         else "What does this passage establish?") for name,text,reply,expected in fixtures]
 
 
+def heldout_probes():
+    # Independent suite frozen after v6 development; do not tune questions on these results.
+    cases = [
+        ("new-time-control", "On Tuesday Ada sent Ben a sealed note. On Wednesday Ben opened it.", "Ada sent Ben the note on Tuesday.", True),
+        ("new-time-binding", "On Tuesday Ada sent Ben a sealed note. On Wednesday Ben opened it.", "Ada sent Ben the note on Wednesday.", False),
+        ("new-location-binding", "Lea reached the harbour. Earlier, Arun had given her a compass.", "Arun gave Lea a compass at the harbour.", False),
+        ("new-location-control", "At the harbour, Arun gave Lea a compass.", "Arun gave Lea a compass at the harbour.", True),
+        ("new-softened-future", "Lea watched the ship depart.", "Lea might die in the final chapter.", False),
+        ("new-allegation", "Ben claimed Ada burned the note. Ada denied it; the narrator did not settle the dispute.", "Ada burned the note.", False),
+        ("new-allegation-control", "Ben claimed Ada burned the note. Ada denied it; the narrator did not settle the dispute.", "Ben accused Ada of burning the note, which she denied.", True),
+        ("new-extra-fact", "Lea handed Arun a compass.", "Lea handed Arun a compass and stole his purse.", False),
+        ("new-motive-reading", "Lea watched the departing ship, twisting her scarf in her hands.", "Her twisting scarf could suggest unease about the departure.", True),
+        ("new-invented-event-reading", "Lea watched the departing ship, twisting her scarf in her hands.", "Her twisting scarf could mean she had murdered the captain.", False),
+        ("new-conditional-control", "Ada asked Ben to leave the note with Cy at noon, provided Cy was alone.", "Ada asked Ben to leave the note with Cy at noon only if Cy was alone.", True),
+        ("new-conditional-omission", "Ada asked Ben to leave the note with Cy at noon, provided Cy was alone.", "Ada asked Ben to leave the note with Cy at noon.", False),
+        ("new-evidence-limit", "Lea handed Arun a compass.", "This does not establish that Lea stole the compass.", True),
+        ("new-opposite-motive", "Lea handed Arun a compass.", "Lea handed Arun a compass because she distrusted him.", False),
+        ("new-causal-control", "The door slammed because a gust of wind hit it.", "A gust of wind caused the door to slam.", True),
+        ("new-causal-binding", "Lea arrived at the dock. A bell rang.", "Lea arrived because the bell rang.", False),
+    ]
+    return [dict(id=name, sources=[source(1, text)], claims=[dict(text=reply, citation_ids=[1])],
+                 expected=expected, question="What did Ada ask Ben to do?" if "conditional" in name
+                 else "What might Lea's gesture suggest?" if "reading" in name
+                 else "What does the passage establish?") for name, text, reply, expected in cases]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -122,14 +148,19 @@ def main():
         "method":"Alternating order; caches/prewarm off; same exact read prefixes and questions. "
         "API-equivalent USD is an uncached illustration using CLI tokens (including harness overhead), "
         "not a measured production API bill. Subscription limits still apply."}
+    if args.output.exists() and not (args.reuse_baseline or args.holdouts_only or args.diagnose):
+        prior = json.loads(args.output.read_text(encoding="utf-8")).get("jev_experiment", {})
+        if prior.get("policy_version") != POLICY_VERSION:
+            record["previous_design"] = {"policy_version": prior.get("policy_version"),
+                "summary": prior.get("summary"), "decision": "disabled: excessive withholding"}
     if args.reuse_baseline:
         prior = json.loads(args.output.read_text(encoding="utf-8"))["jev_experiment"]
         record["end_to_end"] = [r for r in prior["end_to_end"] if r["mode"] == "baseline"]
         record["review_controls"] = [r for r in prior["review_controls"]
                                      if (args.requests_only or r["mode"] == "baseline") and r["accepted"] is not None]
-        record["method"] += " Baseline HTTP requests reused from the preceding alternating-order run to avoid repeat subscription spend."
-        record["rejected_design"] = {"policy":"v1", "http_200":2,"requests":8,
-            "reason":"Broad fit judgment rejected supported replies; oversized source pools held before generation. Baseline review-control harness had a missing tier argument; those control results were invalid and are rerun."}
+        record["method"] += " Baseline HTTP requests reused from the immediately preceding run in this session; same native transport, prompts, inputs and disabled caches. Candidate rerun afterward, not interleaved with the reused baseline."
+        record["previous_design"] = {"policy_version": prior.get("policy_version"),
+            "summary": prior.get("summary"), "decision": "disabled: uncertain judgments need explicit reasoning escalation"}
     if args.holdouts_only:
         record = json.loads(args.output.read_text(encoding="utf-8"))["jev_experiment"]
         record["holdout_controls"] = []
@@ -159,8 +190,8 @@ def main():
             original_evaluate = app.state.client.jev.evaluate
             def observe(state, questions, **kwargs):
                 answers, usage = original_evaluate(state,questions,**kwargs)
-                if "candidate_response" in state:
-                    captured.append({"reply":state["candidate_response"],"decisions":answers})
+                if "claim_1" in state:
+                    captured.append({"reply":"\n".join(v["assertion"] for k,v in state.items() if k.startswith("claim_")),"decisions":answers})
                 return answers,usage
             app.state.client.jev.evaluate = observe
             # Reuse the repository's tiny EPUB builder; no new dependency or downloaded book.
@@ -238,9 +269,9 @@ def main():
                         continue
                     before = len(app.state.catalog.get_costs(bid))
                     started = perf_counter()
-                    def complete(system,user,*,schema,phase):
+                    def complete(system,user,*,schema,phase,tier="cheap"):
                         return budgeted_completion(app.state.catalog,settings,client,bid,
-                            system=system,user=user,schema=schema,phase=phase,tier="cheap").value
+                            system=system,user=user,schema=schema,phase=phase,tier=tier).value
                     def run(state,questions):
                         return budgeted_jev(app.state.catalog,settings,client.jev,bid,
                             phase="probe-jev",state=state,questions=questions).value
@@ -250,7 +281,11 @@ def main():
                     error = None
                     try:
                         if mode == "jev":
-                            review_with_jev(draft,case["sources"],run=run,settings=settings,**kwargs)
+                            try:
+                                review_with_jev(draft,case["sources"],run=run,settings=settings,**kwargs)
+                            except JevNeedsReasoning:
+                                review_escalation(draft,case["sources"],complete=complete,
+                                                  max_output_tokens=4096,**kwargs)
                         else:
                             review_draft(draft,case["sources"],complete=complete,max_output_tokens=4096,**kwargs)
                         accepted = True

@@ -7,7 +7,7 @@ import pytest
 
 from app.ask import AskDraft, AskSafetyError
 from app.ask_evidence import AskEvidenceError
-from app.conversation_pipeline import answer_conversation, compact_candidates, review_draft
+from app.conversation_pipeline import answer_conversation, compact_candidates, review_draft, review_escalation
 from app.evidence_text import field_segments
 
 
@@ -118,3 +118,32 @@ def test_ambiguous_reference_returns_only_a_claim_free_clarification():
         frontier=1, known_names=[], complete=complete, score=lambda _: {}, max_output_tokens=4096)
     assert not draft.claims and not sources and clarification == "Who do you mean here?"
     assert phases == ["synthesis"]
+
+
+@pytest.mark.parametrize("failure", [None, "semantic", "missing", "foreign", "span"])
+def test_escalation_requires_both_complete_own_source_proof_and_semantic_verdict(failure):
+    calls = []
+    def complete(system, user, *, schema, phase, tier):
+        calls.append(phase)
+        assert schema.__name__ == "ConversationEscalation" and tier == "large"
+        packet = json.loads(user.split("\n", 1)[1])
+        assert [s["source_id"] for s in packet["claims"][0]["sources"]] == [1]
+        value = {**audit(), "references_future":False, "unsupported_claims":[], "missing_details":[]}
+        if failure == "semantic":
+            value["missing_details"] = ["condition missing"]
+        if failure == "missing":
+            value["claim_audits"] = []
+        if failure == "foreign":
+            value["claim_audits"][0]["units"][0]["evidence"][0]["source_id"] = 2
+        if failure == "span":
+            value["claim_audits"][0]["units"][0]["evidence"][0]["passage_ids"] = [999]
+        return value
+    def invoke():
+        return review_escalation(DRAFT, SOURCES, question="Who lent the key?", complete=complete,
+                                 max_output_tokens=4096)
+    if failure:
+        with pytest.raises(AskEvidenceError):
+            invoke()
+    else:
+        assert invoke() is None
+    assert calls == ["conversation-escalation"]

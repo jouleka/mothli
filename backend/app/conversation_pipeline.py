@@ -27,6 +27,10 @@ class ConversationVerdict(AskVerdict):
     """Independent own-citation review, never given the positive review's decision."""
 
 
+class ConversationEscalation(ConversationEvidenceReview, ConversationVerdict):
+    """One bounded reasoning call: positive source spans AND semantic/completeness verdict."""
+
+
 class ConversationDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -196,9 +200,39 @@ def review_draft(draft, sources, *, question, frontier, scene_sources, coverage_
     complete_evidence_citations(value, sources, {"claim_audits": audits})
 
 
+def review_escalation(draft, sources, *, question, complete, max_output_tokens, **_unused):
+    """Review the unchanged draft without Jev's verdicts, scores, or suggested explanations.
+
+    This is an explicit exception path, not another routine generation or a silent repair.
+    Both proof coverage and the semantic verdict must pass the existing strict validators.
+    """
+    from app.ask import ASK_JUDGE_SYSTEM
+    from app.ask_evidence import validate_evidence_audit
+
+    value = draft.model_dump(mode="json")
+    batches = evidence_review_batches(value, sources, max_output_tokens=max_output_tokens)
+    if len(batches) != 1:
+        raise AskEvidenceError()
+    result = complete(ASK_EVIDENCE_SYSTEM + "\n" + ASK_JUDGE_SYSTEM + INTERPRETATION_REVIEW,
+        _own_evidence_prompt(draft, sources, question, batches[0]),
+        schema=ConversationEscalation, phase="conversation-escalation", tier="large")
+    parsed = ConversationEscalation.model_validate(result, strict=True)
+    if parsed.references_future or parsed.unsupported_claims or parsed.missing_details:
+        raise AskEvidenceError()
+    audit = {"claim_audits": [a.model_dump(mode="json") for a in parsed.claim_audits]}
+    validate_evidence_audit(value, sources, audit, claim_ids=batches[0])
+    for claim in audit["claim_audits"]:
+        own = set(draft.claims[claim["claim_id"] - 1].citation_ids)
+        if any(ref["source_id"] not in own for unit in claim["units"] for ref in unit["evidence"]):
+            raise AskEvidenceError()
+    complete_evidence_citations(value, sources, audit)
+
+
 def answer_conversation(question, candidates, *, frontier, known_names, complete,
-                        score, max_output_tokens, review=None, max_attempts=2):
+                        score, max_output_tokens, review=None, max_attempts=2, context_notes=""):
     prompt = ask_prompt(question, candidates, frontier=frontier)
+    if context_notes:
+        prompt += "\n" + context_notes
     feedback = []
     for _attempt in range(max_attempts):
         generated = complete(DRAFT_SYSTEM, ask_repair_prompt(prompt, feedback),

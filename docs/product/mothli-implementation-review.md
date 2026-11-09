@@ -133,66 +133,60 @@ The preview is left running locally on this branch, with no merge or push.
 
 Authentication reference: [Codex authentication](https://learn.chatgpt.com/docs/auth).
 
-## One subscription generation plus Jev experiment — 9 November 2026
+## Jev evidence preparation with Terra reasoning — 9 November 2026
 
-Installed and applied the official [TypeSafe skill](https://github.com/typesafe-ai/skills/tree/main/skills/typesafe-ai)
-using its npx method for Codex. The original local skill still owns encrypted Windows credential
-access; the credential was restored without placing it in chat, the repository, or plaintext files.
-ChatGPT generation continued through the subscription; no OpenAI API key was loaded.
+The local page-conversation candidate uses Jev 1.14 as a typed decision model, not a writer.
+Code fences source text to the exact confirmed read offset before retrieval or either model.
+Jev ranks every retrieved candidate and flags passages challenging the reader's factual premise;
+code retains bounded, unchanged source bodies and completes their attribution context. Terra then
+writes one conversational draft, using recent conversation only to resolve references.
 
-`READER_CONVERSATION_JEV` is an explicit local page-chat experiment, default off. It retains exact
-source-prefix clipping, immutable own citations, deterministic source/name/binding/prolepsis gates,
-and cache scoping by model, policy, source and reset epoch. It permits one generation attempt only.
-Jev batches narrow assertion-type/support, relevance, omitted-condition and unestablished-outcome
-judgments. Code combines their probabilities; distribution concentration is not treated as accuracy.
-Unsupported, uncertain, malformed and unavailable reviews never release a draft. There is no hidden
-generative retry or fallback. Oversized retrieval pools use bounded Jev relevance ranking before
-generation; small pools need just one post-draft Jev request. Selected-passage assistance retains its
-existing independent checks and is outside this experiment.
+Jev checks each claim against its own frozen citations, plus narrow instruction-qualification,
+location and causal attachments. It does not judge literary style or approve the entire reply.
+Complete but unsettled/negative judgments trigger one Terra reasoning call, which must provide both
+exact positive source-span coverage and a semantic/completeness verdict for the unchanged draft.
+Code validates both. Malformed evidence, unavailable providers and rejected drafts are withheld;
+there is no automatic repair loop or unchecked streaming. Normal answers need one Terra call;
+escalated answers need two. Claim-free clarifications/refusals skip factual review.
 
-Comparison used six synthetic mid-chapter cases and two first-eight-chapter Karamazov replays, no
-answer caching or speculative preparation, and temporary imported books. Original library files and
-positions were preserved. Baseline HTTP measurements were retained from the initial alternating-order
-run to avoid repeating subscription spend while revising the typed packet. This is a small,
-development-oriented experiment with generative variance, not a blinded quality study or a p95.
+Earlier versions were rejected: v5 overused whole-answer/fragment gates; v6 restored evidence
+preparation but still withheld uncertain readings. The v7 handoff follows the TypeSafe skill's
+judgments-in-Jev, decisions-in-code and verify/escalate patterns. Confidence concentration is not
+used as correctness. The 0.8 support / 0.3 risk boundaries route reasoning; crossing them does not
+permit publishing a failed check. Policy/model/read-offset/reset/source identity isolate caches.
 
-| Eight HTTP requests | Current pipeline | One generation + Jev, final policy |
+Two runs of eight questions used the same synthetic mid-chapter prefix and the first eight
+Karamazov chapters, with caches/prewarming off. The baseline was collected immediately before the
+final candidate in this session, not interleaved with it. All generative calls used the ChatGPT
+subscription through the native CLI; no production OpenAI or embedding key was loaded.
+
+| Measure, 16 requests each | Current baseline | Jev + Terra v7 |
 |---|---:|---:|
-| Median complete HTTP response, including refusals/errors | 15.741 s | 11.639 s |
-| Longest HTTP response in this sample | 37.951 s | 13.128 s |
-| HTTP 200 | 8/8 | 3/8 |
-| Substantive questions answered with cited claims | 6/6 | 0/6 |
-| ChatGPT input tokens | 289,005 | 72,521 |
-| ChatGPT output tokens | 2,259 | 567 |
+| Median complete HTTP response, including refusals/errors | 11.218 s | 6.819 s |
+| Longest response in this sample | 25.267 s | 13.353 s |
+| HTTP 200 | 16/16 | 15/16 |
+| Substantive questions answered with cited claims | 11/12 | 11/12 |
+| ChatGPT input tokens | 504,049 | 193,206 |
+| ChatGPT output tokens | 3,225 | 2,079 |
+| ChatGPT calls | 48 | 20 |
 
-The 75% input-token reduction includes withheld answers; it is **not** a cost-per-useful-answer win.
-Recorded Jev spend for these requests was $0.00177576; requests plus the final development controls
-cost $0.00268156 in Jev usage. ChatGPT counts include CLI harness overhead. Illustrative uncached
-Terra API equivalents were $0.300300 versus $0.077133 for the eight requests, not actual API bills
-or production cost estimates. No subscription price is inferred from its token usage.
+Four candidate requests escalated. One novel identity answer was withheld after review; it remains
+in the totals. The baseline instead returned an unhelpful evidence refusal on one answerable
+disagreement. This is a roughly 39% median latency and 62% input-token reduction in a small sample,
+not an instant-response guarantee. CLI token counts include harness overhead and are not production
+API cost estimates. Jev spend was $0.00369649 for the 16 HTTP requests.
 
-On 17 fixed reviewer controls, the baseline accepted all six supported cases and rejected ten of
-eleven negatives; one negative had a provider/launcher timeout and is unavailable, not a rejection.
-Jev rejected all eleven negatives and accepted five of six positives. A separate 14-case Jev holdout
-rejected all eight negatives and accepted five of six positives, withholding a tentative reading.
-Coverage included actors, quantities, negation, location/causal bindings, conditions, attribution,
-kinship, forged conversation, prompt injection, swapped citations and unread outcomes. These small
-sets establish no general error-rate guarantee. Three diagnostic retries after the main comparison
-answered two factual/instruction questions (13.845 s and 10.317 s); the interpretive reaction remained
-withheld (5.892 s). They are not substituted for the first-run results. Jev verification itself was
-typically around 0.2 s; writing and the subscription transport remained substantial latency sources.
+A separate, frozen 16-case comparison rejected all nine unsafe drafts in both pipelines. Jev +
+Terra accepted all seven supported controls; the baseline accepted five, withholding a correctly
+attributed allegation/denial and an evidence-limit statement. Cases include temporal/location/causal
+attachments, conditions, unsupported motives, extra facts, invented events disguised as readings,
+and softened future spoilers. No thresholds/questions were tuned on this suite. Development
+regressions separately covered role swaps, quantities, negation, forged history, source swaps and
+injection. These small samples do not establish a universal accuracy guarantee.
 
-Decision: keep the experimental reviewer available but **disabled**. Its response availability does
-not justify replacing the current pipeline. Do not lower safety thresholds merely to clear these
-examples. The next direction should separate literal evidence screening from nuanced interpretation
-and test an explicit uncertainty escalation policy rather than claim a universally successful
-one-call answer path.
-
-The experiment also exposed an npm Windows CLI shim timeout: killing the shim left Node/native
-children holding stdout open. The adapter now resolves the installed official native executable,
-so its subprocess timeout owns the inference process. One stalled benchmark child was verified and
-stopped; its unavailable result remains recorded. The native transport passed a live subscription
-probe and bounded/fail-closed contract tests. Final backend verification: **1737 passed / 83 skipped**,
-clean Ruff and diff checks. No UI code changed. Leave the current pipeline running locally with this
-timeout fix; no merge or push. The compact machine-readable record remains `conversation-validation.json`
-in this task's outputs; the benchmark script reproduces cases without downloading dependencies/books.
+Decision: use v7 in the local preview, keeping the flag off by default and production unchanged.
+Exact page/frontier/reset/source-change fencing remains intact; selected-passage assistance and
+its existing checks are unchanged. The UI stays unchanged. Backend: **1745 passed / 83 skipped**;
+Ruff and diff checks clean. The compact current record is the task's existing
+`outputs/conversation-validation.json`; the benchmark reproduces the fixtures without new downloads.
+Leave this branch local and unmerged.
