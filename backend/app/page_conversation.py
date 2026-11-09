@@ -6,6 +6,8 @@ import json
 import logging
 import sys
 from uuid import uuid4
+from concurrent.futures import ThreadPoolExecutor
+from threading import BoundedSemaphore
 from time import perf_counter
 
 from fastapi import HTTPException
@@ -21,6 +23,7 @@ from app.conversation_pipeline import (ConversationDraft, DRAFT_SYSTEM, answer_c
                                        compact_candidates, review_escalation, CLARIFICATIONS, BRIEF_DRAFT_SYSTEM)
 from app.cost import CostCeilingExceeded, budgeted_completion, pricing_known
 from app.eval.spoiler_gate import score_recap
+from app.eval.spoiler_gate.synthesis import _read_visibility
 from app.eval.spoiler_gate.binding import unsupported_event_bindings
 from app.read_frontier import requested_snapshot
 from app.retrieval_passages import passage_windows
@@ -34,6 +37,21 @@ from app.llm.jev_budget import budgeted_jev
 from app.conversation_turns import VERSION as TURN_VERSION, REPLY_SYSTEM, QUESTIONS, classify_turn, answer_dialogue
 
 logger = logging.getLogger("mothli.conversation")
+_visibility_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="read-visibility")
+_visibility_slot = BoundedSemaphore(1)
+
+
+def _warm_visibility(text):
+    # Only pure word sets from an already verified prefix. No model calls or stored facts.
+    # One task at a time, no waiting queue; the authoritative scorer still runs every check.
+    if not _visibility_slot.acquire(blocking=False):
+        return None
+    def prepare():
+        try:
+            return _read_visibility(text)
+        finally:
+            _visibility_slot.release()
+    return _visibility_worker.submit(prepare)
 
 
 def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
@@ -213,11 +231,14 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             return payload(AskDraft(insufficient_evidence=True, claims=[]), [])
         facts = source_facts(candidates)
         permitted_text = "\n".join(ch["text"] for ch in chapters)
+        visibility = _warm_visibility(permitted_text) if settings.reader_conversation_routing else None
         read_words = None
 
         def score(text):
             nonlocal read_words
             started_safety = perf_counter()
+            if visibility is not None:
+                visibility.result()
             # Keep the existing future-name oracle/prolepsis tripwire, but validate events against
             # this exact prefix rather than chapter-stamped facts which can legitimately lag it.
             with store.book(book_id) as mem:

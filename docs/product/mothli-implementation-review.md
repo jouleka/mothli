@@ -165,7 +165,10 @@ Jev-cleared claims keep their original citations; no fabricated span audits stan
 Dense requests remain bounded and can still be withheld. No accuracy thresholds were lowered.
 
 Pure immutable lexical/visibility caches avoid rescanning the same exact permitted body. They contain
-word sets, not generated story facts or cached authorization. Source hashes, reading epochs and exact
+word sets, not generated story facts or cached authorization. One bounded CPU worker prepares visibility
+while Terra drafts; the authoritative safety check still waits for and verifies the exact same prefix.
+The field table below predates this last CPU overlap; the final local smoke timing is recorded separately.
+Source hashes, reading epochs and exact
 prefix checks still run on every request. Selected-passage assistance is unchanged. Per-phase timing,
 tokens and sanitized failure traces are logged locally without source text or dialogue. Cache hits
 report their own current timings. The UI distinguishes verification and reading-boundary failures.
