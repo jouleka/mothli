@@ -128,6 +128,30 @@ def test_source_replacement_invalidates_even_an_already_cached_parse(page_env, m
     assert api.post(f"/api/books/{bid}/ask", json={"question":"Why?", "read_frontier":point}).status_code == 409
 
 
+def test_source_hashing_rejects_symlink_escape_before_opening_it(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import app.read_frontier as module
+    data = tmp_path / "data"
+    book_dir = data / "books" / "bksafe"
+    book_dir.mkdir(parents=True)
+    outside = tmp_path / "outside.epub"
+    outside.write_bytes(b"not an admitted source")
+    try:
+        (book_dir / "source.epub").symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation not available")
+    monkeypatch.setattr(module,"load_manifest",lambda *a: {})
+    catalog = SimpleNamespace(get_state=lambda _: {}, get_book=lambda _: {})
+    worker = SimpleNamespace(source_chapters=lambda _:pytest.fail("escaped source was parsed"))
+    original_open = Path.open
+    def checked_open(path, *args, **kwargs):
+        assert path != outside, "escaped source was opened before containment check"
+        return original_open(path,*args,**kwargs)
+    monkeypatch.setattr(Path,"open",checked_open)
+    with pytest.raises(ValueError,match="source is unavailable"):
+        module.source_state("bksafe",catalog,SimpleNamespace(data_dir=str(data)),worker)
+
+
 @pytest.mark.parametrize("escalation", [False, True])
 def test_jev_candidate_prepares_evidence_then_drafts_and_checks_own_citations(page_env, monkeypatch, escalation):
     from types import SimpleNamespace

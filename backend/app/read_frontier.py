@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from app.content_scope import is_content
 from app.ingest.extraction.chapter_text import content_hash_of
-from app.ingest.manifest import load_manifest
+from app.ingest.manifest import load_manifest, source_epub_path
 from app.retrieval_passages import normalize_source
 
 
@@ -53,9 +53,12 @@ def source_state(book_id, catalog, settings, worker):
     manifest = load_manifest(settings.data_dir, book_id)
     # A cached parse must never keep authorizing text after its source has changed on disk.
     try:
-        with (Path(settings.data_dir) / "books" / book_id / "source.epub").open("rb") as source:
+        books_root = (Path(settings.data_dir) / "books").resolve()
+        source_path = Path(source_epub_path(settings.data_dir, book_id)).resolve()
+        source_path.relative_to(books_root)
+        with source_path.open("rb") as source:
             digest = hashlib.file_digest(source, "sha256").hexdigest()
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise ValueError("source is unavailable") from exc
     if book.get("file_hash") and digest != book["file_hash"]:
         raise ValueError("source no longer matches its import")

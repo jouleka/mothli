@@ -11,7 +11,8 @@ files, positions, marks, annotations and correction data remain intact.
 
 - General conversation receives only a verified primary-text prefix, independent of extraction
   progress. Snapshot identity binds book incarnation, source/atom hashes, reset epoch and exact
-  offset. Stale, forged or changed-source boundaries fail before inference. An admitted older
+  offset. File paths use validated book IDs and resolved storage-root containment, rejecting
+  symlink escapes before source hashing. Stale, forged or changed-source boundaries fail before inference. An admitted older
   boundary remains narrow while a page turn is in flight. Reading progress is a monotonic high-water
   mark; moving backward does not authorize an unseen suffix or reset the reading pass.
 - Selected passages are a separate explicitly authorized scope: only the exact reader-supplied
