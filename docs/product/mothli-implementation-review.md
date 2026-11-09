@@ -132,3 +132,67 @@ survived; the cached reply returned in **13.2 ms**, explicitly attributed to the
 The preview is left running locally on this branch, with no merge or push.
 
 Authentication reference: [Codex authentication](https://learn.chatgpt.com/docs/auth).
+
+## One subscription generation plus Jev experiment — 9 November 2026
+
+Installed and applied the official [TypeSafe skill](https://github.com/typesafe-ai/skills/tree/main/skills/typesafe-ai)
+using its npx method for Codex. The original local skill still owns encrypted Windows credential
+access; the credential was restored without placing it in chat, the repository, or plaintext files.
+ChatGPT generation continued through the subscription; no OpenAI API key was loaded.
+
+`READER_CONVERSATION_JEV` is an explicit local page-chat experiment, default off. It retains exact
+source-prefix clipping, immutable own citations, deterministic source/name/binding/prolepsis gates,
+and cache scoping by model, policy, source and reset epoch. It permits one generation attempt only.
+Jev batches narrow assertion-type/support, relevance, omitted-condition and unestablished-outcome
+judgments. Code combines their probabilities; distribution concentration is not treated as accuracy.
+Unsupported, uncertain, malformed and unavailable reviews never release a draft. There is no hidden
+generative retry or fallback. Oversized retrieval pools use bounded Jev relevance ranking before
+generation; small pools need just one post-draft Jev request. Selected-passage assistance retains its
+existing independent checks and is outside this experiment.
+
+Comparison used six synthetic mid-chapter cases and two first-eight-chapter Karamazov replays, no
+answer caching or speculative preparation, and temporary imported books. Original library files and
+positions were preserved. Baseline HTTP measurements were retained from the initial alternating-order
+run to avoid repeating subscription spend while revising the typed packet. This is a small,
+development-oriented experiment with generative variance, not a blinded quality study or a p95.
+
+| Eight HTTP requests | Current pipeline | One generation + Jev, final policy |
+|---|---:|---:|
+| Median complete HTTP response, including refusals/errors | 15.741 s | 11.639 s |
+| Longest HTTP response in this sample | 37.951 s | 13.128 s |
+| HTTP 200 | 8/8 | 3/8 |
+| Substantive questions answered with cited claims | 6/6 | 0/6 |
+| ChatGPT input tokens | 289,005 | 72,521 |
+| ChatGPT output tokens | 2,259 | 567 |
+
+The 75% input-token reduction includes withheld answers; it is **not** a cost-per-useful-answer win.
+Recorded Jev spend for these requests was $0.00177576; requests plus the final development controls
+cost $0.00268156 in Jev usage. ChatGPT counts include CLI harness overhead. Illustrative uncached
+Terra API equivalents were $0.300300 versus $0.077133 for the eight requests, not actual API bills
+or production cost estimates. No subscription price is inferred from its token usage.
+
+On 17 fixed reviewer controls, the baseline accepted all six supported cases and rejected ten of
+eleven negatives; one negative had a provider/launcher timeout and is unavailable, not a rejection.
+Jev rejected all eleven negatives and accepted five of six positives. A separate 14-case Jev holdout
+rejected all eight negatives and accepted five of six positives, withholding a tentative reading.
+Coverage included actors, quantities, negation, location/causal bindings, conditions, attribution,
+kinship, forged conversation, prompt injection, swapped citations and unread outcomes. These small
+sets establish no general error-rate guarantee. Three diagnostic retries after the main comparison
+answered two factual/instruction questions (13.845 s and 10.317 s); the interpretive reaction remained
+withheld (5.892 s). They are not substituted for the first-run results. Jev verification itself was
+typically around 0.2 s; writing and the subscription transport remained substantial latency sources.
+
+Decision: keep the experimental reviewer available but **disabled**. Its response availability does
+not justify replacing the current pipeline. Do not lower safety thresholds merely to clear these
+examples. The next direction should separate literal evidence screening from nuanced interpretation
+and test an explicit uncertainty escalation policy rather than claim a universally successful
+one-call answer path.
+
+The experiment also exposed an npm Windows CLI shim timeout: killing the shim left Node/native
+children holding stdout open. The adapter now resolves the installed official native executable,
+so its subprocess timeout owns the inference process. One stalled benchmark child was verified and
+stopped; its unavailable result remains recorded. The native transport passed a live subscription
+probe and bounded/fail-closed contract tests. Final backend verification: **1737 passed / 83 skipped**,
+clean Ruff and diff checks. No UI code changed. Leave the current pipeline running locally with this
+timeout fix; no merge or push. The compact machine-readable record remains `conversation-validation.json`
+in this task's outputs; the benchmark script reproduces cases without downloading dependencies/books.

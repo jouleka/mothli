@@ -197,10 +197,10 @@ def review_draft(draft, sources, *, question, frontier, scene_sources, coverage_
 
 
 def answer_conversation(question, candidates, *, frontier, known_names, complete,
-                        score, max_output_tokens):
+                        score, max_output_tokens, review=None, max_attempts=2):
     prompt = ask_prompt(question, candidates, frontier=frontier)
     feedback = []
-    for _attempt in range(2):
+    for _attempt in range(max_attempts):
         generated = complete(DRAFT_SYSTEM, ask_repair_prompt(prompt, feedback),
                              schema=ConversationDraft, phase="synthesis", tier="large")
         try:
@@ -218,7 +218,7 @@ def answer_conversation(question, candidates, *, frontier, known_names, complete
             if any(safety[key] for key in (
                     "future_entity_leaks", "prolepsis_hits", "unsupported_event_bindings")):
                 raise AskSafetyError("draft failed the completed-source safety checks")
-            review_draft(draft, sources, question=question, frontier=frontier,
+            (review or review_draft)(draft, sources, question=question, frontier=frontier,
                          scene_sources=[s for s in candidates if s["ordinal"] == frontier],
                          coverage_sources=sources, complete=complete,
                          max_output_tokens=max_output_tokens)

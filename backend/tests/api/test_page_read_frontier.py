@@ -126,3 +126,53 @@ def test_source_replacement_invalidates_even_an_already_cached_parse(page_env, m
     monkeypatch.setattr(app.state.client, "complete", lambda *a, **kw: pytest.fail("changed source reached model"))
     assert api.get(f"/api/books/{bid}/read-frontier").status_code == 409
     assert api.post(f"/api/books/{bid}/ask", json={"question":"Why?", "read_frontier":point}).status_code == 409
+
+
+def test_jev_candidate_uses_one_draft_one_batch_and_separate_cache_policy(page_env, monkeypatch):
+    from types import SimpleNamespace
+    api, bid, app, settings = page_env
+    point = confirm(api, bid)
+    settings.reader_conversation_jev = True
+    paid = []
+    def complete(system, user, tier="cheap", schema=None):
+        assert schema.__name__ == "ConversationDraft"
+        paid.append("draft")
+        assert "UNREAD_CANARY" not in user and "FUTURE_CHAPTER_CANARY" not in user
+        source_id = int(re.search(r"SOURCE \[(\d+)\]", user)[1])
+        return {"clarification":None, "insufficient_evidence":False, "claims":[
+            {"text":"Mara put the cobalt key in a red tin.", "citation_ids":[source_id]}]}, {"in":100,"out":25}
+    def evaluate(state, questions):
+        paid.append("jev")
+        assert "UNREAD_CANARY" not in json.dumps(state)
+        assert "FUTURE_CHAPTER_CANARY" not in json.dumps(state)
+        answers = {}
+        for k, q in questions.items():
+            if q["type"] == "noul":
+                answers[k] = {"type":"noul", "noul":.999 if k == "addresses_message" else .001}
+                continue
+            choice = "supported"
+            answers[k] = {"type":"choice", "choice":choice, "confidence":.999,
+                "probabilities":{option:.999 if option == choice else .0005 for option in q["criteria"]}}
+        return answers, {"in":200,"out":40}
+    app.state.client.jev = SimpleNamespace(model="jev-1.14.0", evaluate=evaluate, close=lambda:None)
+    monkeypatch.setattr(app.state.client, "complete", complete)
+    body = {"question":"Where is the key?", "read_frontier":point}
+    result = api.post(f"/api/books/{bid}/ask", json=body)
+    assert result.status_code == 200, result.text
+    assert paid == ["draft", "jev"]
+    assert api.post(f"/api/books/{bid}/ask", json=body).json()["cached"]
+    assert paid == ["draft", "jev"]
+    settings.reader_conversation_jev = False
+    monkeypatch.setattr(app.state.client, "complete", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("not a cache hit")))
+    # A baseline request must not reuse approval from the experimental reviewer.
+    with pytest.raises(RuntimeError, match="not a cache hit"):
+        api.post(f"/api/books/{bid}/ask", json=body)
+
+
+def test_missing_jev_is_detected_before_spending_on_a_draft(page_env, monkeypatch):
+    api, bid, app, settings = page_env
+    point = confirm(api, bid)
+    settings.reader_conversation_jev = True
+    monkeypatch.setattr(app.state.client, "complete", lambda *a, **kw: pytest.fail("unreviewable paid draft"))
+    response = api.post(f"/api/books/{bid}/ask", json={"question":"What happened?", "read_frontier":point})
+    assert response.status_code == 503

@@ -3,6 +3,7 @@ from copy import copy
 from collections import deque
 import hashlib
 import json
+from time import perf_counter
 
 from fastapi import HTTPException
 
@@ -21,6 +22,9 @@ from app.eval.spoiler_gate.binding import unsupported_event_bindings
 from app.read_frontier import requested_snapshot
 from app.retrieval_passages import passage_windows
 from app.unicode_text import word_tokens
+from app.conversation_jev import DECISION_LIMITS, FIT, SUPPORT, POLICY_VERSION, POLICY, review_with_jev
+from app.llm.jev import JevUnavailable
+from app.llm.jev_budget import budgeted_jev
 
 
 def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
@@ -33,6 +37,9 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(409, "reading context changed; refresh before continuing") from exc
     eff = point["available_chapter"]
+    use_jev = settings.reader_conversation_jev
+    if use_jev and not getattr(client, "jev", None):
+        raise HTTPException(503, "Jev review is not configured")
     question = conversation_question(body.question, body.history, eff)
     query = conversation_retrieval_question(body.question, body.history, eff)
     calls = []
@@ -40,18 +47,33 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
     reviewer.conversation_review_effort = settings.reader_conversation_review_effort
 
     def complete(system, user, *, schema, phase, tier="cheap"):
+        started = perf_counter()
         result = budgeted_completion(catalog, settings, reviewer, book_id, phase=phase,
                                      system=system, user=user, tier=tier, schema=schema)
         model = result.billing_model or reviewer.billing_model(tier)
-        calls.append({"provider": reviewer.provider, "model": model,
+        calls.append({"provider": reviewer.provider, "model": model, "phase":phase,
             "input_tokens": int(result.usage.get("in", 0)),
             "output_tokens": int(result.usage.get("out", 0)), "usd": result.usd,
             "pricing_known": pricing_known(model)})
+        calls[-1]["elapsed_ms"] = round((perf_counter() - started) * 1000, 2)
+        return result.value
+
+    def jev_run(state, questions):
+        started = perf_counter()
+        phase = "jev-source-selection" if "candidates" in state else "conversation-jev"
+        result = budgeted_jev(catalog, settings, client.jev, book_id,
+            phase=phase, state=state, questions=questions)
+        calls.append({"provider": "typesafe", "model": client.jev.model, "phase":phase,
+            "input_tokens": result.usage["in"], "output_tokens": result.usage["out"],
+            "usd": result.usd, "pricing_known": True,
+            "elapsed_ms": round((perf_counter() - started) * 1000, 2)})
         return result.value
 
     scope = (book_id, book["incarnation"], hashlib.sha256(json.dumps([
         point["id"], CONTENT_POLICY_VERSION, "page-conversation-v1", DRAFT_SYSTEM,
         ASK_EVIDENCE_SYSTEM, ASK_JUDGE_SYSTEM,
+        [POLICY_VERSION, POLICY, FIT, SUPPORT, DECISION_LIMITS, client.jev.model, settings.jev_min_probability,
+         settings.jev_min_confidence] if use_jev else "parallel-gpt-review",
         client.extractor_version("large"), client.extractor_version("cheap"),
         getattr(client, "base_url", ""), settings.reader_conversation_review_effort,
     ]).encode()).hexdigest())
@@ -60,8 +82,12 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
 
     def cost_payload(items):
         value = _ask_cost_payload(items)
+        for public, original in zip(value["calls"], items, strict=True):
+            public.update({k: original[k] for k in ("input_tokens", "output_tokens", "elapsed_ms", "phase")})
         if client.provider == "codex-local":
-            value["payer"] = "your ChatGPT subscription"
+            value["payer"] = ("your ChatGPT subscription and TypeSafe account"
+                              if any(c["provider"] == "typesafe" for c in items)
+                              else "your ChatGPT subscription")
         return value
 
     def payload(draft, sources, clarification=None):
@@ -95,14 +121,22 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             return payload(AskDraft(insufficient_evidence=True, claims=[]), [])
         if not _recap_input_fits(settings, reviewer, DRAFT_SYSTEM,
                                  ask_prompt(question, candidates, frontier=eff), schema=ConversationDraft):
-            original = candidates
-            selected = select_sources_bounded(question, candidates,
-                fits=lambda prompt: _recap_input_fits(settings, reviewer, SOURCE_SELECTION_SYSTEM,
-                                                       prompt, schema=SourceSelection),
-                complete=lambda prompt: complete(SOURCE_SELECTION_SYSTEM, prompt,
-                                                 schema=SourceSelection, phase="source-selection"),
-                frontier=eff)
-            candidates = complete_ask_context(query, selected, original, allow_named_fallback=True)
+            if use_jev:
+                from app.llm.jev_tasks import select
+                selected = select(question, candidates, run=jev_run, settings=settings, frontier=eff)
+                candidates = complete_ask_context(query, selected, candidates, allow_named_fallback=True)
+                if not _recap_input_fits(settings, reviewer, DRAFT_SYSTEM,
+                        ask_prompt(question, candidates, frontier=eff), schema=ConversationDraft):
+                    raise HTTPException(413, "source context exceeds the one-draft experiment limit")
+            else:
+                original = candidates
+                selected = select_sources_bounded(question, candidates,
+                    fits=lambda prompt: _recap_input_fits(settings, reviewer, SOURCE_SELECTION_SYSTEM,
+                                                           prompt, schema=SourceSelection),
+                    complete=lambda prompt: complete(SOURCE_SELECTION_SYSTEM, prompt,
+                                                     schema=SourceSelection, phase="source-selection"),
+                    frontier=eff)
+                candidates = complete_ask_context(query, selected, original, allow_named_fallback=True)
         if not candidates:
             return payload(AskDraft(insufficient_evidence=True, claims=[]), [])
         facts = source_facts(candidates)
@@ -121,9 +155,13 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             result["unsupported_event_bindings"] = unsupported_event_bindings(text, facts)
             return result
 
+        def jev_review(draft, sources, **kwargs):
+            return review_with_jev(draft, sources, run=jev_run, settings=settings, **kwargs)
+
         draft, sources, clarification = answer_conversation(question, candidates, frontier=eff,
             known_names=[], complete=complete, score=score,
-            max_output_tokens=settings.cost_max_output_tokens_per_call)
+            max_output_tokens=settings.cost_max_output_tokens_per_call,
+            review=jev_review if use_jev else None, max_attempts=1 if use_jev else 2)
         return payload(draft, sources, clarification)
 
     try:
@@ -137,6 +175,8 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         raise _conversation_limit_error(exc) from exc
     except AnswerBusy as exc:
         raise HTTPException(503, "conversation is busy; retry shortly") from exc
+    except JevUnavailable as exc:
+        raise HTTPException(503, "Jev review unavailable; no unchecked reply was published") from exc
     except AskRetrievalLimit as exc:
         raise HTTPException(413, "read text exceeds the bounded search budget") from exc
     except (AskSafetyError, AskEvidenceError, ValueError) as exc:

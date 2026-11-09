@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     reader_answer_cache: bool = False
     reader_conversation_pipeline: bool = False
     reader_page_context: bool = False
+    reader_conversation_jev: bool = False
     reader_conversation_review_effort: Literal["low", "medium"] = "medium"
     reader_fast_mode: bool = False
     reader_reuse_enabled: bool = False
@@ -127,6 +128,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
+        if self.reader_conversation_jev and (self.deployment_mode != "local" or not self.reader_page_context
+                                             or not self.jev_enabled):
+            raise ValueError("conversation Jev experiment requires local page context and Jev")
         if self.llm_transport == "codex-local" and self.deployment_mode != "local":
             raise ValueError("codex-local is only supported for local testing")
         if self.deployment_mode != "hosted":

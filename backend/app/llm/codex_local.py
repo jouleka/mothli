@@ -7,6 +7,7 @@ adapter is deliberately excluded from hosted mode and API cost/latency guarantee
 """
 import json
 import os
+import platform
 from pathlib import Path
 import shutil
 import subprocess
@@ -21,12 +22,28 @@ _FOREGROUND = threading.BoundedSemaphore(2)
 _BACKGROUND = threading.BoundedSemaphore(1)
 
 
+def _executable():
+    executable = shutil.which("codex")
+    if executable and Path(executable).suffix.lower() in {".cmd", ".bat", ".ps1"}:
+        # npm's Windows shim spawns Node and then the native CLI. Killing only the shim on a
+        # timeout leaves a child holding stdout open, so subprocess.run can wait indefinitely.
+        # Use the official installed native binary directly, following its launcher layout.
+        arch = "aarch64" if platform.machine().lower() in {"arm64", "aarch64"} else "x86_64"
+        package_arch = "arm64" if arch == "aarch64" else "x64"
+        root = Path(executable).parent / "node_modules" / "@openai" / "codex"
+        suffix = Path("vendor") / f"{arch}-pc-windows-msvc" / "bin" / "codex.exe"
+        candidates = [root / "node_modules" / "@openai" / f"codex-win32-{package_arch}" / suffix,
+                      root / suffix]
+        executable = next((str(p) for p in candidates if p.is_file()), None)
+    if not executable:
+        raise ProviderUnavailable("configuration", service="completion")
+    return executable
+
+
 def complete(system, user, *, model, effort, schema, max_output_tokens, timeout, background=False):
     if model != "gpt-6.1-terra" or effort not in {"low", "medium"}:
         raise ValueError("codex-local requires GPT-6.1 Terra with low or medium effort")
-    executable = shutil.which("codex")
-    if not executable:
-        raise ProviderUnavailable("configuration", service="completion")
+    executable = _executable()
     # The CLI owns subscription credentials. Never inherit an API-key override into inference.
     environment = {k: v for k, v in os.environ.items() if k.upper() not in {
         "OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY",

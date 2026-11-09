@@ -106,6 +106,30 @@ def test_local_transport_cannot_be_enabled_for_hosted_mode():
         Settings(_env_file=None, llm_transport="codex-local", deployment_mode="hosted")
 
 
+def test_windows_cli_uses_native_child_so_timeouts_do_not_only_kill_the_npm_shim(tmp_path, monkeypatch):
+    shim = tmp_path / "codex.cmd"
+    shim.write_text("@echo off")
+    native = tmp_path / "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+    native.parent.mkdir(parents=True)
+    native.write_bytes(b"synthetic path probe, never executed")
+    monkeypatch.setattr(codex_local.shutil,"which",lambda _:str(shim))
+    monkeypatch.setattr(codex_local.platform,"machine",lambda:"AMD64")
+    assert codex_local._executable() == str(native)
+
+
+def test_cli_timeout_is_unavailable_review_not_an_approval(monkeypatch):
+    _fake_cli(monkeypatch)
+    original = codex_local.subprocess.run
+    def run(command, **kwargs):
+        if command[1] == "login":
+            return original(command, **kwargs)
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+    monkeypatch.setattr(codex_local.subprocess,"run",run)
+    with pytest.raises(ProviderUnavailable):
+        LLMClient(env={"LLM_TRANSPORT":"codex-local"}).complete(
+            "Review carefully.","Evidence only.",schema=Result,max_output_tokens=100)
+
+
 def test_terra_api_cost_is_separate_from_chatgpt_plan_usage():
     assert pricing_known("gpt-6.1-terra")
     assert usd_of("gpt-6.1-terra", {"in": 1000, "out": 1000}) == pytest.approx(0.006)

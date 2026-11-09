@@ -162,6 +162,20 @@ def test_transport_rejects_invalid_responses_without_leaking_provider_content(fa
         client.close()
 
 
+@pytest.mark.parametrize("probability", [True, "0.9", -0.1, 1.1, None])
+def test_noul_transport_requires_a_real_bounded_probability(probability):
+    def handler(request):
+        return httpx.Response(200, json={"model":"jev-1.14.0",
+            "answers":{"q":{"type":"noul","noul":probability}},
+            "usage":{"input_tokens":10,"output_tokens":3}})
+    client = JevClient(api_key="synthetic", model="jev-1.14.0", transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(JevUnavailable):
+            client.evaluate({}, {"q":{"type":"noul","instructions":"Is the text supported?"}})
+    finally:
+        client.close()
+
+
 def test_jev_spend_is_reserved_and_settled_including_failed_or_over_limit_calls():
     class Catalog:
         def reserve_cost(self, *args, **kwargs):
