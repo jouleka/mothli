@@ -428,6 +428,10 @@ export function AskTheBook({
             ? /cost ceiling/i.test(reason.message)
               ? BOOK_USAGE_LIMIT_MESSAGE
               : "Mothli needs a short break. Try again shortly."
+            : reason instanceof ApiError && reason.status === 502 && /cleared against your read pages/i.test(reason.message)
+            ? "I couldn’t verify that against your read pages. Try naming the person or moment you mean."
+            : reason instanceof ApiError && reason.status === 409
+            ? "Your reading position changed. Please try again from this page."
             : "I couldn’t get a reply. Try again?";
         session.update({ error: message });
       }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import heapq
 import json
 import re
+from functools import lru_cache
 from collections.abc import Callable, Iterable
 from typing import Any, Literal
 
@@ -338,6 +339,16 @@ def judge_ask_draft(client, draft, sources, *, tier="cheap", complete=None, ques
 _passage_windows = passage_windows
 
 
+@lru_cache(maxsize=2048)
+def _source_terms(text):
+    """Immutable lexical work only, keyed by exact body bytes. No IDs, facts or answers.
+
+    Callers must still fence and verify source text before lookup. This never authorizes a
+    cached chapter or reading position; changed/clipped bodies use different keys.
+    """
+    return frozenset(content_words(text))
+
+
 def retrieve_ask_sources(
     question: str,
     *,
@@ -408,7 +419,7 @@ def retrieve_ask_sources(
         nonlocal serial
         if not text:
             return None
-        terms = content_words(text)
+        terms = _source_terms(text) if len(text) <= 6000 else frozenset(content_words(text))
         shared = len(query_words & terms)
         # Preserve the named subject before generic wording such as 'the text read so far'. The
         # independent semantic ranking below still retrieves paraphrases with no shared words.

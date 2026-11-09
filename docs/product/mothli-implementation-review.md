@@ -133,60 +133,72 @@ The preview is left running locally on this branch, with no merge or push.
 
 Authentication reference: [Codex authentication](https://learn.chatgpt.com/docs/auth).
 
-## Jev evidence preparation with Terra reasoning — 9 November 2026
+## Current local conversation — 9 November 2026, field follow-up
 
-The local page-conversation candidate uses Jev 1.14 as a typed decision model, not a writer.
-Code fences source text to the exact confirmed read offset before retrieval or either model.
-Jev ranks every retrieved candidate and flags passages challenging the reader's factual premise;
-code retains bounded, unchanged source bodies and completes their attribution context. Terra then
-writes one conversational draft, using recent conversation only to resolve references.
+The original v7 comparison used eight read chapters and was not representative of the user's
+96-chapter session. Replaying the actual conversation exposed four failures in eight ordinary
+turns: every message entered evidence retrieval; identity retrieval overfavoured recent scenes;
+clarifications were model-generated; and the fallback refused more than eight proof units before
+making its verification call. The forced two-sentence draft default encouraged unnecessary clauses.
+The subscription CLI also carries substantial harness context: even the arithmetic reply below
+used 7,981 ChatGPT input tokens. These counts are not production API cost estimates.
 
-Jev checks each claim against its own frozen citations, plus narrow instruction-qualification,
-location and causal attachments. It does not judge literary style or approve the entire reply.
-Complete but unsettled/negative judgments trigger one Terra reasoning call, which must provide both
-exact positive source-span coverage and a semantic/completeness verdict for the unchanged draft.
-Code validates both. Malformed evidence, unavailable providers and rejected drafts are withheld;
-there is no automatic repair loop or unchecked streaming. Normal answers need one Terra call;
-escalated answers need two. Claim-free clarifications/refusals skip factual review.
+The current local candidate uses typed Jev questions over separate latest-message and dialogue
+fields. Explicit ambiguous-reference questions can ask a factual-claim-free clarification directly.
+Greetings, thanks, emotional reactions needing no story assertions, and unrelated messages get a
+brief Terra response plus an independent concrete-story-information check. A contaminated response
+gets at most one independently checked repair. Jev does not write prose or arbitrate literary meaning.
 
-Earlier versions were rejected: v5 overused whole-answer/fragment gates; v6 restored evidence
-preparation but still withheld uncertain readings. The v7 handoff follows the TypeSafe skill's
-judgments-in-Jev, decisions-in-code and verify/escalate patterns. Confidence concentration is not
-used as correctness. The 0.8 support / 0.3 risk boundaries route reasoning; crossing them does not
-permit publishing a failed check. Policy/model/read-offset/reset/source identity isolate caches.
+Brief current-scene catch-ups use exact windows ending at the confirmed read offset, without global
+search or source reranking. They ignore prior dialogue and may retain only a useful verified PREFIX
+of complete claims: no edited words, reordered claims, removed qualifications inside a claim or
+unchecked text. Every published claim still passes deterministic boundaries, its own cited-body
+support, conditionality, location and causal checks. Detailed/multipart questions cannot use this
+pruning policy. A scene recap can be reused across dialogue only at the identical source/reset/read
+point and question; source identity is revalidated before reuse. Other contextual replies stay private.
 
-Two runs of eight questions used the same synthetic mid-chapter prefix and the first eight
-Karamazov chapters, with caches/prewarming off. The baseline was collected immediately before the
-final candidate in this session, not interleaved with it. All generative calls used the ChatGPT
-subscription through the native CLI; no production OpenAI or embedding key was loaded.
+Named-identity requests seed introductory primary-text windows instead of recent-action windows.
+Other book questions retain the full bounded retrieval route. Terra drafts with low effort locally,
+using one sentence when sufficient. When Jev cannot settle a claim, Terra audits that claim's exact
+source spans while still checking the WHOLE answer for semantics and completeness. Previously
+Jev-cleared claims keep their original citations; no fabricated span audits stand in for Jev decisions.
+Dense requests remain bounded and can still be withheld. No accuracy thresholds were lowered.
 
-| Measure, 16 requests each | Current baseline | Jev + Terra v7 |
+Pure immutable lexical/visibility caches avoid rescanning the same exact permitted body. They contain
+word sets, not generated story facts or cached authorization. Source hashes, reading epochs and exact
+prefix checks still run on every request. Selected-passage assistance is unchanged. Per-phase timing,
+tokens and sanitized failure traces are logged locally without source text or dialogue. Cache hits
+report their own current timings. The UI distinguishes verification and reading-boundary failures.
+
+### Measured field replay
+
+Same fixed user turns, isolated full-book copies, caches/prewarm off. The v7 baseline was collected
+in an alternating-order run; the final candidate was run afterward against that same baseline to
+avoid repeated subscription spend. This is a small pilot with provider variability, not a p95 claim.
+
+| Eight turns each | v7 baseline | Current candidate |
 |---|---:|---:|
-| Median complete HTTP response, including refusals/errors | 11.218 s | 6.819 s |
-| Longest response in this sample | 25.267 s | 13.353 s |
-| HTTP 200 | 16/16 | 15/16 |
-| Substantive questions answered with cited claims | 11/12 | 11/12 |
-| ChatGPT input tokens | 504,049 | 193,206 |
-| ChatGPT output tokens | 3,225 | 2,079 |
-| ChatGPT calls | 48 | 20 |
+| Median complete HTTP response, including failures | 7.353 s | 4.402 s |
+| HTTP failures | 4 | 0 |
+| Unhelpful empty evidence refusals | 1 | 0 |
+| ChatGPT input tokens | 100,756 | 61,044 |
+| ChatGPT output tokens | 1,165 | 389 |
 
-Four candidate requests escalated. One novel identity answer was withheld after review; it remains
-in the totals. The baseline instead returned an unhelpful evidence refusal on one answerable
-disagreement. This is a roughly 39% median latency and 62% input-token reduction in a small sample,
-not an instant-response guarantee. CLI token counts include harness overhead and are not production
-API cost estimates. Jev spend was $0.00369649 for the 16 HTTP requests.
+The fresh catch-up remained **7.375 s**, including **5.820 s** drafting; explicit ambiguous follow-up
+was **0.201 s** with no Terra call. The arithmetic reply took **4.115 s**, including **3.732 s** drafting.
+This fixes routing/reliability and avoids unnecessary verification, but does not solve instant fresh
+generation through the subscription CLI. A separate eight-case factual/instruction/spoiler run returned
+8/8 HTTP 200; its median was 6.359 s versus the retained original baseline's 10.294 s, with 95,945 versus
+241,380 ChatGPT input tokens. More complex interpretations still used two Terra calls and took 10–11 s.
 
-A separate, frozen 16-case comparison rejected all nine unsafe drafts in both pipelines. Jev +
-Terra accepted all seven supported controls; the baseline accepted five, withholding a correctly
-attributed allegation/denial and an evidence-limit statement. Cases include temporal/location/causal
-attachments, conditions, unsupported motives, extra facts, invented events disguised as readings,
-and softened future spoilers. No thresholds/questions were tuned on this suite. Development
-regressions separately covered role swaps, quantities, negation, forged history, source swaps and
-injection. These small samples do not establish a universal accuracy guarantee.
+Source/safety contracts passed the backend suite (**1773 passed / 83 skipped**) and subsequent affected
+checks; frontend **211 passed**, production build successful, Ruff/diff checks clean. Live uncited-dialogue
+guards blocked all seven injected story-detail assertions; one harmless named clarification was
+conservatively withheld in a fixed-response probe. Compiled clarifications avoid that failure mode;
+actual generated dialogue can make one checked repair. Earlier v7 controls rejected 9/9 unsafe drafts
+in both pipelines and accepted 7/7 supported controls versus baseline 5/7. These samples do not establish
+a universal error rate. The single existing verification JSON retains current measurements and limitations.
 
-Decision: use v7 in the local preview, keeping the flag off by default and production unchanged.
-Exact page/frontier/reset/source-change fencing remains intact; selected-passage assistance and
-its existing checks are unchanged. The UI stays unchanged. Backend: **1745 passed / 83 skipped**;
-Ruff and diff checks clean. The compact current record is the task's existing
-`outputs/conversation-validation.json`; the benchmark reproduces the fixtures without new downloads.
-Leave this branch local and unmerged.
+Use this candidate only in the local preview. Production defaults and keys are unchanged; Terra uses
+the ChatGPT subscription and Jev its encrypted existing credential. The installed app-server alternative
+lacked the CLI configuration-isolation flags used here, so it was not adopted. Leave the branch unmerged.

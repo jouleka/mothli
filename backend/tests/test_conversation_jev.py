@@ -6,7 +6,7 @@ import pytest
 from app.ask import AskDraft
 from app.ask_evidence import AskEvidenceError
 from app.config import Settings
-from app.conversation_jev import prepare_context, review_packet, review_with_jev
+from app.conversation_jev import prepare_context, review_packet, review_with_jev, review_recap_prefix, JevNeedsReasoning
 from app.conversation_pipeline import answer_conversation
 
 SOURCES = [dict(id=1, ordinal=1, chapter_key="one", title="One", text="Mara lent Jonas a key."),
@@ -107,3 +107,39 @@ def test_preparation_plans_all_packets_before_any_paid_call():
     with pytest.raises(Exception, match="bounded Jev context"):
         prepare_context("Where?", [{**SOURCES[0], "text": "x" * 30001}], frontier=1,
                         run=run, settings=SimpleNamespace(jev_model="jev-1.14.0"))
+
+
+@pytest.mark.parametrize("first_bad", [False, True])
+def test_recap_keeps_only_a_useful_verified_prefix_with_original_citations(first_bad):
+    draft = AskDraft(insufficient_evidence=False,claims=[
+        {"text":"Mara lent Jonas a key.","citation_ids":[1]},
+        {"text":"Nell kept three coins.","citation_ids":[2]}])
+    def run(state, questions):
+        values = positive(questions)
+        for k in values:
+            if k.endswith("_scene"):
+                values[k] = {"noul":.99}
+        values["c0_unestablished_location" if first_bad else "c1_unestablished_location"]["noul"] = .5
+        return values
+    def invoke():
+        return review_recap_prefix(draft,SOURCES,question="Catch me up",frontier=1,run=run,settings=SETTINGS)
+    if first_bad:
+        with pytest.raises(JevNeedsReasoning):
+            invoke()
+    else:
+        value = invoke()
+        assert value.claims == draft.claims[:1]
+        assert value.claims[0].citation_ids == [1]
+
+
+def test_only_unsettled_claim_ids_are_sent_for_reasoning():
+    draft = AskDraft(insufficient_evidence=False,claims=[
+        {"text":"Mara lent Jonas a key.","citation_ids":[1]},
+        {"text":"Nell kept three coins.","citation_ids":[2]}])
+    def run(state,questions):
+        answers=positive(questions)
+        answers["c1_unestablished_location"]["noul"]=.5
+        return answers
+    with pytest.raises(JevNeedsReasoning) as exc:
+        review_with_jev(draft,SOURCES,question="What happened?",frontier=1,run=run,settings=SETTINGS)
+    assert exc.value.claim_ids == [2]

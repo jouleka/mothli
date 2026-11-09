@@ -53,6 +53,14 @@ beforeEach(() => {
 });
 
 describe("Mothli conversation", () => {
+  test("explains a source verification failure without publishing an unchecked answer", async () => {
+    mocks.askBook.mockRejectedValue(new ApiError("reply could not be cleared against your read pages", 502));
+    render(<AskTheBook {...props} />);
+    submit("Who was that?");
+    await screen.findByText("I couldn’t verify that against your read pages. Try naming the person or moment you mean.");
+    expect(screen.queryByText(answer.claims[0].text)).toBeNull();
+  });
+
   test("confirms the visible page before sending and rejects a different source boundary", async () => {
     const point = {id:"a".repeat(64), atom:2, offset:120, position_epoch:0, available_chapter:2};
     let confirm!: (value: typeof point) => void;

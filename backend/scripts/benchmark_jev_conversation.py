@@ -132,6 +132,112 @@ def heldout_probes():
                  else "What does the passage establish?") for name, text, reply, expected in cases]
 
 
+def benchmark_interactive(args):
+    """Replay real conversational failures on isolated books; no originals or keys changed."""
+    import logging
+    traces = []
+    class Trace(logging.Handler):
+        def emit(self, record):
+            traces.append(json.loads(record.getMessage()))
+    logger = logging.getLogger("mothli.conversation")
+    handler = Trace()
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    result = {"review_policy":POLICY_VERSION,"method":"One alternating-order pair per fixed question, no caches/prewarm. "
+        "v7 = Jev evidence pipeline with medium drafting; candidate = typed turn routing, "
+        "recent-scene recap and low drafting. Same strict source/spoiler verification. "
+        "Subscription CLI tokens include harness overhead; not API billing.", "rows":[]}
+    previous = json.loads(args.output.read_text(encoding="utf-8")).get("interactive_followups", {})
+    if args.reuse_baseline and previous:
+        result["rows"] = [r for r in previous["rows"] if r["mode"] == "v7"]
+        result["previous_candidate"] = previous.get("summary", {}).get("candidate", {})
+        result["method"] += " v7 baseline reused from immediately preceding paired run. Revised candidate collected afterward, not interleaved."
+    def save():
+        document = json.loads(args.output.read_text(encoding="utf-8"))
+        document["interactive_followups"] = result
+        args.output.write_text(json.dumps(document, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+    try:
+        with tempfile.TemporaryDirectory(prefix="mothli-interactive-") as directory:
+            settings = Settings(_env_file=None, data_dir=directory, llm_transport="codex-local",
+                openai_api_key=None, anthropic_api_key=None, embed_api_key=None,
+                openai_base_url=None, embed_base_url=None, embed_provider="stub", typesafe_api_key=None,
+                jev_enabled=True, jev_windows_credential=True, jev_model="jev-1.14.0",
+                reader_page_context=True, reader_conversation_pipeline=True, reader_conversation_jev=True,
+                reader_conversation_review_effort="low", reader_answer_cache=False,
+                reader_prepare_enabled=False, recap_prewarm=False, reader_fast_mode=False,
+                cost_max_usd_per_book=.25)
+            app = create_app(settings)
+            with TestClient(app, raise_server_exceptions=False) as api:
+                app.state.client.timeout = 45
+                observations = []
+                original_complete = app.state.client.complete
+                def observe_complete(*a, **kw):
+                    value, usage = original_complete(*a, **kw)
+                    if kw.get("schema").__name__ in {"ConversationDraft", "ConversationReply", "ConversationEscalation"}:
+                        observations.append({"schema":kw["schema"].__name__, "value":value})
+                    return value, usage
+                app.state.client.complete = observe_complete
+                original_evaluate = app.state.client.jev.evaluate
+                def observe_jev(state, questions, **kw):
+                    value, usage = original_evaluate(state,questions,**kw)
+                    if "claim_1" in state or "reply" in state:
+                        observations.append({"jev":value})
+                    return value, usage
+                app.state.client.jev.evaluate = observe_jev
+                book = api.post("/api/books",files={"file":("novel.epub",args.source_epub.read_bytes(),"application/epub+zip")})
+                book.raise_for_status()
+                bid = book.json()["book_id"]
+                app.state.catalog.set_position(bid,"epubcfi(/6/198)",96)
+                boundary = api.get(f"/api/books/{bid}/read-frontier").json()
+                identity = "Alyosha, also called Alexey Fyodorovitch Karamazov, is the youngest brother of Ivan and Dmitri. The narrator describes him as a lover of humanity who adopted monastic life; he also cares deeply for the boys gathered around Ilusha."
+                recap = "Mitya was sentenced, and Ilusha died two days later; at Ilusha’s funeral, Alyosha told the boys his brother was innocent and the valet had killed their father. Alyosha urged the boys to be kind and honest, never forget one another, and keep Ilusha’s memory in their hearts."
+                def history(*turns):
+                    return [dict(role="user" if i%2==0 else "assistant",content=text,as_of_chapter=96)
+                            for i,text in enumerate(turns)]
+                first = history("Who is Alyosha?",identity)
+                recent = history("Who is Alyosha?",identity,"Catch me up",recap)
+                cases = [("catch-up","Catch me up",first),
+                    ("who-was-that","Who was that?",recent),
+                    ("thats-it","thats it?",recent),
+                    ("greeting","Hey Mothli",[]),
+                    ("thanks","Thanks, that helps!",first),
+                    ("unrelated","What's 2 + 2?",[]),
+                    ("reaction","That was sad.",recent),
+                    ("identity","Who is Alyosha?",[])]
+                for i,(name,question,turns) in enumerate(cases):
+                    for mode in (("v7","candidate") if i%2==0 else ("candidate","v7")):
+                        if args.reuse_baseline and mode == "v7":
+                            continue
+                        observations.clear()
+                        settings.reader_conversation_routing = mode == "candidate"
+                        settings.reader_conversation_draft_effort = "low" if mode == "candidate" else "medium"
+                        traces.clear()
+                        before = len(app.state.catalog.get_costs(bid))
+                        started = perf_counter()
+                        response = api.post(f"/api/books/{bid}/ask",json={"question":question,
+                            "history":turns,"read_frontier":boundary})
+                        data = response.json()
+                        row = {"id":name,"mode":mode,"seconds":round(perf_counter()-started,4),
+                            "status":response.status_code,"claims":[c["text"] for c in data.get("claims",[])],
+                            "message":data.get("message"),"insufficient_evidence":data.get("insufficient_evidence"),
+                            "detail":data.get("detail"),"trace":list(traces),
+                            "observations":list(observations),
+                            **totals(app.state.catalog.get_costs(bid)[before:])}
+                        result["rows"].append(row)
+                        save()
+                        print(json.dumps({k:row[k] for k in ["id","mode","seconds","status","chatgpt_calls"]}),flush=True)
+    finally:
+        logger.removeHandler(handler)
+    result["summary"] = {mode:{"requests":len(rows),"median_seconds":median(r["seconds"] for r in rows),
+        "errors":sum(r["status"]!=200 for r in rows),
+        "empty_evidence_refusals":sum(r["insufficient_evidence"] is True for r in rows),
+        "chatgpt_input_tokens":sum(r["chatgpt_input_tokens"] for r in rows),
+        "chatgpt_output_tokens":sum(r["chatgpt_output_tokens"] for r in rows)}
+        for mode in ["v7","candidate"] if (rows:=[r for r in result["rows"] if r["mode"]==mode])}
+    save()
+    print(json.dumps(result["summary"]),flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -141,7 +247,11 @@ def main():
     parser.add_argument("--holdouts-only", action="store_true")
     parser.add_argument("--requests-only", action="store_true")
     parser.add_argument("--diagnose", nargs="+")
+    parser.add_argument("--interactive", action="store_true")
+    parser.add_argument("--routed-candidate", action="store_true")
     args = parser.parse_args()
+    if args.interactive:
+        return benchmark_interactive(args)
     record = {"status":"running", "model":"gpt-6.1-terra", "jev_model":"jev-1.14.0",
         "policy_version":POLICY_VERSION,
         "transport":"ChatGPT subscription; TypeSafe API", "end_to_end":[], "review_controls":[],
@@ -155,7 +265,8 @@ def main():
                 "summary": prior.get("summary"), "decision": "disabled: excessive withholding"}
     if args.reuse_baseline:
         prior = json.loads(args.output.read_text(encoding="utf-8"))["jev_experiment"]
-        record["end_to_end"] = [r for r in prior["end_to_end"] if r["mode"] == "baseline"]
+        record["end_to_end"] = [r for r in prior["end_to_end"] if r["mode"] == "baseline"
+                                and r["repetition"] <= args.repetitions]
         record["review_controls"] = [r for r in prior["review_controls"]
                                      if (args.requests_only or r["mode"] == "baseline") and r["accepted"] is not None]
         record["method"] += " Baseline HTTP requests reused from the immediately preceding run in this session; same native transport, prompts, inputs and disabled caches. Candidate rerun afterward, not interleaved with the reused baseline."
@@ -171,7 +282,7 @@ def main():
         record["status"] = "running-diagnostics"
     def save():
         existing = json.loads(args.output.read_text(encoding="utf-8")) if args.output.exists() else {}
-        existing["jev_experiment"] = record
+        existing["routed_fact_checks" if args.routed_candidate else "jev_experiment"] = record
         args.output.write_text(json.dumps(existing, ensure_ascii=False, indent=2)+"\n",encoding="utf-8")
     with tempfile.TemporaryDirectory(prefix="mothli-jev-bench-") as directory:
         settings = Settings(_env_file=None, data_dir=directory, llm_transport="codex-local",
@@ -239,6 +350,8 @@ def main():
                         if args.reuse_baseline and mode == "baseline":
                             continue
                         settings.reader_conversation_jev = mode == "jev"
+                        settings.reader_conversation_routing = args.routed_candidate and mode == "jev"
+                        settings.reader_conversation_draft_effort = "low" if settings.reader_conversation_routing else "medium"
                         captured.clear()
                         before = len(app.state.catalog.get_costs(book_id))
                         started = perf_counter()

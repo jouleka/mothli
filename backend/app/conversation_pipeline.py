@@ -87,6 +87,13 @@ INTERPRETATION_REVIEW = (
     "own complete cited support. An unsupported definite motive or outcome must fail."
 )
 
+BRIEF_DRAFT_SYSTEM = DRAFT_SYSTEM.replace(
+    "Otherwise speak directly and warmly in TWO SHORT SENTENCES TOTAL by default, one sentence per "
+    "claim, about 15-30 words each.",
+    "Speak directly and warmly. Use one short sentence when enough; add a second only for necessary "
+    "detail. One sentence per claim, usually 15-40 words total.",
+)
+
 
 def compact_candidates(candidates):
     """Coalesce exact contained windows at the SAME recorded source location, losing no text.
@@ -115,7 +122,7 @@ def compact_candidates(candidates):
     return list(retained.values())
 
 
-def _own_evidence_prompt(draft, sources, question, claim_ids):
+def _own_evidence_prompt(draft, sources, question, claim_ids, *, semantic_context=False):
     # Keep original claim/unit IDs, but positive evidence is restricted to that claim's
     # frozen own citations. Other claims and sources may not fill a missing proof link.
     text = evidence_prompt(draft.model_dump(mode="json"), sources,
@@ -126,6 +133,14 @@ def _own_evidence_prompt(draft, sources, question, claim_ids):
     for claim in packet["claims"]:
         ids = draft.claims[claim["claim_id"] - 1].citation_ids
         claim["sources"] = [available[i] for i in ids]
+    if semantic_context:
+        packet["remaining_answer_claims"] = [{"claim_id":i, "text":claim.text,
+            "own_cited_sources":[available[k] for k in claim.citation_ids]}
+            for i,claim in enumerate(draft.claims,1) if i not in claim_ids]
+        packet["semantic_review_scope"] = (
+            "Check the whole answer in answer_context for factual support, future outcomes and "
+            "answer completeness. Each claim's own bodies are nested in claims or remaining_answer_claims. "
+            "Return positive per-unit span audits only for the requested claims, keeping original IDs.")
     packet["review_scope"] = (
         "Audit every requested original unit in order, using ONLY sources nested within its "
         "own claim. Other claims, the question, conversation and location hints are not proof. "
@@ -200,7 +215,7 @@ def review_draft(draft, sources, *, question, frontier, scene_sources, coverage_
     complete_evidence_citations(value, sources, {"claim_audits": audits})
 
 
-def review_escalation(draft, sources, *, question, complete, max_output_tokens, **_unused):
+def review_escalation(draft, sources, *, question, complete, max_output_tokens, claim_ids=None, **_unused):
     """Review the unchanged draft without Jev's verdicts, scores, or suggested explanations.
 
     This is an explicit exception path, not another routine generation or a silent repair.
@@ -210,11 +225,11 @@ def review_escalation(draft, sources, *, question, complete, max_output_tokens, 
     from app.ask_evidence import validate_evidence_audit
 
     value = draft.model_dump(mode="json")
-    batches = evidence_review_batches(value, sources, max_output_tokens=max_output_tokens)
+    batches = evidence_review_batches(value, sources, max_output_tokens=max_output_tokens, claim_ids=claim_ids)
     if len(batches) != 1:
         raise AskEvidenceError()
     result = complete(ASK_EVIDENCE_SYSTEM + "\n" + ASK_JUDGE_SYSTEM + INTERPRETATION_REVIEW,
-        _own_evidence_prompt(draft, sources, question, batches[0]),
+        _own_evidence_prompt(draft, sources, question, batches[0], semantic_context=True),
         schema=ConversationEscalation, phase="conversation-escalation", tier="large")
     parsed = ConversationEscalation.model_validate(result, strict=True)
     if parsed.references_future or parsed.unsupported_claims or parsed.missing_details:
@@ -225,17 +240,19 @@ def review_escalation(draft, sources, *, question, complete, max_output_tokens, 
         own = set(draft.claims[claim["claim_id"] - 1].citation_ids)
         if any(ref["source_id"] not in own for unit in claim["units"] for ref in unit["evidence"]):
             raise AskEvidenceError()
-    complete_evidence_citations(value, sources, audit)
+    if claim_ids is None:
+        complete_evidence_citations(value, sources, audit)
 
 
 def answer_conversation(question, candidates, *, frontier, known_names, complete,
-                        score, max_output_tokens, review=None, max_attempts=2, context_notes=""):
+                        score, max_output_tokens, review=None, max_attempts=2, context_notes="",
+                        draft_system=DRAFT_SYSTEM, allow_verified_prefix=False):
     prompt = ask_prompt(question, candidates, frontier=frontier)
     if context_notes:
         prompt += "\n" + context_notes
     feedback = []
     for _attempt in range(max_attempts):
-        generated = complete(DRAFT_SYSTEM, ask_repair_prompt(prompt, feedback),
+        generated = complete(draft_system, ask_repair_prompt(prompt, feedback),
                              schema=ConversationDraft, phase="synthesis", tier="large")
         try:
             generated = ConversationDraft.model_validate(generated, strict=True)
@@ -243,19 +260,34 @@ def answer_conversation(question, candidates, *, frontier, known_names, complete
             if draft.insufficient_evidence:
                 return draft, [], CLARIFICATIONS.get(generated.clarification)
             draft = complete_ask_citations(draft, candidates, known_names=known_names)
-            sources = cited_sources(draft, candidates)
-            if len(sources) > 6:
-                raise AskSafetyError("draft needs more than six source passages")
-            draft = validate_ask_draft(draft, sources, known_names=known_names,
-                                       defer_lexical_to_judge=True)
-            safety = score(draft_text(draft))
-            if any(safety[key] for key in (
-                    "future_entity_leaks", "prolepsis_hits", "unsupported_event_bindings")):
-                raise AskSafetyError("draft failed the completed-source safety checks")
-            (review or review_draft)(draft, sources, question=question, frontier=frontier,
+            original = draft
+            sizes = range(len(draft.claims), 0, -1) if allow_verified_prefix else [len(draft.claims)]
+            for size in sizes:
+                draft = AskDraft(insufficient_evidence=False, claims=original.claims[:size])
+                sources = cited_sources(draft, candidates)
+                try:
+                    if len(sources) > 6:
+                        raise AskSafetyError("draft needs more than six source passages")
+                    draft = validate_ask_draft(draft, sources, known_names=known_names,
+                                               defer_lexical_to_judge=True)
+                    safety = score(draft_text(draft))
+                    if any(safety[key] for key in (
+                            "future_entity_leaks", "prolepsis_hits", "unsupported_event_bindings")):
+                        raise AskSafetyError("draft failed the completed-source safety checks")
+                    break
+                except AskSafetyError:
+                    if not allow_verified_prefix or size == 1:
+                        raise
+            reviewed = (review or review_draft)(draft, sources, question=question, frontier=frontier,
                          scene_sources=[s for s in candidates if s["ordinal"] == frontier],
                          coverage_sources=sources, complete=complete,
                          max_output_tokens=max_output_tokens)
+            if reviewed is not None:
+                if not isinstance(reviewed, AskDraft) or reviewed != AskDraft(
+                        insufficient_evidence=False, claims=draft.claims[:len(reviewed.claims)]):
+                    raise AskEvidenceError()
+                draft = reviewed
+                sources = cited_sources(draft, candidates)
             return draft, sources, None
         except (AskSafetyError, AskEvidenceError) as exc:
             if isinstance(exc, AskEvidenceError) and not exc.repairable:

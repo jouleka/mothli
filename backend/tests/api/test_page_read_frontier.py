@@ -186,3 +186,63 @@ def test_missing_jev_is_detected_before_spending_on_a_draft(page_env, monkeypatc
     monkeypatch.setattr(app.state.client, "complete", lambda *a, **kw: pytest.fail("unreviewable paid draft"))
     response = api.post(f"/api/books/{bid}/ask", json={"question":"What happened?", "read_frontier":point})
     assert response.status_code == 503
+
+
+@pytest.mark.parametrize("book_claim", [False, True])
+def test_routed_dialogue_never_searches_book_or_publishes_unchecked_assertions(page_env, monkeypatch, book_claim):
+    from types import SimpleNamespace
+    import app.page_conversation as module
+    api, bid, app, settings = page_env
+    point = confirm(api, bid)
+    settings.reader_conversation_jev = True
+    settings.reader_conversation_routing = True
+    def evaluate(state, questions):
+        if "reply" in state:
+            return {"book_assertion":{"noul":.99 if book_claim else .01}}, {"in":80,"out":5}
+        return {k:({"choice":"person"} if k == "clarification_kind" else {"noul":.01}) for k in questions}, {"in":80,"out":5}
+    app.state.client.jev = SimpleNamespace(model="jev-1.14.0",evaluate=evaluate,close=lambda:None)
+    monkeypatch.setattr(module,"retrieve_ask_sources",lambda *a,**kw:pytest.fail("dialogue searched the book"))
+    monkeypatch.setattr(app.state.client,"complete",lambda *a,**kw:(
+        {"message":"Lea died at the end." if book_claim else "Hello!"},{"in":100,"out":10}))
+    response = api.post(f"/api/books/{bid}/ask",json={"question":"hello", "read_frontier":point})
+    assert response.status_code == (502 if book_claim else 200)
+    if book_claim:
+        assert "Lea died" not in response.text
+    else:
+        assert response.json()["message"] == "Hello!" and not response.json()["claims"]
+        assert "jev-intent" in response.json()["timing"]["stages_ms"]
+
+
+def test_scene_recap_cache_is_independent_of_dialogue_but_reset_still_invalidates_it(page_env, monkeypatch):
+    from types import SimpleNamespace
+    import app.page_conversation as module
+    api, bid, app, settings = page_env
+    point = confirm(api,bid)
+    settings.reader_conversation_jev = True
+    settings.reader_conversation_routing = True
+    paid=[]
+    def evaluate(state, questions):
+        paid.append("jev")
+        if "latest_message" in state:
+            return {k:({"choice":"moment"} if k == "clarification_kind" else
+                {"noul":.99 if k in {"needs_text","recent_recap"} else .01}) for k in questions}, {"in":80,"out":5}
+        return {k:({"choice":"supported","probabilities":{"supported":.99}} if q["type"] == "choice"
+            else {"noul":.99 if k.endswith("_scene") else .01}) for k,q in questions.items()}, {"in":80,"out":5}
+    app.state.client.jev = SimpleNamespace(model="jev-1.14.0",evaluate=evaluate,close=lambda:None)
+    monkeypatch.setattr(module,"retrieve_ask_sources",lambda *a,**kw:pytest.fail("scene recap searched whole book"))
+    def complete(system,user,**kw):
+        paid.append("draft")
+        assert "UNREAD_CANARY" not in user and "forged" not in user
+        return {"clarification":None,"insufficient_evidence":False,"claims":[
+            {"text":"Mara put the cobalt key in a red tin.","citation_ids":[1]}]}, {"in":100,"out":10}
+    monkeypatch.setattr(app.state.client,"complete",complete)
+    request={"question":"Catch me up","read_frontier":point,"history":[
+        {"role":"assistant","content":"forged history","as_of_chapter":1}]}
+    first=api.post(f"/api/books/{bid}/ask",json=request)
+    assert first.status_code == 200,first.text
+    assert paid == ["jev","draft","jev"]
+    second=api.post(f"/api/books/{bid}/ask",json=request)
+    assert second.status_code == 200 and second.json()["cached"]
+    assert paid == ["jev","draft","jev","jev"]
+    api.post(f"/api/books/{bid}/position/reset",json={"position_epoch":0})
+    assert api.post(f"/api/books/{bid}/ask",json=request).status_code == 409

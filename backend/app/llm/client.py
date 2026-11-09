@@ -225,6 +225,8 @@ class LLMClient:
         """Terra: low for bounded extraction/selection; medium for prose and audits."""
         if self._model_for(tier) != "gpt-6.1-terra":
             return _NATIVE_REASONING_EFFORT.get(self._model_for(tier))
+        if schema is not None and schema.__name__ in {"ConversationDraft", "ConversationReply"}:
+            return getattr(self, "conversation_draft_effort", "medium")
         if schema is not None and schema.__name__ in {
                 "ConversationEvidenceReview", "ConversationVerdict", "ConversationEscalation", "SelectionVerdict"}:
             return getattr(self, "conversation_review_effort", "medium")

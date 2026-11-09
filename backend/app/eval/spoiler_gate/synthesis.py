@@ -29,6 +29,7 @@ third user of ``_audit_all`` (alongside migration/audit tooling), not a view rea
 per-book lock (inside ``with store.book() as mem:``), so it is concurrency-safe like every other access.
 """
 import re
+from functools import lru_cache
 
 from app.ingest.extraction.resolve import ROLE_NOUNS, _norm
 from app.language import english_recap_contract
@@ -384,6 +385,18 @@ def _read_proper_strict(read_text):
     return out
 
 
+@lru_cache(maxsize=4)
+def _read_visibility(read_text):
+    """Pure, immutable word sets from this exact allowed prefix, never stored story facts.
+
+    The caller still verifies source identity and reading epoch on every request. A different
+    source body or clipped prefix is a different key; no future-name oracle is cached here.
+    """
+    proper = frozenset(w for token in _read_proper_strict(read_text)
+                       for w in word_tokens(token, min_length=2))
+    return proper, frozenset(word_tokens(_norm(read_text)))
+
+
 def score_recap(db, bm, recap_text, read_text=None):
     """DETERMINISTIC synthesis over-reach check. Hard signals include:
       - future_entity_leaks: a recap token that names a future-revealed thing — an ENTITY canonical or
@@ -450,9 +463,7 @@ def score_recap(db, bm, recap_text, read_text=None):
                 themed_future.setdefault(f"theme:{th['name']}", set()).add(t)
 
     if read_text is not None:
-        read_proper = {w for token in _read_proper_strict(read_text)
-                       for w in word_tokens(token, min_length=2)}
-        read_any = set(word_tokens(_norm(read_text)))            # all words read so far (any case)
+        read_proper, read_any = _read_visibility(read_text)
         # F1: a visible token whitelists ONLY if the reader actually read it. In a clean store every
         # visible name appears in read prose (reveal-correctness), so this bites only mis-stamps.
         whitelist = {t for t in visible if t in read_any or t in read_proper}

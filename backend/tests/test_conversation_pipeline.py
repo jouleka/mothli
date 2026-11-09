@@ -147,3 +147,73 @@ def test_escalation_requires_both_complete_own_source_proof_and_semantic_verdict
     else:
         assert invoke() is None
     assert calls == ["conversation-escalation"]
+
+
+@pytest.mark.parametrize("change", ["edit", "reorder"])
+def test_review_cannot_replace_or_reorder_claims_under_the_prefix_contract(change):
+    def complete(*a,**kw):
+        return {"clarification":None, "insufficient_evidence":False, "claims":[
+            {"text":"Mara lent Jonas a key.","citation_ids":[1]},
+            {"text":"Nell kept three coins.","citation_ids":[2]}]}
+    def review(draft,sources,**kw):
+        return AskDraft(insufficient_evidence=False,claims=[
+            {"text":"Mara lent Jonas a knife.","citation_ids":[1]}] if change == "edit" else draft.claims[1:])
+    with pytest.raises(AskEvidenceError):
+        answer_conversation("Catch me up",SOURCES,frontier=1,known_names=[],complete=complete,
+            score=lambda _:{"future_entity_leaks":[],"prolepsis_hits":[],"unsupported_event_bindings":[]},
+            max_output_tokens=4096,review=review,max_attempts=1)
+
+
+@pytest.mark.parametrize("failure", [None,"cross-source","extra-audit","semantic"])
+def test_selective_escalation_keeps_global_semantics_and_frozen_own_proof(failure):
+    draft = AskDraft(insufficient_evidence=False,claims=[
+        {"text":"Mara lent Jonas a key.","citation_ids":[1]},
+        {"text":"Nell kept three coins.","citation_ids":[2]}])
+    calls=[]
+    def complete(system,user,**kw):
+        calls.append(kw["phase"])
+        packet=json.loads(user.split("\n",1)[1])
+        assert [c["claim_id"] for c in packet["claims"]] == [2]
+        assert packet["remaining_answer_claims"][0]["own_cited_sources"][0]["source_id"] == 1
+        assert [s["source_id"] for s in packet["claims"][0]["sources"]] == [2]
+        audits=[{"claim_id":2,"units":[{"unit_id":u["id"],"supported":True,"diagnostic":None,
+            "evidence":[{"source_id":1 if failure == "cross-source" else 2,"passage_ids":[1]}]}
+            for u in field_segments(draft.claims[1].text,"answer")]}]
+        if failure == "extra-audit":
+            audits = audit()["claim_audits"] + audits
+        return {"references_future":False,"unsupported_claims":[],
+                "missing_details":["omission"] if failure == "semantic" else [],"claim_audits":audits}
+    def invoke():
+        return review_escalation(draft,SOURCES,question="What happened?",complete=complete,
+                                 max_output_tokens=4096,claim_ids=[2])
+    if failure:
+        with pytest.raises(AskEvidenceError):
+            invoke()
+    else:
+        assert invoke() is None
+    assert calls == ["conversation-escalation"]
+
+
+@pytest.mark.parametrize("allow,first_bad", [(True,False),(False,False),(True,True)])
+def test_optional_recap_prefix_still_passes_every_deterministic_and_citation_check(allow, first_bad):
+    reviewed=[]
+    def complete(*a,**kw):
+        return {"clarification":None,"insufficient_evidence":False,"claims":[
+            {"text":"Mara lent Jonas a key.","citation_ids":[1]},
+            {"text":"Nell kept three coins.","citation_ids":[2]}]}
+    def score(text):
+        return {"future_entity_leaks":["blocked"] if ("Mara" if first_bad else "Nell") in text else [],
+                "prolepsis_hits":[],"unsupported_event_bindings":[]}
+    def review(draft,sources,**kw):
+        reviewed.append(draft)
+        assert draft.claims[0].text == "Mara lent Jonas a key." and len(draft.claims) == 1
+        assert [s["id"] for s in sources] == [1]
+    def invoke():
+        return answer_conversation("Catch me up",SOURCES,frontier=1,known_names=[],complete=complete,
+            score=score,max_output_tokens=4096,review=review,max_attempts=1,allow_verified_prefix=allow)
+    if allow and not first_bad:
+        assert invoke()[0].claims == DRAFT.claims and len(reviewed) == 1
+    else:
+        with pytest.raises(AskSafetyError):
+            invoke()
+        assert not reviewed
