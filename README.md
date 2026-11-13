@@ -14,7 +14,10 @@ SQLite story-memory engine, and an experimental hosted multi-user foundation.
 
 ## Features
 
-- Import and read DRM-free EPUB files you are allowed to use.
+- Import and read DRM-free EPUB files you are allowed to use. FB2, MOBI and AZW3 files (zipped or not)
+  are converted to EPUB in the browser first.
+- Pick a classic: add a public-domain book from a curated Project Gutenberg list with one tap. A book
+  is downloaded only when a reader adds it; set `CLASSICS_ENABLED=false` for an offline install.
 - Maintain a chapter-bounded, bitemporal story memory.
 - Catch up and discuss people or passages in one continuing Mothli conversation.
 - Keep highlights, notes, bookmarks, and explicitly saved Mothli replies in Notebook.

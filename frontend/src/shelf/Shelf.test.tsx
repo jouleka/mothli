@@ -16,12 +16,16 @@ const mocks = vi.hoisted(() => ({
   books: vi.fn(),
   importBook: vi.fn(),
   providerSettings: vi.fn(),
+  classics: vi.fn(),
+  addClassic: vi.fn(),
 }));
 vi.mock("../api", () => ({
   api: {
     books: mocks.books,
     importBook: mocks.importBook,
     providerSettings: mocks.providerSettings,
+    classics: mocks.classics,
+    addClassic: mocks.addClassic,
   },
 }));
 
@@ -32,6 +36,8 @@ beforeEach(() => {
   mocks.books.mockReset().mockResolvedValue([]);
   mocks.importBook.mockReset();
   mocks.providerSettings.mockReset().mockRejectedValue(new Error("local mode"));
+  mocks.classics.mockReset().mockRejectedValue(new Error("no catalogue"));
+  mocks.addClassic.mockReset();
 });
 
 afterEach(() => {
@@ -449,5 +455,79 @@ describe("Library interactions", () => {
       JSON.stringify(["sea"]),
     );
     expect(onOpen).toHaveBeenCalledWith("sea");
+  });
+});
+
+describe("Pick a classic", () => {
+  const catalogue = {
+    enabled: true,
+    source: "Project Gutenberg",
+    books: [
+      { id: "emma", title: "Emma", author: "Jane Austen", year: 1815, book_id: null },
+      { id: "dracula", title: "Dracula", author: "Bram Stoker", year: 1897, book_id: null },
+      { id: "the-odyssey", title: "The Odyssey", author: "Homer", year: null, book_id: "bkodyssey" },
+    ],
+  };
+
+  test("is not offered when the server has no catalogue", async () => {
+    render(<Shelf onOpen={() => {}} />);
+    await screen.findByRole("heading", { name: "Make yourself at home." });
+    expect(screen.queryByRole("button", { name: /pick a classic/i })).toBeNull();
+  });
+
+  test("lists the classics, filters them, and adds one to the shelf", async () => {
+    const user = userEvent.setup();
+    mocks.classics.mockResolvedValue(catalogue);
+    mocks.addClassic.mockResolvedValue({ book_id: "bkemma" });
+    render(<Shelf onOpen={() => {}} />);
+    const trigger = await screen.findByRole("button", { name: /pick a classic/i });
+    await user.click(trigger);
+    const sheet = screen.getByRole("dialog", { name: "Pick a classic" });
+    expect(within(sheet).getByText("Jane Austen, 1815")).toBeTruthy();
+    expect(within(sheet).getByText("Homer", { selector: ".ml-classics-text span" })).toBeTruthy();
+    expect(within(sheet).getByText(/From Project Gutenberg/)).toBeTruthy();
+
+    const search = within(sheet).getByRole("searchbox", { name: "Search the classics" });
+    await user.type(search, "stoker");
+    expect(within(sheet).queryByRole("button", { name: "Add Emma" })).toBeNull();
+    expect(within(sheet).getByRole("button", { name: "Add Dracula" })).toBeTruthy();
+    await user.clear(search);
+
+    mocks.books.mockResolvedValue([{ book_id: "bkemma", title: "Emma", author: "Jane Austen" }]);
+    mocks.classics.mockResolvedValue({
+      ...catalogue,
+      books: catalogue.books.map((book) => (book.id === "emma" ? { ...book, book_id: "bkemma" } : book)),
+    });
+    await user.click(within(sheet).getByRole("button", { name: "Add Emma" }));
+    expect(mocks.addClassic).toHaveBeenCalledWith("emma");
+    expect(await within(sheet).findByRole("button", { name: "Open Emma" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Emma, Jane Austen" })).toBeTruthy();
+  });
+
+  test("opens a classic that is already on the shelf, and closes with Escape", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    mocks.classics.mockResolvedValue(catalogue);
+    render(<Shelf onOpen={onOpen} />);
+    const trigger = await screen.findByRole("button", { name: /pick a classic/i });
+    await user.click(trigger);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Pick a classic" })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "Open The Odyssey" }));
+    expect(onOpen).toHaveBeenCalledWith("bkodyssey");
+  });
+
+  test("explains a failed download and leaves the shelf alone", async () => {
+    const user = userEvent.setup();
+    mocks.classics.mockResolvedValue(catalogue);
+    mocks.addClassic.mockRejectedValue(new Error("Couldn’t reach the book’s source. Check your connection and try again."));
+    const { container } = render(<Shelf onOpen={() => {}} />);
+    await user.click(await screen.findByRole("button", { name: /pick a classic/i }));
+    await user.click(screen.getByRole("button", { name: "Add Dracula" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Couldn’t reach");
+    expect((screen.getByRole("button", { name: "Add Dracula" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(await axeAA(container)).toHaveNoViolations();
   });
 });

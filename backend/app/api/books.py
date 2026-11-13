@@ -44,6 +44,14 @@ def import_book(file: UploadFile, catalog=Depends(get_catalog), store=Depends(ge
     # UploadFile is spooled, but an unbounded read still lets a hostile request allocate arbitrary
     # process memory. Read one byte past the policy limit so the boundary is deterministic.
     blob = file.file.read(settings.epub_max_upload_bytes + 1)
+    return import_epub_blob(blob, filename=file.filename, source="upload",
+                            catalog=catalog, store=store, settings=settings)
+
+
+def import_epub_blob(blob, *, filename, source, catalog, store, settings,
+                     fallback_title=None, fallback_author=None):
+    """Shelve one EPUB, whether it was uploaded or fetched from the classics catalogue. Every
+    source goes through the same size limit, segmentation, DRM refusal and commit order."""
     if len(blob) > settings.epub_max_upload_bytes:
         raise HTTPException(413, "EPUB upload exceeds the configured size limit")
     if not blob:
@@ -60,8 +68,8 @@ def import_book(file: UploadFile, catalog=Depends(get_catalog), store=Depends(ge
         raise HTTPException(422, "no body chapters detected in this EPUB")
     profile = detect_book_type(result, chapters)
 
-    title = result.title or (file.filename or book_id).rsplit(".", 1)[0]
-    author = result.author
+    title = result.title or fallback_title or (filename or book_id).rsplit(".", 1)[0]
+    author = result.author or fallback_author
     source_path = source_epub_path(settings.data_dir, book_id)
     book_dir = os.path.dirname(source_path)
     os.makedirs(book_dir, exist_ok=True)
@@ -71,13 +79,13 @@ def import_book(file: UploadFile, catalog=Depends(get_catalog), store=Depends(ge
     write_manifest(settings.data_dir, manifest)
     with store.book(
         book_id,
-        meta=dict(title=title, author=author, source="upload", file_hash=file_hash),
+        meta=dict(title=title, author=author, source=source, file_hash=file_hash),
     ) as mem:
         mem.set_book_profile(**profile.as_dict())            # advisory metadata; never changes atoms
         mem.set_content_language(result.content_language)
     try:
         catalog.add_book(
-            book_id, title=title, author=author, source="upload", file_hash=file_hash,
+            book_id, title=title, author=author, source=source, file_hash=file_hash,
         )
     except ValueError as e:                                  # same content already shelved
         raise HTTPException(409, f"book already imported as {book_id!r}") from e

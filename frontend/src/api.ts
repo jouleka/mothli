@@ -17,6 +17,9 @@ import {
 } from "./pwa/offline";
 
 export type Book = { book_id: string; title: string; author: string | null };
+/** A public-domain book from the curated catalogue; `book_id` is set once it is on the shelf. */
+export type Classic = { id: string; title: string; author: string; year: number | null; book_id: string | null };
+export type ClassicsCatalog = { enabled: boolean; source: string; books: Classic[] };
 export type AiRuntime = {
   mode: "demo" | "live";
   provider: string;
@@ -286,6 +289,11 @@ export const api = {
     fetch("/api/health/ai/check", { method: "POST", headers: csrfHeaders(), signal, cache: "no-store" })
       .then((r) => j<AiRuntime>(r)),
   books: () => fetch("/api/books").then((r) => j<Book[]>(r)),
+  classics: () => fetch("/api/classics").then((r) => j<ClassicsCatalog>(r)),
+  addClassic: (id: string) =>
+    fetch(`/api/classics/${encodeURIComponent(id)}`, { method: "POST", headers: csrfHeaders() }).then(
+      (r) => j<{ book_id: string }>(r),
+    ),
   importBook: (file: File) => {
     const fd = new FormData();
     fd.append("file", file);
