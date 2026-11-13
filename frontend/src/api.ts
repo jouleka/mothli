@@ -18,8 +18,18 @@ import {
 
 export type Book = { book_id: string; title: string; author: string | null };
 /** A public-domain book from the curated catalogue; `book_id` is set once it is on the shelf. */
-export type Classic = { id: string; title: string; author: string; year: number | null; book_id: string | null };
-export type ClassicsCatalog = { enabled: boolean; source: string; books: Classic[] };
+export type Classic = { id: string; title: string; author: string; language: string; book_id: string | null };
+/** One page of the public-domain catalogue. `total` is its whole size, `matches` this search's. */
+export type ClassicsCatalog = {
+  enabled: boolean;
+  source: string;
+  source_url: string;
+  total: number;
+  matches: number;
+  languages: { code: string; count: number }[];
+  books: Classic[];
+};
+export type ClassicsSearch = { q?: string; language?: string; offset?: number };
 export type AiRuntime = {
   mode: "demo" | "live";
   provider: string;
@@ -289,7 +299,14 @@ export const api = {
     fetch("/api/health/ai/check", { method: "POST", headers: csrfHeaders(), signal, cache: "no-store" })
       .then((r) => j<AiRuntime>(r)),
   books: () => fetch("/api/books").then((r) => j<Book[]>(r)),
-  classics: () => fetch("/api/classics").then((r) => j<ClassicsCatalog>(r)),
+  classics: (search: ClassicsSearch = {}) => {
+    const params = new URLSearchParams();
+    if (search.q) params.set("q", search.q);
+    if (search.language) params.set("language", search.language);
+    if (search.offset) params.set("offset", String(search.offset));
+    const query = params.toString();
+    return fetch(`/api/classics${query ? `?${query}` : ""}`).then((r) => j<ClassicsCatalog>(r));
+  },
   addClassic: (id: string) =>
     fetch(`/api/classics/${encodeURIComponent(id)}`, { method: "POST", headers: csrfHeaders() }).then(
       (r) => j<{ book_id: string }>(r),

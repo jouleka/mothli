@@ -459,15 +459,25 @@ describe("Library interactions", () => {
 });
 
 describe("Pick a classic", () => {
+  const books = [
+    { id: "158", title: "Emma", author: "Jane Austen", language: "en", book_id: null },
+    { id: "345", title: "Dracula", author: "Bram Stoker", language: "en", book_id: null },
+    { id: "1727", title: "The Odyssey", author: "Homer", language: "en", book_id: "bkodyssey" },
+  ];
   const catalogue = {
     enabled: true,
     source: "Project Gutenberg",
-    books: [
-      { id: "emma", title: "Emma", author: "Jane Austen", year: 1815, book_id: null },
-      { id: "dracula", title: "Dracula", author: "Bram Stoker", year: 1897, book_id: null },
-      { id: "the-odyssey", title: "The Odyssey", author: "Homer", year: null, book_id: "bkodyssey" },
+    source_url: "https://www.gutenberg.org/",
+    total: 77713,
+    matches: 77713,
+    languages: [
+      { code: "en", count: 61513 },
+      { code: "fr", count: 4152 },
     ],
+    books,
   };
+  type Row = { id: string; title: string; author: string; language: string; book_id: string | null };
+  const page = (found: Row[], matches = found.length) => ({ ...catalogue, matches, books: found });
 
   test("is not offered when the server has no catalogue", async () => {
     render(<Shelf onOpen={() => {}} />);
@@ -475,33 +485,62 @@ describe("Pick a classic", () => {
     expect(screen.queryByRole("button", { name: /pick a classic/i })).toBeNull();
   });
 
-  test("lists the classics, filters them, and adds one to the shelf", async () => {
+  test("opens on the most-read books, searches the whole catalogue, and adds one to the shelf", async () => {
     const user = userEvent.setup();
-    mocks.classics.mockResolvedValue(catalogue);
-    mocks.addClassic.mockResolvedValue({ book_id: "bkemma" });
+    mocks.classics.mockImplementation(async (search: { q?: string } = {}) =>
+      search.q ? page(books.filter((book) => book.author.toLowerCase().includes(search.q!))) : catalogue,
+    );
+    mocks.addClassic.mockResolvedValue({ book_id: "bkdracula" });
     render(<Shelf onOpen={() => {}} />);
     const trigger = await screen.findByRole("button", { name: /pick a classic/i });
     await user.click(trigger);
     const sheet = screen.getByRole("dialog", { name: "Pick a classic" });
-    expect(within(sheet).getByText("Jane Austen, 1815")).toBeTruthy();
+    expect(within(sheet).getByText("Most read right now")).toBeTruthy();
     expect(within(sheet).getByText("Homer", { selector: ".ml-classics-text span" })).toBeTruthy();
-    expect(within(sheet).getByText(/From Project Gutenberg/)).toBeTruthy();
+    expect(within(sheet).getByRole("link", { name: "Project Gutenberg" }).getAttribute("href")).toBe(
+      "https://www.gutenberg.org/",
+    );
+    expect(within(sheet).getByText(/Public domain in the United States; if you live elsewhere/)).toBeTruthy();
 
     const search = within(sheet).getByRole("searchbox", { name: "Search the classics" });
     await user.type(search, "stoker");
+    expect(await within(sheet).findByText("1 book")).toBeTruthy();
+    expect(mocks.classics).toHaveBeenLastCalledWith({ q: "stoker", language: "" });
     expect(within(sheet).queryByRole("button", { name: "Add Emma" })).toBeNull();
-    expect(within(sheet).getByRole("button", { name: "Add Dracula" })).toBeTruthy();
-    await user.clear(search);
 
-    mocks.books.mockResolvedValue([{ book_id: "bkemma", title: "Emma", author: "Jane Austen" }]);
-    mocks.classics.mockResolvedValue({
-      ...catalogue,
-      books: catalogue.books.map((book) => (book.id === "emma" ? { ...book, book_id: "bkemma" } : book)),
+    mocks.books.mockResolvedValue([{ book_id: "bkdracula", title: "Dracula", author: "Bram Stoker" }]);
+    await user.click(within(sheet).getByRole("button", { name: "Add Dracula" }));
+    expect(mocks.addClassic).toHaveBeenCalledWith("345");
+    expect(await within(sheet).findByRole("button", { name: "Open Dracula" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Dracula, Bram Stoker" })).toBeTruthy();
+    await user.keyboard("{Escape}");
+    expect((await screen.findByText("Pick a classic", { selector: ".ml-book-add-title" })).closest("button")!.textContent).toContain(
+      "77,713 free books",
+    );
+  });
+
+  test("narrows by language, says when nothing matches, and loads further pages", async () => {
+    const user = userEvent.setup();
+    const first = { id: "17489", title: "Fantine", author: "Victor Hugo", language: "fr", book_id: null };
+    const second = { id: "17493", title: "Cosette", author: "Victor Hugo", language: "fr", book_id: null };
+    mocks.classics.mockImplementation(async (search: { q?: string; language?: string; offset?: number } = {}) => {
+      if (search.q) return page([]);
+      if (search.language === "fr") return page(search.offset ? [second] : [first], 2);
+      return catalogue;
     });
-    await user.click(within(sheet).getByRole("button", { name: "Add Emma" }));
-    expect(mocks.addClassic).toHaveBeenCalledWith("emma");
-    expect(await within(sheet).findByRole("button", { name: "Open Emma" })).toBeTruthy();
-    expect(await screen.findByRole("button", { name: "Emma, Jane Austen" })).toBeTruthy();
+    render(<Shelf onOpen={() => {}} />);
+    await user.click(await screen.findByRole("button", { name: /pick a classic/i }));
+    const sheet = screen.getByRole("dialog", { name: "Pick a classic" });
+    await user.selectOptions(within(sheet).getByRole("combobox", { name: "Language" }), "French");
+    expect(await within(sheet).findByText("2 books")).toBeTruthy();
+    expect(within(sheet).getByText("Victor Hugo · French")).toBeTruthy();
+    await user.click(within(sheet).getByRole("button", { name: "Show more" }));
+    expect(await within(sheet).findByRole("button", { name: "Add Cosette" })).toBeTruthy();
+    expect(mocks.classics).toHaveBeenLastCalledWith({ q: "", language: "fr", offset: 1 });
+    expect(within(sheet).queryByRole("button", { name: "Show more" })).toBeNull();
+
+    await user.type(within(sheet).getByRole("searchbox", { name: "Search the classics" }), "zzz");
+    expect(await within(sheet).findByText("Nothing by that name here.")).toBeTruthy();
   });
 
   test("opens a classic that is already on the shelf, and closes with Escape", async () => {
