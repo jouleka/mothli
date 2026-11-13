@@ -668,11 +668,6 @@ export function Shelf({
                 onChange={(event) => setQuery(event.currentTarget.value)}
               />
             </label>
-            {classics && !libraryEmpty && (
-              <button type="button" className="ml-classics-link" onClick={openClassics}>
-                Pick a classic
-              </button>
-            )}
             <label className="ml-sort">
               <span className="sr-only">Sort books</span>
               <select
@@ -783,6 +778,15 @@ export function Shelf({
                         </button>
                       </div>
                     )}
+                    {browsingAll && classics && (
+                      <div className="ml-book ml-book--add">
+                        <button className="ml-book-add ml-book-classics" onClick={openClassics}>
+                          <Moth size={44} />
+                          <span className="ml-book-add-title">Pick a classic</span>
+                          <span className="ml-book-add-hint">{classics.books.length} free books, out of copyright</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <ul className="ml-list">
@@ -818,6 +822,14 @@ export function Shelf({
                         >
                           <Icon name="plus" size={16} />
                           {busy ? "Adding your book…" : "Add a book"}
+                        </button>
+                      </li>
+                    )}
+                    {browsingAll && classics && (
+                      <li>
+                        <button className="ml-row-add" onClick={openClassics}>
+                          <Icon name="book" size={16} />
+                          Pick a classic
                         </button>
                       </li>
                     )}
