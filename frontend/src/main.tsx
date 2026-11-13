@@ -1,6 +1,12 @@
 import "@fontsource/eb-garamond/400.css";
 import "@fontsource/eb-garamond/400-italic.css";
-import "@fontsource/fraunces/400.css";
+import "@fontsource/eb-garamond/500.css";
+import "@fontsource-variable/inter/index.css";
+import "@fontsource-variable/cormorant-garamond/index.css";
+import "@fontsource-variable/cormorant-garamond/wght-italic.css";
+import "@fontsource-variable/caveat/index.css";
+import "@fontsource-variable/literata/index.css";
+import "@fontsource-variable/literata/wght-italic.css";
 import "./styles.css";
 
 import React, { useEffect, useState } from "react";
@@ -12,6 +18,16 @@ import { Icon } from "./ui/Icon";
 import { Button } from "./ui/Button";
 import { AiRuntimeProvider } from "./ui/AiStatus";
 import "./experience.css";
+import "./theme/mothli.css";
+import "./theme/bookish.css";
+
+// Light or dark, remembered per device; the reader keeps it in sync with its theme preference.
+try {
+  const savedTheme = localStorage.getItem("mothli.theme");
+  document.documentElement.dataset.theme = savedTheme === "dark" ? "dark" : "light";
+} catch {
+  document.documentElement.dataset.theme = "light";
+}
 
 // Router-less view switch for the shelf and reader.
 const currentBookId = () =>

@@ -28,12 +28,14 @@ function TocBranch({
       {items.map((item) => {
         const current = item.atom === currentAtom;
         const containsCurrent = !current && tocContainsAtom(item, currentAtom);
+        // The server only releases titles up to the chapter being read; later ones arrive blank.
+        const unreached = item.atom != null && atoms[item.atom] != null && !atoms[item.atom].title && item.atom > currentAtom;
         return (
           <li key={item.id} data-current-branch={containsCurrent || undefined}>
             {item.href ? (
               <button
                 type="button"
-                className="plain toc-link"
+                className={unreached ? "plain toc-link toc-link--unreached" : "plain toc-link"}
                 aria-current={current ? "location" : undefined}
                 onClick={() => onNavigate(item)}
               >
@@ -288,6 +290,9 @@ export function ReaderNavigation({
               <p className="quiet">This book has no table of contents.</p>
             )}
           </nav>
+          {atoms.some((atom, index) => index > currentAtom && !atom.title) && (
+            <p className="toc-hidden-note m-hand">Titles ahead stay hidden until you reach them.</p>
+          )}
           </div>
         </section>
       )}

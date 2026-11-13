@@ -1,0 +1,550 @@
+/* The reading room, restyled as a book: a paper sheet on a desk, Mothli writing in the margin.
+ * Loaded last. It only overrides look, never layout logic, so component CSS stays the source of
+ * structure. Colours and type come from theme/mothli.css. */
+
+/* ---------- the desk and the sheet ---------- */
+.reader-grid.mr { background: var(--m-bg); }
+.reader-grid.mr[data-chat-open] { grid-template-columns: minmax(0, 1fr) 400px; }
+
+.mr .running-head.mr-top { height: 64px; min-height: 64px; padding: 0 32px; }
+.mr .mr-back.reader-library {
+  padding: 0;
+  border-radius: 0;
+  color: var(--m-ink);
+  font: 500 15px var(--m-ui);
+  gap: 8px;
+}
+.mr .mr-back:hover { background: transparent; color: var(--m-accent); }
+.mr .running-head .mr-title h1.title {
+  font: italic 600 22px/1.15 var(--m-display);
+  color: var(--m-ink);
+}
+.mr .mr-title .chapter {
+  font: 600 11px/1.4 var(--m-ui);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--m-accent);
+}
+.mr .mr-tools.reader-toolbar { gap: 4px; }
+.mr .mr-tools .reader-tool,
+.mr .mr-tools summary.reader-tool {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  color: var(--m-ink);
+}
+.mr .mr-aa > span[aria-hidden] { font: 400 20px/1 var(--m-book); }
+.mr .mr-streak {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 16px;
+  background: transparent;
+  border: 1px solid var(--m-line-strong);
+  color: var(--m-soft);
+  font: 600 13px var(--m-ui);
+}
+
+.mr .book-view.mr-book {
+  width: calc(100% - 64px);
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 28px 40px 0;
+  border-radius: 6px 6px 0 0;
+  background: var(--m-surface);
+  box-shadow: var(--m-shadow);
+}
+.reader-grid.mr[data-chat-open] .book-view.mr-book {
+  max-width: none;
+  width: calc(100% - 32px);
+  margin: 0 0 0 32px;
+  border-radius: 6px 0 0 0;
+}
+.mr .reader-loading.mr-loading,
+.mr .reader-fatal.mr-loading {
+  inset: 64px 0 60px;
+  font: italic 400 20px var(--m-book);
+  color: var(--m-soft);
+}
+.mr .reader-fatal h2 { font: 600 34px/1.1 var(--m-display); }
+
+.mr .reader-footer.mr-bottom {
+  height: 60px;
+  min-height: 60px;
+  padding: 0 32px;
+  color: var(--m-soft);
+}
+.mr .page-nav.mr-turn { width: 44px; height: 44px; color: var(--m-ink); }
+.mr .page-nav.mr-turn--next { background: transparent; color: var(--m-ink); }
+.mr .mr-progress { font: 400 13px var(--m-ui); color: var(--m-soft); }
+.mr .mr-bar { height: 3px; border-radius: 0; background: var(--m-line-strong); }
+.mr .mr-bar > div { border-radius: 0; }
+.mr .mr-percent { color: var(--m-soft); }
+.mr .mr-finish.ui-button { min-height: 44px; padding: 0 22px; }
+
+/* popovers are loose sheets of the same paper */
+.mr .mr-tools .reader-popover,
+.mr .mr-tools .navigation-panel,
+.mr .mr-tools .marks-panel,
+.mr .reader-settings-body,
+.mr .selection-actions {
+  border-radius: 6px;
+  background: var(--m-surface);
+  box-shadow: var(--m-shadow);
+}
+.mr .reader-panel-heading,
+.mr .notebook-title h2,
+.mr [role="alertdialog"] h2,
+.mr .assist-page h2 {
+  font: 600 30px/1.1 var(--m-display);
+  letter-spacing: 0;
+  color: var(--m-ink);
+}
+.mr .reader-toc .toc-link { font: 400 19px/1.3 var(--m-book); }
+.mr .reader-toc .toc-link[aria-current="location"] { color: var(--m-accent); background: transparent; font-weight: 500; }
+.mr .notebook-filters button { border-radius: 0; background: transparent; font: 500 14px var(--m-ui); }
+.mr .notebook-filters button[aria-pressed="true"] { background: transparent; color: var(--m-ink); box-shadow: inset 0 -2px 0 var(--m-accent); }
+.mr .notebook-search,
+.mr .lp-companion .memory-search {
+  border: 0;
+  border-bottom: 1px solid var(--m-line-strong);
+  border-radius: 0;
+  background: transparent;
+}
+.mr .notebook-search input[type="search"],
+.mr .memory-search input { font: 400 19px var(--m-book); background: transparent; }
+.mr .marks-list q,
+.mr .marks-list blockquote,
+.mr .selection-context q,
+.mr .assist-page blockquote { font-family: var(--m-book); font-style: italic; }
+.mr .assist-page .ask-answer { font-family: var(--m-hand); font-size: 26px; line-height: 1.15; color: var(--m-mothli-ink); }
+
+/* the selection slip: a small sheet with the passage and what you can do with it */
+.mr .reader-marks .selection-actions {
+  padding: 20px 24px 16px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--m-surface);
+  color: var(--m-ink);
+  box-shadow: var(--m-shadow);
+}
+.mr .reader-marks .selection-context { gap: 8px; padding: 0; margin: 0 0 8px; }
+.mr .reader-marks .selection-context q {
+  padding: 10px 14px;
+  border: 0;
+  border-left: 3px solid var(--m-flame);
+  border-radius: 0;
+  background: var(--m-highlight);
+  color: var(--m-ink);
+  font: italic 400 17px/1.4 var(--m-book);
+  quotes: none;
+}
+.mr .reader-marks .selection-dismiss { width: 44px; min-height: 44px; margin: -6px -10px 0 0; background: transparent; color: var(--m-ink); }
+.mr .reader-marks .selection-tool-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 0 24px; }
+.mr .reader-marks .selection-tool-picker .ui-button {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--m-ink);
+  font: 500 15px var(--m-ui);
+}
+.mr .reader-marks .selection-tool-picker .ui-button:hover:not(:disabled),
+.mr .reader-marks .selection-tool-picker .ui-button[aria-expanded="true"] { background: transparent; color: var(--m-accent); }
+.mr .reader-marks .selection-tool-picker .ui-button:nth-child(3) { color: var(--m-accent); font-weight: 600; }
+.mr .reader-marks .selection-tool-picker .ui-button > svg,
+.mr .reader-marks .selection-highlight-icon { display: none; }
+.mr .reader-marks .selection-tool-picker .ui-button.icon-button { width: 44px; margin-left: auto; }
+.mr .reader-marks .selection-tool-picker .ui-button.icon-button > svg { display: block; }
+.mr .reader-marks .selection-highlight-actions,
+.mr .reader-marks .selection-ai-actions { margin: 8px 0 0; padding: 12px 0 0; border-top: 1px solid var(--m-line); }
+.mr .reader-marks .selection-highlight-actions button { width: 44px; min-height: 44px; border: 0; border-radius: 50%; background: transparent; }
+.mr .reader-marks .selection-ai-actions .ui-button { min-height: 44px; border-radius: 22px; font: 500 14px var(--m-ui); }
+.mr .reader-marks .selection-note-editor { margin-top: 8px; padding: 12px 0 0; border-top: 1px solid var(--m-line); }
+.mr .reader-marks .selection-note-editor label { font: 600 11px var(--m-ui); letter-spacing: 0.14em; text-transform: uppercase; color: var(--m-accent); }
+.mr .reader-marks .selection-note-editor textarea {
+  min-height: 84px;
+  padding: 6px 0;
+  border: 0;
+  border-bottom: 2px solid var(--m-ink);
+  border-radius: 0;
+  background: transparent;
+  color: var(--m-pencil);
+  font: 500 25px/1.15 var(--m-hand);
+  box-shadow: none;
+}
+
+/* ---------- Mothli, in the margin ---------- */
+.lp-companion.mothli-conversation {
+  background: var(--m-surface);
+  font: 400 15px/1.5 var(--m-ui);
+}
+.lp-companion.mothli-conversation--embedded {
+  border-radius: 0 6px 0 0;
+  border-left: 1px solid var(--m-line);
+  box-shadow: 0 1px 0 var(--m-line), 0 30px 60px -30px rgba(60, 40, 10, 0.45);
+  animation: none;
+}
+.mr .mothli-conversation--embedded:not(.mothli-conversation--compact) { margin: 64px 32px 60px 0; }
+.lp-companion.mothli-conversation--standalone { border-radius: 6px; }
+
+.lp-companion-head { padding: 20px 28px 0; gap: 8px; }
+.lp-moth-ring { width: 40px; height: 40px; background: none; }
+.lp-companion-id h2 { font: italic 600 26px/1.1 var(--m-display); }
+.lp-companion-id span { font: 400 13px/1.3 var(--m-ui); color: var(--m-soft); }
+.lp-companion .lp-companion-head-actions .ui-button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  background: transparent;
+  color: var(--m-ink);
+}
+.lp-companion-tabs {
+  gap: 24px;
+  padding: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--m-line);
+  background: transparent;
+}
+.lp-companion-tabs button {
+  flex: 0 0 auto;
+  height: 44px;
+  padding: 0;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  font: 500 14px var(--m-ui);
+  color: var(--m-soft);
+}
+.lp-companion-tabs button.is-active {
+  background: transparent;
+  border-bottom-color: var(--m-mothli-ink);
+  color: var(--m-ink);
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.lp-companion .lp-thread { padding: 24px 28px 8px; }
+.lp-hello-line,
+.lp-reply-body > p {
+  font: 500 26px/1.16 var(--m-hand);
+  color: var(--m-mothli-ink);
+}
+.lp-hello-line { max-width: none; padding: 0; border-radius: 0; background: transparent; }
+.lp-hello-fine { margin: 14px 0 0; font: 400 13px/1.5 var(--m-ui); color: var(--m-soft); }
+.lp-hello-fine button { font-weight: 600; }
+.lp-companion .lp-exchange { gap: 14px; margin: 0 0 28px; }
+.lp-companion .mothli-question.lp-you {
+  justify-self: start;
+  max-width: none;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--m-pencil);
+  font: 500 26px/1.12 var(--m-hand);
+}
+.lp-moment-label {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--m-accent);
+  font: 600 11px var(--m-ui);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.lp-companion .lp-reply { max-width: none; padding: 0; border-radius: 0; background: transparent; }
+.lp-reply-actions { gap: 4px 20px; margin-top: 8px; }
+.lp-companion .lp-sources > summary,
+.lp-companion .lp-save.ui-button {
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--m-accent);
+  font: 500 14px var(--m-ui);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.lp-companion .lp-sources > div > button {
+  padding: 10px 0 10px 14px;
+  border-left: 2px solid var(--m-line-strong);
+  border-radius: 0;
+  background: transparent;
+}
+.lp-companion .lp-sources > div > button > span { font: 600 12px var(--m-ui); }
+.lp-companion .lp-sources q { font: italic 400 17px/1.45 var(--m-book); }
+.lp-thinking { padding: 6px 0; border-radius: 0; background: transparent; }
+.lp-thinking-dots i { background: var(--m-mothli-ink); }
+
+.lp-companion .lp-bottom { padding: 12px 28px 20px; background: transparent; border-top: 0; }
+.lp-companion .lp-chip,
+.lp-companion .lp-chip.ui-button {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--m-line-strong);
+  border-radius: 22px;
+  background: transparent;
+  color: var(--m-ink);
+  font: 500 14px var(--m-ui);
+}
+.lp-companion .lp-chip:hover:not(:disabled) { border-color: var(--m-ink); background: transparent; }
+.lp-companion .lp-chip svg { display: none; }
+.lp-companion .lp-selection {
+  padding: 12px 8px 12px 16px;
+  border: 0;
+  border-left: 3px solid var(--m-flame);
+  border-radius: 0;
+  background: var(--m-highlight);
+  color: var(--m-ink);
+  font: italic 400 17px/1.4 var(--m-book);
+}
+.lp-companion .lp-composer {
+  padding: 0;
+  border: 0;
+  border-bottom: 2px solid var(--m-ink);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.lp-companion .lp-composer:focus-within { border-bottom-color: var(--m-accent); box-shadow: none; }
+.lp-companion.mothli-conversation .lp-composer textarea {
+  min-height: 44px;
+  padding: 8px 0 !important;
+  font: 500 25px/1.2 var(--m-hand);
+  color: var(--m-ink);
+  background: transparent;
+}
+.lp-companion.mothli-conversation .lp-composer textarea::placeholder { color: var(--m-soft); }
+.lp-companion .lp-send.ui-button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  border-radius: 50%;
+}
+.lp-spoiler-line { font: 400 13px var(--m-ui); color: var(--m-soft); }
+
+/* cast and story so far */
+.lp-companion-body { padding: 8px 28px 24px; }
+.memory-intro,
+.memory-state p,
+.memory-empty-line {
+  font: 500 24px/1.14 var(--m-hand);
+  color: var(--m-mothli-ink);
+}
+.memory-people.memory-collection { display: block; }
+.memory-collection li { border-bottom: 1px solid var(--m-line); }
+.memory-collection button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  width: 100%;
+  min-height: 52px;
+  padding: 10px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+.memory-collection button:hover { background: transparent; }
+.memory-collection button:hover strong { color: var(--m-accent); }
+.memory-collection .memory-avatar { display: none; }
+.memory-collection strong { font: 400 22px/1.25 var(--m-book); color: var(--m-ink); }
+.memory-collection small { font: 400 13px var(--m-ui); color: var(--m-soft); }
+.memory-new { color: var(--m-accent); background: transparent; font: 600 11px var(--m-ui); letter-spacing: 0.14em; text-transform: uppercase; }
+.memory-avatar { background: var(--m-surface-2); color: var(--m-ink); font-family: var(--m-display); font-weight: 600; }
+.memory-person-head h3 { font: 600 40px/1 var(--m-display); }
+.memory-aliases,
+.memory-met { font: italic 400 18px/1.35 var(--m-book); color: var(--m-soft); }
+.memory-ties h4 { font: 600 11px var(--m-ui); letter-spacing: 0.14em; text-transform: uppercase; color: var(--m-accent); }
+.memory-ties strong { font: 400 20px/1.25 var(--m-book); }
+.memory-ties small { font: italic 400 16px var(--m-book); color: var(--m-soft); }
+.memory-ask { border-radius: 24px; }
+.memory-timeline article h3 { font: italic 400 22px/1.25 var(--m-book); }
+.memory-timeline article > p { font: 400 18px/1.45 var(--m-book); color: var(--m-body); }
+.memory-timeline-dot {
+  border-radius: 0;
+  background: transparent;
+  color: var(--m-accent);
+  font: 600 24px/1 var(--m-display);
+  box-shadow: none;
+}
+.memory-timeline > li.is-latest .memory-timeline-dot { background: transparent; color: var(--m-accent); }
+.memory-chapter-actions button,
+.memory-chips button { border-radius: 22px; }
+
+/* ---------- Mothli in the corner of the page ---------- */
+.mc-moth {
+  background: var(--m-surface);
+  border: 1px solid var(--m-line-strong);
+  box-shadow: 0 10px 24px -12px rgba(60, 40, 10, 0.5);
+}
+.mc-bubble {
+  border: 0;
+  border-radius: 6px;
+  background: var(--m-surface);
+  box-shadow: var(--m-shadow);
+}
+.mc-bubble { width: 380px; max-width: calc(100vw - 32px); padding: 20px 22px 16px; }
+.mc-bubble p,
+.mc-bubble.welcome-back p {
+  font: 500 23px/1.16 var(--m-hand);
+  color: var(--m-mothli-ink);
+}
+.mc-bubble p strong { font: 600 24px var(--m-hand); color: var(--m-mothli-ink); }
+.mc-primary { border-radius: 24px; background: var(--m-cta); color: var(--m-on-cta); font: 600 15px var(--m-ui); }
+.mc-primary:hover { background: var(--m-cta-hover); }
+.mc-quiet { border-radius: 24px; font: 500 15px var(--m-ui); color: var(--m-ink); }
+.mc-people button { border-radius: 22px; font: 500 14px var(--m-ui); }
+
+@media (max-width: 900px) {
+  .mr .book-view.mr-book,
+  .reader-grid.mr[data-chat-open] .book-view.mr-book {
+    width: 100%;
+    margin: 0;
+    padding: 12px 16px 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .mr .running-head.mr-top { padding: 0 8px; }
+  .mr .mr-streak { display: none; }
+  .mr .running-head .mr-title h1.title { font-size: 19px; }
+  .lp-companion-head { padding: 12px 20px 0; }
+  .lp-companion .lp-thread { padding: 20px 20px 8px; }
+  .lp-companion .lp-bottom { padding: 12px 20px 16px; }
+  .lp-companion-body { padding: 8px 20px 20px; }
+  .mr .reader-footer.mr-bottom { padding: 0 12px; }
+  .mr .mothli-conversation--embedded:not(.mothli-conversation--compact) { margin: 0; }
+}
+
+/* ---------- tool panels: Contents, Notebook, Appearance, Read aloud ---------- */
+.mr .reader-popover { padding: 24px 28px; font: 400 15px/1.45 var(--m-ui); }
+.mr .reader-panel-heading h2,
+.mr .reader-panel-heading strong,
+.mr .notebook-title h2 {
+  font: 600 30px/1.1 var(--m-display);
+  letter-spacing: 0;
+  color: var(--m-ink);
+}
+.mr .notebook-title svg { display: none; }
+.mr .reader-panel-heading .icon-button,
+.mr .reader-popover .icon-button {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  background: transparent;
+  color: var(--m-ink);
+}
+.mr .navigation-views,
+.mr .notebook-filters {
+  gap: 24px;
+  padding: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--m-line);
+  background: transparent;
+}
+.mr .navigation-views button,
+.mr .notebook-filters button {
+  flex: 0 0 auto;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 0;
+  font: 500 14px var(--m-ui);
+}
+.mr .navigation-views button[aria-selected="true"],
+.mr .notebook-filters button[aria-pressed="true"] {
+  background: transparent;
+  color: var(--m-ink);
+  font-weight: 500;
+  box-shadow: inset 0 -2px 0 var(--m-accent);
+}
+.mr .history-controls button { border-radius: 22px; font: 500 14px var(--m-ui); }
+.mr .reader-toc .toc-link { min-height: 44px; border-radius: 0; font: 400 19px/1.3 var(--m-book); }
+.mr .reader-toc .toc-link:hover { background: transparent; color: var(--m-accent); }
+.mr .reader-toc .toc-link[aria-disabled="true"] { color: var(--m-faint); }
+.mr .preset-row label > span { border-radius: 6px; font: 500 14px var(--m-ui); }
+.mr .preset-row input:checked + span { border-color: var(--m-accent); background: transparent; color: var(--m-ink); box-shadow: inset 0 0 0 1px var(--m-accent); }
+.mr .appearance-theme-sample { border-radius: 6px; font-family: var(--m-book); }
+.mr [data-preset="paper"] .appearance-theme-sample { background: #fffdf7; color: #2a251e; }
+.mr [data-preset="sepia"] .appearance-theme-sample { background: #f1e6cb; color: #34281b; }
+.mr [data-preset="night"] .appearance-theme-sample { background: #1e1a15; color: #e0d5bf; }
+.mr .reader-tts-play { border-radius: 50%; }
+.mr .notebook-saved-reply,
+.mr .marks-list li { border-radius: 0; }
+.mr .notebook-saved-reply p,
+.mr .notebook-saved-reply > q { font: 500 22px/1.16 var(--m-hand); color: var(--m-mothli-ink); }
+.mr .notebook-reply-question { font: 500 20px/1.15 var(--m-hand); color: var(--m-pencil); }
+.mr .notebook-empty { font: 500 22px/1.16 var(--m-hand); color: var(--m-mothli-ink); }
+.mr .notebook-empty svg { display: none; }
+.mr .start-over-note,
+.mr .jump-note { border-radius: 6px; background: var(--m-surface); box-shadow: var(--m-shadow); }
+.mr .hero-page.assist-page { border-radius: 6px; background: var(--m-surface); box-shadow: var(--m-shadow); }
+.mr .assist-page .hero-eyebrow { font: 600 11px var(--m-ui); letter-spacing: 0.14em; text-transform: uppercase; color: var(--m-accent); }
+
+/* the Aa menu: plain rows with their labels */
+.mr .mr-tools .reader-settings-body { padding: 8px 12px; min-width: 240px; }
+.mr .mr-tools .reader-settings-body .reader-tool,
+.mr .mr-tools .reader-settings-body summary.reader-tool,
+.mr .mr-tools .reader-settings-body .reader-reset {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  width: 100%;
+  height: auto;
+  min-height: 48px;
+  padding: 0 8px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--m-ink);
+  font: 500 15px var(--m-ui);
+}
+.mr .mr-tools .reader-settings-body .reader-tool > span:not(.sr-only):not([aria-hidden]),
+.mr .mr-tools .reader-settings-body .reader-reset > span {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+  white-space: nowrap;
+}
+.mr .mr-tools .reader-settings-body .reader-tool:hover,
+.mr .mr-tools .reader-settings-body .reader-reset:hover { background: transparent; color: var(--m-accent); }
+.mr [data-preset="system"] .appearance-theme-sample { background: linear-gradient(105deg, #fffdf7 50%, #1e1a15 50%); color: #8a7e69; }
+
+/* read aloud */
+.mr .reader-tts-actions { padding: 0; border-radius: 0; background: transparent; gap: 8px; }
+.mr .reader-tts-panel select,
+.mr .reader-popover select { min-height: 44px; border: 1px solid var(--m-line-strong); border-radius: 6px; background: var(--m-surface); color: var(--m-ink); font: 400 15px var(--m-ui); }
+.mr .reader-tts-details { border: 1px solid var(--m-line); border-radius: 6px; }
+
+/* phone: Mothli is a full sheet over the page */
+.lp-companion.mothli-conversation--compact {
+  height: var(--mothli-viewport-height, 100dvh);
+  border-radius: 0;
+  border-left: 0;
+  box-shadow: none;
+}
+.lp-companion.mothli-conversation--compact .lp-companion-head-actions .mothli-close {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  min-width: 44px;
+  padding: 0 4px !important;
+  gap: 6px;
+  border-radius: 0;
+  font: 500 15px var(--m-ui);
+}
+
+/* contents: chapters you have not reached keep their titles to themselves */
+.mr .reader-toc .toc-link.toc-link--unreached { color: var(--m-faint); }
+.mr .toc-hidden-note { margin: 16px 0 0; font-size: 22px; line-height: 1.14; }
+
+/* reading time left in the chapter */
+.mr .mr-time { white-space: nowrap; color: var(--m-soft); }
+.mr .mr-time::before { content: "·"; margin-right: 12px; }
+@media (max-width: 900px) {
+  .mr .mr-time { display: none; }
+}

@@ -1,0 +1,72 @@
+/* The card for a tapped name: a slip of the same paper, sitting next to the name. */
+.name-card {
+  position: fixed;
+  z-index: 45;
+  width: min(340px, calc(100vw - 24px));
+  box-sizing: border-box;
+  padding: 20px 22px 12px;
+  border-radius: 6px;
+  background: var(--m-surface);
+  color: var(--m-ink);
+  box-shadow: var(--m-shadow);
+  font-family: var(--m-ui);
+  outline: none;
+  animation: name-card-in 160ms ease-out both;
+}
+@keyframes name-card-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.name-card-name {
+  margin: 0;
+  font: 600 30px/1.05 var(--m-display);
+  overflow-wrap: anywhere;
+}
+.name-card-met {
+  margin: 6px 0 0;
+  font: italic 400 18px/1.35 var(--m-book);
+  color: var(--m-soft);
+}
+.name-card-ties {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--m-line);
+}
+.name-card-ties li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--m-line);
+  font: 400 19px/1.25 var(--m-book);
+}
+.name-card-ties li span:last-child {
+  font: italic 400 16px/1.25 var(--m-book);
+  color: var(--m-soft);
+  text-align: right;
+}
+.name-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 20px;
+  margin-top: 6px;
+}
+.name-card-actions button {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--m-ink);
+  font: 500 15px var(--m-ui);
+  cursor: pointer;
+}
+.name-card-actions button:hover { color: var(--m-accent); }
+.name-card-actions .name-card-ask { color: var(--m-accent); font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) {
+  .name-card { animation: none; }
+}

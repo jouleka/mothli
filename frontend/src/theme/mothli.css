@@ -1,0 +1,220 @@
+/* Mothli's theme: a book. Paper, ink, one oxblood accent, and Mothli's own blue pencil.
+ * One set of semantic tokens, three papers: day (default), night and sepia.
+ * Every surface on a screen comes from the same paper, so nothing flips between light and dark.
+ * Legacy component CSS reads the bridged variables at the bottom of each skin. */
+
+:root,
+.mothli-skin-light,
+.reader-grid[data-reader-theme="paper"] {
+  --m-bg: #f4efe4;
+  --m-surface: #fffdf7;
+  --m-surface-2: #efe8d8;
+  --m-line: #e8dfcb;
+  --m-line-strong: #cfc5b0;
+  --m-ink: #1f1b16;
+  --m-body: #2a251e;
+  --m-soft: #5c5346;
+  --m-faint: #8a7e69;
+  --m-ghost: #b9ad96;
+  --m-accent: #7a1f2b;
+  --m-accent-hover: #551019;
+  --m-accent-wash: #f3e9dd;
+  --m-cta: #7a1f2b;
+  --m-cta-hover: #551019;
+  --m-on-cta: #fffdf7;
+  --m-user-bubble: #efe8d8;
+  --m-on-user: #1f1b16;
+  --m-streak-bg: #f3e3a6;
+  --m-streak-ink: #5a3d00;
+  --m-flame: #b8892b;
+  --m-moth-glow: none;
+  --m-shadow: 0 1px 0 #e2d9c6, 0 3px 0 #fbf7ec, 0 4px 0 #e2d9c6, 0 30px 60px -30px rgba(60, 40, 10, 0.45);
+  --m-highlight: #f3e3a6;
+  /* Mothli writes in blue pencil; the reader's own margin notes are graphite. */
+  --m-mothli-ink: #2f449e;
+  --m-pencil: #5c5346;
+  --m-gold: #e9cf93;
+  --m-gutter: rgba(120, 95, 50, 0.13);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"],
+.mothli-skin-dark,
+.reader-grid[data-reader-theme="night"] {
+  --m-bg: #12100c;
+  --m-surface: #1e1a15;
+  --m-surface-2: #28231c;
+  --m-line: #332c24;
+  --m-line-strong: #4a4136;
+  --m-ink: #f3ead6;
+  --m-body: #e0d5bf;
+  --m-soft: #b5a992;
+  --m-faint: #8f846f;
+  --m-ghost: #6b6252;
+  --m-accent: #e9cf93;
+  --m-accent-hover: #f6e6bc;
+  --m-accent-wash: #2c261e;
+  --m-cta: #e9cf93;
+  --m-cta-hover: #f6e6bc;
+  --m-on-cta: #1e1a15;
+  --m-user-bubble: #28231c;
+  --m-on-user: #e6dcc8;
+  --m-streak-bg: #2c261e;
+  --m-streak-ink: #e9cf93;
+  --m-flame: #e9cf93;
+  --m-moth-glow: none;
+  --m-shadow: 0 1px 0 #2c2620, 0 3px 0 #1a1612, 0 4px 0 #2c2620, 0 30px 60px -30px rgba(0, 0, 0, 0.8);
+  --m-highlight: #4a4020;
+  --m-mothli-ink: #9db0ff;
+  --m-pencil: #b5a992;
+  --m-gold: #e9cf93;
+  --m-gutter: rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
+
+.reader-grid[data-reader-theme="sepia"] {
+  --m-bg: #e6d8b8;
+  --m-surface: #f1e6cb;
+  --m-surface-2: #e3d3af;
+  --m-line: #d9c9a5;
+  --m-line-strong: #c4b189;
+  --m-ink: #2e2317;
+  --m-body: #34281b;
+  --m-soft: #66533a;
+  --m-faint: #8a7658;
+  --m-ghost: #b09c7b;
+  --m-accent: #7a1f2b;
+  --m-accent-hover: #551019;
+  --m-accent-wash: #e3d3af;
+  --m-cta: #7a1f2b;
+  --m-cta-hover: #551019;
+  --m-on-cta: #fff8ec;
+  --m-user-bubble: #e3d3af;
+  --m-on-user: #2e2317;
+  --m-shadow: 0 1px 0 #d2c19b, 0 3px 0 #ecdfc2, 0 4px 0 #d2c19b, 0 30px 60px -30px rgba(60, 40, 10, 0.5);
+  --m-highlight: #ecd58e;
+  --m-mothli-ink: #2f449e;
+  --m-pencil: #66533a;
+  --m-gutter: rgba(100, 75, 30, 0.16);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  .reader-grid[data-reader-theme="system"] {
+    --m-bg: #12100c;
+    --m-surface: #1e1a15;
+    --m-surface-2: #28231c;
+    --m-line: #332c24;
+    --m-line-strong: #4a4136;
+    --m-ink: #f3ead6;
+    --m-body: #e0d5bf;
+    --m-soft: #b5a992;
+    --m-faint: #8f846f;
+    --m-ghost: #6b6252;
+    --m-accent: #e9cf93;
+    --m-accent-hover: #f6e6bc;
+    --m-accent-wash: #2c261e;
+    --m-cta: #e9cf93;
+    --m-cta-hover: #f6e6bc;
+    --m-on-cta: #1e1a15;
+    --m-user-bubble: #28231c;
+    --m-on-user: #e6dcc8;
+    --m-streak-bg: #2c261e;
+    --m-streak-ink: #e9cf93;
+    --m-flame: #e9cf93;
+    --m-moth-glow: none;
+    --m-shadow: 0 1px 0 #2c2620, 0 3px 0 #1a1612, 0 4px 0 #2c2620, 0 30px 60px -30px rgba(0, 0, 0, 0.8);
+    --m-highlight: #4a4020;
+    --m-mothli-ink: #9db0ff;
+    --m-pencil: #b5a992;
+    --m-gutter: rgba(0, 0, 0, 0.35);
+    color-scheme: dark;
+  }
+}
+
+/* type: a quiet sans for controls, Garamond for the book, Cormorant for titles, Caveat for margins */
+:root {
+  --m-ui: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --m-book: "EB Garamond", "Literata Variable", Georgia, serif;
+  --m-display: "Cormorant Garamond Variable", "Cormorant Garamond", "EB Garamond", Georgia, serif;
+  --m-hand: "Caveat Variable", "Caveat", "Segoe Print", cursive;
+}
+
+/* legacy bridge: older component CSS reads these */
+:root,
+:root[data-theme="dark"],
+.mothli-skin-light,
+.mothli-skin-dark,
+.reader-grid[data-reader-theme] {
+  --canvas: var(--m-bg);
+  --paper: var(--m-surface);
+  --paper-deep: var(--m-surface-2);
+  --surface: var(--m-surface);
+  --ink: var(--m-ink);
+  --ink-soft: var(--m-soft);
+  --ink-muted: var(--m-faint);
+  --madder: var(--m-accent);
+  --accent: var(--m-accent);
+  --accent-hover: var(--m-accent-hover);
+  --accent-wash: var(--m-accent-wash);
+  --on-accent: var(--m-on-cta);
+  --selection: var(--m-highlight);
+  --hairline: var(--m-line);
+  --hairline-strong: var(--m-line-strong);
+  --wash: var(--m-surface-2);
+  --font-ui: var(--m-ui);
+  --display: var(--m-display);
+  --serif: var(--m-book);
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 8px;
+  --shadow-panel: var(--m-shadow);
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--m-bg);
+  color: var(--m-ink);
+  font-family: var(--m-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--m-accent);
+  outline-offset: 2px;
+}
+
+/* shared buttons */
+.ui-button {
+  font-family: var(--m-ui);
+  font-weight: 600;
+  border-radius: 999px;
+}
+.ui-button--primary {
+  background: var(--m-cta);
+  color: var(--m-on-cta);
+  border-color: transparent;
+  box-shadow: none;
+}
+.ui-button--primary:hover:not(:disabled) {
+  background: var(--m-cta-hover);
+  border-color: transparent;
+}
+.ui-button--secondary,
+.ui-button--ghost {
+  color: var(--m-ink);
+}
+
+/* shared voices */
+.m-hand {
+  font-family: var(--m-hand);
+  font-weight: 500;
+  color: var(--m-mothli-ink);
+}
+.m-kicker {
+  font: 600 12px/1.2 var(--m-ui);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--m-accent);
+}

@@ -1,29 +1,37 @@
-.reader-marks .notebook-simple { width: min(540px, calc(100vw - 32px)); padding: 24px; }
-.notebook-simple .notebook-title { display: flex; align-items: center; gap: 10px; color: var(--accent); }
-.notebook-simple .notebook-title h2 { color: var(--ink); font: 26px/1.2 var(--font-display, Georgia, serif); }
-.notebook-simple .reader-panel-heading { margin-bottom: 16px; }
-.reader-marks .notebook-simple .notebook-filters { padding: 12px 0; margin: 0; gap: 2px; }
-.reader-marks .notebook-simple .notebook-filters button { min-height: 40px; padding: 8px 10px; font-size: 12px; }
-.notebook-simple .bookmark-form { padding-bottom: 8px; }
-.notebook-simple .bookmark-form > div { align-items: center; }
-.notebook-simple .bookmark-form input { font-size: 12px; }
-.notebook-simple .bookmark-form button { white-space: nowrap; }
-.notebook-simple .notebook-section > h3 { display: flex; align-items: center; gap: 7px; margin: 20px 0 8px; color: var(--ink-soft); font: 500 12px/1.4 var(--font-ui); }
-.reader-marks .notebook-simple .marks-list { margin: 0; }
-.reader-marks .notebook-simple .marks-list > li { padding: 14px; margin-top: 10px; border-radius: 6px 14px 14px 6px; }
-.notebook-simple .notebook-mark-meta { display: flex; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 11px; }
-.notebook-simple .mark-location { width: 100%; padding: 0; border: 0; line-height: 1.65; background: transparent; }
-.notebook-simple .mark-location > span:last-child { font-size: 14px; }
-.notebook-simple .mark-delete { padding: 4px; min-width: 30px; min-height: 30px; }
-.notebook-simple .notebook-empty { padding: 24px 12px; text-align: center; color: var(--ink-soft); }
-.notebook-simple .notebook-empty > svg { color: var(--accent); transform: rotate(-7deg); }
-.notebook-simple .notebook-empty p { margin: 10px 0 0; font-size: 13px; }
-.notebook-simple .notebook-mothli-keeps .marks-list > li { border-left-color: var(--ink-soft); }
-.notebook-simple .notebook-reply-question { font-size: 11px; color: var(--ink-soft); }
-.notebook-simple .notebook-saved-reply p { font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
-.notebook-simple .notebook-saved-reply button { padding: 4px 8px; min-height: 32px; font-size: 11px; }
-.notebook-simple .marks-export { margin-top: 8px; gap: 7px; color: var(--ink-soft); font-size: 12px; }
+/* Notebook: highlights, notes, bookmarks and saved Mothli replies, on a loose sheet of the same paper.
+ * The reader's own pages are set in the book's type; what Mothli wrote stays in its blue pencil. */
+.reader-marks .notebook-simple { width: min(480px, calc(100vw - 32px)); padding: 24px 28px; }
+.notebook-simple .notebook-title { display: flex; align-items: center; gap: 8px; color: var(--m-ink); }
+.notebook-simple .notebook-title svg { display: none; }
+.reader-marks .notebook-simple .notebook-title h2 { color: var(--m-ink); font: 600 30px/1.1 var(--m-display); letter-spacing: 0; }
+.notebook-simple .reader-panel-heading { margin-bottom: 8px; }
+.reader-marks .notebook-simple .notebook-search { min-height: 44px; margin: 0 0 4px; padding: 0; border: 0; border-bottom: 1px solid var(--m-line-strong); border-radius: 0; background: transparent; color: var(--m-soft); }
+.reader-marks .notebook-simple .notebook-search:focus-within { border-bottom-color: var(--m-ink); box-shadow: none; }
+.reader-marks .notebook-simple .notebook-search input[type="search"] { font: 400 19px var(--m-book); color: var(--m-ink); background: transparent; }
+.reader-marks .notebook-simple .notebook-filters { display: flex; gap: 22px; margin: 0 0 16px; padding: 0; border-radius: 0; border-bottom: 1px solid var(--m-line); background: transparent; overflow-x: auto; }
+.reader-marks .notebook-simple .notebook-filters button { flex: 0 0 auto; min-height: 44px; height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--m-soft); font: 500 14px var(--m-ui); white-space: nowrap; }
+.reader-marks .notebook-simple .notebook-filters button[aria-pressed="true"] { background: transparent; color: var(--m-ink); font-weight: 500; box-shadow: inset 0 -2px 0 var(--m-accent); }
+.notebook-simple .bookmark-form { display: flex; gap: 8px; margin: 0 0 8px; padding: 0; }
+.notebook-simple .bookmark-form > div { display: flex; gap: 12px; width: 100%; align-items: center; }
+.reader-marks .notebook-simple .bookmark-form input { flex: 1; min-width: 0; min-height: 44px; padding: 0; border: 0; border-bottom: 1px solid var(--m-line-strong); border-radius: 0; background: transparent; color: var(--m-ink); font: 400 18px var(--m-book); }
+.notebook-simple .bookmark-form button { white-space: nowrap; min-height: 44px; }
+.notebook-simple .notebook-section > h3 { display: flex; align-items: center; gap: 7px; margin: 22px 0 4px; color: var(--m-accent); font: 600 11px/1.4 var(--m-ui); letter-spacing: 0.14em; text-transform: uppercase; }
+.notebook-simple .notebook-section > h3 svg { display: none; }
+.reader-marks .notebook-simple .marks-list { margin: 0; padding: 0; list-style: none; display: block; }
+.reader-marks .notebook-simple .marks-list > li { display: flex; gap: 8px; align-items: flex-start; padding: 14px 0; margin: 0; border: 0; border-bottom: 1px solid var(--m-line); border-radius: 0; background: transparent; }
+.notebook-simple .notebook-mark-meta { display: flex; align-items: center; gap: 6px; color: var(--m-soft); font: 400 13px var(--m-ui); }
+.notebook-simple .mark-location { flex: 1; width: 100%; padding: 0; border: 0; line-height: 1.6; background: transparent; color: var(--m-ink); text-align: left; cursor: pointer; }
+.notebook-simple .mark-location > span:last-child { display: block; margin-top: 4px; font: italic 400 19px/1.45 var(--m-book); color: var(--m-body); }
+.notebook-simple .mark-delete { padding: 4px; min-width: 44px; min-height: 44px; color: var(--m-soft); }
+.notebook-simple .notebook-empty { padding: 28px 0; text-align: left; color: var(--m-mothli-ink); }
+.notebook-simple .notebook-empty > svg { display: none; }
+.notebook-simple .notebook-empty p { margin: 0; font: 500 24px/1.14 var(--m-hand); color: var(--m-mothli-ink); }
+.notebook-simple .notebook-reply-question { font: 500 21px/1.14 var(--m-hand); color: var(--m-pencil); }
+.notebook-simple .notebook-saved-reply p { margin: 6px 0; font: 500 23px/1.16 var(--m-hand); color: var(--m-mothli-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.notebook-simple .notebook-saved-reply button { padding: 0; min-height: 44px; border-radius: 0; background: transparent; color: var(--m-accent); font: 500 14px var(--m-ui); text-decoration: underline; text-underline-offset: 4px; }
+.notebook-simple .marks-export { display: inline-flex; align-items: center; min-height: 44px; margin-top: 10px; gap: 7px; color: var(--m-soft); font: 500 14px var(--m-ui); }
+.notebook-simple .marks-status { color: var(--m-soft); font: 400 13px var(--m-ui); }
 .notebook-simple .marks-status:empty { display: none; }
 @media (max-width: 760px) {
-  .reader-marks .notebook-simple { position: fixed; inset: 84px 12px auto; width: auto; max-height: calc(100dvh - 100px); padding: 18px; }
+  .reader-marks .notebook-simple { position: fixed; inset: 64px 8px auto; width: auto; max-height: calc(100dvh - 80px); }
 }

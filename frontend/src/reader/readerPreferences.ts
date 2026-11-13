@@ -1,3 +1,7 @@
+import garamondUrl from "@fontsource/eb-garamond/files/eb-garamond-latin-400-normal.woff2?url";
+import garamondItalicUrl from "@fontsource/eb-garamond/files/eb-garamond-latin-400-italic.woff2?url";
+import garamondMediumUrl from "@fontsource/eb-garamond/files/eb-garamond-latin-500-normal.woff2?url";
+
 export type FontSizePreset = "small" | "book" | "large" | "x-large";
 export type LineHeightPreset = "compact" | "comfortable" | "relaxed";
 export type MeasurePreset = "narrow" | "balanced" | "wide";
@@ -57,10 +61,10 @@ export function normalizeReaderPreferences(value: unknown): ReaderPreferences {
 }
 
 const FONT_SIZE: Record<FontSizePreset, string> = {
-  small: "100%",
-  book: "112%",
-  large: "125%",
-  "x-large": "140%",
+  small: "112%",
+  book: "128%",
+  large: "144%",
+  "x-large": "162%",
 };
 const LINE_HEIGHT: Record<LineHeightPreset, string> = {
   compact: "1.4",
@@ -69,26 +73,29 @@ const LINE_HEIGHT: Record<LineHeightPreset, string> = {
 };
 const TYPEFACE: Record<TypefacePreset, string | null> = {
   publisher: null,
-  serif: 'Georgia, "Times New Roman", serif',
+  serif: '"EB Garamond", Georgia, "Times New Roman", serif',
   sans: 'system-ui, -apple-system, "Segoe UI", sans-serif',
 };
 export const READER_THEME_COLORS = {
   paper: {
-    background: "#fffcf5",
-    text: "#252431",
-    link: "#5552cb",
+    background: "#fffdf7",
+    text: "#2a251e",
+    link: "#7a1f2b",
+    selection: "#f3e3a6",
     scheme: "light",
   },
   sepia: {
-    background: "#f3e4c4",
-    text: "#34261b",
-    link: "#7a2b22",
+    background: "#f1e6cb",
+    text: "#34281b",
+    link: "#7a1f2b",
+    selection: "#ecd58e",
     scheme: "light",
   },
   night: {
-    background: "#1c1c29",
-    text: "#eceaf3",
-    link: "#bab3ff",
+    background: "#1e1a15",
+    text: "#e0d5bf",
+    link: "#e9cf93",
+    selection: "#5a4d22",
     scheme: "dark",
   },
 } as const;
@@ -100,16 +107,30 @@ function themeRules(theme: ReaderTheme): string {
       html { color-scheme: ${colors.scheme}; background: ${colors.background} !important; color: ${colors.text} !important; }
       body { background: ${colors.background} !important; color: ${colors.text} !important; }
       a:link, a:visited { color: ${colors.link} !important; }
+      ::selection { background: ${colors.selection}; color: inherit; }
+      ::highlight(mothli-names) { text-decoration: underline dotted ${colors.link}; }
     `;
   };
   if (theme !== "system") return rules(theme);
   return `${rules("paper")} @media (prefers-color-scheme: dark) { ${rules("night")} }`;
 }
 
+function absolute(url: string) {
+  try {
+    return new URL(url, typeof location !== "undefined" ? location.href : "http://localhost/").href;
+  } catch {
+    return url;
+  }
+}
+
 export function buildBookStyles(preferences: ReaderPreferences): string {
   const typeface = TYPEFACE[preferences.typeface];
   return `
     @namespace epub "http://www.idpf.org/2007/ops";
+    @font-face { font-family: "EB Garamond"; font-style: normal; font-weight: 400; font-display: swap; src: url("${absolute(garamondUrl)}") format("woff2"); }
+    @font-face { font-family: "EB Garamond"; font-style: italic; font-weight: 400; font-display: swap; src: url("${absolute(garamondItalicUrl)}") format("woff2"); }
+    @font-face { font-family: "EB Garamond"; font-style: normal; font-weight: 500 700; font-display: swap; src: url("${absolute(garamondMediumUrl)}") format("woff2"); }
+    html { font-family: "EB Garamond", Georgia, serif; }
     ${themeRules(preferences.theme)}
     html { font-size: ${FONT_SIZE[preferences.font_size]} !important; }
     ${typeface ? `html, body { font-family: ${typeface} !important; }` : ""}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export const WELCOME_BACK_GAP_MS = 4 * 60 * 60 * 1000; // ~4h — a return after a real break, not a blink
 
-export type WelcomeBack = { lastChapter: number };
+export type WelcomeBack = { lastChapter: number; awayMs: number };
 
 /** LIT-29 "since you were last here" — client-tracked (localStorage) last-open time + last-seen
  * bookmark. On reopen after a gap beyond the threshold, surface the recap ONCE with a welcome-back
@@ -28,7 +28,7 @@ export function useWelcomeBack(bookId: string, bookmark: number | null) {
         prior = null;
       }
       if (prior && typeof prior.t === "number" && Date.now() - prior.t > WELCOME_BACK_GAP_MS) {
-        setWelcomeBack({ lastChapter: bookmark });
+        setWelcomeBack({ lastChapter: bookmark, awayMs: Date.now() - prior.t });
       }
     } else {
       setWelcomeBack(null); // a later bookmark change is an interaction — resume the flowing view

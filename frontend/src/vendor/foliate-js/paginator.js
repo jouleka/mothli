@@ -442,6 +442,8 @@ export class Paginator extends HTMLElement {
     static observedAttributes = [
         'flow', 'gap', 'margin',
         'max-inline-size', 'max-block-size', 'max-column-count',
+        // Mothli: lets the host show a two-page spread in a tall but wide-enough area
+        'max-column-count-portrait',
     ]
     #root = this.attachShadow({ mode: 'closed' })
     #observer = new ResizeObserver(() => this.render())
@@ -652,6 +654,10 @@ export class Paginator extends HTMLElement {
             case 'max-block-size':
             case 'max-column-count':
                 this.#top.style.setProperty('--_' + name, value)
+                break
+            case 'max-column-count-portrait':
+                this.#top.style.setProperty('--_' + name, value)
+                this.render()
                 break
             case 'max-inline-size':
                 // needs explicit `render()` as it doesn't necessarily resize

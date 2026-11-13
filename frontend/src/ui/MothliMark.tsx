@@ -1,6 +1,7 @@
 import "./MothliMark.css";
+import { Moth, type MothMood } from "./Moth";
 
-/** One original book-moth mark shared by the app, toolbar, and conversation. */
-export function MothliMark({ className = "" }: { className?: string }) {
-  return <img className={`mothli-mark ${className}`} src="/mothli-icon.svg" alt="" aria-hidden="true" width={36} height={36} draggable={false} />;
+/** Mothli's small mark for toolbars and headers: the live moth, without its lamp-glow. */
+export function MothliMark({ className = "", mood = "idle", size = 36 }: { className?: string; mood?: MothMood; size?: number }) {
+  return <Moth className={`mothli-mark ${className}`} mood={mood} size={size} glow={false} />;
 }
