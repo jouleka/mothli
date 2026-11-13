@@ -172,9 +172,8 @@ describe("which files the library accepts", () => {
   });
 
   test("explains each kind it cannot take, in plain words", () => {
-    for (const kind of ["epub", "fb2", "kindle"] as const) expect(unsupportedBookMessage(kind)).toBeNull();
+    for (const kind of ["epub", "fb2", "kindle", "zipped"] as const) expect(unsupportedBookMessage(kind)).toBeNull();
     expect(unsupportedBookMessage("pdf")).toContain("PDFs aren’t supported yet");
-    expect(unsupportedBookMessage("zipped")).toContain("Unzip");
     expect(unsupportedBookMessage("kfx")).toContain("outside Kindle");
     expect(unsupportedBookMessage("unknown")).toContain("EPUB, FB2, MOBI or AZW3");
   });
