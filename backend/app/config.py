@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     recap_failure_max_entries: int = Field(default=128, ge=1)
     recap_max_inflight: int = Field(default=8, ge=1)
     epub_max_upload_bytes: int = Field(default=128 * 1024 * 1024, ge=1, lt=2 ** 63)
+    # "Pick a classic" downloads a curated public-domain book from Project Gutenberg when a reader
+    # asks for one. Turn off for an offline or air-gapped install; nothing is fetched otherwise.
+    classics_enabled: bool = True
     cost_max_input_tokens_per_call: int = Field(default=60_000, ge=1, lt=2 ** 63)
     cost_max_output_tokens_per_call: int = Field(default=4_096, ge=1, lt=2 ** 63)
     # Long-book ingestion can consume the old 2M default before reader preparation starts.

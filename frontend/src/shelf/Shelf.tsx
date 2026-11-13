@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Book } from "../api";
+import { api, type Book, type Classic, type ClassicsCatalog } from "../api";
 import { readingStreak, recentDays } from "../journey/journey";
 import { InstallApp } from "../pwa/InstallApp";
 import {
@@ -15,6 +15,7 @@ import { Moth } from "../ui/Moth";
 import { MothliMark } from "../ui/MothliMark";
 import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupportedBookMessage } from "../import/bookFiles";
 import { readLastPassage, sinceLabel } from "../reader/lastPassage";
+import { ClassicsPicker } from "./ClassicsPicker";
 import { ProviderSettings } from "./ProviderSettings";
 import "./shelf-redesign.css";
 
@@ -136,6 +137,12 @@ export function Shelf({
   const [layout, setLayout] = useState<"grid" | "list">("grid");
   const [dragging, setDragging] = useState(false);
   const [journey, setJourney] = useState<Journey | null>(null);
+  // Pick a classic: offered only when the server has a catalogue to offer.
+  const [classics, setClassics] = useState<ClassicsCatalog | null>(null);
+  const [showClassics, setShowClassics] = useState(false);
+  const [classicBusy, setClassicBusy] = useState<string | null>(null);
+  const [classicError, setClassicError] = useState<string | null>(null);
+  const classicsTrigger = useRef<HTMLElement | null>(null);
   const [recentState, setRecent] = useState(() => ({
     owner,
     ids: readRecent(owner),
@@ -159,9 +166,18 @@ export function Shelf({
       if (mounted.current) setErr(msg(error));
     }
   }, []);
+  const loadClassics = useCallback(async () => {
+    try {
+      const catalog = await Promise.resolve().then(() => api.classics());
+      if (mounted.current && catalog?.enabled && catalog.books.length) setClassics(catalog);
+    } catch {
+      /* no catalogue on this server: the shelf simply doesn't offer one */
+    }
+  }, []);
   useEffect(() => {
     mounted.current = true;
     void refresh();
+    void loadClassics();
     api
       .providerSettings()
       .then(() => {
@@ -171,7 +187,7 @@ export function Shelf({
     return () => {
       mounted.current = false;
     };
-  }, [refresh]);
+  }, [refresh, loadClassics]);
   useEffect(() => {
     let dead = false;
     if (!books || !("caches" in globalThis)) return;
@@ -258,6 +274,28 @@ export function Shelf({
     } finally {
       importLock.current = false;
       if (mounted.current) setBusy(false);
+    }
+  };
+  const openClassics = () => {
+    classicsTrigger.current = document.activeElement as HTMLElement | null;
+    setClassicError(null);
+    setShowClassics(true);
+  };
+  const closeClassics = useCallback(() => {
+    setShowClassics(false);
+    classicsTrigger.current?.focus();
+  }, []);
+  const addClassic = async (classic: Classic) => {
+    if (classicBusy) return;
+    setClassicBusy(classic.id);
+    setClassicError(null);
+    try {
+      await api.addClassic(classic.id);
+      await Promise.all([refresh(), loadClassics()]);
+    } catch (error) {
+      if (mounted.current) setClassicError(msg(error));
+    } finally {
+      if (mounted.current) setClassicBusy(null);
     }
   };
   const saveOffline = async (book: Book) => {
@@ -565,6 +603,11 @@ export function Shelf({
                   {busy ? "Adding your book…" : "Add a book"}
                 </Button>
                 <p className="ml-progress-where">or drop a book file anywhere</p>
+                {classics && (
+                  <button type="button" className="ml-classics-link" onClick={openClassics}>
+                    Nothing to hand? Pick a classic
+                  </button>
+                )}
               </div>
             </div>
             <div className="ml-page ml-page--right">
@@ -625,6 +668,11 @@ export function Shelf({
                 onChange={(event) => setQuery(event.currentTarget.value)}
               />
             </label>
+            {classics && !libraryEmpty && (
+              <button type="button" className="ml-classics-link" onClick={openClassics}>
+                Pick a classic
+              </button>
+            )}
             <label className="ml-sort">
               <span className="sr-only">Sort books</span>
               <select
@@ -791,6 +839,21 @@ export function Shelf({
 
       {showSettings && (
         <ProviderSettings onClose={() => setShowSettings(false)} />
+      )}
+      {showClassics && classics && (
+        <ClassicsPicker
+          catalog={classics}
+          busyId={classicBusy}
+          error={classicError}
+          onAdd={(classic) => {
+            void addClassic(classic);
+          }}
+          onOpen={(id) => {
+            setShowClassics(false);
+            openBook(id);
+          }}
+          onClose={closeClassics}
+        />
       )}
       {offlineStatus && (
         <div className="library-toast ml-toast" aria-live="polite">
