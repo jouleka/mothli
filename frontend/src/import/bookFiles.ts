@@ -5,7 +5,7 @@ export type BookFileKind = "epub" | "fb2" | "kindle" | "pdf" | "zipped" | "kfx" 
 
 export const BOOK_FORMATS = "EPUB, FB2, MOBI or AZW3";
 export const BOOK_ACCEPT =
-  ".epub,.fb2,.mobi,.azw,.azw3,.prc,application/epub+zip,application/x-fictionbook+xml,application/x-mobipocket-ebook,application/vnd.amazon.ebook";
+  ".epub,.fb2,.fb2.zip,.fbz,.zip,.mobi,.azw,.azw3,.prc,application/epub+zip,application/zip,application/x-fictionbook+xml,application/x-mobipocket-ebook,application/vnd.amazon.ebook";
 
 export function bookFileKind(file: { name: string; type: string }): BookFileKind {
   const name = file.name.toLowerCase();
@@ -21,15 +21,27 @@ export function bookFileKind(file: { name: string; type: string }): BookFileKind
 /** A plain explanation for a file the library can't take. Null when the file is fine to try. */
 export function unsupportedBookMessage(kind: BookFileKind): string | null {
   if (kind === "pdf") return `PDFs aren’t supported yet. Add an ${BOOK_FORMATS} book.`;
-  if (kind === "zipped") return "Unzip this file first, then add the book inside it.";
   if (kind === "kfx") return `This Kindle format can’t be read outside Kindle. Add an ${BOOK_FORMATS} book.`;
   if (kind === "unknown") return `Mothli can’t open this kind of file. Add an ${BOOK_FORMATS} book.`;
   return null;
 }
 
+/** The book inside a zip: an FB2 first (that is what zipped books almost always are), then others. */
+async function unzipBook(file: File): Promise<File> {
+  const [{ listZip, readZipEntry }, { BookImportError, readBytes }] = await Promise.all([import("./zipRead"), import("./epubWriter")]);
+  const bytes = await readBytes(file);
+  const entries = listZip(bytes).filter((entry) => !entry.name.endsWith("/") && !/(^|\/)(__MACOSX\/|\.)/.test(entry.name));
+  const rank = (name: string) => ["fb2", "epub", "kindle"].indexOf(bookFileKind({ name, type: "" }));
+  const book = entries.filter((entry) => rank(entry.name) >= 0).sort((a, b) => rank(a.name) - rank(b.name))[0];
+  if (!book) throw new BookImportError(`This zip doesn’t contain a book Mothli can open. Add an ${BOOK_FORMATS} book.`);
+  const inner = await readZipEntry(bytes, book);
+  return new File([inner as BlobPart], book.name.split("/").pop() || "book", { type: "" });
+}
+
 /** Turn a picked file into the EPUB the server expects. EPUBs pass straight through. */
 export async function prepareBookUpload(file: File): Promise<File> {
   const kind = bookFileKind(file);
+  if (kind === "zipped") return prepareBookUpload(await unzipBook(file));
   if (kind === "fb2") return (await import("./fb2ToEpub")).fb2ToEpub(file);
   if (kind === "kindle") return (await import("./mobiToEpub")).mobiToEpub(file);
   return file;
