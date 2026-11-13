@@ -17,7 +17,12 @@ import {
   type ReadFrontier,
   type SelectionAction,
 } from "../api";
-import { AskTheBook, type AskSession } from "./AskTheBook";
+import { AskTheBook, type AskSession, type CompanionSeed, type CompanionTab } from "./AskTheBook";
+import { MothCorner, WelcomeBackCard, type CornerNote } from "./MothMoments";
+import { crossedMilestone, milestoneLine, recordReadingDay, unlockCast } from "../journey/journey";
+import { Moth } from "../ui/Moth";
+import "./reader.css";
+import "./panels.css";
 import { readSavedReplies, writeSavedReplies, type SavedCompanionReply } from "./companionNotes";
 import "./simple-reader.css";
 import { admitRelocation, arrowPagingBlocked, jumpsAhead } from "./guard";
@@ -57,6 +62,10 @@ import { atomAtRange, pageAnchor, ReadFrontierReporter } from "./readFrontier";
 import { StartOverNote } from "./StartOverNote";
 import { useWelcomeBack } from "./welcomeBack";
 import { useCompactReaderShell } from "./mobileShell";
+import { NameCard } from "./NameCard";
+import { forgetLastPassage, minutesLeftLabel, saveLastPassage } from "./lastPassage";
+import { buildNameMatcher, markNames, nameAtPoint, rectInTopWindow, type NameIndex, type NameMatcher, type TapRect } from "./nameTaps";
+import type { GraphNode } from "../api";
 import {
   HIGHLIGHT_COLORS,
   localAnnotation,
@@ -68,7 +77,6 @@ import {
 } from "./readerMarks";
 import type { FoliateTTS } from "./tts";
 import { Icon } from "../ui/Icon";
-import { MothliMark } from "../ui/MothliMark";
 import { Button } from "../ui/Button";
 import { presentationFor } from "./bookProfile";
 import { activeOfflineOwner, flushOfflineMutations, queuePosition } from "../pwa/offline";
@@ -151,6 +159,10 @@ export function ReaderPage({
   const [notebookOpenRequest, setNotebookOpenRequest] = useState(0);
   const [askOpen, setAskOpen] = useState(false);
   const [initialAction, setInitialAction] = useState<"recap" | null>(null);
+  const [companionSeed, setCompanionSeed] = useState<CompanionSeed | null>(null);
+  const [companionNav, setCompanionNav] = useState<{ tab: CompanionTab; personId: number | null; nonce: number } | null>(null);
+  const [cornerNotes, setCornerNotes] = useState<CornerNote[]>([]);
+  const [streak, setStreak] = useState(0);
   const [replySnapshot, setReplySnapshot] = useState<{scope:string;replies:SavedCompanionReply[]}>({scope:"",replies:[]});
   const workspaceTriggerRef = useRef<HTMLElement | null>(null);
   const askSessionRef = useRef<AskSession | null>(null);
@@ -211,6 +223,35 @@ export function ReaderPage({
   const preferencesRef = useRef(preferences);
   const sectionAtomRef = useRef<number[]>([]);
   const marksRef = useRef<ReaderMark[]>([]);
+  // Tap a name in the text: the cast known up to the reader's frontier, and where it appears on
+  // each loaded page. Kept outside the EPUB DOM so positions and highlights are untouched.
+  const [cast, setCast] = useState<GraphNode[]>([]);
+  const [nameCard, setNameCard] = useState<{ person: GraphNode; anchor: TapRect; calledAs: string } | null>(null);
+  const castRef = useRef<GraphNode[]>([]);
+  const nameMatcherRef = useRef<NameMatcher>(buildNameMatcher([]));
+  const nameDocsRef = useRef(new Map<Document, NameIndex>());
+  const closeNameCard = useCallback(() => setNameCard(null), []);
+  // The reader engine's own estimate of reading time left in this chapter, in minutes.
+  const [minutesLeft, setMinutesLeft] = useState<number | null>(null);
+  // Keys pressed while focus is inside the book page arrive here, since the page is an iframe.
+  const shortcutRef = useRef<(event: KeyboardEvent) => void>(() => {});
+  // A per-device choice, like the theme: some readers want the page completely plain.
+  const [nameTapsOn, setNameTapsOn] = useState(() => {
+    try {
+      return localStorage.getItem("mothli.nameTaps") !== "off";
+    } catch {
+      return true;
+    }
+  });
+  const changeNameTaps = (on: boolean) => {
+    setNameTapsOn(on);
+    if (!on) setNameCard(null);
+    try {
+      localStorage.setItem("mothli.nameTaps", on ? "on" : "off");
+    } catch {
+      /* optional preference */
+    }
+  };
   const localMarksRef = useRef<ReaderMark[]>([]);
   const hostedMarksRef = useRef(true);
   const lastAtomRef = useRef(0); // atom of the last accepted report (follows the reader backward)
@@ -258,7 +299,10 @@ export function ReaderPage({
       setPreferences(normalized);
       cacheReaderPreferences(bookId, normalized);
       if (viewRef.current)
+      {
         applyReaderPreferences(viewRef.current.renderer, normalized);
+        viewRef.current.renderer.setAttribute("max-column-count", "2"); // a two-page spread whenever there is room
+      }
       preferenceSaverRef.current?.schedule(normalized);
     },
     [bookId],
@@ -689,15 +733,35 @@ export function ReaderPage({
           doc.addEventListener("keyup", (event) => {
             if (event.key === "Shift" || event.shiftKey) captureSelection();
           });
+          doc.addEventListener("keydown", (event) => {
+            if (!dead) shortcutRef.current(event);
+          });
+          for (const known of [...nameDocsRef.current.keys()])
+            if (!known.defaultView) nameDocsRef.current.delete(known);
+          nameDocsRef.current.set(doc, markNames(doc, nameMatcherRef.current));
+          doc.addEventListener("click", (event) => {
+            if (dead) return;
+            const selected = doc.getSelection();
+            if (selected && !selected.isCollapsed) return;
+            const names = nameDocsRef.current.get(doc);
+            if (!names) return;
+            const hit = nameAtPoint(doc, names, event.clientX, event.clientY);
+            const person = hit && castRef.current.find((item) => item.entity_id === hit.entityId);
+            if (!hit || !person) return;
+            event.preventDefault();
+            setNameCard({ person, anchor: rectInTopWindow(hit.range), calledAs: hit.range.toString().replace(/\s+/g, " ").trim() });
+          });
         });
 
         view.addEventListener("relocate", (e) => {
           if (dead) return;
+          setNameCard(null);
           setFinishCandidate(null);
           const d = (e as CustomEvent).detail as {
             cfi?: string;
             range?: Range;
             section?: { current: number };
+            time?: { section?: number };
           };
           const idx = d.section?.current;
           if (d.cfi == null || idx == null) return;
@@ -717,6 +781,8 @@ export function ReaderPage({
           maxAtomRef.current = Math.max(maxAtomRef.current, atom);
           setCurrentAtom(atom);
           setCurrentAnchor({ cfi: d.cfi, atom: atom + 1 });
+          setMinutesLeft(typeof d.time?.section === "number" ? d.time.section : null);
+          if (d.range) saveLastPassage(activeOfflineOwner(), bookId, d.range.toString());
           if (d.range) {
             const readRange = d.range.cloneRange();
             const cfi = d.cfi;
@@ -777,6 +843,21 @@ export function ReaderPage({
         // Set both iframe typography and paginator geometry before the first section is initialized,
         // so remote preferences never cause a visible post-render reflow on resume.
         applyReaderPreferences(view.renderer, loadedPreferences);
+        view.renderer.setAttribute("max-column-count", "2"); // a two-page spread whenever there is room
+        // The engine drops to one page whenever the book area is taller than wide, even on a big
+        // window. Spread by width instead: two pages once there is room for two readable columns.
+        const syncSpread = () => {
+          const width = holder.current?.clientWidth ?? 0;
+          view.renderer.setAttribute("max-column-count-portrait", width >= 900 ? "2" : "1");
+        };
+        syncSpread();
+        const spreadObserver = typeof ResizeObserver === "function" ? new ResizeObserver(syncSpread) : null;
+        if (holder.current) spreadObserver?.observe(holder.current);
+        const disposeReaderMotion = disposeMotion;
+        disposeMotion = () => {
+          disposeReaderMotion();
+          spreadObserver?.disconnect();
+        };
         // Older imports may have a completed-chapter bookmark without a CFI. Resume at the next
         // unread atom only when the whole-spine map validates its file; never guess a spine index.
         if (saved.cfi) await view.init({ lastLocation: saved.cfi });
@@ -868,8 +949,7 @@ export function ReaderPage({
       if (pendingJump || startOverOpen) return; // the confirm dialog owns the keyboard while open
       // don't hijack arrows when focus is in a control/region where arrows have their own meaning
       if (arrowPagingBlocked(e.target)) return;
-      if (e.key === "ArrowRight") viewRef.current?.next();
-      if (e.key === "ArrowLeft") viewRef.current?.prev();
+      shortcutRef.current(e);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -899,6 +979,7 @@ export function ReaderPage({
       allowJumpRef.current = false;
       setPendingJump(null);
       forget();
+      forgetLastPassage(activeOfflineOwner(), bookId);
       setPos({
         bookmark: 0,
         current_chapter: 1,
@@ -1148,9 +1229,79 @@ export function ReaderPage({
   const unit = presentationFor(
     manifest?.book_profile?.book_type ?? "novel",
   ).unit;
+  const completedTitle = (chapter: number) =>
+    manifest?.atoms[chapter - 1]?.title?.trim() || `${unit} ${chapter}`;
+  const throughLabel = pos && pos.bookmark > 0 ? completedTitle(pos.bookmark) : "";
 
-  const openConversation = (action: "recap" | null = null) => {
+  // Journey: the streak on open, and Mothli's moments when a chapter is finished.
+  useEffect(() => {
+    if (readerReady) setStreak(recordReadingDay());
+  }, [readerReady]);
+  const pushNote = useCallback((note: CornerNote) => {
+    setCornerNotes((current) => [note, ...current.filter((item) => item.id !== note.id)].slice(0, 3));
+  }, []);
+  const dismissNote = useCallback((id: string) => {
+    setCornerNotes((current) => current.filter((item) => item.id !== id));
+  }, []);
+
+  const lastSeenBookmark = useRef<number | null>(null);
+  useEffect(() => {
+    const bookmark = pos?.bookmark;
+    if (bookmark == null || !manifest) return;
+    const previous = lastSeenBookmark.current;
+    lastSeenBookmark.current = bookmark;
+    if (previous == null || bookmark <= previous || bookmark > manifest.atoms.length) return;
+    const role = manifest.atoms[bookmark - 1]?.content_role;
+    if (role && role !== "content") return;
+    const chapterTitle = completedTitle(bookmark);
+    const noteId = `chapter-${bookmark}`;
+    const tellMe = {
+      label: "Tell me",
+      run: () =>
+        openConversation(null, {
+          id: `closeout-${bookmark}-${Date.now()}`,
+          kind: "closeout",
+          chapter: bookmark,
+          label: `After ${chapterTitle}`,
+        }),
+    };
+    const mark = crossedMilestone(previous, bookmark, manifest.atoms.length);
+    pushNote({
+      id: noteId,
+      text: `${mark ? `${milestoneLine(mark, title || "this book")} ` : ""}That’s ${chapterTitle} done! Want to hear what I noticed?`,
+      action: tellMe,
+    });
+    Promise.resolve()
+      .then(() => api.notes(bookId, bookmark))
+      .then((notes) => {
+        const chapter = notes?.chapters?.find((item) => item.revealed_at === bookmark);
+        const fresh = unlockCast(bookId, (chapter?.new_characters ?? []).map((person) => person.entity_id));
+        if (!fresh.length || !chapter) return;
+        const people = chapter.new_characters.filter((person) => fresh.includes(person.entity_id));
+        setCornerNotes((current) =>
+          current.map((note) =>
+            note.id === noteId
+              ? {
+                  ...note,
+                  people,
+                  text: `That’s ${chapterTitle} done! You met ${people.length === 1 ? "someone new" : `${people.length} new people`}. Want to hear what I noticed?`,
+                }
+              : note,
+          ),
+        );
+      })
+      .catch(() => {});
+  }, [pos?.bookmark, manifest]);
+
+  const openConversation = (
+    action: "recap" | null = null,
+    seed: CompanionSeed | null = null,
+    tab: CompanionTab = "talk",
+    personId: number | null = null,
+  ) => {
     setInitialAction(action);
+    if (seed) setCompanionSeed(seed);
+    setCompanionNav({ tab, personId, nonce: Date.now() });
     workspaceTriggerRef.current = document.activeElement as HTMLElement | null;
     setAskOpen(true);
     dismiss();
@@ -1169,55 +1320,94 @@ export function ReaderPage({
     setSourceReturn(null);
   };
 
+  const prefersDark =
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+      : false;
+  const isDark = preferences.theme === "night" || (preferences.theme === "system" && prefersDark);
+  useEffect(() => {
+    document.documentElement.dataset.theme = isDark ? "dark" : "light";
+    try {
+      localStorage.setItem("mothli.theme", isDark ? "dark" : "light");
+    } catch {
+      /* optional */
+    }
+  }, [isDark]);
+
+  const totalChapters = manifest?.atoms.length ?? 0;
+  const percent = totalChapters ? Math.round((Math.min(pos?.bookmark ?? 0, totalChapters) / totalChapters) * 100) : 0;
+  const latestNote = cornerNotes[0] ?? null;
+  // Reading shortcuts: arrows turn the page, "/" opens Mothli, "n" opens the Notebook.
+  shortcutRef.current = (event) => {
+    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (pendingJump || startOverOpen || modalOpen) return;
+    if (event.key === "ArrowRight") viewRef.current?.next();
+    else if (event.key === "ArrowLeft") viewRef.current?.prev();
+    else if (event.key === "/" && pos) {
+      event.preventDefault();
+      if (!askOpen) openConversation();
+    } else if (event.key === "n" || event.key === "N") {
+      event.preventDefault();
+      setNotebookOpenRequest((value) => value + 1);
+    }
+  };
+  const readerBookmark = Math.max(pos?.bookmark ?? 0, readFrontier?.available_chapter ?? 0);
+  useEffect(() => {
+    if (readerBookmark < 1) {
+      setCast([]);
+      return;
+    }
+    let live = true;
+    Promise.resolve()
+      .then(() => api.graph(bookId, readerBookmark))
+      .then((graph) => {
+        if (live && graph && graph.as_of_chapter <= readerBookmark) setCast(graph.characters ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [bookId, readerBookmark]);
+  useEffect(() => {
+    castRef.current = cast;
+    nameMatcherRef.current = buildNameMatcher(nameTapsOn ? cast : []);
+    for (const doc of [...nameDocsRef.current.keys()]) {
+      if (!doc.defaultView) nameDocsRef.current.delete(doc);
+      else nameDocsRef.current.set(doc, markNames(doc, nameMatcherRef.current));
+    }
+  }, [cast, nameTapsOn]);
+
   return (
     <div
-      className="reader-grid simple-reader"
+      className="reader-grid mr"
       ref={gridRef}
       data-reader-theme={preferences.theme}
       data-chat-open={askOpen || undefined}
+      data-compact={compactShell || undefined}
     >
       <a className="skip-link" href="#main">
         skip to the book
       </a>
-      <main id="main" className="book-pane" tabIndex={-1}>
-        <header className="running-head">
-          <div className="reader-titlebar">
-            <button
-              className="plain reader-library"
-              aria-label="Back to library"
-              title="Back to your library"
-              onClick={onBack}
-            >
-              <Icon name="arrowLeft" />
-            </button>
-            <div className="reader-title-group">
-              <h1 className="title">{title || "Opening your book…"}</h1>
-              <span className="chapter">
-                {chapterLabel || "Your reading space"}
-              </span>
-            </div>
-            <span
-              className={`sync-state ${syncState}`}
-              role="status"
-              aria-live="polite"
-            >
-              {syncState === "saving" || syncState === "pending"
-                ? "Saving…"
-                : syncState === "queued"
-                  ? "Waiting to sync"
-                  : syncState === "conflict"
-                    ? "Newer progress kept"
-                    : syncState === "error"
-                      ? "Sync needs attention"
-                      : "Saved"}
-            </span>
-
+      <main id="main" className="book-pane mr-main" tabIndex={-1}>
+        <header className="running-head mr-top">
+          <button className="plain reader-library mr-back" aria-label="Back to library" title="Back to your library" onClick={onBack}>
+            <Icon name="arrowLeft" size={18} />
+            <span>Library</span>
+          </button>
+          <div className="mr-title">
+            <h1 className="title">{title || "Opening your book…"}</h1>
+            <span className="chapter">{chapterLabel || " "}</span>
           </div>
-          <div
-            className="reader-toolbar"
-            role="group"
-            aria-label="Reading tools"
-          >
+          <div className="mr-tools reader-toolbar" role="group" aria-label="Reading tools">
+            {streak > 0 && (
+              <span className="mr-streak" title={`${streak} days in a row`}>
+                <svg width="13" height="15" viewBox="0 0 14 16" aria-hidden="true">
+                  <path d="M7 1c1 3 5 4.5 5 9a5 5 0 0 1-10 0c0-2.4 1.4-3.4 2-5 .8 1.4 1.6 2 2.4 2C6.4 5 6.2 3 7 1Z" fill="currentColor" />
+                </svg>
+                <span className="sr-only">Reading streak:</span>
+                {streak}
+              </span>
+            )}
             <ReaderNavigation
               toc={toc}
               atoms={manifest?.atoms ?? []}
@@ -1252,8 +1442,7 @@ export function ReaderPage({
               }
               status={marksStatus}
               onAssist={(action) => {
-                if (readerSelection)
-                  setSelectionAssist({ action, selection: readerSelection });
+                if (readerSelection) setSelectionAssist({ action, selection: readerSelection });
               }}
               onHighlight={(color) => {
                 void saveHighlight(color);
@@ -1271,78 +1460,108 @@ export function ReaderPage({
                 void deleteReaderMark(mark);
               }}
               openRequest={notebookOpenRequest}
-              onSourceJump={() => { if(currentAnchor) setSourceReturn({cfi:currentAnchor.cfi,destination:"notebook"}); }}
+              onSourceJump={() => {
+                if (currentAnchor) setSourceReturn({ cfi: currentAnchor.cfi, destination: "notebook" });
+              }}
               savedReplies={savedReplies}
               onTalkAboutSelection={() => openConversation()}
               onNavigateReply={(reply) => {
                 const citation = reply.citations[0];
                 if (citation) void viewRef.current?.goTo(citation.cfi ?? citation.href);
               }}
-              onDeleteReply={(id) => { try { saveReplies(savedReplies.filter((reply) => reply.id !== id)); setMarksStatus("Deleted"); } catch { setMarksStatus("Couldn’t delete. Try again."); } }}
+              onDeleteReply={(id) => {
+                try {
+                  saveReplies(savedReplies.filter((reply) => reply.id !== id));
+                  setMarksStatus("Deleted");
+                } catch {
+                  setMarksStatus("Couldn’t delete. Try again.");
+                }
+              }}
               onClearSelection={clearReaderSelection}
             />
-            <button className="plain reader-tool mothli-trigger" disabled={!pos} aria-label="Talk to Mothli" aria-expanded={askOpen} onClick={() => askOpen ? closeWorkspace() : openConversation()}>
-              <MothliMark /><span>Mothli</span>
-            </button>
             <details className="reader-settings-menu">
-              <summary className="plain reader-tool" aria-label="Reading settings" title="Reading settings"><Icon name="settings" /><span>Settings</span></summary>
+              <summary className="plain reader-tool mr-aa" aria-label="Reading settings" title="Text size, font and theme">
+                <span aria-hidden="true">Aa</span>
+                <span className="sr-only">Settings</span>
+              </summary>
               <div className="reader-settings-body">
-                <ReaderControls preferences={preferences} onChange={changePreferences} status={preferenceStatus} />
+                <ReaderControls preferences={preferences} onChange={changePreferences} status={preferenceStatus} nameTaps={nameTapsOn} onNameTapsChange={changeNameTaps} />
                 <ReaderTTS getView={() => viewRef.current} getVisibleRange={() => visibleRangeRef.current} inactive={modalOpen || startOverOpen} resetKey={bookId} />
-                {pos && pos.bookmark > 0 && <button className="plain reader-reset" aria-label="Start over" onClick={() => {
-                  positionReportingPausedRef.current = true;
-                  setStartOverError(null);
-                  setStartOverOpen(true);
-                }}><Icon name="refresh" size={16}/><span>Start over</span></button>}
+                {pos && pos.bookmark > 0 && (
+                  <button
+                    className="plain reader-reset"
+                    aria-label="Start over"
+                    onClick={() => {
+                      positionReportingPausedRef.current = true;
+                      setStartOverError(null);
+                      setStartOverOpen(true);
+                    }}
+                  >
+                    <Icon name="refresh" size={16} />
+                    <span>Start over</span>
+                  </button>
+                )}
               </div>
             </details>
+            <button
+              className="plain reader-tool mr-theme"
+              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              title={isDark ? "Light mode" : "Dark mode"}
+              onClick={() => changePreferences({ ...preferences, theme: isDark ? "paper" : "night" })}
+            >
+              {isDark ? (
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+                </svg>
+              ) : (
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
+                </svg>
+              )}
+            </button>
+            <span className={`sync-state ${syncState}`} role="status" aria-live="polite">
+              {syncState === "saving" || syncState === "pending"
+                ? "Saving…"
+                : syncState === "queued"
+                  ? "Waiting to sync"
+                  : syncState === "conflict"
+                    ? "Newer progress kept"
+                    : syncState === "error"
+                      ? "Sync needs attention"
+                      : "Saved"}
+            </span>
           </div>
         </header>
-        {welcomeBack && (
-          <section className="reader-return-card welcome-back" aria-label="Welcome back">
-            <Icon name="book" size={22} />
-            <strong>Welcome back</strong>
-            <Button variant="primary" onClick={() => openConversation("recap")}>Catch me up</Button>
-            <Button variant="ghost" className="icon-button" aria-label="Dismiss welcome back" onClick={() => { dismiss(); gridRef.current?.querySelector<HTMLElement>("#main")?.focus(); }}><Icon name="close" /></Button>
-          </section>
+
+        {sourceReturn && (
+          <div className="mothli-source-return">
+            <Button icon="arrowLeft" onClick={returnToConversation}>
+              {sourceReturn.destination === "mothli" ? "Back to Mothli" : "Back to Notebook"}
+            </Button>
+          </div>
         )}
-        {sourceReturn && <div className="mothli-source-return"><Button icon="arrowLeft" onClick={returnToConversation}>{sourceReturn.destination === "mothli" ? "Back to Mothli" : "Back to Notebook"}</Button></div>}
-        <div
-          className="book-view"
-          ref={holder}
-          role="region"
-          aria-label="Book pages"
-        />
+        <div className="book-view mr-book" ref={holder} role="region" aria-label="Book pages" />
         {!readerReady && !fatal && (
-          <div className="reader-loading" role="status">
-            <Icon name="book" size={30} />
+          <div className="reader-loading mr-loading" role="status">
+            <Moth mood="thinking" size={72} glow={false} />
             <span>Opening your book…</span>
           </div>
         )}
         {fatal && (
-          <div className="reader-fatal" role="alert">
-            <Icon name="book" size={30} />
+          <div className="reader-fatal mr-loading" role="alert">
+            <Moth mood="sleepy" size={72} glow={false} />
             <h2>A moment between chapters.</h2>
             <p>The book could not be opened: {fatal}</p>
             <div className="reader-fatal-actions">
-              <Button
-                variant="primary"
-                icon="refresh"
-                onClick={() => setLoadAttempt((attempt) => attempt + 1)}
-              >
+              <Button variant="primary" icon="refresh" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
                 Try again
               </Button>
               <Button onClick={onBack}>Back to library</Button>
             </div>
           </div>
         )}
-        {pendingJump && (
-          <JumpNote
-            chapter={pendingJump.chapter}
-            onFollow={followJump}
-            onStay={() => setPendingJump(null)}
-          />
-        )}
+        {pendingJump && <JumpNote chapter={pendingJump.chapter} onFollow={followJump} onStay={() => setPendingJump(null)} />}
         {startOverOpen && (
           <StartOverNote
             busy={startOverBusy}
@@ -1355,63 +1574,109 @@ export function ReaderPage({
             }}
           />
         )}
-        <footer className="reader-footer">
-          <span>
-            {pos && manifest
-              ? manifest.atoms[Math.min(pos.current_chapter, manifest.atoms.length) - 1]?.title || `${unit[0].toUpperCase() + unit.slice(1)} ${Math.min(pos.current_chapter, manifest.atoms.length)}`
-              : "Preparing your pages"}
-          </span>
-          <span className="reader-page-hint">Use ← → to turn the page</span>
-          <div className="reader-page-buttons">
-            {finishCandidate &&
-              manifest &&
-              readerReady &&
-              !startOverOpen &&
-              !pendingJump &&
-              (pos?.bookmark ?? 0) < manifest.atoms.length && (
-                <Button
-                  variant="primary"
-                  disabled={syncState === "saving"}
-                  onClick={() => {
-                    if (positionReportingPausedRef.current) return;
-                    reporterRef.current?.complete(
-                      finishCandidate.cfi,
-                      finishCandidate.offset,
-                      manifest.atoms.length,
-                      positionEpochRef.current,
-                    );
-                  }}
-                >
-                  Finish book
-                </Button>
-              )}
-            <button
-              className="page-nav prev"
-              aria-label="Previous page"
-              disabled={!readerReady || startOverOpen || !!pendingJump}
-              onClick={() => viewRef.current?.prev()}
-            >
-              <Icon name="arrowLeft" size={17} />
-            </button>
-            <button
-              className="page-nav next"
-              aria-label="Next page"
-              disabled={!readerReady || startOverOpen || !!pendingJump}
-              onClick={() => viewRef.current?.next()}
-            >
-              <Icon name="arrowRight" size={17} />
-            </button>
+
+        <footer className="reader-footer mr-bottom">
+          <button
+            className="page-nav prev mr-turn"
+            aria-label="Previous page"
+            disabled={!readerReady || startOverOpen || !!pendingJump}
+            onClick={() => viewRef.current?.prev()}
+          >
+            <Icon name="arrowLeft" size={20} />
+          </button>
+          <div className="mr-progress">
+            <span>{totalChapters ? `${unit[0].toUpperCase()}${unit.slice(1)} ${Math.min(currentAtom + 1, totalChapters)} of ${totalChapters}` : "Preparing your pages"}</span>
+            <div className="mr-bar" aria-hidden="true">
+              <div style={{ width: `${percent}%` }} />
+            </div>
+            <span className="mr-percent">{percent}%</span>
+            {readerReady && minutesLeftLabel(minutesLeft, unit) && (
+              <span className="mr-time">{minutesLeftLabel(minutesLeft, unit)}</span>
+            )}
           </div>
+          {finishCandidate &&
+            manifest &&
+            readerReady &&
+            !startOverOpen &&
+            !pendingJump &&
+            (pos?.bookmark ?? 0) < manifest.atoms.length && (
+              <Button
+                variant="primary"
+                className="mr-finish"
+                disabled={syncState === "saving"}
+                onClick={() => {
+                  if (positionReportingPausedRef.current) return;
+                  reporterRef.current?.complete(finishCandidate.cfi, finishCandidate.offset, manifest.atoms.length, positionEpochRef.current);
+                }}
+              >
+                Finish book
+              </Button>
+            )}
+          <button
+            className="page-nav next mr-turn mr-turn--next"
+            aria-label="Next page"
+            disabled={!readerReady || startOverOpen || !!pendingJump}
+            onClick={() => viewRef.current?.next()}
+          >
+            <Icon name="arrowRight" size={20} />
+          </button>
         </footer>
+
+        {!askOpen && (
+          <MothCorner
+            note={latestNote}
+            disabled={!pos}
+            welcome={
+              welcomeBack && pos ? (
+                <WelcomeBackCard
+                  bookId={bookId}
+                  bookmark={pos.bookmark}
+                  awayMs={welcomeBack.awayMs}
+                  onCatchUp={(recap) =>
+                    recap
+                      ? openConversation(null, {
+                          id: `recap-${Date.now()}`,
+                          kind: "recap",
+                          label: "While you were away",
+                          text: [recap.now, recap.recap].filter(Boolean).join("\n\n"),
+                          asOfChapter: recap.as_of_chapter,
+                        })
+                      : openConversation("recap")
+                  }
+                  onPerson={(name) =>
+                    openConversation(null, {
+                      id: `ask-${Date.now()}`,
+                      kind: "ask",
+                      prompt: `Remind me who ${name} is.`,
+                    })
+                  }
+                  onDismiss={() => {
+                    dismiss();
+                    gridRef.current?.querySelector<HTMLElement>("#main")?.focus();
+                  }}
+                />
+              ) : undefined
+            }
+            onOpen={() => {
+              if (latestNote) dismissNote(latestNote.id);
+              openConversation();
+            }}
+            onDismiss={() => latestNote && dismissNote(latestNote.id)}
+            onPerson={(id) => openConversation(null, null, "people", id)}
+          />
+        )}
       </main>
       {askOpen && (
         <AskTheBook
           bookId={bookId}
-          bookmark={Math.max(pos?.bookmark ?? 0, readFrontier?.available_chapter ?? 0)}
+          bookmark={readerBookmark}
           prepareReadContext={prepareReadContext}
           throughCurrentPage={readFrontier !== null}
           readingPass={readingPass}
           initialAction={initialAction}
+          seed={companionSeed}
+          navigate={companionNav}
+          chapterLabel={throughLabel}
           embedded
           compact={compactShell}
           selection={readerSelection}
@@ -1420,11 +1685,29 @@ export function ReaderPage({
           onSaveReply={(reply) => saveReplies([...savedReplies.filter((saved) => saved.id !== reply.id), { ...reply, createdAt: new Date().toISOString() }])}
           onNavigate={(citation) => {
             setInitialAction(null);
-            setSourceReturn(currentAnchor ? {cfi:currentAnchor.cfi,destination:"mothli"} : null);
+            setSourceReturn(currentAnchor ? { cfi: currentAnchor.cfi, destination: "mothli" } : null);
             closeWorkspace();
             void viewRef.current?.goTo(citation.cfi ?? citation.href);
           }}
           onClose={closeWorkspace}
+        />
+      )}
+      {nameCard && (
+        <NameCard
+          bookId={bookId}
+          bookmark={readerBookmark}
+          person={nameCard.person}
+          calledAs={nameCard.calledAs}
+          anchor={nameCard.anchor}
+          onAsk={(name) => {
+            setNameCard(null);
+            openConversation(null, { id: `ask-${Date.now()}`, kind: "ask", prompt: `Remind me who ${name} is.` });
+          }}
+          onMore={(id) => {
+            setNameCard(null);
+            openConversation(null, null, "people", id);
+          }}
+          onClose={closeNameCard}
         />
       )}
       {selectionAssist && (
@@ -1443,7 +1726,6 @@ export function ReaderPage({
           }}
         />
       )}
-
     </div>
   );
 }

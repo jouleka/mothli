@@ -74,10 +74,15 @@ export function ReaderControls({
   preferences,
   onChange,
   status,
+  nameTaps,
+  onNameTapsChange,
 }: {
   preferences: ReaderPreferences;
   onChange: (preferences: ReaderPreferences) => void;
   status: PreferenceSaveStatus;
+  /** Whether names Mothli knows are underlined and tappable. Kept per device, not synced. */
+  nameTaps?: boolean;
+  onNameTapsChange?: (on: boolean) => void;
 }) {
   const { open, closing, id, triggerRef, panelRef, toggle, close } =
     useReaderPopover();
@@ -156,38 +161,32 @@ export function ReaderControls({
               <Icon name="close" />
             </Button>
           </div>
-          <div className="appearance-preview-frame">
-            <div
-              className="appearance-preview"
-              aria-label="Reading preview"
-              data-preview-theme={preferences.theme}
-              data-preview-size={preferences.font_size}
-              data-preview-spacing={preferences.line_height}
-              data-preview-measure={preferences.measure}
-              data-preview-margins={preferences.margins}
-              data-preview-typeface={preferences.typeface}
-            >
-              <span className="appearance-preview-kicker">A moment to read</span>
-              <p>
-                The evening settled softly around the room. For a little while,
-                there was only the quiet pleasure of another page.
-              </p>
-            </div>
-            <span className="appearance-preview-caption">Make the page feel like yours.</span>
-          </div>
-          <fieldset className="reading-moods">
-            <legend>Set the mood</legend>
-            <div>
-              {([
-                { name: "Daylight", detail: "Clear & spacious", theme: "paper", typeface: "serif", line_height: "comfortable" },
-                { name: "Candlelight", detail: "Warm & unhurried", theme: "sepia", typeface: "serif", line_height: "relaxed" },
-                { name: "After hours", detail: "A softer night", theme: "night", typeface: "sans", line_height: "relaxed" },
-              ] as const).map(mood => <button key={mood.name} type="button" data-mood={mood.theme} aria-pressed={preferences.theme === mood.theme && preferences.typeface === mood.typeface && preferences.line_height === mood.line_height} onClick={() => onChange({ ...preferences, theme: mood.theme, typeface: mood.typeface, line_height: mood.line_height })}><span aria-hidden="true">Aa</span><strong>{mood.name}</strong><small>{mood.detail}</small></button>)}
-            </div>
-          </fieldset>
           <div className="appearance-groups appearance-essentials">
             {renderGroup(GROUPS.find((group) => group.key === "theme")!)}
             {renderGroup(GROUPS.find((group) => group.key === "font_size")!)}
+            {onNameTapsChange && (
+              <fieldset className="appearance-group appearance-group--names">
+                <legend>Names in the text</legend>
+                <div className="preset-row">
+                  {(
+                    [
+                      [true, "Tappable"],
+                      [false, "Plain"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <label key={label}>
+                      <input
+                        type="radio"
+                        name={`${id}-names`}
+                        checked={(nameTaps ?? true) === value}
+                        onChange={() => onNameTapsChange(value)}
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
           </div>
           <div className="appearance-customize">
             <button

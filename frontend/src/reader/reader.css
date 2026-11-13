@@ -1,0 +1,401 @@
+/* The reading screen: a quiet top bar, the book as a two-page spread, progress at the bottom,
+ * Mothli in the corner. Every colour comes from the theme skin, so light stays light and dark
+ * stays dark. */
+
+.reader-grid.mr {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--m-bg);
+  color: var(--m-ink);
+  font-family: var(--m-ui);
+}
+.reader-grid.mr[data-chat-open] {
+  grid-template-columns: minmax(0, 1fr) 420px;
+}
+
+.mr .book-pane.mr-main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 0;
+  background: var(--m-bg);
+}
+
+/* top bar */
+.mr .running-head.mr-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  height: 68px;
+  min-height: 68px;
+  padding: 0 28px;
+  border: 0;
+  background: transparent;
+  flex-direction: row;
+}
+.mr .mr-back.reader-library {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  height: 40px;
+  padding: 0 14px 0 10px;
+  border: 0;
+  border-radius: 20px;
+  background: transparent;
+  color: var(--m-soft);
+  font: 700 15px var(--m-ui);
+  cursor: pointer;
+}
+.mr .mr-back:hover {
+  background: var(--m-surface-2);
+  color: var(--m-ink);
+}
+.mr .mr-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  max-width: 52vw;
+  text-align: center;
+}
+.mr .running-head .mr-title h1.title {
+  margin: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 800 15px/1.3 var(--m-ui);
+  letter-spacing: 0;
+  color: var(--m-ink);
+}
+.mr .mr-title .chapter {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 700 12px/1.3 var(--m-ui);
+  color: var(--m-faint);
+}
+.mr .mr-tools.reader-toolbar {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.mr .mr-tools .reader-tool,
+.mr .mr-tools summary.reader-tool {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--m-soft);
+  cursor: pointer;
+  list-style: none;
+}
+.mr .mr-tools summary.reader-tool::-webkit-details-marker {
+  display: none;
+}
+.mr .mr-tools .reader-tool > span:not(.sr-only):not([aria-hidden]) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.mr .mr-tools .reader-tool > svg {
+  width: 20px;
+  height: 20px;
+}
+.mr .mr-tools .reader-tool:hover,
+.mr .mr-tools .reader-tool[aria-expanded="true"],
+.mr .mr-tools details[open] > summary.reader-tool {
+  background: var(--m-surface-2);
+  color: var(--m-ink);
+}
+.mr .mr-aa > span[aria-hidden] {
+  font: 400 17px/1 var(--m-book);
+}
+.mr .mr-streak {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  margin-right: 6px;
+  padding: 0 13px;
+  border-radius: 18px;
+  background: var(--m-streak-bg);
+  color: var(--m-streak-ink);
+  font: 800 13px var(--m-ui);
+}
+.mr .mr-streak svg {
+  color: var(--m-flame);
+}
+.mr .mr-tools .sync-state {
+  width: 8px;
+  margin-left: 4px;
+  font-size: 0;
+}
+.mr .mr-tools .sync-state.queued,
+.mr .mr-tools .sync-state.error,
+.mr .mr-tools .sync-state.conflict {
+  width: auto;
+  font-size: 12px;
+}
+
+/* popovers open under their button, aligned to the right edge */
+.mr .mr-tools .reader-navigation,
+.mr .mr-tools .reader-marks,
+.mr .mr-tools .reader-settings-menu {
+  position: relative;
+}
+.mr .mr-tools .reader-popover,
+.mr .mr-tools .navigation-panel,
+.mr .mr-tools .marks-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  left: auto;
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100dvh - 110px);
+  border: 0;
+  border-radius: 22px;
+  background: var(--m-surface);
+  color: var(--m-ink);
+  box-shadow: var(--m-shadow);
+  z-index: 40;
+}
+.mr .reader-settings-body {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  left: auto;
+  min-width: 240px;
+  border: 0;
+  border-radius: 22px;
+  background: var(--m-surface);
+  box-shadow: var(--m-shadow);
+  z-index: 40;
+}
+.mr .reader-settings-body .reader-popover {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+}
+
+/* the book */
+.mr .book-view.mr-book {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  margin: 0 auto;
+  padding: 8px 32px 0;
+  box-sizing: border-box;
+}
+
+.mr .reader-loading.mr-loading,
+.mr .reader-fatal.mr-loading {
+  position: absolute;
+  inset: 68px 0 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--m-bg);
+  color: var(--m-soft);
+  font: 700 15px var(--m-ui);
+}
+.mr .reader-fatal h2 {
+  margin: 0;
+  font: 800 24px var(--m-ui);
+  color: var(--m-ink);
+}
+
+/* bottom bar */
+.mr .reader-footer.mr-bottom {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 64px;
+  min-height: 64px;
+  padding: 0 28px;
+  border: 0;
+  background: transparent;
+  color: var(--m-faint);
+}
+.mr .page-nav.mr-turn {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--m-faint);
+  cursor: pointer;
+}
+.mr .page-nav.mr-turn:hover:not(:disabled) {
+  background: var(--m-surface-2);
+  color: var(--m-ink);
+}
+.mr .page-nav.mr-turn--next {
+  background: var(--m-accent-wash);
+  color: var(--m-accent);
+}
+.mr .page-nav.mr-turn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.mr .mr-progress {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-width: 0;
+  font: 700 12px var(--m-ui);
+  color: var(--m-faint);
+}
+.mr .mr-progress > span:first-child {
+  white-space: nowrap;
+}
+.mr .mr-bar {
+  width: 320px;
+  max-width: 40vw;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--m-line);
+  overflow: hidden;
+}
+.mr .mr-bar > div {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--m-accent);
+  transition: width 400ms ease;
+}
+.mr .mr-percent {
+  color: var(--m-accent);
+}
+.mr .mr-finish.ui-button {
+  min-height: 40px;
+  padding: 0 18px;
+}
+
+/* chat column */
+.mr .mothli-conversation--embedded:not(.mothli-conversation--compact) {
+  margin: 12px 12px 12px 0;
+}
+
+/* selection tools sit above the book */
+.mr .selection-actions {
+  border: 0;
+  border-radius: 22px;
+  background: var(--m-surface);
+  box-shadow: var(--m-shadow);
+}
+.mr .mothli-source-return {
+  position: absolute;
+  bottom: 76px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+}
+.mr .mothli-source-return .ui-button {
+  background: var(--m-surface);
+  color: var(--m-ink);
+  box-shadow: var(--m-shadow);
+}
+
+@media (max-width: 900px) {
+  .reader-grid.mr,
+  .reader-grid.mr[data-chat-open] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mr .running-head.mr-top {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 6px;
+    height: 60px;
+    min-height: 60px;
+    padding: 0 8px;
+  }
+  .mr .mr-back > span {
+    display: none;
+  }
+  .mr .mr-back.reader-library {
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+  .mr .mr-title {
+    max-width: none;
+    align-items: flex-start;
+    text-align: left;
+  }
+  .mr .mr-streak {
+    height: 30px;
+    margin-right: 2px;
+    padding: 0 9px;
+  }
+  .mr .mr-tools .reader-tool,
+  .mr .mr-tools summary.reader-tool {
+    width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+  .mr .mr-tools .mr-theme {
+    display: none;
+  }
+  .mr .book-view.mr-book {
+    padding: 8px 16px 0;
+  }
+  .mr .reader-footer.mr-bottom {
+    gap: 8px;
+    height: 60px;
+    min-height: 60px;
+    padding: 0 12px;
+  }
+  .mr .mr-progress {
+    justify-content: flex-start;
+    gap: 8px;
+  }
+  .mr .mr-bar {
+    flex: 1;
+    max-width: none;
+  }
+  .mr .mr-tools .reader-popover,
+  .mr .mr-tools .navigation-panel,
+  .mr .mr-tools .marks-panel,
+  .mr .reader-settings-body {
+    position: fixed;
+    top: 64px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+  }
+  .mr .mc {
+    bottom: 68px;
+  }
+}

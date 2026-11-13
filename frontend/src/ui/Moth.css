@@ -1,0 +1,28 @@
+.moth {
+  display: inline-block;
+  flex: 0 0 auto;
+  overflow: visible;
+  vertical-align: middle;
+  color: var(--m-mothli-ink);
+}
+
+.moth .moth-wing {
+  transform-box: view-box;
+  transform-origin: 38px 30px;
+}
+
+/* thinking: the wings fold and open quietly while a reply is on its way. Every other mood is still. */
+.moth--thinking .moth-wing {
+  animation: moth-fold 0.9s ease-in-out infinite alternate;
+}
+
+@keyframes moth-fold {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0.72); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .moth .moth-wing {
+    animation: none !important;
+  }
+}

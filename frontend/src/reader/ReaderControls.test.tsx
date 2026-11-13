@@ -13,6 +13,28 @@ afterEach(() => {
 });
 
 describe("ReaderControls", () => {
+  test("offers a switch for tappable names only when the reader supports it", async () => {
+    const user = userEvent.setup();
+    const onNameTapsChange = vi.fn();
+    const { rerender } = render(
+      <ReaderControls preferences={DEFAULT_READER_PREFERENCES} onChange={() => {}} status="saved" />,
+    );
+    await user.click(screen.getByRole("button", { name: /reading appearance/i }));
+    expect(screen.queryByRole("group", { name: "Names in the text" })).toBeNull();
+    rerender(
+      <ReaderControls
+        preferences={DEFAULT_READER_PREFERENCES}
+        onChange={() => {}}
+        status="saved"
+        nameTaps
+        onNameTapsChange={onNameTapsChange}
+      />,
+    );
+    expect((screen.getByRole("radio", { name: "Tappable" }) as HTMLInputElement).checked).toBe(true);
+    await user.click(screen.getByRole("radio", { name: "Plain" }));
+    expect(onNameTapsChange).toHaveBeenCalledWith(false);
+  });
+
   test("prioritizes theme and size, and reveals native layout presets on request", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -26,9 +48,9 @@ describe("ReaderControls", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /reading appearance/i }),
     );
-    expect(screen.getAllByRole("group")).toHaveLength(3);
-    fireEvent.click(screen.getByRole("button", { name: /Candlelight/ }));
-    expect(onChange).toHaveBeenCalledWith({ ...DEFAULT_READER_PREFERENCES, theme: "sepia", typeface: "serif", line_height: "relaxed" });
+    expect(screen.getAllByRole("group")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("radio", { name: /sepia/i }));
+    expect(onChange).toHaveBeenCalledWith({ ...DEFAULT_READER_PREFERENCES, theme: "sepia" });
     expect(screen.queryByRole("radio", { name: "Publisher" })).toBeNull();
     fireEvent.click(screen.getByRole("radio", { name: /^large$/i }));
     expect(onChange).toHaveBeenCalledWith({
@@ -36,7 +58,7 @@ describe("ReaderControls", () => {
       font_size: "large",
     });
     await user.click(screen.getByText("Customize"));
-    expect(screen.getAllByRole("group")).toHaveLength(7);
+    expect(screen.getAllByRole("group")).toHaveLength(6);
     expect(screen.getByRole("radio", { name: "Publisher" })).toBeTruthy();
     expect(await axeAA(container)).toHaveNoViolations();
   });

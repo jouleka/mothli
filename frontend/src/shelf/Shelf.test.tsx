@@ -92,6 +92,33 @@ describe("Shelf a11y", () => {
     expect(onOpen).toHaveBeenCalledWith("kar");
   });
 
+  test("an FB2 file is converted and uploaded as an EPUB", async () => {
+    mocks.books.mockResolvedValue([]);
+    mocks.importBook.mockResolvedValue({ book_id: "b" });
+    const { container } = render(<Shelf onOpen={() => {}} />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const fb2 = new File(
+      ["<FictionBook><description><title-info><book-title>Short</book-title></title-info></description><body><section><p>Only this.</p></section></body></FictionBook>"],
+      "short.fb2",
+      { type: "" },
+    );
+    fireEvent.change(input, { target: { files: [fb2] } });
+    await waitFor(() => expect(mocks.importBook).toHaveBeenCalled());
+    const uploaded = mocks.importBook.mock.calls[0][0] as File;
+    expect(uploaded.name).toBe("short.epub");
+    expect(uploaded.type).toBe("application/epub+zip");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  test("a broken FB2 file is explained instead of uploaded", async () => {
+    mocks.books.mockResolvedValue([]);
+    const { container } = render(<Shelf onOpen={() => {}} />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["not a book"], "broken.fb2")] } });
+    expect((await screen.findByRole("alert")).textContent).toContain("not a readable FB2");
+    expect(mocks.importBook).not.toHaveBeenCalled();
+  });
+
   test("the import busy state is announced to assistive tech (role=status)", async () => {
     let release!: () => void;
     mocks.books.mockResolvedValue([]);
@@ -117,7 +144,7 @@ describe("Shelf a11y", () => {
       expect(
         (
           screen.getByRole("button", {
-            name: /add an epub/i,
+            name: /add a book/i,
           }) as HTMLButtonElement
         ).disabled,
       ).toBe(false),
@@ -312,7 +339,7 @@ describe("Library interactions", () => {
     expect(screen.getByText("Drop your next read here.")).toBeTruthy();
     fireEvent.drop(main, { dataTransfer });
     expect(screen.getByRole("alert").textContent).toContain(
-      "Choose a DRM-free EPUB",
+      "PDFs aren’t supported yet",
     );
     expect(screen.queryByText("Drop your next read here.")).toBeNull();
     expect(mocks.importBook).not.toHaveBeenCalled();

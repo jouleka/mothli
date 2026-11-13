@@ -103,7 +103,7 @@ export function SelectionAssistant({
     >
       <article className="hero-page assist-page">
         <header className="hero-head">
-          <span className="smallcaps hero-eyebrow">selected passage</span>
+          <span className="hero-eyebrow">Mothli, on the passage you picked</span>
           <Button
             ref={closeRef}
             variant="ghost"

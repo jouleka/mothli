@@ -241,8 +241,7 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--mothli-accent) 12%, transparent);
 }
 .mothli-composer textarea {
-  font: inherit !important;
-  font-size: 0.85rem !important;
+  font: 500 25px/1.2 var(--m-hand) !important;
   border: 0 !important;
   outline: 0 !important;
   box-shadow: none !important;
@@ -254,7 +253,7 @@
   width: 100%;
   min-height: 42px;
   max-height: 120px;
-  line-height: 1.5 !important;
+  line-height: 1.2 !important;
 }
 .mothli-composer > div {
   display: flex;

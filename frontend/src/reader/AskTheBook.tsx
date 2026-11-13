@@ -11,11 +11,13 @@ import {
 import { api, ApiError, type AskAnswer, type AskCitation, type ReadFrontier } from "../api";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
-import { MothliMark } from "../ui/MothliMark";
+import { Moth, type MothMood } from "../ui/Moth";
+import { PeoplePanel, StoryPanel } from "./StoryMemory";
 import { activeOfflineOwner } from "../pwa/offline";
 import { keepTabFocusInside } from "./focusTrap";
 import type { ReaderSelection } from "./ReaderMarksPanel";
 import "./mothli-conversation.css";
+import "./companion.css";
 
 export type SavedCompanionReply = {
   id: string;
@@ -30,7 +32,15 @@ type AskExchange = {
   answer: AskAnswer;
   passage?: boolean;
   selectionKey?: string;
+  /** Mothli spoke first (a welcome-back recap or a chapter closeout): no reader bubble. */
+  fromMothli?: boolean;
 };
+/** A moment where Mothli speaks first. `recap` is already in hand; `closeout` is fetched on open. */
+export type CompanionSeed =
+  | { id: string; kind: "recap"; label: string; text: string; asOfChapter: number }
+  | { id: string; kind: "closeout"; label: string; chapter: number }
+  | { id: string; kind: "ask"; prompt: string };
+export type CompanionTab = "talk" | "people" | "story";
 type AskSnapshot = {
   question: string;
   exchanges: AskExchange[];
@@ -190,6 +200,10 @@ export function AskTheBook({
   initialAction,
   prepareReadContext,
   throughCurrentPage = false,
+  seed = null,
+  chapterLabel: _chapterLabel = "",
+  initialTab = "talk",
+  navigate = null,
 }: {
   bookId: string;
   bookmark: number;
@@ -206,6 +220,10 @@ export function AskTheBook({
   initialAction?: "recap" | null;
   prepareReadContext?: () => Promise<ReadFrontier | null>;
   throughCurrentPage?: boolean;
+  seed?: CompanionSeed | null;
+  chapterLabel?: string;
+  initialTab?: CompanionTab;
+  navigate?: { tab: CompanionTab; personId: number | null; nonce: number } | null;
 }) {
   const localSessionRef = useRef<AskSession | null>(null);
   const retainedSession = sessionRef ?? localSessionRef;
@@ -253,6 +271,15 @@ export function AskTheBook({
       return true;
     }
   });
+  const [tab, setTab] = useState<CompanionTab>(initialTab);
+  const [focusPerson, setFocusPerson] = useState<number | null>(null);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  useEffect(() => setTab(initialTab), [initialTab]);
+  useEffect(() => {
+    if (!navigate) return;
+    setTab(navigate.tab);
+    setFocusPerson(navigate.personId);
+  }, [navigate?.nonce]);
   const modal = !embedded || compact;
   const isCurrent = () =>
     retainedSession.current === session && activeOfflineOwner() === owner;
@@ -505,341 +532,486 @@ export function AskTheBook({
       viewport.removeEventListener("scroll", resize);
     };
   }, [compact]);
+  // Mothli speaks first: a recap already in hand, or a chapter closeout fetched once on open.
+  const seededRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!seed || seededRef.current === seed.id) return;
+    seededRef.current = seed.id;
+    setTab("talk");
+    if (seed.kind === "ask") {
+      void send(seed.prompt, true);
+      return;
+    }
+    if (seed.kind === "recap") {
+      session.update({
+        exchanges: [
+          ...session.getSnapshot().exchanges,
+          {
+            id: seed.id,
+            question: seed.label,
+            fromMothli: true,
+            answer: {
+              as_of_chapter: Math.min(seed.asOfChapter, bookmark),
+              insufficient_evidence: false,
+              claims: [],
+              citations: [],
+              cost: null,
+              answer_type: "recap" as const,
+              recap: seed.text,
+            },
+          },
+        ].slice(-40),
+      });
+      return;
+    }
+    if (session.getSnapshot().busy) return;
+    const requestToken = session.getSnapshot().requestToken + 1;
+    session.update({ busy: true, error: "", pendingQuestion: null, requestToken });
+    const isCurrentRequest = () => isCurrent() && session.getSnapshot().requestToken === requestToken;
+    void api
+      .chapterCloseout(bookId, seed.chapter)
+      .then((result) => {
+        if (!isCurrentRequest()) return;
+        if (result.as_of_chapter > bookmark || result.citations.some((citation) => citation.ordinal > bookmark))
+          throw new Error("unverified");
+        session.update({
+          exchanges: [
+            ...session.getSnapshot().exchanges,
+            { id: crypto.randomUUID(), question: seed.label, answer: result, fromMothli: true },
+          ].slice(-40),
+        });
+      })
+      .catch((reason: unknown) => {
+        if (!isCurrentRequest()) return;
+        session.update({
+          error:
+            reason instanceof ApiError && reason.status === 409
+              ? "I’m still taking notes on that chapter. Ask me again in a minute."
+              : reason instanceof ApiError && reason.status === 429
+                ? BOOK_USAGE_LIMIT_MESSAGE
+                : "I couldn’t gather my thoughts on that chapter. Try again?",
+        });
+      })
+      .finally(() => {
+        if (isCurrentRequest()) session.update({ busy: false });
+      });
+  }, [seed?.id]);
+
+  // Suggestions are only offered when their answers have already cleared review server-side.
+  useEffect(() => {
+    let live = true;
+    setSuggestions([]);
+    if (bookmark < 1) return;
+    Promise.resolve()
+      .then(() => api.preparedQuestions(bookId, bookmark))
+      .then((value) => {
+        if (live && value && value.as_of_chapter <= bookmark) setSuggestions((value.questions ?? []).slice(0, 3));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [bookId, bookmark]);
+
+  const askAbout = (prompt: string) => {
+    setTab("talk");
+    onClearSelection?.();
+    void send(prompt, true);
+    inputRef.current?.focus({ preventScroll: true });
+  };
+
   const visibleExchanges = exchanges.filter(
     (exchange) => exchange.passage || exchange.answer.as_of_chapter <= bookmark,
   );
+  const mood: MothMood = busy ? "thinking" : error ? "sleepy" : !visibleExchanges.length ? "curious" : "idle";
+  const starters = selection
+    ? ["What’s going on here?", "Why does this matter?"]
+    : bookmark > 0
+      ? ["What just happened?", "What have I missed?"]
+      : [];
+  const chips = (visibleExchanges.length ? [] : starters).concat(suggestions).slice(0, 3);
+
   return (
     <div
-      className={`mothli-panel mothli-conversation${embedded ? " mothli-conversation--embedded" : " mothli-conversation--standalone"}${compact ? " mothli-conversation--compact" : ""}`}
+      className={`mothli-panel mothli-conversation lp-companion${embedded ? " mothli-conversation--embedded" : " mothli-conversation--standalone"}${compact ? " mothli-conversation--compact" : ""}`}
       role={modal ? "dialog" : "complementary"}
       aria-modal={modal || undefined}
       aria-labelledby={titleId}
       ref={rootRef}
+      data-tab={tab}
     >
-      <header className="mothli-header">
-        <MothliMark />
-        <div>
-          <h2 id={titleId}>Mothli</h2>
-          <span>{selection ? "This passage" : "Your reading companion"}</span>
+      <header className="lp-companion-head">
+        <div className="lp-companion-id">
+          <span className="lp-moth-ring"><Moth mood={mood} size={42} glow={false} /></span>
+          <div>
+            <h2 id={titleId} className="lp-voice">Mothli</h2>
+            <span>{busy ? "Thinking it over…" : selection ? "Talking about the passage you picked" : "Knows the story up to here"}</span>
+          </div>
         </div>
-        <Button
-          variant="ghost"
-          className="mothli-menu"
-          aria-label="Conversation options"
-          title="Conversation options"
-          onClick={() => setConfirmClear(!confirmClear)}
-        >
-          <Icon name="more" size={17} />
-        </Button>
-        <Button
-          variant="ghost"
-          className="mothli-close"
-          aria-label="Back to reading"
-          title="Back to reading"
-          onClick={onClose}
-        >
-          <Icon name={compact ? "arrowLeft" : "close"} size={18} />
-          {compact && <span>Read</span>}
-        </Button>
-      </header>
-      <div
-        className="mothli-thread"
-        ref={conversationRef}
-        onScroll={(event) => {
-          session.scrollTop = event.currentTarget.scrollTop;
-        }}
-        role="region"
-        aria-label="Book conversation"
-      >
-        {confirmClear && (
-          <div className="mothli-clear">
-            <span>Clear this chat?</span>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                session.update({
-                  question: "",
-                  exchanges: [],
-                  pendingQuestion: null,
-                  busy: false,
-                  error: "",
-                  requestToken: session.getSnapshot().requestToken + 1,
-                });
-                session.scrollTop = null;
-                setConfirmClear(false);
-                setPeopleOpen(false);
-                inputRef.current?.focus();
-              }}
-            >
-              Clear
-            </Button>
-            <Button variant="ghost" onClick={() => setConfirmClear(false)}>
-              Keep
-            </Button>
-          </div>
-        )}
-        {aiDisclosure && (
-          <div className="mothli-introduction">
-            <span>Mothli is your AI reading companion.</span>
-            <button
-              type="button"
-              aria-label="Dismiss introduction"
-              onClick={() => {
-                setAiDisclosure(false);
-                try {
-                  localStorage.setItem("litlet.pip.introduced", "yes");
-                } catch {
-                  /* Optional preference. */
-                }
-              }}
-            >
-              <Icon name="close" size={14} />
-            </button>
-          </div>
-        )}
-        {!visibleExchanges.length && !busy && (
-          <div className="mothli-welcome">
-            <MothliMark />
-            <p>What’s on your mind?</p>
-          </div>
-        )}
-        {visibleExchanges.map((exchange, index) => (
-          <section
-            className="mothli-exchange"
-            aria-label={`Question ${index + 1}`}
-            data-latest-exchange={
-              index === visibleExchanges.length - 1 || undefined
-            }
-            key={exchange.id}
+        <div className="lp-companion-head-actions">
+          <Button
+            variant="ghost"
+            className="mothli-menu"
+            aria-label="Conversation options"
+            title="Conversation options"
+            onClick={() => setConfirmClear(!confirmClear)}
           >
-            <p className="mothli-question">{exchange.question}</p>
-            <div className="mothli-reply">
-              <p>{readableAnswer(exchange.answer)}</p>
-              {!exchange.answer.insufficient_evidence && exchange.answer.answer_type !== "conversation" && (
-                <div className="mothli-reply-actions">
-                  {exchange.answer.citations.length > 0 && (
-                    <details className="mothli-sources">
-                      <summary>
-                        <Icon name="book" size={14} />
-                        Pages
-                      </summary>
-                      <div>
-                        {exchange.answer.citations.map((citation) => (
-                          <button
-                            key={citation.id}
-                            type="button"
-                            onClick={() => {
-                              if (isCurrent()) onNavigate(citation);
-                            }}
-                          >
-                            <span>
-                              {citation.title || "Passage"}
-                              <Icon name="arrowRight" size={14} />
-                            </span>
-                            <q>{citation.excerpt}</q>
-                          </button>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-                  {onSaveReply && (
-                    <Button
-                      variant="ghost"
-                      className="mothli-save"
-                      icon={saved.has(exchange.id) ? "check" : "bookmark"}
-                      aria-label={
-                        saved.has(exchange.id)
-                          ? "Saved to Notebook"
-                          : "Save reply to Notebook"
-                      }
-                      disabled={saved.has(exchange.id)}
-                      onClick={() => {
-                        if (!isCurrent()) return;
-                        try {
-                          onSaveReply({
-                            id: exchange.id,
-                            body: readableAnswer(exchange.answer),
-                            question: exchange.question,
-                            citations: exchange.answer.citations,
-                            asOfChapter: exchange.answer.as_of_chapter,
-                          });
-                          setSaved(new Set([...saved, exchange.id]));
-                          setSaveError("");
-                        } catch {
-                          setSaveError(
-                            "Couldn’t save that reply. Tap Save to try again.",
-                          );
-                        }
-                      }}
-                    >
-                      {saved.has(exchange.id) ? "Saved" : "Save"}
-                    </Button>
-                  )}
-                </div>
-              )}
-            </div>
-          </section>
-        ))}
-        {busy && (
-          <section className="mothli-exchange" aria-label="Sending message">
-            <p className="mothli-question">{pendingQuestion}</p>
-            <span className="mothli-thinking" aria-hidden="true">
-              •••
-            </span>
+            <Icon name="more" size={17} />
+          </Button>
+          <Button
+            variant="ghost"
+            className="mothli-close"
+            aria-label="Back to reading"
+            title="Back to reading"
+            onClick={onClose}
+          >
+            <Icon name={compact ? "arrowLeft" : "close"} size={18} />
+            {compact && <span>Read</span>}
+          </Button>
+        </div>
+        <nav className="lp-companion-tabs" aria-label="Mothli views">
+          {(
+            [
+              ["talk", "Chat"],
+              ["people", "Cast"],
+              ["story", "Story so far"],
+            ] as const
+          ).map(([key, label]) => (
             <button
-              className="mothli-cancel"
+              key={key}
               type="button"
-              onClick={() =>
-                session.update({
-                  busy: false,
-                  pendingQuestion: null,
-                  requestToken: session.getSnapshot().requestToken + 1,
-                })
-              }
+              aria-pressed={tab === key}
+              className={tab === key ? "is-active" : undefined}
+              onClick={() => {
+                setTab(key);
+                if (key !== "people") setFocusPerson(null);
+              }}
             >
-              Cancel
+              {label}
             </button>
-          </section>
-        )}
-        {peopleOpen && (
-          <div className="mothli-people">
-            <div>
-              <span>Who was it?</span>
-              <button
-                type="button"
-                aria-label="Close people"
-                onClick={() => setPeopleOpen(false)}
-              >
-                <Icon name="close" size={15} />
-              </button>
-            </div>
-            {peopleBusy ? (
-              <span>Finding names…</span>
-            ) : peopleError ? (
-              <button type="button" onClick={() => void openPeople()}>
-                {peopleError}
-              </button>
-            ) : people.length ? (
-              people.map((person) => (
+          ))}
+        </nav>
+      </header>
+      {tab === "people" ? (
+        <div className="lp-companion-body">
+          <PeoplePanel
+            bookId={bookId}
+            bookmark={bookmark}
+            focusId={focusPerson}
+            onAsk={(name) => askAbout(`Remind me who ${name} is.`)}
+          />
+        </div>
+      ) : tab === "story" ? (
+        <div className="lp-companion-body">
+          <StoryPanel
+            bookId={bookId}
+            bookmark={bookmark}
+            onOpenPerson={(id) => {
+              setFocusPerson(id);
+              setTab("people");
+            }}
+            onAskChapter={(title) => askAbout(`What stood out in ${title}?`)}
+          />
+        </div>
+      ) : (
+        <>
+          <div
+            className="mothli-thread lp-thread"
+            ref={conversationRef}
+            onScroll={(event) => {
+              session.scrollTop = event.currentTarget.scrollTop;
+            }}
+            role="region"
+            aria-label="Book conversation"
+          >
+            {confirmClear && (
+              <div className="mothli-clear lp-clear">
+                <span>Start a fresh chat? Saved replies stay in Notebook.</span>
                 <Button
-                  key={person.entity_id}
                   variant="ghost"
-                  disabled={busy}
                   onClick={() => {
-                    onClearSelection?.();
-                    void send(`Remind me who ${person.name} is.`, true);
+                    session.update({
+                      question: "",
+                      exchanges: [],
+                      pendingQuestion: null,
+                      busy: false,
+                      error: "",
+                      requestToken: session.getSnapshot().requestToken + 1,
+                    });
+                    session.scrollTop = null;
+                    setConfirmClear(false);
                     setPeopleOpen(false);
                     inputRef.current?.focus();
                   }}
                 >
-                  <span className="mothli-person-monogram" aria-hidden="true">
-                    {person.name.trim().charAt(0)}
-                  </span>
-                  {person.name}
+                  Clear
                 </Button>
-              ))
-            ) : (
-              <p>No names yet. Select a name in your book.</p>
+                <Button variant="ghost" onClick={() => setConfirmClear(false)}>
+                  Keep
+                </Button>
+              </div>
             )}
-          </div>
-        )}
-      </div>
-      <div className="mothli-bottom">
-        <div className="mothli-shortcuts" aria-label="Conversation shortcuts">
-          <Button
-            variant="ghost"
-            icon="book"
-            disabled={busy || !!selection}
-            onClick={() => void send("Catch me up")}
-          >
-            Catch me up
-          </Button>
-          <Button
-            variant="ghost"
-            icon="search"
-            disabled={busy}
-            onClick={() => void openPeople()}
-          >
-            Who was that?
-          </Button>
-        </div>
-        {selection && (
-          <div className="mothli-selection">
-            <q>{selection.text}</q>
-            {onClearSelection && (
-              <button
-                type="button"
-                aria-label="Remove passage context"
-                disabled={busy}
-                onClick={onClearSelection}
-              >
-                <Icon name="close" size={14} />
-              </button>
-            )}
-          </div>
-        )}
-        <div className="mothli-status" role="status" aria-live="polite">
-          {saveError ||
-            (busy ? (
-              <span className="sr-only">Mothli is checking your pages.</span>
-            ) : (
-              error && (
-                <>
-                  <span>{error}</span>
-                  {error !== BOOK_USAGE_LIMIT_MESSAGE && error !== REQUEST_TOO_LARGE_MESSAGE && (
-                    <button type="button" onClick={() => void send()}>
-                      Retry
+            {!visibleExchanges.length && !busy && (
+              <div className="lp-hello">
+                <p className="lp-voice lp-hello-line">
+                  {selection
+                    ? "Ooh, good pick. What do you want to know about it?"
+                    : bookmark > 0
+                      ? "Hi! I’ve been reading along with you. Forgot someone, lost the thread, or spotted something odd? Ask me."
+                      : "Hi! I’m Mothli. I’ll read along with you and remember the story, so you don’t have to."}
+                </p>
+                {aiDisclosure && (
+                  <p className="lp-hello-fine">
+                    I’m an AI. I only use the pages you’ve already read, so I can’t spoil what’s ahead.{" "}
+                    <button
+                      type="button"
+                      aria-label="Dismiss introduction"
+                      onClick={() => {
+                        setAiDisclosure(false);
+                        try {
+                          localStorage.setItem("litlet.pip.introduced", "yes");
+                        } catch {
+                          /* Optional preference. */
+                        }
+                      }}
+                    >
+                      Got it
                     </button>
-                  )}
-                </>
-              )
+                  </p>
+                )}
+              </div>
+            )}
+            {visibleExchanges.map((exchange, index) => (
+              <section
+                className={`mothli-exchange lp-exchange${exchange.fromMothli ? " lp-exchange--mothli-first" : ""}`}
+                aria-label={exchange.fromMothli ? exchange.question : `Question ${index + 1}`}
+                data-latest-exchange={index === visibleExchanges.length - 1 || undefined}
+                key={exchange.id}
+              >
+                {exchange.fromMothli ? (
+                  <p className="lp-moment-label">{exchange.question}</p>
+                ) : (
+                  <p className="mothli-question lp-you">{exchange.question}</p>
+                )}
+                <div className="mothli-reply lp-reply">
+                  <div className="lp-reply-body">
+                    <p>{readableAnswer(exchange.answer)}</p>
+                    {!exchange.answer.insufficient_evidence && exchange.answer.answer_type !== "conversation" && (
+                      <div className="mothli-reply-actions lp-reply-actions">
+                        {exchange.answer.citations.length > 0 && (
+                          <details className="mothli-sources lp-sources">
+                            <summary>
+                              <Icon name="book" size={14} />
+                              Pages
+                            </summary>
+                            <div>
+                              {exchange.answer.citations.map((citation) => (
+                                <button
+                                  key={citation.id}
+                                  type="button"
+                                  onClick={() => {
+                                    if (isCurrent()) onNavigate(citation);
+                                  }}
+                                >
+                                  <span>
+                                    {citation.title || "Passage"}
+                                    <Icon name="arrowRight" size={14} />
+                                  </span>
+                                  <q>{citation.excerpt}</q>
+                                </button>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                        {onSaveReply && (
+                          <Button
+                            variant="ghost"
+                            className="mothli-save lp-save"
+                            icon={saved.has(exchange.id) ? "check" : "bookmark"}
+                            aria-label={saved.has(exchange.id) ? "Saved to Notebook" : "Save reply to Notebook"}
+                            disabled={saved.has(exchange.id)}
+                            onClick={() => {
+                              if (!isCurrent()) return;
+                              try {
+                                onSaveReply({
+                                  id: exchange.id,
+                                  body: readableAnswer(exchange.answer),
+                                  question: exchange.question,
+                                  citations: exchange.answer.citations,
+                                  asOfChapter: exchange.answer.as_of_chapter,
+                                });
+                                setSaved(new Set([...saved, exchange.id]));
+                                setSaveError("");
+                              } catch {
+                                setSaveError("Couldn’t save that reply. Tap Save to try again.");
+                              }
+                            }}
+                          >
+                            {saved.has(exchange.id) ? "Saved" : "Save"}
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
             ))}
-        </div>
-        <form className="mothli-composer" onSubmit={submit}>
-          <label htmlFor={`${titleId}-message`} className="sr-only">
-            Message Mothli
-          </label>
-          <textarea
-            id={`${titleId}-message`}
-            ref={inputRef}
-            rows={2}
-            maxLength={500}
-            placeholder="What’s on your mind?"
-            value={question}
-            disabled={busy}
-            onChange={(event) =>
-              session.update({ question: event.currentTarget.value })
-            }
-            onKeyDown={(event) => {
-              if (
-                event.key === "Enter" &&
-                !event.shiftKey &&
-                !event.nativeEvent.isComposing
-              ) {
-                event.preventDefault();
-                void send();
-              }
-            }}
-          />
-          <div>
-            <span title="Mothli only uses the pages you’ve read">
-              <Icon name="shield" size={12} />
-              <span>
-                {selection ? "This passage only" : throughCurrentPage ? "Through this page" : "Only your read pages"}
-              </span>
-            </span>
-            <Button
-              type="submit"
-              variant="primary"
-              aria-label="Send message"
-              className="mothli-send"
-              disabled={busy || question.trim().length < 2}
-            >
-              <Icon name="arrowRight" size={18} />
-            </Button>
+            {busy && (
+              <section className="mothli-exchange lp-exchange" aria-label="Sending message">
+                {pendingQuestion && <p className="mothli-question lp-you">{pendingQuestion}</p>}
+                <div className="lp-thinking">
+                  <span className="lp-thinking-dots" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  <button
+                    className="mothli-cancel"
+                    type="button"
+                    onClick={() =>
+                      session.update({
+                        busy: false,
+                        pendingQuestion: null,
+                        requestToken: session.getSnapshot().requestToken + 1,
+                      })
+                    }
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </section>
+            )}
+            {peopleOpen && (
+              <div className="mothli-people lp-people-pick">
+                <div>
+                  <span className="lp-voice">Who was it?</span>
+                  <button type="button" aria-label="Close people" onClick={() => setPeopleOpen(false)}>
+                    <Icon name="close" size={15} />
+                  </button>
+                </div>
+                {peopleBusy ? (
+                  <span>Finding names…</span>
+                ) : peopleError ? (
+                  <button type="button" onClick={() => void openPeople()}>
+                    {peopleError}
+                  </button>
+                ) : people.length ? (
+                  <div className="lp-people-grid">
+                    {people.slice(0, 24).map((person) => (
+                      <Button
+                        key={person.entity_id}
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => {
+                          onClearSelection?.();
+                          void send(`Remind me who ${person.name} is.`, true);
+                          setPeopleOpen(false);
+                          inputRef.current?.focus();
+                        }}
+                      >
+                        <span className="mothli-person-monogram" aria-hidden="true">
+                          {person.name.trim().charAt(0)}
+                        </span>
+                        {person.name}
+                      </Button>
+                    ))}
+                    {people.length > 24 && (
+                      <button
+                        type="button"
+                        className="lp-see-all"
+                        onClick={() => {
+                          setPeopleOpen(false);
+                          setTab("people");
+                        }}
+                      >
+                        See all {people.length} in People
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p>No names yet. Select a name in your book.</p>
+                )}
+              </div>
+            )}
           </div>
-        </form>
-      </div>
+          <div className="mothli-bottom lp-bottom">
+            <div className="mothli-shortcuts lp-starters" aria-label="Conversation shortcuts">
+              <Button variant="ghost" icon="book" className="lp-chip lp-chip--lamp" disabled={busy || !!selection} onClick={() => void send("Catch me up")}>
+                Catch me up
+              </Button>
+              <Button variant="ghost" icon="search" className="lp-chip" disabled={busy} onClick={() => void openPeople()}>
+                Who was that?
+              </Button>
+              {chips.map((prompt) => (
+                <button key={prompt} type="button" className="lp-chip" disabled={busy} onClick={() => void send(prompt)}>
+                  {prompt}
+                </button>
+              ))}
+            </div>
+            {selection && (
+              <div className="mothli-selection lp-selection">
+                <q>{selection.text}</q>
+                {onClearSelection && (
+                  <button type="button" aria-label="Remove passage context" disabled={busy} onClick={onClearSelection}>
+                    <Icon name="close" size={14} />
+                  </button>
+                )}
+              </div>
+            )}
+            <div className="mothli-status lp-status" role="status" aria-live="polite">
+              {saveError ||
+                (busy ? (
+                  <span className="sr-only">Mothli is checking your pages.</span>
+                ) : (
+                  error && (
+                    <>
+                      <span>{error}</span>
+                      {error !== BOOK_USAGE_LIMIT_MESSAGE && error !== REQUEST_TOO_LARGE_MESSAGE && (
+                        <button type="button" onClick={() => void send()}>
+                          Retry
+                        </button>
+                      )}
+                    </>
+                  )
+                ))}
+            </div>
+            <form className="mothli-composer lp-composer" onSubmit={submit}>
+              <label htmlFor={`${titleId}-message`} className="sr-only">
+                Message Mothli
+              </label>
+              <textarea
+                id={`${titleId}-message`}
+                ref={inputRef}
+                rows={1}
+                maxLength={500}
+                placeholder={selection ? "Ask about this passage…" : "Ask Mothli anything about your book…"}
+                value={question}
+                disabled={busy}
+                onChange={(event) => session.update({ question: event.currentTarget.value })}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    void send();
+                  }
+                }}
+              />
+              <Button
+                type="submit"
+                variant="primary"
+                aria-label="Send message"
+                className="mothli-send lp-send"
+                disabled={busy || question.trim().length < 2}
+              >
+                <Icon name="arrowRight" size={18} />
+              </Button>
+            </form>
+            <p className="lp-spoiler-line" title="Mothli only uses the pages you’ve read">
+              <Icon name="shield" size={12} />
+              {selection ? "Only this passage" : throughCurrentPage ? "Only up to this page. No spoilers." : "Only what you’ve read. No spoilers."}
+            </p>
+          </div>
+        </>
+      )}
     </div>
   );
 }
