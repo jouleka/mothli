@@ -517,3 +517,7 @@
   .ml-classics { width: 100%; max-height: 100dvh; height: 100dvh; padding: 24px 20px 16px; border-radius: 0; }
   .ml-classics-head h2 { font-size: 36px; }
 }
+
+/* the classics tile sits beside "Add a book": solid, so it reads as something to open */
+.ml-book-classics { border-style: solid; border-color: var(--m-line-strong); background: var(--m-surface); }
+.ml-book-classics:hover { border-color: var(--m-ink); }
