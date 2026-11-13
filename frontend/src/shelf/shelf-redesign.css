@@ -474,7 +474,8 @@
   flex-direction: column;
   gap: 16px;
   width: min(720px, 100%);
-  max-height: min(820px, calc(100dvh - 48px));
+  /* a fixed height, so the sheet does not jump as a search narrows the list */
+  height: min(820px, calc(100dvh - 48px));
   box-sizing: border-box;
   padding: 32px 36px 24px;
   border-radius: 6px;
@@ -488,7 +489,21 @@
 .ml-classics-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .ml-classics-head h2 { margin: 4px 0 0; font: 600 44px/1 var(--m-display); letter-spacing: -0.01em; }
 .ml-classics-note { margin: 0; font-size: 24px; line-height: 1.14; }
-.ml-classics-search { flex: none; }
+.ml-classics-find { flex: none; display: flex; align-items: center; gap: 12px; }
+.ml-classics-search { flex: 1; min-width: 0; }
+.ml-classics-language select {
+  min-height: 44px;
+  max-width: 180px;
+  padding: 0 12px;
+  border: 1px solid var(--m-line-strong);
+  border-radius: 4px;
+  background: var(--m-surface);
+  color: var(--m-ink);
+  font: 500 14px/1.2 var(--m-ui);
+}
+.ml-classics-count { margin: -4px 0 -8px; font: 600 12px/1.2 var(--m-ui); letter-spacing: 0.08em; text-transform: uppercase; color: var(--m-soft); }
+.ml-classics-list li.ml-classics-more { justify-content: center; border-bottom: 0; padding: 20px 0 8px; }
+.ml-classics-foot a { color: var(--m-accent); text-underline-offset: 3px; }
 .ml-classics .ml-search input { border: 0; box-shadow: none; border-radius: 0; padding: 0; background: transparent; }
 .ml-classics-error { margin: 0; padding: 10px 14px; border-left: 3px solid var(--m-accent); background: var(--m-accent-wash); font-size: 15px; }
 .ml-classics-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 0 4px 0 0; list-style: none; }
@@ -516,6 +531,8 @@
   .ml-classics-scrim { padding: 0; }
   .ml-classics { width: 100%; max-height: 100dvh; height: 100dvh; padding: 24px 20px 16px; border-radius: 0; }
   .ml-classics-head h2 { font-size: 36px; }
+  .ml-classics-find { flex-wrap: wrap; }
+  .ml-classics-language, .ml-classics-language select { width: 100%; max-width: none; }
 }
 
 /* the classics tile sits beside "Add a book": solid, so it reads as something to open */

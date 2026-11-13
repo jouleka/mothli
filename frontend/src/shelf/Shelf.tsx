@@ -285,15 +285,17 @@ export function Shelf({
     setShowClassics(false);
     classicsTrigger.current?.focus();
   }, []);
-  const addClassic = async (classic: Classic) => {
-    if (classicBusy) return;
+  const addClassic = async (classic: Classic): Promise<string | null> => {
+    if (classicBusy) return null;
     setClassicBusy(classic.id);
     setClassicError(null);
     try {
-      await api.addClassic(classic.id);
+      const added = await api.addClassic(classic.id);
       await Promise.all([refresh(), loadClassics()]);
+      return added?.book_id ?? null;
     } catch (error) {
       if (mounted.current) setClassicError(msg(error));
+      return null;
     } finally {
       if (mounted.current) setClassicBusy(null);
     }
@@ -783,7 +785,7 @@ export function Shelf({
                         <button className="ml-book-add ml-book-classics" onClick={openClassics}>
                           <Moth size={44} />
                           <span className="ml-book-add-title">Pick a classic</span>
-                          <span className="ml-book-add-hint">{classics.books.length} free books, out of copyright</span>
+                          <span className="ml-book-add-hint">{classics.total.toLocaleString("en")} free books, out of copyright</span>
                         </button>
                       </div>
                     )}
@@ -857,9 +859,7 @@ export function Shelf({
           catalog={classics}
           busyId={classicBusy}
           error={classicError}
-          onAdd={(classic) => {
-            void addClassic(classic);
-          }}
+          onAdd={addClassic}
           onOpen={(id) => {
             setShowClassics(false);
             openBook(id);

@@ -16,8 +16,13 @@ SQLite story-memory engine, and an experimental hosted multi-user foundation.
 
 - Import and read DRM-free EPUB files you are allowed to use. FB2, MOBI and AZW3 files (zipped or not)
   are converted to EPUB in the browser first.
-- Pick a classic: add a public-domain book from a curated Project Gutenberg list with one tap. A book
-  is downloaded only when a reader adds it; set `CLASSICS_ENABLED=false` for an offline install.
+- Pick a classic: search about 77,000 public-domain books from
+  [Project Gutenberg](https://www.gutenberg.org/) and add one with a tap. The list is every text
+  Project Gutenberg marks public domain in the United States, built from its offline catalogue feed
+  (`backend/scripts/build_classics_catalog.py`); readers elsewhere are told to check their own
+  country's rules, and `CLASSICS_MIN_YEARS_SINCE_DEATH` narrows the list to a death-date rule if you
+  need one. A book is downloaded only when a reader adds it; set `CLASSICS_ENABLED=false` for an
+  offline install.
 - Maintain a chapter-bounded, bitemporal story memory.
 - Catch up and discuss people or passages in one continuing Mothli conversation.
 - Keep highlights, notes, bookmarks, and explicitly saved Mothli replies in Notebook.
