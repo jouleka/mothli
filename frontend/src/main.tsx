@@ -12,6 +12,7 @@ import "./styles.css";
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { initializeOfflineSupport, type OfflineSession } from "./pwa/offline";
+import { ReadingHistory } from "./history/ReadingHistory";
 import { FreeLibrary } from "./library/FreeLibrary";
 import { ReaderPage } from "./reader/ReaderPage";
 import { Shelf } from "./shelf/Shelf";
@@ -34,14 +35,17 @@ try {
 const currentBookId = () =>
   new URLSearchParams(window.location.search).get("book");
 const inLibrary = () => new URLSearchParams(window.location.search).has("library");
+const inHistory = () => new URLSearchParams(window.location.search).has("history");
 
 function App({ session }: { session?: OfflineSession | null }) {
   const [bookId, setBookId] = useState<string | null>(currentBookId);
   const [browsing, setBrowsing] = useState(inLibrary);
+  const [recalling, setRecalling] = useState(inHistory);
   useEffect(() => {
     const restoreLocation = () => {
       setBookId(currentBookId());
       setBrowsing(inLibrary());
+      setRecalling(inHistory());
     };
     window.addEventListener("popstate", restoreLocation);
     return () => window.removeEventListener("popstate", restoreLocation);
@@ -54,6 +58,12 @@ function App({ session }: { session?: OfflineSession | null }) {
     history.pushState(null, "", "/");
     setBookId(null);
     setBrowsing(false);
+    setRecalling(false);
+  };
+  const recall = () => {
+    history.pushState(null, "", "/?history=1");
+    setRecalling(true);
+    window.scrollTo(0, 0);
   };
   const browse = () => {
     history.pushState(null, "", "/?library=1");
@@ -64,10 +74,12 @@ function App({ session }: { session?: OfflineSession | null }) {
   // route a stale offset into ANOTHER book's permanent bookmark ratchet — pass-2 F4)
   return bookId ? (
     <ReaderPage key={bookId} bookId={bookId} onBack={back} />
+  ) : recalling ? (
+    <ReadingHistory onBack={back} onOpen={open} />
   ) : browsing ? (
     <FreeLibrary onBack={back} onOpen={open} />
   ) : (
-    <Shelf onOpen={open} onBrowse={browse} session={session} />
+    <Shelf onOpen={open} onBrowse={browse} onHistory={recall} session={session} />
   );
 }
 

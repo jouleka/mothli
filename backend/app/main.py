@@ -18,7 +18,7 @@ from starlette.responses import JSONResponse
 from starlette.staticfiles import StaticFiles
 
 from app import deps
-from app.api import books, classics, health, ingest, reading, views
+from app.api import books, classics, health, history, ingest, reading, views
 from app.config import Settings
 from app.ingest.worker import IngestWorker
 from app.hosted.auth import api as auth_api
@@ -489,6 +489,7 @@ def create_app(
         app.include_router(health.router)
         app.include_router(books.router)
         app.include_router(classics.router)
+        app.include_router(history.router)
         app.include_router(reading.router)
         app.include_router(ingest.router)
         app.include_router(views.router)

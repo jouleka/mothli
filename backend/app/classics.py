@@ -22,6 +22,7 @@ import threading
 import unicodedata
 from collections import Counter
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple
@@ -298,6 +299,54 @@ def search(query="", *, language=None, genre=None, mood=None, offset=0, limit=40
     found = _matches(words, language or None, genre or None, mood or None, max(int(min_years_since_death), 0), year)
     offset, limit = max(int(offset), 0), min(max(int(limit), 1), MAX_PAGE)
     return len(found), [_entry(row) for row in found[offset:offset + limit]]
+
+
+_NOT_WORD = re.compile(r"[^\w]+", re.UNICODE)
+_ASIDE = re.compile(r"\([^)]*\)|\[[^\]]*\]")
+
+
+def title_key(title):
+    """A title reduced to what two editions of a book share: no series note, subtitle or article."""
+    text = fold(_ASIDE.sub(" ", title or ""))
+    text = re.split(r"\s*[:;]\s+|\s+[-–—]\s+", text, maxsplit=1)[0]
+    text = _NOT_WORD.sub(" ", text).strip()
+    return re.sub(r"^(the|a|an) ", "", text)
+
+
+def author_key(author):
+    """The surname of the first author, which survives "Austen, Jane" as well as "Jane Austen"."""
+    first = re.split(r"\s*(?:;|&| and |\|)\s*", author or "", maxsplit=1)[0]
+    if "," in first:
+        first = first.split(",", 1)[0]
+    words = _NOT_WORD.sub(" ", fold(_ASIDE.sub(" ", first))).split()
+    return words[-1] if words else ""
+
+
+@lru_cache(maxsize=8)
+def _by_title(min_years_since_death, year):
+    found = {}
+    for row in _eligible(min_years_since_death, year)[0]:
+        found.setdefault(title_key(row.title), []).append(row)
+    return {key: tuple(rows) for key, rows in found.items() if key}
+
+
+def match_title(title, author, *, min_years_since_death=0, today=None):
+    """The catalogue number of the free-library book a reader means by a title and author from
+    another app, or None. Both must agree: a title alone names too many different books. Spelling
+    of a surname may differ a little (Dostoevsky, Dostoyevsky); the most-read English edition wins."""
+    surname = author_key(author)
+    key = title_key(title)
+    if not surname or len(key) < 2:
+        return None
+    year = (today or datetime.now(UTC)).year
+    best = None
+    for row in _by_title(max(int(min_years_since_death), 0), year).get(key, ()):
+        names = _NOT_WORD.sub(" ", row.hay[len(row.title_key) + 1:]).split()
+        if surname in names or any(SequenceMatcher(None, surname, name).ratio() >= 0.84 for name in names):
+            if row.language == "en":
+                return str(row.pg)
+            best = best or row
+    return str(best.pg) if best else None
 
 
 def find_classic(classic_id, *, min_years_since_death=0, today=None):

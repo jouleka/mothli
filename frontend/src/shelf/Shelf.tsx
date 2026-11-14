@@ -115,8 +115,11 @@ type Journey = { id: string; done: number; total: number };
 export function Shelf({
   onOpen,
   onBrowse,
+  onHistory,
   session,
 }: {
+  /** Opens the reading history brought in from other apps; the link is not shown without it. */
+  onHistory?: () => void;
   onOpen: (id: string) => void;
   /** Opens the free library; the tile is not shown without it. */
   onBrowse?: () => void;
@@ -434,6 +437,11 @@ export function Shelf({
         </a>
         <h1 className="sr-only">Your library</h1>
         <div className="ml-top-tools">
+          {onHistory && (
+            <button className="ml-guide-toggle" onClick={onHistory}>
+              Reading history
+            </button>
+          )}
           <button
             className="ml-guide-toggle"
             aria-expanded={showGuide}
