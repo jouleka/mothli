@@ -45,19 +45,36 @@ function toneOf(book: Book) {
 export function BookCover({
   book,
   className = "",
+  art,
 }: {
   book: Book;
   className?: string;
+  /** Where the book's own cover picture is served, when it may have one. */
+  art?: string;
 }) {
+  // The cloth cover is always drawn: it shows while the picture loads, and stays when there is none.
+  const [picture, setPicture] = useState<"loading" | "shown" | "none">("loading");
   return (
     <span
       className={`book-cover cover-${toneOf(book)} ${className}`}
+      data-art={art ? picture : undefined}
       aria-hidden="true"
     >
       <span className="cover-title">{book.title}</span>
       <span className="cover-author">
         {(book.author || "").split(/\s+/).pop() || "Your collection"}
       </span>
+      {art && picture !== "none" && (
+        <img
+          className="cover-art"
+          src={art}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setPicture("shown")}
+          onError={() => setPicture("none")}
+        />
+      )}
     </span>
   );
 }
@@ -733,7 +750,7 @@ export function Shelf({
                           title={bookName(book)}
                           onClick={() => openBook(book.book_id)}
                         >
-                          <BookCover book={book} />
+                          <BookCover book={book} art={`/api/books/${encodeURIComponent(book.book_id)}/cover`} />
                         </button>
                         <span className="sr-only" id={`book-${book.book_id}-title`}>{book.title}</span>
                         {offlineButton(book)}
