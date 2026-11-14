@@ -376,6 +376,11 @@ export const api = {
     const query = params.toString();
     return fetch(`/api/history${query ? `?${query}` : ""}`, { cache: "no-store" }).then((r) => j<HistoryPage>(r));
   },
+  /** A passage the reader once marked, picked at random, to greet them with. */
+  historyGlimpse: () =>
+    fetch("/api/history/glimpse", { cache: "no-store" }).then((r) =>
+      j<{ mark: { text: string; entry_id: number; title: string; author: string } | null }>(r),
+    ),
   historyEntry: (id: number) => fetch(`/api/history/${id}`, { cache: "no-store" }).then((r) => j<HistoryDetail>(r)),
   importHistory: (batch: HistoryBatch) =>
     fetch("/api/history/import", {

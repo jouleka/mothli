@@ -1,7 +1,7 @@
 /** Your reading history: what a reader has read, means to read and marked in other reading apps,
  * brought in from the files those apps let them export. A title here is a record, not a book; when
  * the free library has the book, it can be added from here. */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { api, type Book, type HistoryDetail, type HistoryEntry, type HistoryPage } from "../api";
 import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupportedBookMessage } from "../import/bookFiles";
 import { Cover } from "../library/FreeLibrary";
@@ -77,58 +77,157 @@ function Thumb({ entry }: { entry: HistoryEntry }) {
   if (entry.classic_id) {
     return <Cover book={{ id: entry.classic_id, title: entry.title, author: entry.author, language: "en", book_id: entry.book_id }} />;
   }
-  const cloth: Book = { book_id: `history-${entry.id}`, title: entry.title, author: entry.author };
+  // the reader's own copy carries its own cover; a title with no book yet wears plain cloth
+  const cloth: Book = { book_id: entry.book_id ?? `history-${entry.id}`, title: entry.title, author: entry.author };
   return (
     <span className="fl-cover">
-      <BookCover book={cloth} />
+      <BookCover book={cloth} art={entry.book_id ? `/api/books/${encodeURIComponent(entry.book_id)}/cover` : undefined} />
     </span>
   );
 }
 
-const GUIDES: { name: string; steps: string }[] = [
+type Way = { title?: string; steps: string[] };
+type Source = { id: string; name: string; brings: string; tone: string; ways: Way[]; note?: string };
+
+/** Where a reader may be coming from, and exactly what to fetch from there. */
+const SOURCES: Source[] = [
   {
+    id: "goodreads",
     name: "Goodreads",
-    steps: "On the Goodreads website (not the app): My Books, then Tools, then “Import and export”, then “Export Library”. Bring the goodreads_library_export.csv file it gives you.",
+    brings: "Your list, ratings, reviews",
+    tone: "oxblood",
+    ways: [
+      {
+        steps: [
+          "Open goodreads.com in a browser. The phone app can’t do this.",
+          "Go to My Books, then Tools, then “Import and export”.",
+          "Choose “Export Library” and wait for the link to appear.",
+          "Bring the file it gives you: goodreads_library_export.csv.",
+        ],
+      },
+    ],
   },
   {
-    name: "StoryGraph",
-    steps: "On StoryGraph: Manage Account, then “Export StoryGraph Library”. A link to the file arrives by email.",
+    id: "kindle",
+    name: "Kindle",
+    brings: "Highlights and notes",
+    tone: "navy",
+    ways: [
+      {
+        title: "On a Kindle e-reader",
+        steps: [
+          "Plug the Kindle into a computer with its cable.",
+          "Open the Kindle drive, then the “documents” folder.",
+          "Bring the file called “My Clippings.txt”. It holds every highlight and note made on that device.",
+        ],
+      },
+      {
+        title: "In the Kindle app on a phone or tablet",
+        steps: [
+          "Open a book and tap its Notebook (the page icon).",
+          "Choose Share or Export, and email it to yourself.",
+          "Bring the .html file from that email. It is one file per book.",
+        ],
+      },
+    ],
+    note: "Most Kindle books are copy-protected and stay in Kindle. One that Amazon lets you download without protection can be dropped here like any other book.",
   },
   {
-    name: "Kindle e-reader",
-    steps: "Plug your Kindle into a computer with its cable. Open the Kindle drive, then the “documents” folder, and bring the file called “My Clippings.txt”. It holds every highlight and note made on that device.",
-  },
-  {
-    name: "Kindle app on a phone or tablet",
-    steps: "Open a book, open its Notebook (the page icon), choose Share or Export, and email it to yourself. Bring the .html file from that email. It is one file per book.",
-  },
-  {
+    id: "kobo",
     name: "Kobo",
-    steps: "Plug your Kobo into a computer. Turn on “show hidden files”, open the folder called “.kobo” on the Kobo drive, and bring the file “KoboReader.sqlite”. It holds your library, what you have finished, and every highlight and note.",
+    brings: "Library, progress, highlights",
+    tone: "forest",
+    ways: [
+      {
+        steps: [
+          "Plug the Kobo into a computer.",
+          "Turn on “show hidden files”, then open the folder called “.kobo” on the Kobo drive.",
+          "Bring the file “KoboReader.sqlite”. It holds your library, what you finished, and everything you marked.",
+        ],
+      },
+    ],
   },
   {
-    name: "Apple Books on a Mac",
-    steps: "In Finder choose Go, then “Go to Folder”, and paste ~/Library/Containers/com.apple.iBooksX/Data/Documents. Bring the .sqlite file from the “BKLibrary” folder and the .sqlite file from the “AEAnnotation” folder together. Apple gives no way to do this from an iPhone or iPad.",
+    id: "apple",
+    name: "Apple Books",
+    brings: "Library, progress, highlights",
+    tone: "slate",
+    ways: [
+      {
+        title: "On a Mac",
+        steps: [
+          "In Finder choose Go, then “Go to Folder”.",
+          "Paste ~/Library/Containers/com.apple.iBooksX/Data/Documents",
+          "Bring two files together: the .sqlite file inside “BKLibrary” and the .sqlite file inside “AEAnnotation”.",
+        ],
+      },
+    ],
+    note: "Apple gives no way to do this from an iPhone or iPad. Books you added to Apple Books yourself can be dragged out of it and dropped here.",
   },
   {
+    id: "storygraph",
+    name: "StoryGraph",
+    brings: "Your list, ratings, reviews",
+    tone: "plum",
+    ways: [
+      {
+        steps: [
+          "On StoryGraph open Manage Account.",
+          "Choose “Export StoryGraph Library”.",
+          "A link to the file arrives by email. Bring that file.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "readwise",
     name: "Readwise",
-    steps: "If your highlights from Kindle, Apple Books, Kobo and others already sync to Readwise, paste your access token above to bring them all at once. Or, on Readwise, choose Export, then CSV, and bring that file.",
+    brings: "Every highlight, in one go",
+    tone: "ochre",
+    ways: [
+      {
+        steps: [
+          "Open readwise.io/access_token and copy your access token.",
+          "Paste it in the box below. It is used once and not kept.",
+        ],
+      },
+    ],
+    note: "Prefer a file? On Readwise choose Export, then CSV, and drop it here instead.",
   },
   {
+    id: "libby",
     name: "Libby",
-    steps: "Open a book’s Reading Journey and choose “Export Reading Data”, or open your Timeline and choose Actions, then “Export Timeline”. Pick “Data”.",
+    brings: "Highlights and loans",
+    tone: "forest",
+    ways: [
+      {
+        steps: [
+          "For one book: open its Reading Journey and choose “Export Reading Data”.",
+          "For everything you borrowed: open your Timeline, choose Actions, then “Export Timeline”.",
+          "Pick “Data” either way, and bring the file.",
+        ],
+      },
+    ],
   },
   {
-    name: "KOReader",
-    steps: "In a book, open the top menu, the tools tab, “Export highlights”, and export as JSON. Bring that file.",
-  },
-  {
-    name: "Calibre, Hardcover, BookWyrm, LibraryThing, or your own list",
-    steps: "Export or save your books as a CSV file. Any spreadsheet works if it has a column for the title and one for the author; shelves, ratings and dates are read when they are there.",
-  },
-  {
-    name: "Google Play Books",
-    steps: "Not yet. Play Books keeps your notes as Google Docs, which we can’t read reliably so far. Books you uploaded yourself, or bought without copy protection, can be exported from Play Books and added from your shelf.",
+    id: "other",
+    name: "Somewhere else",
+    brings: "KOReader, Calibre, your own list",
+    tone: "slate",
+    ways: [
+      {
+        title: "KOReader",
+        steps: ["In a book open the top menu, the tools tab, then “Export highlights”.", "Export as JSON and bring that file."],
+      },
+      {
+        title: "Calibre, Hardcover, BookWyrm, LibraryThing, or a list you keep",
+        steps: [
+          "Export or save your books as a CSV file.",
+          "Any spreadsheet works if it has a column for the title and one for the author. Shelves, ratings and dates are read when they are there.",
+        ],
+      },
+    ],
+    note: "Google Play Books isn’t possible yet: it keeps your notes as Google Docs, which we can’t read reliably so far.",
   },
 ];
 
@@ -136,13 +235,9 @@ type Chosen = { name: string; parsed?: ParsedHistory; database?: File; book?: Fi
 type Progress = { done: number; total: number };
 type Outcome = { books: number; updated: number; highlights: number; skipped: number; shelved?: number };
 
-function Importer({ onImported, startOpen }: { onImported: () => Promise<number>; startOpen: boolean }) {
+function Importer({ onImported, onClose }: { onImported: () => Promise<number>; onClose?: () => void }) {
   const input = useRef<HTMLInputElement>(null);
-  const [open, setOpen] = useState(startOpen);
-  // with nothing imported (at first, or after removing it all) the import desk is the page
-  useEffect(() => {
-    if (startOpen) setOpen(true);
-  }, [startOpen]);
+  const [from, setFrom] = useState<string | null>(null);
   const [chosen, setChosen] = useState<Chosen[]>([]);
   const [over, setOver] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -276,19 +371,85 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
   ].filter(Boolean);
   const listed = what.length > 1 ? `${what.slice(0, -1).join(", ")} and ${what[what.length - 1]}` : (what[0] ?? "");
 
-  if (!open) {
-    return (
-      <div className="rh-reopen">
-        <Button icon="plus" onClick={() => setOpen(true)}>
-          Import more
-        </Button>
-      </div>
-    );
-  }
+  const source = SOURCES.find((item) => item.id === from) ?? null;
 
   return (
-    <section className="rh-import" aria-labelledby="rh-import-title">
-      <h2 id="rh-import-title">Bring in your files</h2>
+    <section className="rh-desk" aria-labelledby="rh-desk-title">
+      <header className="rh-desk-head">
+        <div>
+          <h2 id="rh-desk-title">Where have you been reading?</h2>
+          <p>Pick one and I’ll show you what to fetch. Already have your files? Drop them below and I’ll work out what each one is.</p>
+        </div>
+        {onClose && (
+          <button className="fl-sheet-close rh-desk-close" aria-label="Close import" onClick={onClose}>
+            <Icon name="close" size={18} />
+          </button>
+        )}
+      </header>
+
+      <ul className="rh-sources" aria-label="Reading apps">
+        {SOURCES.map((item) => (
+          <li key={item.id}>
+            <button
+              type="button"
+              className="rh-source"
+              data-tone={item.tone}
+              aria-pressed={from === item.id}
+              onClick={() => setFrom(from === item.id ? null : item.id)}
+            >
+              <span className="rh-spine" aria-hidden="true">
+                {item.name[0]}
+              </span>
+              <span className="rh-source-name">{item.name}</span>
+              <span className="rh-source-brings">{item.brings}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      {source && (
+        <div className="rh-how" role="region" aria-label={`How to bring your ${source.name} history`}>
+          {source.ways.map((way, index) => (
+            <div className="rh-way" key={way.title ?? index}>
+              {way.title && <h3>{way.title}</h3>}
+              <ol>
+                {way.steps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+            </div>
+          ))}
+          {source.note && <p className="rh-how-note">{source.note}</p>}
+        </div>
+      )}
+
+      {from === "readwise" && (
+        <form
+          className="rh-readwise"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (token.trim() && !asking) void fromReadwise();
+          }}
+        >
+          <label htmlFor="rh-readwise-token">Your Readwise access token</label>
+          <div>
+            <input
+              id="rh-readwise-token"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Paste it here"
+              value={token}
+              maxLength={120}
+              onChange={(event) => setToken(event.currentTarget.value)}
+            />
+            <Button type="submit" variant="primary" aria-busy={asking} disabled={asking || token.trim().length < 20}>
+              {asking ? "Bringing your highlights…" : "Bring from Readwise"}
+            </Button>
+          </div>
+        </form>
+      )}
+
       <div
         className="rh-drop"
         data-over={over}
@@ -303,11 +464,11 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
           void choose(event.dataTransfer.files);
         }}
       >
-        <Icon name="download" size={26} />
-        <p className="rh-drop-title">Drop your export files and your books here</p>
-        <p className="rh-drop-hint">
-          Goodreads · StoryGraph · Kindle · Kobo · Apple Books · Readwise · Libby · KOReader · Calibre · any spreadsheet
+        <Moth size={44} mood={progress || asking ? "thinking" : "idle"} />
+        <p className="rh-drop-title">
+          {source && from !== "readwise" ? `Drop your ${source.name === "Somewhere else" ? "" : `${source.name} `}file here` : "Drop your files here"}
         </p>
+        <p className="rh-drop-hint">Exports from any reading app, and any books you have as files. Several at once is fine.</p>
         <Button variant="primary" disabled={progress !== null} onClick={() => input.current?.click()}>
           Choose files
         </Button>
@@ -355,9 +516,7 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
       {(ready.length > 0 || databases.length > 0 || bookFiles.length > 0) && (
         <div className="rh-go">
           <Button variant="primary" aria-busy={progress !== null} disabled={progress !== null} onClick={() => void bringIn()}>
-            {progress
-              ? `Importing… ${count(progress.done)} of ${count(progress.total)}`
-              : `Import ${listed}`}
+            {progress ? `Importing… ${count(progress.done)} of ${count(progress.total)}` : `Import ${listed}`}
           </Button>
           {progress && <progress value={progress.done} max={Math.max(progress.total, 1)} aria-label="Import progress" />}
         </div>
@@ -370,8 +529,8 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
       )}
       {outcome && (
         <p className="rh-outcome" role="status">
-          <Icon name="check" size={16} />
-          <span>
+          <Moth size={40} />
+          <span className="m-hand">
             {outcome.shelved ? `Put ${plural(outcome.shelved, "book")} on your shelf. ` : ""}
             {outcome.books || outcome.highlights
               ? `Brought in ${[outcome.books ? plural(outcome.books, "new book") : null, outcome.highlights ? plural(outcome.highlights, "new highlight") : null]
@@ -387,50 +546,11 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
         </p>
       )}
 
-      <form
-        className="rh-readwise"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (token.trim() && !asking) void fromReadwise();
-        }}
-      >
-        <label htmlFor="rh-readwise-token">
-          <strong>Use Readwise?</strong> Paste your access token from readwise.io/access_token to bring every book
-          highlight it holds. The token is used once and not kept.
-        </label>
-        <div>
-          <input
-            id="rh-readwise-token"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="Readwise access token"
-            value={token}
-            maxLength={120}
-            onChange={(event) => setToken(event.currentTarget.value)}
-          />
-          <Button type="submit" aria-busy={asking} disabled={asking || token.trim().length < 20}>
-            {asking ? "Bringing your highlights…" : "Bring from Readwise"}
-          </Button>
-        </div>
-      </form>
-
-      <details className="rh-guides">
-        <summary>How do I get my files?</summary>
-        <dl>
-          {GUIDES.map((guide) => (
-            <div key={guide.name}>
-              <dt>{guide.name}</dt>
-              <dd>{guide.steps}</dd>
-            </div>
-          ))}
-        </dl>
-      </details>
       <p className="rh-honest">
         This brings your list, ratings, reviews, highlights and notes, and any book files you have without copy
         protection ({BOOK_FORMATS}). Books bought in Kindle, Apple Books and similar stores are usually copy-protected,
-        and those files can’t be opened here or anywhere else but their own app. Your files are read by your own Mothli and
-        go nowhere else.
+        and those files can’t be opened here or anywhere else but their own app. Your files are read by your own Mothli
+        and go nowhere else.
       </p>
     </section>
   );
@@ -651,6 +771,22 @@ export function ReadingHistory({ onBack, onOpen }: { onBack: () => void; onOpen:
   const [forgetting, setForgetting] = useState(false);
   const typed = useRef(query);
   const [turn, setTurn] = useState(0);
+  const [desk, setDesk] = useState(false);
+  const [glimpse, setGlimpse] = useState<{ text: string; entry_id: number; title: string; author: string } | null>(null);
+
+  // something of the reader's own to greet them with; asked for once, and again after an import
+  useEffect(() => {
+    let stale = false;
+    api
+      .historyGlimpse()
+      .then((found) => {
+        if (!stale) setGlimpse(found.mark);
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [turn]);
 
   const needle = query.trim();
   const search = useCallback(
@@ -691,7 +827,13 @@ export function ReadingHistory({ onBack, onOpen }: { onBack: () => void; onOpen:
 
   const reload = useCallback(async () => {
     const loaded = await search();
+    // the desk stays open after an import, so what came across is still there to read
+    setDesk(true);
     setPage(loaded);
+    void api
+      .historyGlimpse()
+      .then((found) => setGlimpse(found.mark))
+      .catch(() => {});
     return loaded.free;
   }, [search]);
 
@@ -724,6 +866,24 @@ export function ReadingHistory({ onBack, onOpen }: { onBack: () => void; onOpen:
       ]
     : [];
 
+  const tally: { n: number; label: string; view: View }[] = page
+    ? [
+        { n: page.by_status.read, label: page.by_status.read === 1 ? "book read" : "books read", view: "read" as View },
+        { n: page.by_status.reading, label: "on the go", view: "reading" as View },
+        { n: page.by_status.want, label: "to read", view: "want" as View },
+        { n: page.highlights, label: page.highlights === 1 ? "passage marked" : "passages marked", view: "highlights" as View },
+        { n: page.free, label: "free to read here", view: "free" as View },
+      ].filter((item) => item.n > 0)
+    : [];
+  const showGlimpse = () => {
+    if (!glimpse) return;
+    pickedFrom.current = document.activeElement as HTMLElement | null;
+    void api
+      .historyEntry(glimpse.entry_id)
+      .then(setPicked)
+      .catch(() => {});
+  };
+
   return (
     <div className="mothli-library fl rh">
       <a className="skip-link" href="#rh-main">
@@ -751,20 +911,72 @@ export function ReadingHistory({ onBack, onOpen }: { onBack: () => void; onOpen:
       </header>
 
       <main id="rh-main">
-        <section className="fl-hero rh-hero">
-          <p className="m-kicker">From your other reading apps</p>
-          <h1>Your reading history</h1>
-          <div className="ml-note fl-hero-note">
-            <Moth size={40} />
-            <p className="m-hand">
-              {page && !empty
-                ? `${plural(page.books, "book")} and ${plural(page.highlights, "highlight")} so far. I’ll keep them safe.`
-                : "Bring what you’ve read elsewhere. I’ll keep your list and everything you marked."}
-            </p>
+        <section className="ml-spread rh-spread" aria-label="Your reading history at a glance">
+          <div className="ml-page ml-page--left">
+            <p className="m-kicker">From your other reading apps</p>
+            <h1 className="ml-spread-title">Your reading history</h1>
+            {page && !empty ? (
+              <>
+                <ul className="rh-tally" aria-label="At a glance">
+                  {tally.map((item) => (
+                    <li key={item.label}>
+                      <button type="button" onClick={() => setView(item.view)} aria-label={`${count(item.n)} ${item.label}`}>
+                        <strong>{count(item.n)}</strong>
+                        <span>{item.label}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <div className="ml-spread-foot">
+                  <Button variant="primary" className="ml-spread-cta" aria-expanded={desk} onClick={() => setDesk((value) => !value)}>
+                    {desk ? "Done importing" : "Bring more in"}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className="ml-spread-lede">
+                Whatever you read, rated and underlined in another app can come with you: your list, your stars, your
+                highlights, and any books you have as files.
+              </p>
+            )}
+          </div>
+          <div className="ml-page ml-page--right">
+            {glimpse && page && !empty ? (
+              <figure className="rh-glimpse">
+                <figcaption className="ml-note">
+                  <Moth size={40} />
+                  <span className="m-hand">Something you once underlined</span>
+                </figcaption>
+                <blockquote>{glimpse.text}</blockquote>
+                <button type="button" className="fl-link" onClick={showGlimpse}>
+                  {glimpse.title}
+                  {glimpse.author ? `, ${glimpse.author}` : ""}
+                </button>
+              </figure>
+            ) : (
+              <div className="ml-note ml-note--stacked">
+                <Moth size={64} />
+                <div className="m-hand ml-note-text ml-note-text--large">
+                  {page && !empty ? (
+                    <>
+                      <p>
+                        {plural(page.books, "book")} and {plural(page.highlights, "highlight")} so far.
+                      </p>
+                      <p>I’ll keep them safe.</p>
+                    </>
+                  ) : (
+                    <>
+                      <p>Tell me where you’ve been reading.</p>
+                      <p>I’ll show you what to bring, and keep it all safe.</p>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </section>
 
-        {page !== null && <Importer startOpen={empty} onImported={reload} />}
+        {page !== null && (empty || desk) && <Importer onImported={reload} onClose={empty ? undefined : () => setDesk(false)} />}
 
         {failed && (
           <div className="fl-error fl-error--page" role="alert">
@@ -803,32 +1015,50 @@ export function ReadingHistory({ onBack, onOpen }: { onBack: () => void; onOpen:
               </label>
             </div>
 
-            <ul className="rh-rows" aria-label="Books in your history">
-              {page.entries.map((entry) => (
-                <li key={entry.id}>
-                  <button type="button" className="rh-row" onClick={() => pick(entry)} aria-label={`${entry.title}${entry.author ? `, ${entry.author}` : ""}`}>
-                    <span className="rh-thumb">
-                      <Thumb entry={entry} />
-                    </span>
-                    <span className="rh-row-text">
-                      <span className="rh-row-title">{entry.title}</span>
-                      {entry.author && <span className="rh-row-author">{entry.author}</span>}
-                      <span className="rh-row-facts">
-                        {entry.status && <span>{STATUS_NAMES[entry.status]}{entry.finished_on ? ` ${longDate(entry.finished_on)}` : ""}</span>}
-                        {entry.rating ? <Stars rating={entry.rating} /> : null}
-                        {entry.highlights > 0 && <span>{plural(entry.highlights, "highlight")}</span>}
-                      </span>
-                    </span>
-                    {entry.book_id ? (
-                      <span className="rh-tag rh-tag--shelf">
-                        <Icon name="check" size={12} /> On your shelf
-                      </span>
-                    ) : entry.classic_id ? (
-                      <span className="rh-tag rh-tag--free">Free to read here</span>
-                    ) : null}
-                  </button>
-                </li>
-              ))}
+            <ul className="fl-grid rh-grid" aria-label="Books in your history">
+              {page.entries.map((entry, index) => {
+                // a finished book sits under the year it was finished, like the pages of a reading journal
+                const year = view === "read" ? (entry.finished_on?.slice(0, 4) ?? "") : null;
+                const before = index > 0 ? (page.entries[index - 1].finished_on?.slice(0, 4) ?? "") : null;
+                return (
+                  <Fragment key={entry.id}>
+                    {year !== null && year !== before && (
+                      <li className="rh-year">
+                        <h3>{year || "Sometime before"}</h3>
+                      </li>
+                    )}
+                    <li>
+                      <button
+                        type="button"
+                        className="fl-card rh-card"
+                        onClick={() => pick(entry)}
+                        aria-label={`${entry.title}${entry.author ? `, ${entry.author}` : ""}`}
+                      >
+                        <Thumb entry={entry} />
+                        <span className="fl-card-title">{entry.title}</span>
+                        {entry.author && <span className="fl-card-author">{entry.author}</span>}
+                        <span className="rh-card-facts">
+                          {entry.status && (
+                            <span>
+                              {STATUS_NAMES[entry.status]}
+                              {entry.finished_on ? ` ${longDate(entry.finished_on)}` : ""}
+                            </span>
+                          )}
+                          {entry.rating ? <Stars rating={entry.rating} /> : null}
+                          {entry.highlights > 0 && <span>{plural(entry.highlights, "highlight")}</span>}
+                        </span>
+                        {entry.book_id ? (
+                          <span className="rh-tag rh-tag--shelf">
+                            <Icon name="check" size={12} /> On your shelf
+                          </span>
+                        ) : entry.classic_id ? (
+                          <span className="rh-tag rh-tag--free">Free to read here</span>
+                        ) : null}
+                      </button>
+                    </li>
+                  </Fragment>
+                );
+              })}
             </ul>
             {page.entries.length === 0 && <p className="rh-nothing">Nothing here matches.</p>}
             {page.entries.length < page.matches && (
@@ -848,6 +1078,7 @@ export function ReadingHistory({ onBack, onOpen }: { onBack: () => void; onOpen:
                         .forgetHistory()
                         .then(() => {
                           setForgetting(false);
+                          setDesk(false);
                           setView("");
                           setQuery("");
                           setTurn((value) => value + 1);
