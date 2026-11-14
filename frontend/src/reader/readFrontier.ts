@@ -27,6 +27,10 @@ export function atomAtRange(atoms: Atom[], sectionHref: string, range: Range, ed
     }
     if (boundary.comparePoint(element, 0) <= 0) selected = index;
   }
+  // Text ahead of this file's first chapter anchor is the end of the previous chapter, which
+  // began in the preceding file: the server assigns it to that chapter too.
+  if (selected === null && candidates.every(({atom}) => atom.href.includes("#")))
+    return Math.max(0, candidates[0].index - 1);
   return selected;
 }
 

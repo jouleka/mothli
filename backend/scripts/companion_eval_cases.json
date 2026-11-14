@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "note": "Fixed questions for scripts/companion_eval.py. facts: every group must match (any alternative, case-insensitive regex). forbidden: none may match. expect: answer | empty | plain.",
+  "books": {
+    "karamazov": {
+      "source": "fixtures",
+      "read_through_atom": 5,
+      "later_names": ["Smerdyakov", "Grushenka", "Katerina", "Ilusha", "Kolya", "Rakitin", "Snegiryov", "Lizaveta", "Hohlakov"],
+      "cases": [
+        {"id": "k-id-nickname", "type": "identity", "question": "Who is Alyosha again?",
+         "facts": [["youngest", "third son", "brother"], ["monastery", "novice"]]},
+        {"id": "k-id-other-form", "type": "identity", "question": "Remind me who Mitya is?",
+         "facts": [["Dmitri"], ["eldest", "first", "oldest", "elder"]]},
+        {"id": "k-id-minor", "type": "identity", "question": "Who is Grigory?",
+         "facts": [["servant"]]},
+        {"id": "k-why-stated", "type": "interpretive", "question": "Why did Alyosha enter the monastery?",
+         "facts": [["Zossima", "elder"], ["darkness", "light", "escape", "immortality", "soul"]]},
+        {"id": "k-why-partly-stated", "type": "interpretive", "question": "Why did Adelaida Ivanovna run away from Fyodor Pavlovitch?",
+         "facts": [["contempt", "fight", "quarrel", "money", "property", "unhappy"], ["student"]]},
+        {"id": "k-why-unstated", "type": "interpretive", "question": "Why does Fyodor Pavlovitch play the buffoon?",
+         "facts": [["part", "role", "act", "buffoon", "injured husband", "self-love"]]},
+        {"id": "k-reaction-named", "type": "reaction", "question": "Poor Mitya. That was hard to read.",
+         "facts": [["Mitya", "Grigory", "father", "forgot", "abandon"]]},
+        {"id": "k-reaction-bare", "type": "reaction", "question": "That chapter wrecked me.", "facts": []},
+        {"id": "k-followup-her", "type": "followup", "question": "And what happened to her after that?",
+         "history": [["Why did Adelaida Ivanovna run away from Fyodor Pavlovitch?",
+                      "She had come to feel contempt for Fyodor, and she left him with a destitute divinity student."]],
+         "facts": [["Petersburg"], ["died", "death"]]},
+        {"id": "k-followup-he", "type": "followup", "question": "Why did he do that?",
+         "history": [["Who is Alyosha again?", "Alyosha is Fyodor Pavlovitch's youngest son and a novice at the monastery."],
+                     ["So he went into the monastery?", "Yes, Alyosha entered the monastery near the town."]],
+         "facts": [["Zossima", "elder", "soul", "immortality", "light"]]},
+        {"id": "k-spoiler-outcome", "type": "spoiler", "expect": "empty", "question": "Who ends up killing Fyodor Pavlovitch?",
+         "forbidden": ["Smerdyakov", "valet", "Dmitri (killed|murdered)", "Mitya (killed|murdered)"]},
+        {"id": "k-spoiler-unread-person", "type": "spoiler", "expect": "empty", "question": "What is Grushenka like?",
+         "forbidden": ["Grushenka (is|was) (a|the|an)"]}
+      ]
+    },
+    "pride": {
+      "source": "epub",
+      "read_through_atom": 6,
+      "must_contain_read": ["truth universally acknowledged", "entirely a matter of chance", "her wit flowed"],
+      "cases": [
+        {"id": "p-id-nickname", "type": "identity", "question": "Who is Lizzy again?",
+         "facts": [["Elizabeth"], ["Bennet", "daughter", "sister"]]},
+        {"id": "p-id-friend", "type": "identity", "question": "Who is Charlotte Lucas?",
+         "facts": [["friend"], ["Sir William", "Lucas", "eldest", "twenty-seven"]]},
+        {"id": "p-id-newcomer", "type": "identity", "question": "Remind me who Mr. Bingley is.",
+         "facts": [["Netherfield"], ["good-looking", "gentleman", "pleasant", "amiable", "lively", "fortune", "hundred thousand", "rich", "wealth", "danced"]]},
+        {"id": "p-why-stated", "type": "interpretive", "question": "Why did Elizabeth take against Mr. Darcy at the ball?",
+         "facts": [["tolerable", "not handsome enough", "refus", "would not dance", "slight", "declin"]]},
+        {"id": "p-why-view", "type": "interpretive", "question": "Why does Charlotte think Jane should show more affection for Bingley?",
+         "facts": [["Bingley"], ["secure", "fix", "encourag", "lose", "more than like", "help him on", "conceal", "guard", "never"]]},
+        {"id": "p-why-unstated", "type": "interpretive", "question": "Why is Mr. Darcy so disagreeable to everyone?",
+         "facts": [["proud", "pride", "haughty", "reserved", "fastidious", "above"]]},
+        {"id": "p-reaction-named", "type": "reaction", "question": "Darcy is unbearable.",
+         "facts": [["Darcy", "tolerable", "proud", "danc"]]},
+        {"id": "p-reaction-bare", "type": "reaction", "question": "I am loving this so far!", "facts": []},
+        {"id": "p-followup-her", "type": "followup", "question": "What exactly did he say about her?",
+         "history": [["Who is Mr. Darcy?", "Darcy is Bingley's friend, a rich man whom the whole room soon found proud."],
+                     ["And he refused to dance with Elizabeth?", "Yes, he declined when Bingley suggested it."]],
+         "facts": [["tolerable"], ["handsome enough", "tempt"]]},
+        {"id": "p-followup-she", "type": "followup", "question": "What does she think about marriage?",
+         "history": [["Who is Charlotte Lucas?", "Charlotte Lucas is Sir William's eldest daughter and Elizabeth's close friend."]],
+         "facts": [["chance"]]},
+        {"id": "p-spoiler-outcome", "type": "spoiler", "expect": "empty", "question": "Does Elizabeth end up marrying Mr. Darcy?",
+         "forbidden": ["Pemberley", "\\byes\\b", "they (do )?marry", "marries (him|Darcy)"]},
+        {"id": "p-spoiler-unread-person", "type": "spoiler", "expect": "empty", "question": "Who is Mr. Wickham?",
+         "forbidden": ["Wickham (is|was) (a|an|the)", "militia", "officer"]}
+      ]
+    }
+  }
+}

@@ -45,6 +45,8 @@ type AskSnapshot = {
   question: string;
   exchanges: AskExchange[];
   pendingQuestion: string | null;
+  /** Sentences of the reply in progress that the server has already checked. */
+  streaming: string;
   busy: boolean;
   error: string;
   requestToken: number;
@@ -64,6 +66,7 @@ const BOOK_USAGE_LIMIT_MESSAGE =
 const REQUEST_TOO_LARGE_MESSAGE = "That’s a lot of pages at once. Pick a passage and we can start there.";
 // Legacy storage namespace preserves existing conversations after the Mothli rename.
 const STORAGE_PREFIX = "litlet.pip.conversation:";
+const spokenSeeds = new Set<string>();
 function storageKey(bookId: string, owner: string, pass: string) {
   return `${STORAGE_PREFIX}${encodeURIComponent(owner)}:${encodeURIComponent(bookId)}:${encodeURIComponent(pass)}`;
 }
@@ -82,13 +85,17 @@ function readableBookAnswer(answer: AskAnswer): string {
         return "Pick a passage and let’s start there.";
       case "paratext_only":
         return "We’re still in the opening pages. Pick a passage to talk about.";
+      case "ahead":
+        return "We haven’t got there yet. I only know the pages you’ve read, so I can’t say what’s coming.";
       default:
-        return "I couldn’t find enough in your read pages to answer that. Which passage did you mean?";
+        return "I can’t find that in what you’ve read so far. If it’s on these pages, point me to the bit you mean.";
     }
   }
   const body = answer.answer_type === "recap"
     ? (answer.recap ?? "")
-    : answer.claims.map((claim) => claim.text).join("\n\n");
+    : answer.style === "prose"
+      ? [...answer.claims.map((claim) => claim.text), answer.closing].filter(Boolean).join(" ")
+      : answer.claims.map((claim) => claim.text).join("\n\n");
   return [answer.acknowledgment, body].filter(Boolean).join("\n\n");
 }
 function isStoredExchange(value: unknown): value is AskExchange {
@@ -125,6 +132,7 @@ function createAskSession(
     question: "",
     exchanges: [],
     pendingQuestion: null,
+    streaming: "",
     busy: false,
     error: "",
     requestToken: 0,
@@ -242,7 +250,7 @@ export function AskTheBook({
   }
   const session = retainedSession.current;
   session.bookmark = bookmark;
-  const { question, exchanges, pendingQuestion, busy, error } =
+  const { question, exchanges, pendingQuestion, streaming, busy, error } =
     useSyncExternalStore(
       session.subscribe,
       session.getSnapshot,
@@ -319,7 +327,7 @@ export function AskTheBook({
       node.scrollTop =
         node.querySelector<HTMLElement>("[data-latest-exchange]")?.offsetTop ??
         0;
-  }, [exchanges.length, busy]);
+  }, [exchanges.length, busy, streaming]);
   useEffect(() => {
     setPeopleOpen(false);
     setPeople([]);
@@ -340,6 +348,7 @@ export function AskTheBook({
       busy: true,
       error: "",
       pendingQuestion: value,
+      streaming: "",
       requestToken,
     });
     const isCurrentRequest = () =>
@@ -422,9 +431,17 @@ export function AskTheBook({
             },
           ])
           .slice(-8);
-        result = readPoint
+        // Sentence by sentence when the server offers it; each one arrives already checked.
+        const streamed = readPoint && api.askBookStream
+          ? await api.askBookStream(bookId, value, requestBookmark, history, readPoint, (sentence) => {
+              if (isCurrentRequest())
+                session.update({ streaming: [session.getSnapshot().streaming, sentence].filter(Boolean).join(" ") });
+            })
+          : null;
+        if (!isCurrentRequest()) return;
+        result = streamed ?? (readPoint
           ? await api.askBook(bookId, value, requestBookmark, history, readPoint)
-          : await api.askBook(bookId, value, requestBookmark, history);
+          : await api.askBook(bookId, value, requestBookmark, history));
         if (
           result.as_of_chapter > requestBookmark ||
           result.citations.some((citation) => citation.ordinal > requestBookmark) ||
@@ -462,15 +479,17 @@ export function AskTheBook({
             : reason instanceof ApiError && reason.status === 502 && /cleared against (your read pages|the selected passage)/i.test(reason.message)
             ? scopeSelection
               ? "I couldn’t verify that from the selected passage. Try selecting a little more context."
-              : "I couldn’t verify that against your read pages. Try naming the person or moment you mean."
+              : "I couldn’t back that up from your pages, so I’d rather not guess. Try naming the person or moment you mean."
             : reason instanceof ApiError && reason.status === 409
             ? "Your reading position changed. Please try again from this page."
+            : reason instanceof ApiError && reason.code === "ask_timeout"
+            ? "That took too long, so I stopped. Try again?"
             : "I couldn’t get a reply. Try again?";
         session.update({ error: message });
       }
     } finally {
       if (isCurrentRequest())
-        session.update({ busy: false, pendingQuestion: null });
+        session.update({ busy: false, pendingQuestion: null, streaming: "" });
     }
   };
   const openPeople = async () => {
@@ -533,10 +552,11 @@ export function AskTheBook({
     };
   }, [compact]);
   // Mothli speaks first: a recap already in hand, or a chapter closeout fetched once on open.
-  const seededRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!seed || seededRef.current === seed.id) return;
-    seededRef.current = seed.id;
+    // The panel unmounts when closed, so a ref would forget: reopening must not replay the
+    // last seed (a second paid closeout, a repeated question, or a duplicated recap).
+    if (!seed || spokenSeeds.has(seed.id)) return;
+    spokenSeeds.add(seed.id);
     setTab("talk");
     if (seed.kind === "ask") {
       void send(seed.prompt, true);
@@ -734,6 +754,7 @@ export function AskTheBook({
                       question: "",
                       exchanges: [],
                       pendingQuestion: null,
+                      streaming: "",
                       busy: false,
                       error: "",
                       requestToken: session.getSnapshot().requestToken + 1,
@@ -859,6 +880,13 @@ export function AskTheBook({
             {busy && (
               <section className="mothli-exchange lp-exchange" aria-label="Sending message">
                 {pendingQuestion && <p className="mothli-question lp-you">{pendingQuestion}</p>}
+                {streaming && (
+                  <div className="mothli-reply lp-reply" aria-live="polite">
+                    <div className="lp-reply-body">
+                      <p>{streaming}</p>
+                    </div>
+                  </div>
+                )}
                 <div className="lp-thinking">
                   <span className="lp-thinking-dots" aria-hidden="true">
                     <i />
@@ -872,6 +900,7 @@ export function AskTheBook({
                       session.update({
                         busy: false,
                         pendingQuestion: null,
+                        streaming: "",
                         requestToken: session.getSnapshot().requestToken + 1,
                       })
                     }

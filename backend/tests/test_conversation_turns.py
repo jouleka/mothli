@@ -15,8 +15,30 @@ def test_routing_truth_table_has_an_evidence_path_for_uncertainty(values, expect
         assert state["latest_message"] == "untrusted reader text"
         assert state["recent_dialogue"] == [] and "currently open book" in state["conversation_setting"]
         return {**{k:{"noul":p} for k,p in zip(list(questions)[:5],(*values,.01,.99 if values[2] >= .7 else .01),strict=True)},
+                "book_reaction":{"noul":.01}, "asks_ahead":{"noul":.01},
                 "clarification_kind":{"choice":"person"}}
     assert classify_turn("untrusted reader text",run=run) == expected
+
+
+@pytest.mark.parametrize("ahead,flag", [(.95, True), (.69, False)])
+def test_asking_ahead_is_a_wording_hint_that_never_changes_the_route(ahead, flag):
+    def run(state, questions):
+        return {**{k:{"noul":.01} for k in questions if k != "clarification_kind"},
+                "needs_text":{"noul":.99}, "asks_ahead":{"noul":ahead},
+                "clarification_kind":{"choice":"moment"}}
+    signals = {}
+    assert classify_turn("Who kills him in the end?",run=run,signals=signals) == "evidence"
+    assert signals == {"ahead": flag}
+
+
+@pytest.mark.parametrize("needs_text,reaction,expected", [
+    (.05,.95,"reaction"), (.05,.2,"dialogue"), (.95,.95,"evidence"), (.05,.69,"dialogue")])
+def test_only_a_clear_book_reaction_leaves_the_no_book_facts_reply(needs_text, reaction, expected):
+    def run(state, questions):
+        return {**{k:{"noul":.01} for k in questions if k != "clarification_kind"},
+                "needs_text":{"noul":needs_text}, "book_reaction":{"noul":reaction},
+                "clarification_kind":{"choice":"moment"}}
+    assert classify_turn("That chapter wrecked me.",run=run) == expected
 
 
 @pytest.mark.parametrize("bad", [True, None, float("nan"), 1.1])

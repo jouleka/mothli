@@ -1,8 +1,9 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { axeAA } from "../test-a11y";
 const mocks = vi.hoisted(() => ({
   askBook: vi.fn(),
+  askBookStream: vi.fn(),
   selectionAction: vi.fn(),
   catchMeUp: vi.fn(),
   graph: vi.fn(),
@@ -103,8 +104,66 @@ describe("Mothli conversation", () => {
     mocks.askBook.mockRejectedValue(new ApiError("reply could not be cleared against your read pages", 502));
     render(<AskTheBook {...props} />);
     submit("Who was that?");
-    await screen.findByText("I couldn’t verify that against your read pages. Try naming the person or moment you mean.");
+    await screen.findByText("I couldn’t back that up from your pages, so I’d rather not guess. Try naming the person or moment you mean.");
     expect(screen.queryByText(answer.claims[0].text)).toBeNull();
+  });
+
+  test("says so when the reader asks about pages they have not reached", async () => {
+    mocks.askBook.mockResolvedValue({ ...answer, insufficient_evidence: true, claims: [], citations: [], status: "ahead" });
+    render(<AskTheBook {...props} />);
+    submit("Who dies in the end?");
+    await screen.findByText(/We haven’t got there yet\./);
+  });
+
+  test("shows a prose reply as one paragraph with its closing line", async () => {
+    mocks.askBook.mockResolvedValue({ ...answer, style: "prose", closing: "Did it read that way to you?",
+      claims: [{ text: "She couldn’t stand him any more.", citation_ids: [1] },
+               { text: "He’d taken all her money.", citation_ids: [1] }] });
+    render(<AskTheBook {...props} />);
+    submit("Why did she leave?");
+    await screen.findByText("She couldn’t stand him any more. He’d taken all her money. Did it read that way to you?");
+  });
+
+  test("does not replay a seeded question when the panel is reopened", async () => {
+    const seed = { id: "seed-reopen-1", kind: "ask" as const, prompt: "Remind me who Aldric is" };
+    const first = render(<AskTheBook {...props} seed={seed} />);
+    await waitFor(() => expect(mocks.askBook).toHaveBeenCalledTimes(1));
+    first.unmount();
+    render(<AskTheBook {...props} seed={seed} />);
+    await screen.findByLabelText("Message Mothli");
+    expect(mocks.askBook).toHaveBeenCalledTimes(1);
+  });
+
+  test("shows checked sentences as they arrive and then the finished reply", async () => {
+    const point = {id:"a".repeat(64), atom:2, offset:120, position_epoch:0, available_chapter:2};
+    const streamed = {...answer, style:"prose" as const, citations:[], read_frontier:point,
+      claims:[{text:"Darcy called her tolerable.", citation_ids:[]}, {text:"Ouch.", citation_ids:[]}]};
+    let finish!: (value: typeof streamed) => void;
+    let say!: (text: string) => void;
+    mocks.askBookStream.mockImplementationOnce((...args: unknown[]) => {
+      say = args[5] as (text: string) => void;
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    render(<AskTheBook {...props} prepareReadContext={async () => point} />);
+    submit("What did he say?");
+    await waitFor(() => expect(mocks.askBookStream).toHaveBeenCalled());
+    act(() => say("Darcy called her tolerable."));
+    await screen.findByText("Darcy called her tolerable.");
+    expect(screen.getByText("Cancel")).toBeTruthy();
+    await act(async () => finish(streamed));
+    await screen.findByText("Darcy called her tolerable. Ouch.");
+    expect(screen.queryByText("Cancel")).toBeNull();
+    expect(mocks.askBook).not.toHaveBeenCalled();
+  });
+
+  test("asks the ordinary way when the server does not offer streamed replies", async () => {
+    const point = {id:"a".repeat(64), atom:2, offset:120, position_epoch:0, available_chapter:2};
+    mocks.askBookStream.mockResolvedValueOnce(null);
+    mocks.askBook.mockResolvedValue({...answer, read_frontier:point});
+    render(<AskTheBook {...props} prepareReadContext={async () => point} />);
+    submit("Where did they meet?");
+    await screen.findByText(answer.claims[0].text);
+    expect(mocks.askBook).toHaveBeenCalledWith("b", "Where did they meet?", 2, [], point);
   });
 
   test("confirms the visible page before sending and rejects a different source boundary", async () => {

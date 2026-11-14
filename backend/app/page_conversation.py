@@ -7,7 +7,7 @@ import logging
 import sys
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
-from threading import BoundedSemaphore
+from threading import BoundedSemaphore, Lock
 from time import perf_counter
 
 from fastapi import HTTPException
@@ -20,7 +20,8 @@ from app.ask_evidence import ASK_EVIDENCE_SYSTEM, AskEvidenceError
 from app.ask_selection import SOURCE_SELECTION_SYSTEM, SourceSelection, select_sources_bounded
 from app.content_scope import CONTENT_POLICY_VERSION
 from app.conversation_pipeline import (ConversationDraft, SceneConversationDraft, DRAFT_SYSTEM, answer_conversation,
-                                       compact_candidates, review_escalation, CLARIFICATIONS, BRIEF_DRAFT_SYSTEM)
+                                       compact_candidates, review_escalation, CLARIFICATIONS, BRIEF_DRAFT_SYSTEM,
+                                       review_draft, PROSE_DRAFT_SYSTEM, ProseConversationDraft)
 from app.cost import CostCeilingExceeded, budgeted_completion, pricing_known
 from app.eval.spoiler_gate import score_recap
 from app.eval.spoiler_gate.synthesis import _read_visibility
@@ -30,11 +31,22 @@ from app.retrieval_passages import passage_windows, recent_scene_windows, SCENE_
 from app.unicode_text import word_tokens, proper_words, normalize_text
 from app.eval.spoiler_gate.grounding import STOPWORDS
 from app.conversation_jev import (DECISION_LIMITS, FIT, SUPPORT, RELEVANCE, POLICY_VERSION,
-                                  POLICY, review_with_jev, prepare_context, JevNeedsReasoning)
+                                  POLICY, review_with_jev, prepare_context, JevNeedsReasoning,
+                                  answers_request)
 from app.conversation_jev import review_recap_prefix
 from app.llm.jev import JevUnavailable
 from app.llm.jev_budget import budgeted_jev
-from app.conversation_turns import VERSION as TURN_VERSION, REPLY_SYSTEM, QUESTIONS, classify_turn, answer_dialogue
+from app.conversation_turns import (VERSION as TURN_VERSION, REPLY_SYSTEM, QUESTIONS, classify_turn,
+                                    answer_dialogue, book_fact_risk)
+from app.known_names import (same_person_names, names_note, text_same_person, first_mention,
+                             BRIDGE_VERSION)
+
+REACTION_NOTES = (
+    "The reader is reacting to what they have just read, not asking a question. Reply as a companion "
+    "who has read the same pages: in one or two short sentences, name the specific moment or detail "
+    "in these passages that most plausibly prompted the reaction. State only what the passages show. "
+    "Do not summarize the chapter, explain it, or ask for clarification, and keep clarification null. "
+    "If no passage plausibly relates to the reaction, return insufficient_evidence=true.")
 
 logger = logging.getLogger("mothli.conversation")
 _visibility_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="read-visibility")
@@ -76,12 +88,18 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         if combined:
             calculation, reader_message = combined
     draft_system = BRIEF_DRAFT_SYSTEM if settings.reader_conversation_routing else DRAFT_SYSTEM
+    prose = bool(settings.reader_conversation_prose and use_jev)
+    if prose:
+        draft_system = PROSE_DRAFT_SYSTEM
     question = conversation_question(reader_message, body.history, eff)
     query = conversation_retrieval_question(reader_message, body.history, eff)
     calls = []
     reviewer = copy(client)
     reviewer.conversation_review_effort = settings.reader_conversation_review_effort
     reviewer.conversation_draft_effort = settings.reader_conversation_draft_effort
+    if getattr(reviewer, "_oai", None) is not None:
+        reviewer._oai = reviewer._oai.with_options(timeout=settings.reader_conversation_timeout_seconds)
+    signals = {}
 
     def complete(system, user, *, schema, phase, tier="cheap"):
         started = perf_counter()
@@ -98,6 +116,8 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         calls[-1]["elapsed_ms"] = round((perf_counter() - started) * 1000, 2)
         return result.value
 
+    timing_lock = Lock()
+
     def jev_run(state, questions):
         started = perf_counter()
         phase = ("jev-dialogue-check" if "reply" in state else "jev-intent" if "latest_message" in state
@@ -106,7 +126,8 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             result = budgeted_jev(catalog, settings, client.jev, book_id,
                 phase=phase, state=state, questions=questions)
         finally:
-            timings[phase] = round(timings.get(phase, 0) + (perf_counter() - started) * 1000, 2)
+            with timing_lock:
+                timings[phase] = round(timings.get(phase, 0) + (perf_counter() - started) * 1000, 2)
         calls.append({"provider": "typesafe", "model": client.jev.model, "phase":phase,
             "input_tokens": result.usage["in"], "output_tokens": result.usage["out"],
             "usd": result.usd, "pricing_known": True,
@@ -114,7 +135,7 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         return result.value
 
     scope = (book_id, book["incarnation"], hashlib.sha256(json.dumps([
-        point["id"], CONTENT_POLICY_VERSION, "page-conversation-v1", SCENE_WINDOWS_VERSION, DRAFT_SYSTEM,
+        point["id"], CONTENT_POLICY_VERSION, "page-conversation-v2-known-names", SCENE_WINDOWS_VERSION, DRAFT_SYSTEM,
         ASK_EVIDENCE_SYSTEM, ASK_JUDGE_SYSTEM,
         [POLICY_VERSION, POLICY, FIT, SUPPORT, RELEVANCE, DECISION_LIMITS,
          getattr(getattr(client,"jev",None),"model","unavailable")]
@@ -122,7 +143,7 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         client.extractor_version("large"), client.extractor_version("cheap"),
         getattr(client, "base_url", ""), settings.reader_conversation_review_effort,
         settings.reader_conversation_draft_effort, settings.reader_conversation_routing,
-        draft_system,
+        draft_system, "prose-v1" if prose else None, BRIDGE_VERSION,
         [TURN_VERSION, REPLY_SYSTEM, QUESTIONS] if settings.reader_conversation_routing else None,
     ]).encode()).hexdigest())
     key = (*scope, body.question)
@@ -149,6 +170,12 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             "citations": [_public_ask_source(s) for s in sources], "cost": cost_payload(calls)}
         if clarification:
             value.update(answer_type="conversation", message=clarification, insufficient_evidence=False)
+        elif draft.insufficient_evidence and signals.get("ahead"):
+            value["status"] = "ahead"
+        if signals.get("prose_reply") and draft.claims:
+            value["style"] = "prose"
+            if signals.get("closing"):
+                value["closing"] = signals["closing"]
         if calculation:
             value["calculation"] = calculation
         value["timing"] = timing_payload()
@@ -168,8 +195,14 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
                 return payload(AskDraft(insufficient_evidence=True,claims=[]),[],calculated)
         if use_jev and not getattr(client,"jev",None):
             raise HTTPException(503,"Jev review is not configured")
-        route = classify_turn(reader_message, run=jev_run, history=[m.model_dump(mode="json")
-            for m in body.history if m.as_of_chapter <= eff]) if settings.reader_conversation_routing else "evidence"
+        route = "evidence"
+        if settings.reader_conversation_routing:
+            try:
+                route = classify_turn(reader_message, run=jev_run, signals=signals,
+                    history=[m.model_dump(mode="json") for m in body.history if m.as_of_chapter <= eff])
+            except JevUnavailable:
+                # Routing only chooses a cheaper path. Without it, take the full evidence path.
+                signals["jev_down"] = True
         scene_bank = getattr(client, "answers", None) if settings.reader_answer_cache and route == "recent_recap" else None
         # AnswerBank persists exactly (book, incarnation, scope, question). Keep the
         # scene namespace inside the scope digest, never as an extra key component.
@@ -182,11 +215,25 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         if route.startswith("clarify_"):
             return payload(AskDraft(insufficient_evidence=True, claims=[]), [],
                            CLARIFICATIONS[route.removeprefix("clarify_")])
-        if route == "dialogue":
-            message = answer_dialogue(question, route=route, complete=complete, run=jev_run)
+        def plain_reply():
+            message = answer_dialogue(question, route="dialogue", complete=complete, run=jev_run)
             return payload(AskDraft(insufficient_evidence=True, claims=[]), [], message)
+
+        if route == "dialogue" or (route == "reaction" and not chapters):
+            return plain_reply()
         if not chapters:
             return payload(AskDraft(insufficient_evidence=True, claims=[]), [])
+        permitted_text = "\n".join(ch["text"] for ch in chapters)
+        identities = []
+        if route != "recent_recap":
+            # Reviewed memory, bounded by completed chapters AND by the exact read prefix.
+            with store.book(book_id) as mem:
+                durable = min(state["bookmark"], state["ingest_progress"], max(0, point["atom"] - 1),
+                              mem.completion_frontier(manifest["atoms"]))
+                if durable > 0 and mem.view(durable).characters():
+                    identities = same_person_names(mem, durable, set(word_tokens(permitted_text)),
+                                                   set(word_tokens(query, min_length=2)))
+        known_names = [form for group in identities for form in group]
         retrieval_started = perf_counter()
         atoms = {a["key"]: a for a in manifest["atoms"]}
         texts = {ch["key"]: ch["text"] for ch in chapters}
@@ -199,13 +246,43 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             names = {normalize_text(w.text) for w in proper_words(body.question)} - STOPWORDS - {
                 "who", "what", "remind", "tell", "please"}
             introductions = []
-            if names:
+            covered = any(names & set(word_tokens(form, min_length=2))
+                          for group in identities for form in group)
+            if names and use_jev and not covered and not signals.get("jev_down"):
+                # No reviewed memory for this name (memory off, or not yet ingested): look for
+                # its other forms in the pages where the reader first met it.
+                mentions = first_mention(names, chapters, passage_windows)
+                asked = " ".join(w.text for w in proper_words(body.question)
+                                 if normalize_text(w.text) in names)
+                try:
+                    found = text_same_person(asked, names, [text for text, _ in mentions], run=jev_run)
+                except JevUnavailable:
+                    signals["jev_down"] = True
+                    found = []
+                if found:
+                    identities = identities + found
+                    known_names = [form for group in identities for form in group]
+                    # The passages that establish the link stay in the pool as citable evidence.
+                    introductions = [(1.0, text, chapter["ordinal"], chapter["key"])
+                                     for text, chapter in mentions]
+            # The reader's own form first, then each other known form of the same person, so the
+            # passage that introduces "Alexey" is offered when the reader asks about "Alyosha".
+            wanted = [names] if names else []
+            for group in identities:
+                forms = [set(word_tokens(form, min_length=2)) for form in group]
+                if names and any(names & form for form in forms):
+                    wanted += [form for form in forms if form and form not in wanted]
+            for position, form in enumerate(wanted[:4]):
+                found = 0
                 for chapter in chapters:
                     for _, _, text in passage_windows(chapter["text"]):
-                        if names <= set(word_tokens(text)):
-                            introductions.append((1.0, text, chapter["ordinal"], chapter["key"]))
+                        if form <= set(word_tokens(text)):
+                            hit = (1.0, text, chapter["ordinal"], chapter["key"])
+                            if hit not in introductions:
+                                introductions.append(hit)
+                                found += 1
                             break
-                    if len(introductions) == 2:
+                    if found == (2 if position == 0 else 1):
                         break
             scene_hits = introductions
         if route == "recent_recap":
@@ -216,11 +293,12 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         else:
             candidates = retrieve_ask_sources(query, bookmark=eff, chapters=chapters,
                 read_chapter=texts.get, semantic_hits=scene_hits, atoms=atoms, candidate_pool=True,
-                prefer_recent=route != "identity")
+                prefer_recent=route != "identity", known_names=known_names)
         candidates = compact_candidates(candidates)
         timings["retrieval"] = round((perf_counter() - retrieval_started) * 1000, 2)
         if not candidates:
-            return payload(AskDraft(insufficient_evidence=True, claims=[]), [])
+            return plain_reply() if route == "reaction" else payload(
+                AskDraft(insufficient_evidence=True, claims=[]), [])
         context_notes = ""
         if route == "recent_recap":
             # Fixed recent scene, already clipped to the exact read offset. No global reranking.
@@ -236,9 +314,19 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
                 "is not a request to recap a previously discussed character.")
         elif use_jev:
             original = candidates
-            selected, context_notes = prepare_context(question, candidates, frontier=eff,
-                                                       run=jev_run, settings=settings)
-            candidates = complete_ask_context(query, selected, original, allow_named_fallback=True)
+            try:
+                if signals.get("jev_down"):
+                    raise JevUnavailable("Jev already failed in this request")
+                selected, context_notes = prepare_context(question, candidates, frontier=eff,
+                                                           run=jev_run, settings=settings)
+            except JevUnavailable:
+                # Retrieval already ordered the pool by priority; use its first six bodies.
+                signals["jev_down"] = True
+                selected, context_notes = candidates[:6], ""
+            candidates = complete_ask_context(query, selected, original, known_names=known_names,
+                                              allow_named_fallback=True)
+        context_notes = "\n".join(note for note in (
+            context_notes, names_note(identities), REACTION_NOTES if route == "reaction" else "") if note)
         if not _recap_input_fits(settings, reviewer, draft_system,
                                  ask_prompt(question, candidates, frontier=eff) + "\n" + context_notes,
                                  schema=ConversationDraft):
@@ -254,9 +342,9 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
                     frontier=eff)
                 candidates = complete_ask_context(query, selected, original, allow_named_fallback=True)
         if not candidates:
-            return payload(AskDraft(insufficient_evidence=True, claims=[]), [])
+            return plain_reply() if route == "reaction" else payload(
+                AskDraft(insufficient_evidence=True, claims=[]), [])
         facts = source_facts(candidates)
-        permitted_text = "\n".join(ch["text"] for ch in chapters)
         visibility = _warm_visibility(permitted_text) if settings.reader_conversation_routing else None
         read_words = None
 
@@ -280,13 +368,31 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             timings["safety"] = round(timings.get("safety", 0) + (perf_counter()-started_safety)*1000, 2)
             return result
 
+        def gpt_review(draft, sources, **kwargs):
+            # The stricter pair of independent reviews. It clears a whole draft or nothing, so
+            # it cannot stand in for the standalone-meaning check on a substituted alternative.
+            if kwargs.get("require_standalone"):
+                raise JevUnavailable("Jev review unavailable")
+            return review_draft(draft, sources, **{k: kwargs[k] for k in (
+                "question", "frontier", "scene_sources", "coverage_sources", "complete",
+                "max_output_tokens")})
+
         def jev_review(draft, sources, **kwargs):
+            if signals.get("jev_down"):
+                return gpt_review(draft, sources, **kwargs)
+            kwargs["identities"] = identities
+            kwargs["connected"] = prose and route != "recent_recap"
             try:
                 if route == "recent_recap":
                     return review_recap_prefix(draft, sources, run=jev_run, settings=settings,
                                                trace_id=request_id, **kwargs)
                 return review_with_jev(draft, sources, run=jev_run, settings=settings,
-                    complete_instruction=route not in {"recent_recap", "identity"}, **kwargs)
+                    complete_instruction=route not in {"recent_recap", "identity", "reaction"}, **kwargs)
+            except JevUnavailable:
+                signals["jev_down"] = True
+                kwargs.pop("identities", None)
+                kwargs.pop("connected", None)
+                return gpt_review(draft, sources, **kwargs)
             except JevNeedsReasoning as exc:
                 if exc.review_alternative is not None:
                     candidate, candidate_sources = exc.review_alternative
@@ -294,18 +400,55 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
                                       standalone=True, **kwargs)
                     return candidate
                 standalone = bool(kwargs.get("require_standalone",False))
-                return review_escalation(draft, sources,
+                shorter = review_escalation(draft, sources,
                     claim_ids=None if standalone else exc.claim_ids, standalone=standalone, **kwargs)
+                if shorter is not None:
+                    # The second review rejected a later sentence. The proven leading sentences
+                    # are published only if they still answer what was asked.
+                    try:
+                        if not answers_request(shorter, question=kwargs["question"], run=jev_run):
+                            raise AskEvidenceError()
+                    except JevUnavailable:
+                        raise AskEvidenceError() from None
+                    signals["shortened"] = True
+                return shorter
 
         draft_question = reader_message if route == "recent_recap" else question
-        draft, sources, clarification = answer_conversation(draft_question, candidates, frontier=eff,
-            known_names=[], complete=complete, score=score,
-            max_output_tokens=settings.cost_max_output_tokens_per_call,
-            review=jev_review if use_jev else None,
-            max_attempts=1 if use_jev else 2,
-            context_notes=context_notes, draft_system=draft_system,
-            draft_schema=SceneConversationDraft if route=="recent_recap" else ConversationDraft,
-            allow_verified_prefix=route == "recent_recap")
+        prose_reply = prose and route != "recent_recap"
+        proposed = {}
+        try:
+            draft, sources, clarification = answer_conversation(draft_question, candidates, frontier=eff,
+                known_names=known_names, complete=complete, score=score,
+                max_output_tokens=settings.cost_max_output_tokens_per_call,
+                review=jev_review if use_jev else None,
+                max_attempts=1 if use_jev else 2,
+                context_notes=context_notes, draft_system=draft_system,
+                draft_schema=(SceneConversationDraft if route=="recent_recap"
+                              else ProseConversationDraft if prose_reply else ConversationDraft),
+                allow_verified_prefix=route == "recent_recap",
+                on_generated=lambda value: proposed.update(closing=getattr(value, "closing", None)),
+                retry_unreviewed=use_jev)
+        except (AskSafetyError, AskEvidenceError, ValueError):
+            if route != "reaction":
+                raise
+            # A reaction never ends in an error: an uncleared grounded reply is discarded and
+            # the reader gets the plain acknowledgment that carries no book facts.
+            return plain_reply()
+        if route == "reaction" and (draft.insufficient_evidence or clarification):
+            return plain_reply()
+        if prose_reply and draft.claims:
+            signals["prose_reply"] = True
+            closing = " ".join((proposed.get("closing") or "").split())
+            if closing and not signals.get("jev_down"):
+                # The one uncited line. It is kept only when it carries no book content and
+                # passes the same spoiler scorer; otherwise the checked reply goes out without it.
+                try:
+                    safety = score(closing)
+                    if (book_fact_risk(closing, question, run=jev_run) < .1 and not any(safety[key] for key in (
+                            "future_entity_leaks", "prolepsis_hits", "unsupported_event_bindings"))):
+                        signals["closing"] = closing
+                except (JevUnavailable, AskEvidenceError):
+                    pass
         result = payload(draft, sources, clarification)
         if scene_bank is not None and valid_answer(result):
             scene_bank.set(scene_key, result)

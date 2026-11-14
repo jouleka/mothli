@@ -11,7 +11,7 @@ Use the ignored server environment; never expose credentials in frontend configu
 
 ```dotenv
 JEV_ENABLED=true
-JEV_MODEL=jev-1.13.0
+JEV_MODEL=jev-1.14.0
 JEV_SELECTION_ENABLED=true
 JEV_EVIDENCE_ENABLED=true
 JEV_PARTIAL_EVIDENCE_ENABLED=true

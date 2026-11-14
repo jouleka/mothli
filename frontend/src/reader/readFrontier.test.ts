@@ -30,6 +30,14 @@ describe("exact page source anchors", () => {
     document.querySelector("h2")!.id = "two";
     expect(atomAtRange(atoms, "book.xhtml", range, "start")).toBe(null);
   });
+  test("text ahead of a file's first chapter anchor belongs to the previous chapter", () => {
+    document.body.innerHTML = '<p>End of six.</p><h2 id="seven">Seven</h2><p>Start of seven.</p><h2 id="eight">Eight</h2>';
+    const range = document.createRange(); range.selectNodeContents(document.querySelectorAll("p")[0]);
+    const atoms = [{href:"a.xhtml#six"}, {href:"b.xhtml#seven"}, {href:"b.xhtml#eight"}] as Parameters<typeof atomAtRange>[0];
+    expect(atomAtRange(atoms, "b.xhtml", range, "start")).toBe(0);
+    range.selectNodeContents(document.querySelectorAll("p")[1]);
+    expect(atomAtRange(atoms, "b.xhtml", range, "start")).toBe(1);
+  });
   test("retains the furthest queued page through a quick backward turn", async () => {
     vi.useFakeTimers();
     const put = vi.fn(async () => null);

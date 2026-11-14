@@ -120,6 +120,13 @@ def _boundary_counts(root, boundaries):
     return counts
 
 
+_PG_FRONT = re.compile(r"Project Gutenberg(?:'s|\u2019s)? (?:e-?book|etext)", re.I)
+
+
+def _join_text(first, second):
+    return "\n\n".join(part for part in (first, second) if part and part.strip())
+
+
 def _anchor_texts(zf, atoms):
     """Per-atom text for anchor-driven books: each spine file is split at its atoms' fragment anchors so
     a frag='' HEAD atom gets ONLY the file head (up to the first #frag) — never the whole file. Returns
@@ -128,7 +135,7 @@ def _anchor_texts(zf, atoms):
     safe-emptied) and a gating flag is emitted — the ingestion worker must NOT ingest until resolved
     (exactly like a COVERAGE GAP). Real, well-formed anchor books (e.g. P&P) resolve cleanly and are
     unaffected; only a typo'd / malformed EPUB trips the guard."""
-    out, flags, by_href = {}, [], {}
+    out, flags, by_href, heads = {}, [], {}, {}
     for a in atoms:
         by_href.setdefault(a.href, []).append(a)
     for href, group in by_href.items():
@@ -154,6 +161,26 @@ def _anchor_texts(zf, atoms):
         buckets = _bucket_by_anchor(root, boundaries)
         for a in group:
             out[a.chapter_key] = buckets.get(a.frag, "")
+        if buckets.get("") and not any(a.frag == "" for a in group):
+            heads[href] = buckets[""]
+    # Text that precedes a file's first anchor belongs to whatever came before it in reading
+    # order. A chapter that continues across a file split is appended to the PRECEDING atom, the
+    # same nearest-preceding-anchor rule used inside one file; it was previously dropped. Whole
+    # files with no anchor of their own (listed in an atom's source_files) are appended the same
+    # way. Nothing is ever moved to an EARLIER atom than the one whose anchor precedes it.
+    previous = None
+    for a in atoms:
+        if previous is not None and a.href != previous.href and a.href in heads:
+            out[previous.chapter_key] = _join_text(out.get(previous.chapter_key, ""), heads.pop(a.href))
+        elif previous is None and a.href in heads:
+            # The first file's head is front matter when it carries the PG header; otherwise it
+            # is prose ahead of the first anchor and is kept at the start of the first atom.
+            head = heads.pop(a.href)
+            if not START_RE.search(head[:8000]) and not _PG_FRONT.search(head[:8000]):
+                out[a.chapter_key] = _join_text(head, out.get(a.chapter_key, ""))
+        for extra in a.source_files[1:]:
+            out[a.chapter_key] = _join_text(out.get(a.chapter_key, ""), _body_text(zf, extra))
+        previous = a
     return out, flags
 
 
@@ -204,7 +231,9 @@ def segment_for_ingest(epub, book_id):
             chapters.append({
                 "ordinal": atom.revealed_at,
                 "key": atom.chapter_key,
-                "href": atom.href,
+                # A chapter that starts inside a shared file keeps its anchor: the reader needs it
+                # to tell which of that file's chapters a page belongs to, and to open citations there.
+                "href": atom.href + (f"#{atom.frag}" if getattr(atom, "frag", "") else ""),
                 "title": atom.title,
                 "part_label": atom.part_label,
                 "text": text,

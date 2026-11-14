@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     jev_enabled: bool = False
     typesafe_api_key: SecretStr | None = None
     jev_windows_credential: bool = False
-    jev_model: Literal["jev-1.13.0", "jev-1.14.0"] = "jev-1.13.0"
+    # 1.14.0 is the one version in use. 1.13.0 is still accepted so an older environment file
+    # starts; on the repo's review controls it sent more correct answers to the slow review.
+    jev_model: Literal["jev-1.13.0", "jev-1.14.0"] = "jev-1.14.0"
     jev_timeout_seconds: float = Field(default=5.0, gt=0, le=15)
     jev_selection_enabled: bool = True
     jev_evidence_enabled: bool = True
@@ -54,8 +56,17 @@ class Settings(BaseSettings):
     reader_memory_ingest: bool = True  # Local source-first preview can defer paid memory backfill.
     reader_conversation_jev: bool = False
     reader_conversation_routing: bool = False
+    # One spoken reply instead of separate cited paragraphs. Same evidence and spoiler checks.
+    reader_conversation_prose: bool = False
+    # Streamed replies: one plain-prose writer, each sentence checked by Jev before it is shown.
+    # Unset, it follows READER_CONVERSATION_JEV: on wherever that path is on. Set false to keep
+    # the reviewed, non-streamed replies.
+    reader_conversation_stream: bool | None = None
     reader_conversation_draft_effort: Literal["low", "medium"] = "medium"
     reader_conversation_review_effort: Literal["low", "medium"] = "medium"
+    # One model call in a page conversation. The provider default (120 s) is far past the
+    # point where a reader has given up; codex-local keeps its own subprocess timeout.
+    reader_conversation_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
     reader_fast_mode: bool = False
     reader_reuse_enabled: bool = False
     reader_reuse_fast_review: bool = True  # Local GPT-6 Luna reuse checks only; normal preparation is unchanged.
@@ -140,6 +151,12 @@ class Settings(BaseSettings):
     def validate_hosted_auth(self):
         if not self.reader_memory_ingest and (self.deployment_mode != "local" or not self.reader_page_context):
             raise ValueError("deferred memory ingestion requires local page context")
+        if self.reader_conversation_stream is None:
+            self.reader_conversation_stream = self.reader_conversation_jev
+        if self.reader_conversation_stream and not self.reader_conversation_jev:
+            raise ValueError("READER_CONVERSATION_STREAM requires READER_CONVERSATION_JEV")
+        if self.reader_conversation_prose and not self.reader_conversation_jev:
+            raise ValueError("prose replies require the local conversation Jev pipeline")
         if self.reader_conversation_routing and not self.reader_conversation_jev:
             raise ValueError("turn routing requires the local conversation Jev pipeline")
         if self.reader_conversation_jev and (self.deployment_mode != "local" or not self.reader_page_context
