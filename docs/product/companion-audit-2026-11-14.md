@@ -395,6 +395,36 @@ Terra on the OpenAI API (not the CLI), Jev 1.13.0, low effort, all fixes applied
 - **Spoiler probes held, 4 of 4.**
 - **Still short of the target.** Time to first word equals total time, so the median is 3–4 s against a 1.5–2 s target. Closing that gap needs streaming or a shorter draft, not fewer Jev calls.
 
+## 6f. First evaluation run (Live)
+
+Runner: `backend/scripts/companion_eval.py` with `companion_eval_cases.json`. 24 fixed questions (12 per book), each in both reply styles, chapter memory off, Jev 1.13.0. Terra ran through the ChatGPT CLI because the OpenAI key stopped being accepted partway through the session, so the times below are CLI times, not production. One run per question.
+
+| Book | Style | As expected | Facts present | Spoilers | Second review used | Median time (CLI) | Spoken (Jev) | Detail (Jev) |
+|---|---|---|---|---|---|---|---|---|
+| Karamazov ch. 1–5 | claims | 12 of 12 | 14 of 14 | 0 | 3 of 12 | 6.4 s | 0.26 | 0.98 |
+| Karamazov ch. 1–5 | prose | 12 of 12 | 14 of 14 | 0 | 6 of 12 | 8.9 s | 0.36 | 0.98 |
+| Pride and Prejudice ch. II–VI | claims | 12 of 12 | 14 of 14 | 0 | 4 of 12 | 5.4 s | 0.35 | 0.98 |
+| Pride and Prejudice ch. II–VI | prose | 10 of 12 | 11 of 14 | 0 | 6 of 12 | 10.4 s | 0.47 | 0.99 |
+
+- **No spoilers in 48 replies.** That includes the outcome and unread-character probes on both books, and a check for any name that appears only after the reading position.
+- **Claims replies were correct everywhere.** Every expected fact was present on both books.
+- **The nickname link held on the second book.** "Who is Lizzy again?" was answered as Elizabeth Bennet.
+- **Prose is not ready to be the default.** On the second book two prose replies failed to clear review (Charlotte's view of Jane, and Charlotte on marriage; the second took 72 s before failing). Prose also needed the slow second review on half its answers, against a quarter to a third for claims.
+- **Tone is better with prose and still low.** Jev's "reads like a person talking" score rose from 0.26–0.35 to 0.36–0.47. Reactions scored highest (0.65–0.75); "who is X" lookups scored lowest.
+- **The tone score is uncalibrated.** It is one Jev question, not a human rating. Use it to compare runs.
+
+### Import problem found while preparing the second book
+
+None of three Project Gutenberg editions of Pride and Prejudice imports cleanly (segmentation run directly; not the conversation path):
+
+| Edition | Result |
+|---|---|
+| 1342, EPUB3 with images | Conversation refused: a "coverage gap" flag blocks the book |
+| 1342, EPUB without images | Imports with no blocking flag, but Chapter I is absent from every atom and the atoms are titled by illustration captions |
+| 42671 | Imports with no blocking flag, but the first atom is Chapter VIII; Chapters I–VII are absent |
+
+The companion cannot know chapters the importer never stored, and atom numbers no longer match chapter numbers. This affects "Pick a classic". Not investigated further and not fixed.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
