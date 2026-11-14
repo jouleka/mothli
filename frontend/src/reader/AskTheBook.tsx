@@ -45,6 +45,8 @@ type AskSnapshot = {
   question: string;
   exchanges: AskExchange[];
   pendingQuestion: string | null;
+  /** Sentences of the reply in progress that the server has already checked. */
+  streaming: string;
   busy: boolean;
   error: string;
   requestToken: number;
@@ -130,6 +132,7 @@ function createAskSession(
     question: "",
     exchanges: [],
     pendingQuestion: null,
+    streaming: "",
     busy: false,
     error: "",
     requestToken: 0,
@@ -247,7 +250,7 @@ export function AskTheBook({
   }
   const session = retainedSession.current;
   session.bookmark = bookmark;
-  const { question, exchanges, pendingQuestion, busy, error } =
+  const { question, exchanges, pendingQuestion, streaming, busy, error } =
     useSyncExternalStore(
       session.subscribe,
       session.getSnapshot,
@@ -324,7 +327,7 @@ export function AskTheBook({
       node.scrollTop =
         node.querySelector<HTMLElement>("[data-latest-exchange]")?.offsetTop ??
         0;
-  }, [exchanges.length, busy]);
+  }, [exchanges.length, busy, streaming]);
   useEffect(() => {
     setPeopleOpen(false);
     setPeople([]);
@@ -345,6 +348,7 @@ export function AskTheBook({
       busy: true,
       error: "",
       pendingQuestion: value,
+      streaming: "",
       requestToken,
     });
     const isCurrentRequest = () =>
@@ -427,9 +431,17 @@ export function AskTheBook({
             },
           ])
           .slice(-8);
-        result = readPoint
+        // Sentence by sentence when the server offers it; each one arrives already checked.
+        const streamed = readPoint && api.askBookStream
+          ? await api.askBookStream(bookId, value, requestBookmark, history, readPoint, (sentence) => {
+              if (isCurrentRequest())
+                session.update({ streaming: [session.getSnapshot().streaming, sentence].filter(Boolean).join(" ") });
+            })
+          : null;
+        if (!isCurrentRequest()) return;
+        result = streamed ?? (readPoint
           ? await api.askBook(bookId, value, requestBookmark, history, readPoint)
-          : await api.askBook(bookId, value, requestBookmark, history);
+          : await api.askBook(bookId, value, requestBookmark, history));
         if (
           result.as_of_chapter > requestBookmark ||
           result.citations.some((citation) => citation.ordinal > requestBookmark) ||
@@ -477,7 +489,7 @@ export function AskTheBook({
       }
     } finally {
       if (isCurrentRequest())
-        session.update({ busy: false, pendingQuestion: null });
+        session.update({ busy: false, pendingQuestion: null, streaming: "" });
     }
   };
   const openPeople = async () => {
@@ -742,6 +754,7 @@ export function AskTheBook({
                       question: "",
                       exchanges: [],
                       pendingQuestion: null,
+                      streaming: "",
                       busy: false,
                       error: "",
                       requestToken: session.getSnapshot().requestToken + 1,
@@ -867,6 +880,13 @@ export function AskTheBook({
             {busy && (
               <section className="mothli-exchange lp-exchange" aria-label="Sending message">
                 {pendingQuestion && <p className="mothli-question lp-you">{pendingQuestion}</p>}
+                {streaming && (
+                  <div className="mothli-reply lp-reply" aria-live="polite">
+                    <div className="lp-reply-body">
+                      <p>{streaming}</p>
+                    </div>
+                  </div>
+                )}
                 <div className="lp-thinking">
                   <span className="lp-thinking-dots" aria-hidden="true">
                     <i />
@@ -880,6 +900,7 @@ export function AskTheBook({
                       session.update({
                         busy: false,
                         pendingQuestion: null,
+                        streaming: "",
                         requestToken: session.getSnapshot().requestToken + 1,
                       })
                     }

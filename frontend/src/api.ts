@@ -140,6 +140,8 @@ export type AskCost = {
   payer: string;
 };
 export const ASK_TIMEOUT_MS = 60_000;
+// null until the server has answered once: whether it offers replies sentence by sentence.
+let streamedReplies: boolean | null = null;
 export type AskAnswer = {
   as_of_chapter: number; insufficient_evidence: boolean; claims: AskClaim[];
   citations: AskCitation[]; cost: AskCost | null;
@@ -629,6 +631,61 @@ export const api = {
       if (controller.signal.aborted) throw new ApiError("The reply is taking longer than expected.", 504, "ask_timeout");
       throw error;
     }).finally(() => window.clearTimeout(timeout));
+  },
+  /**
+   * A reply delivered sentence by sentence, each already checked by the server. Resolves with
+   * the complete answer, or with null when this server does not offer streamed replies (the
+   * caller then asks the ordinary way).
+   */
+  askBookStream: async (
+    id: string, question: string, bookmark: number, history: ConversationMessage[],
+    readFrontier: ReadFrontier, onSentence: (text: string) => void,
+  ): Promise<AskAnswer | null> => {
+    if (streamedReplies === false) return null;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
+    try {
+      const response = await fetch(`/api/books/${id}/ask/stream`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...csrfHeaders() },
+        body: JSON.stringify({ question, bookmark, ...(history.length ? { history } : {}), read_frontier: readFrontier }),
+        signal: controller.signal,
+      });
+      if (response.status === 404 || response.status === 405) {
+        if (response.status === 405 || /not enabled|not found/i.test(await response.clone().text())) {
+          streamedReplies = false;
+          return null;
+        }
+      }
+      if (!response.ok || !response.body) return await j<AskAnswer>(response);
+      streamedReplies = true;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        for (let end = buffer.indexOf("\n\n"); end >= 0; end = buffer.indexOf("\n\n")) {
+          const line = buffer.slice(0, end);
+          buffer = buffer.slice(end + 2);
+          if (!line.startsWith("data: ")) continue;
+          const event = JSON.parse(line.slice(6)) as
+            | { type: "sentence"; text: string }
+            | { type: "done"; answer: AskAnswer }
+            | { type: "error"; status: number; message: string };
+          if (event.type === "sentence") onSentence(event.text);
+          else if (event.type === "done") return event.answer;
+          else throw new ApiError(event.message, event.status);
+        }
+      }
+      throw new ApiError("The reply ended early.", 502);
+    } catch (error) {
+      if (controller.signal.aborted) throw new ApiError("The reply is taking longer than expected.", 504, "ask_timeout");
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
   },
   selectionAction: (
     id: string,

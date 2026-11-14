@@ -534,6 +534,55 @@ Spoiler safety is not weakened: every published sentence passed the same checks 
 - **The one remaining failure:** "Who is Lizzy again?", where the reviewer did not accept from the cited passages that Lizzy is Elizabeth. A rejected first sentence leaves nothing to keep.
 - **Not improved:** speed, and how spoken the replies sound (Jev scores 0.39–0.44 of 1). Both need the redesign in section 7, not more fixes to this path.
 
+## 6j. Streamed replies (built, behind `READER_CONVERSATION_STREAM`)
+
+A third reply path, off by default: `backend/app/stream_conversation.py`, served at `POST /api/books/{id}/ask/stream`. The reader uses it when the server offers it and falls back to `/ask` otherwise.
+
+### How it works
+
+| Step | What happens | Model calls |
+|---|---|---|
+| Passages | Retrieval's first ten passages from the exact read prefix; no model chooses among them | 0 (one Jev call for a nickname on a "who is" question) |
+| Writer | Terra writes plain prose, streamed; persona and voice in one prompt | 1 |
+| Sentence check | Each sentence, as it completes, goes to Jev with the same passages: no story content, or supported with no added place, time, cause or dropped condition | 1 per sentence, in parallel with the writing |
+| Deterministic gate | Unread names, foreshadowing and event binding, per sentence | 0 |
+| Show | A sentence appears once it and every sentence before it are settled. A doubted sentence is dropped; later ones are judged again without it | |
+
+There is no second review, no routing before the writer, and no redraft.
+
+### What changed in the guarantee
+
+- **Unchanged:** the writer sees only read pages, nothing is shown unchecked, an outage shows nothing, and a doubted sentence is withheld.
+- **Looser than the reviewed path, stated plainly:**
+  - A sentence is checked against all ten passages given to the writer, not against citations of its own. All ten are read pages, so this does not admit unread material.
+  - The time and cause checks act at 0.45 instead of 0.3. On the repo's 28 bad controls (run twice) no bad sentence was cleared at any limit from 0.3 to 0.5; those two checks never decided a control on their own, so the controls do not show how high they can safely go. Place and dropped-condition stay at 0.3, where the controls need them.
+  - The check on an instruction's omitted timing, recipient or purpose is replaced by the narrower dropped-condition check.
+  - No Terra second opinion. Doubt costs a sentence instead.
+- **Replies carry no page links** ("Pages" under a reply), because sentences have no citations of their own.
+
+### Measured (direct API, Jev 1.14.0, 24 questions run twice)
+
+| | Reviewed path (claims / prose) | Streamed |
+|---|---|---|
+| Time to first words, median | 2.8–3.5 s (same as total) | 1.5 s |
+| Total time, median | 2.8–3.5 s | 2.0 s |
+| Slowest | 10.1 s | 4.0 s |
+| As expected | 48 of 48 | 46 of 48 |
+| Spoilers | 0 | 0 |
+| Expected facts present | 55 of 56 | 39 of 56 |
+| "Sounds like a person talking" (Jev, 0–1) | 0.39–0.44 | 0.62 |
+| Cost per question | $0.005–0.006 | $0.003–0.006 |
+
+Over real HTTP (uvicorn, not the test client) sentences reached the client separately: first at 1.2–1.3 s, later ones as they cleared.
+
+- **The cost of the speed is completeness.** 41 sentences were dropped across the 48 replies, and replies carried 70% of the expected facts against 98%. Most drops are true sentences that Jev scored just under the support limit (0.6–0.79).
+- **A dropped first sentence leaves a headless reply.** "Who is Lizzy again?" twice lost "Lizzy is Elizabeth Bennet" and showed only "Her father says she has more quickness than her sisters", or nothing. The pages link the two names only by implication.
+- **Unread people get the fixed "we haven't got there yet" line**; the writer's own version is dropped by the check.
+- **One reply repeated the reader's premise** ("hasn't told us who killed him"). The writer is now told not to; in six reruns it said "how he died" or made no such statement.
+- **Not built:** a short "book so far" sheet, conversation memory on the server (history still comes from the browser), and removal of the two older paths.
+
+Tests: `tests/test_stream_conversation.py` (14), two in `AskTheBook.test.tsx`. Backend and frontend suites pass.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

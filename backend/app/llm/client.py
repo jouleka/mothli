@@ -339,6 +339,25 @@ class LLMClient:
             cap["store"] = False
         allowed_tiers = ((None, "fast", "priority", "default") if requested_fast
                          else (None, "default"))
+        on_delta = getattr(self, "on_text_delta", None) if schema is None else None
+        if on_delta is not None:
+            # A spoken reply: the caller receives each fragment as it is written. Its reasoning
+            # effort follows the conversation draft setting rather than the prose default.
+            if "reasoning_effort" in cap:
+                cap["reasoning_effort"] = getattr(self, "conversation_draft_effort", cap["reasoning_effort"])
+            parts, final = [], None
+            with self._oai.chat.completions.create(model=model, messages=messages, stream=True,
+                                                   stream_options={"include_usage": True}, **cap) as stream:
+                for chunk in stream:
+                    if getattr(chunk, "usage", None) is not None:
+                        final = chunk
+                    for choice in getattr(chunk, "choices", None) or ():
+                        text = getattr(getattr(choice, "delta", None), "content", None)
+                        if text:
+                            parts.append(text)
+                            on_delta(text)
+            return "".join(parts), self._usage_openai(
+                final, native=self._is_native_openai, requested_fast=requested_fast)
         if schema is None:
             resp = self._oai.chat.completions.create(model=model, messages=messages, **cap)
             if (self._is_native_openai and model in _NATIVE_REASONING_EFFORT

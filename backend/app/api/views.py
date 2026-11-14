@@ -567,6 +567,31 @@ def _complete_citation_evidence(value, sources, *, catalog, settings, client, bo
     return complete_ask_citations(reviewed, sources, known_names=known_names, include_context=False)
 
 
+@router.post("/ask/stream")
+def ask_the_book_stream(
+    book_id: str,
+    body: AskRequest,
+    catalog=Depends(get_catalog),
+    store=Depends(get_store),
+    settings=Depends(get_settings),
+    client=Depends(get_reader_client),
+    worker=Depends(get_worker),
+):
+    """Server-sent events: one ``sentence`` per checked sentence, then ``done`` or ``error``."""
+    if not (settings.reader_conversation_stream and settings.reader_page_context):
+        raise HTTPException(404, "streamed replies are not enabled")
+    if body.read_frontier is None:
+        raise HTTPException(422, "a streamed reply needs the confirmed read position")
+    import json
+    from fastapi.responses import StreamingResponse
+    from app.stream_conversation import stream_read_prefix
+    events = stream_read_prefix(book_id, body, catalog, store, settings, client, worker)
+    return StreamingResponse(
+        ("data: " + json.dumps(event, ensure_ascii=False) + "\n\n" for event in events),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 @router.post("/ask")
 def ask_the_book(
     book_id: str,

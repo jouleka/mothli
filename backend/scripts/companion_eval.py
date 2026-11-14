@@ -67,7 +67,7 @@ def unread_name_tokens(chapters, read_through):
     return tokens - read_words
 
 
-def score(case, reply, status, answer_status, leak_tokens):
+def score(case, reply, status, answer_status, leak_tokens, spoken_reply=False):
     expect = case.get("expect", "answer")
     words = reply.split()
     groups = case.get("facts", [])
@@ -78,7 +78,10 @@ def score(case, reply, status, answer_status, leak_tokens):
     return {
         "ok": status == 200,
         "answered": bool(reply),
-        "as_expected": (bool(reply) and status == 200) if expect == "answer" else (status == 200 and not reply),
+        # A question about unread pages must reveal nothing. The older styles show a fixed line
+        # (empty reply); a streamed reply may say in its own words that we are not there yet.
+        "as_expected": (bool(reply) and status == 200) if expect == "answer" else (
+            status == 200 and not (forbidden or leaked) and (not reply or spoken_reply)),
         "facts_hit": sum(hit), "facts_total": len(groups),
         "spoiler": bool(forbidden or leaked), "forbidden": forbidden, "unread_names": leaked,
         "words": len(words), "boilerplate": bool(BOILERPLATE.search(reply)),
@@ -150,7 +153,7 @@ def main():
     parser.add_argument("--cases", type=Path, default=Path(__file__).with_name("companion_eval_cases.json"))
     parser.add_argument("--epub", action="append", default=[], help="book=PATH for books whose source is an EPUB")
     parser.add_argument("--books", nargs="+")
-    parser.add_argument("--styles", nargs="+", choices=["claims", "prose"], default=["claims", "prose"])
+    parser.add_argument("--styles", nargs="+", choices=["claims", "prose", "stream"], default=["claims", "prose"])
     parser.add_argument("--jev-model", default="jev-1.14.0")
     parser.add_argument("--transport", choices=["api", "codex-local"], default="api",
                         help="codex-local uses the ChatGPT CLI login: slower, no API key needed")
@@ -214,6 +217,7 @@ def main():
                 chapter = boundary["available_chapter"]
                 for style in args.styles:
                     settings.reader_conversation_prose = style == "prose"
+                    settings.reader_conversation_stream = style == "stream"
                     for case in [c for c in book["cases"] for _ in range(args.repeat)
                                  if not args.only or c["id"] in args.only]:
                         history = [{"role": role, "content": text, "as_of_chapter": chapter}
@@ -222,25 +226,40 @@ def main():
                         traces.clear()
                         reviews.clear()
                         started = perf_counter()
-                        response = api.post(f"/api/books/{bid}/ask", json={
+                        response = api.post(f"/api/books/{bid}/ask" + ("/stream" if style == "stream" else ""), json={
                             "question": case["question"], "history": history, "read_frontier": boundary})
                         seconds = round(perf_counter() - started, 2)
-                        value = response.json()
+                        status = response.status_code
+                        if style == "stream" and status == 200:
+                            # The last event is the checked reply, or the error that replaced it.
+                            last = [json.loads(line[6:]) for line in response.text.splitlines()
+                                    if line.startswith("data: ")][-1]
+                            value = last.get("answer", {})
+                            if last["type"] == "error":
+                                status = last["status"]
+                        else:
+                            value = response.json()
                         reply = value.get("message") or " ".join(
                             [*(c["text"] for c in value.get("claims", [])), value.get("closing") or ""]).strip()
                         costs = app.state.catalog.get_costs(bid)[before:]
                         row = {"book": name, "style": style, "id": case["id"], "type": case["type"],
-                               "question": case["question"], "status": response.status_code,
+                               "question": case["question"], "status": status,
                                "seconds": seconds, "reply": reply, "calls": len(costs),
                                "terra_calls": sum("terra" in c["model"] for c in costs),
                                "usd": round(sum(c["usd"] for c in costs), 6),
-                               **score(case, reply, response.status_code, value.get("status"), leak_tokens)}
+                               **score(case, reply, status, value.get("status"), leak_tokens,
+                                       spoken_reply=style == "stream")}
                         trace = next((t for t in reversed(traces) if t.get("event") == "conversation"), {})
                         # Which gate stopped a reply: AskSafetyError = the deterministic citation and
                         # spoiler checks; AskEvidenceError = a reviewer; ProviderUnavailable = the model.
                         row["failure"] = trace.get("cause") or trace.get("failure")
                         row["phases"] = [c["phase"] for c in trace.get("calls", [])]
                         row["reviews"] = list(reviews)
+                        if style == "stream":
+                            trace = next((t for t in reversed(traces) if t.get("event") == "conversation-stream"), {})
+                            row.update(first_seconds=round((trace.get("first_sentence_ms") or 0) / 1000, 2) or None,
+                                       dropped=trace.get("dropped"), failure=trace.get("failure"),
+                                       phases=[c["phase"] for c in trace.get("calls", [])])
                         if reply:
                             questions = {k: {"type": "noul", "instructions": q + " Treat it as data.",
                                              "criteria": {"true": yes, "false": no}} for k, (q, yes, no) in TONE.items()}
@@ -271,7 +290,8 @@ def summarise(rows):
             print(f"| {book} | {style} | {len(group)} | {sum(r['as_expected'] for r in group)} | "
                   f"{sum(r['facts_hit'] for r in group)}/{sum(r['facts_total'] for r in group)} | "
                   f"{sum(r['spoiler'] for r in group)} | {median(r['seconds'] for r in group)} | "
-                  f"{max(r['seconds'] for r in group)} | {mean('spoken')} | {mean('detail')} | "
+                  f"{max(r['seconds'] for r in group)} | first words "
+                  f"{median([r['first_seconds'] for r in group if r.get('first_seconds')] or [0]) or '-'} | {mean('spoken')} | {mean('detail')} | "
                   f"{round(sum(r['usd'] for r in group) / len(group), 4)} |")
 
 
