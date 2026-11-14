@@ -500,3 +500,28 @@ describe("The free library", () => {
     expect(await axeAA(container)).toHaveNoViolations();
   });
 });
+
+describe("A book's own cover", () => {
+  test("is laid over the cloth cover, and the cloth stays when the book has none", async () => {
+    mocks.books.mockResolvedValue([
+      { book_id: "bk1", title: "Emma", author: "Jane Austen" },
+      { book_id: "bk2", title: "Dracula", author: "Bram Stoker" },
+    ]);
+    const { container } = render(<Shelf onOpen={() => {}} />);
+    await screen.findByRole("button", { name: "Emma, Jane Austen" });
+    const [emma, dracula] = Array.from(container.querySelectorAll<HTMLImageElement>(".ml-book .cover-art"));
+    expect(emma.getAttribute("src")).toBe("/api/books/bk1/cover");
+    expect(emma.getAttribute("alt")).toBe("");
+    const cloth = emma.closest(".book-cover")!;
+    expect(cloth.getAttribute("data-art")).toBe("loading");
+    fireEvent.load(emma);
+    expect(cloth.getAttribute("data-art")).toBe("shown");
+    expect(cloth.querySelector(".cover-title")!.textContent).toBe("Emma");
+
+    const plain = dracula.closest(".book-cover")!;
+    fireEvent.error(dracula);
+    expect(plain.getAttribute("data-art")).toBe("none");
+    expect(plain.querySelector(".cover-art")).toBeNull();
+    expect(plain.querySelector(".cover-title")!.textContent).toBe("Dracula");
+  });
+});

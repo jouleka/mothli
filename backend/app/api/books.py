@@ -9,11 +9,12 @@ of an existing store (D-A10)."""
 import hashlib
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from app.deps import book_lifecycle, get_catalog, get_settings, get_store, get_worker
 from app.ingest.book_type import detect_book_type
+from app.ingest.cover import extract_cover
 from app.ingest.extraction.chapter_text import segment_for_ingest
 from app.ingest.manifest import (
     AtomSetMismatch,
@@ -147,6 +148,25 @@ def epub_bytes(book_id: str, catalog=Depends(get_catalog), settings=Depends(get_
     if not os.path.exists(path):
         raise HTTPException(404, "source EPUB not on disk")
     return FileResponse(path, media_type="application/epub+zip")
+
+
+@router.get("/{book_id}/cover", dependencies=[Depends(book_lifecycle)])
+def book_cover(book_id: str, catalog=Depends(get_catalog), settings=Depends(get_settings)):
+    """The cover picture the book's own EPUB carries, for the shelf. A book with none is a 404 and
+    the shelf draws its cloth cover instead. ``book_id`` is the hash of the file, so the picture
+    for an id never changes and can be kept by the browser."""
+    if catalog.get_book(book_id) is None:
+        raise HTTPException(404, "unknown book")
+    try:
+        path = source_epub_path(settings.data_dir, book_id)
+    except AtomSetMismatch as e:
+        raise HTTPException(404, "unknown book") from e
+    found = extract_cover(path) if os.path.exists(path) else None
+    if found is None:
+        raise HTTPException(404, "no cover")
+    blob, media_type = found
+    return Response(blob, media_type=media_type, headers={
+        "cache-control": "private, max-age=2592000, immutable", "x-content-type-options": "nosniff"})
 
 
 @router.delete(

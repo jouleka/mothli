@@ -28,6 +28,8 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from app.ingest.cover import image_type
+
 CATALOG_PATH = Path(__file__).with_name("classics_catalog.tsv.gz")
 SOURCE_NAME = "Project Gutenberg"
 SOURCE_URL = "https://www.gutenberg.org/"
@@ -277,14 +279,6 @@ def fetch_cover(entry, *, client=None):
         if own:
             client.close()
     return blob if image_type(blob) else None
-
-
-def image_type(blob):
-    if blob[:3] == b"\xff\xd8\xff":
-        return "image/jpeg"
-    if blob[:8] == b"\x89PNG\r\n\x1a\n":
-        return "image/png"
-    return None
 
 
 def _download(client, url, max_bytes):

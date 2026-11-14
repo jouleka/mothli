@@ -379,3 +379,77 @@ def test_manifest_route_serves_the_atom_map(env):
     with open(mpath, "w", encoding="utf-8") as f:
         json.dump(m, f)
     assert c.get(f"/api/books/{bid}/manifest").status_code == 409
+
+
+# ---- the book's own cover picture ------------------------------------------------------------
+
+_JPEG = b"\xff\xd8\xff\xe0" + b"j" * 200
+_PNG = b"\x89PNG\r\n\x1a\n" + b"p" * 200
+
+
+def _with_cover(*, manifest="", metadata="", files=None, title="Covered"):
+    """The three-chapter book with extra manifest items / metadata and extra files in the archive."""
+    source = zipfile.ZipFile(io.BytesIO(epub_ncx([("c1.xhtml", "One", "One", "Aldric walked on. " * 20)], title=title)))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as z:
+        for name in source.namelist():
+            raw = source.read(name)
+            if name == "content.opf":
+                raw = raw.replace(b"</metadata>", metadata.encode() + b"</metadata>")
+                raw = raw.replace(b"</manifest>", manifest.encode() + b"</manifest>")
+            z.writestr(name, raw)
+        for name, raw in (files or {}).items():
+            z.writestr(name, raw)
+    return out.getvalue()
+
+
+@pytest.mark.parametrize("label, blob, kind, picture", [
+    ("epub 3 cover-image property",
+     _with_cover(manifest='<item id="art" href="images/front.jpg" media-type="image/jpeg" properties="cover-image"/>',
+                 files={"images/front.jpg": _JPEG}, title="Three"), "image/jpeg", _JPEG),
+    ("epub 2 meta name=cover",
+     _with_cover(manifest='<item id="pic" href="art%20work/front.png" media-type="image/png"/>',
+                 metadata='<meta name="cover" content="pic"/>', files={"art work/front.png": _PNG}, title="Two"),
+     "image/png", _PNG),
+    ("an image simply called cover",
+     _with_cover(manifest='<item id="x1" href="cover.jpeg" media-type="image/jpeg"/>',
+                 files={"cover.jpeg": _JPEG}, title="Old"), "image/jpeg", _JPEG),
+], ids=lambda value: value if isinstance(value, str) and " " in value else "")
+def test_a_books_own_cover_is_served_for_the_shelf(env, label, blob, kind, picture):
+    c, _settings = env
+    bid = _import(c, blob).json()["book_id"]
+    r = c.get(f"/api/books/{bid}/cover")
+    assert r.status_code == 200, label
+    assert r.content == picture and r.headers["content-type"] == kind
+    assert r.headers["x-content-type-options"] == "nosniff" and "max-age" in r.headers["cache-control"]
+
+
+@pytest.mark.parametrize("label, blob", [
+    ("no cover at all", None),
+    ("a cover that is not really a picture",
+     _with_cover(manifest='<item id="art" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>',
+                 files={"cover.jpg": b"<html><script>alert(1)</script></html>"}, title="Fake")),
+    ("an svg cover is not served",
+     _with_cover(manifest='<item id="art" href="cover.svg" media-type="image/svg+xml" properties="cover-image"/>',
+                 files={"cover.svg": b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'},
+                 title="Vector")),
+    ("a cover the archive does not contain",
+     _with_cover(manifest='<item id="art" href="gone.jpg" media-type="image/jpeg" properties="cover-image"/>',
+                 title="Missing")),
+], ids=lambda value: value if isinstance(value, str) else "")
+def test_a_book_without_a_usable_cover_is_a_plain_404(env, label, blob):
+    c, _settings = env
+    bid = _import(c, blob).json()["book_id"]
+    assert c.get(f"/api/books/{bid}/cover").status_code == 404, label
+
+
+def test_cover_of_an_unknown_book_is_404(env):
+    c, _settings = env
+    assert c.get("/api/books/nope/cover").status_code == 404
+
+
+def test_a_book_whose_cover_path_leaves_the_archive_is_refused_at_import(env):
+    c, _settings = env
+    blob = _with_cover(manifest='<item id="art" href="../../outside.jpg" media-type="image/jpeg" properties="cover-image"/>',
+                       title="Escape")
+    assert _import(c, blob).status_code == 422
