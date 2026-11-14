@@ -261,3 +261,53 @@ def test_deterministically_rejected_primary_cannot_hide_or_authorize_alternative
         with pytest.raises(AskSafetyError if alternative_status == "unsafe" else JevNeedsReasoning):
             invoke()
         assert len(reviewed) == (0 if alternative_status == "unsafe" else 1)
+
+
+TWO = AskDraft(insufficient_evidence=False, claims=[
+    {"text": "Mara lent Jonas a key.", "citation_ids": [1]},
+    {"text": "Nell kept three coins.", "citation_ids": [2]}])
+
+
+def _units(claim_id, text, source, supported=True):
+    return {"claim_id": claim_id, "units": [
+        {"unit_id": u["id"], "supported": supported, "diagnostic": None if supported else "not stated",
+         "evidence": [{"source_id": source, "passage_ids": [1]}] if supported else []}
+        for u in field_segments(text, "answer")]}
+
+
+@pytest.mark.parametrize("case,kept", [
+    ("second-rejected", 1), ("first-rejected", 0), ("unnamed-objection", 0),
+    ("possible-spoiler", 0), ("missing-detail", 0), ("named-without-unit", 1)])
+def test_a_rejected_later_claim_leaves_only_the_proven_leading_claims(case, kept):
+    def complete(system, user, **kw):
+        bad = 1 if case == "first-rejected" else 2
+        unit_rejection = case != "named-without-unit"
+        return {"references_future": case == "possible-spoiler",
+                "missing_details": ["the amount"] if case == "missing-detail" else [],
+                "unsupported_claims": ["The coins are not established."] if case == "unnamed-objection"
+                    else [f"Claim {bad}, unit 0: not stated."],
+                "claim_audits": [_units(i, c.text, i, supported=not (unit_rejection and i == bad))
+                                 for i, c in enumerate(TWO.claims, 1)]}
+    def invoke():
+        return review_escalation(TWO, SOURCES, question="What happened?", complete=complete,
+                                 max_output_tokens=4096)
+    if kept:
+        assert invoke() == AskDraft(insufficient_evidence=False, claims=TWO.claims[:kept])
+    else:
+        with pytest.raises(AskEvidenceError):
+            invoke()
+
+
+def test_a_reply_of_three_claims_is_reviewed_in_joined_calls_instead_of_refused():
+    sources = SOURCES + [dict(id=3, ordinal=1, chapter_key="one", title="One", text="Jonas left at dawn.")]
+    draft = AskDraft(insufficient_evidence=False, claims=[*TWO.claims,
+        {"text": "Jonas left at dawn.", "citation_ids": [3]}])
+    seen = []
+    def complete(system, user, **kw):
+        ids = [c["claim_id"] for c in json.loads(user.split("\n", 1)[1])["claims"]]
+        seen.append(ids)
+        return {"references_future": False, "missing_details": [], "unsupported_claims": [],
+                "claim_audits": [_units(i, draft.claims[i - 1].text, i) for i in ids]}
+    assert review_escalation(draft, sources, question="What happened?", complete=complete,
+                             max_output_tokens=4096) is None
+    assert sorted(seen) == [[1, 2], [3]]

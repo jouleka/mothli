@@ -495,6 +495,45 @@ Terra on the OpenAI API, fixed importer, chapter memory off, 24 questions in bot
 
 `jev_model` now defaults to `jev-1.14.0`. `jev-1.13.0` is still accepted so an older environment file starts.
 
+## 6i. Why correct-looking replies were rejected, and the fix
+
+The evaluation runner now keeps, beside each row, the draft, the Jev checks that were unsure, and the second reviewer's stated objections (`reviews` in the output). The application log still holds no question, reply or book text.
+
+Seven weak questions were run four times in each style (56 replies). Nine were rejected. The reasons:
+
+| Reason | Count | Example |
+|---|---|---|
+| One detail stated more precisely or loosely than the text | 4 | "took her 25,000 roubles" where the text says "up to"; "little time to talk alone" where Charlotte says they cannot spend every moment conversing |
+| A true detail whose cited passages did not contain it | 2 | Alyosha called "a novice"; the read pages say so, the three cited passages did not |
+| The second review refused before it ran | 2 | A reply of three sentences was over its two-claim limit and failed with no review at all |
+| A name link the reviewer did not accept | 1 | Alexey and Alyosha |
+
+- **The reviewer was right each time it ran.** No rejection was a spoiler or an invention; each was a real, small imprecision.
+- **The fault was the consequence.** One doubtful detail discarded the whole reply, including sentences that had each been proven, and the reader waited about 7 s for an error.
+
+### Changes
+
+- **Keep the proven leading sentences.** When the second review rejects named sentences and nothing else, the reply is cut before the first rejected one and the rest is published unedited, provided Jev confirms the shorter reply still answers the question. A possible unread outcome, a missing requested detail, an objection that names no sentence, or a rejected first sentence still clears nothing.
+- **Review replies of three or more sentences** in joined calls instead of refusing them.
+- **Writer instructions:** one sentence per claim, the direct answer alone in the first, and the source's own limits on quantities kept.
+
+Spoiler safety is not weakened: every published sentence passed the same checks as before, and anything the reviewer doubts is still withheld.
+
+### Result (direct API, Jev 1.14.0, one run each)
+
+| | Before | After |
+|---|---|---|
+| The 56 weak-question replies answered | 47 | 55 |
+| Full set, Karamazov claims / prose | 11 / 12 of 12 | 12 / 12 of 12 |
+| Full set, Pride and Prejudice claims / prose | 12 / 10 of 12 | 12 / 12 of 12 |
+| Spoilers | 0 | 0 |
+| Median time, full set | 2.8–3.4 s | 2.8–3.5 s |
+| Slowest, full set | 10.7 s | 10.1 s |
+
+- **Two of the 55 were shortened** and still carried the expected facts.
+- **The one remaining failure:** "Who is Lizzy again?", where the reviewer did not accept from the cited passages that Lizzy is Elizabeth. A rejected first sentence leaves nothing to keep.
+- **Not improved:** speed, and how spoken the replies sound (Jev scores 0.39–0.44 of 1). Both need the redesign in section 7, not more fixes to this path.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

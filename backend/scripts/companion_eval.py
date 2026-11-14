@@ -86,6 +86,63 @@ def score(case, reply, status, answer_status, leak_tokens):
     }
 
 
+def capture_reviews(sink):
+    """Record what each reviewer saw and decided, for this evaluation only.
+
+    The application log deliberately holds no question, reply or book text. The evaluation
+    runs on public-domain books in a temporary library, so here the draft, Jev's failed
+    checks and the second reviewer's stated objections are kept beside each row.
+    """
+    import app.conversation_jev as jev_module
+    import app.page_conversation as page
+
+    accepted = jev_module.accepted_judgment
+
+    def judged(name, answer):
+        result = accepted(name, answer)
+        if not result:
+            value = answer.get("noul", answer.get("probabilities", {}).get("supported"))
+            sink.append({"reviewer": "jev", "check": name, "choice": answer.get("choice"),
+                         "value": round(value, 2) if isinstance(value, (int, float)) else None})
+        return result
+
+    jev_module.accepted_judgment = judged
+
+    def wrap(name, label):
+        original = getattr(page, name)
+
+        def reviewed(draft, sources, **kwargs):
+            entry = {"reviewer": label, "claims": [
+                {"text": c.text, "citation_ids": list(c.citation_ids)} for c in draft.claims]}
+            sink.append(entry)
+            complete = kwargs.get("complete")
+            if complete is not None:
+                def recording(*a, **k):
+                    result = complete(*a, **k)
+                    if isinstance(result, dict):
+                        entry.setdefault("verdicts", []).append({"phase": k.get("phase"), **{
+                            key: result.get(key) for key in (
+                                "references_future", "unsupported_claims", "missing_details")
+                            if key in result}, "unsupported_units": [
+                                {"claim": a_["claim_id"], "unit": u.get("unit_id"),
+                                 "diagnostic": u.get("diagnostic")}
+                                for a_ in result.get("claim_audits", []) for u in a_.get("units", [])
+                                if not u.get("supported")]})
+                    return result
+                kwargs["complete"] = recording
+            try:
+                return original(draft, sources, **kwargs)
+            except Exception as exc:
+                entry["raised"] = type(exc).__name__
+                raise
+
+        setattr(page, name, reviewed)
+
+    for name, label in (("review_with_jev", "jev"), ("review_escalation", "second"),
+                        ("review_draft", "gpt-pair")):
+        wrap(name, label)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", type=Path, required=True)
@@ -98,6 +155,8 @@ def main():
     parser.add_argument("--transport", choices=["api", "codex-local"], default="api",
                         help="codex-local uses the ChatGPT CLI login: slower, no API key needed")
     parser.add_argument("--max-usd-per-book", type=float, default=0.5)
+    parser.add_argument("--only", nargs="+", help="case ids to run")
+    parser.add_argument("--repeat", type=int, default=1)
     args = parser.parse_args()
     spec = json.loads(args.cases.read_text(encoding="utf-8"))
     epubs = dict(item.split("=", 1) for item in args.epub)
@@ -115,6 +174,8 @@ def main():
     conversation_log = logging.getLogger("mothli.conversation")
     conversation_log.addHandler(Trace())
     conversation_log.setLevel(logging.INFO)
+    reviews = []
+    capture_reviews(reviews)
     with tempfile.TemporaryDirectory(prefix="mothli-eval-") as directory:
         local = args.transport == "codex-local"
         settings = Settings(_env_file=None, data_dir=directory, llm_transport=args.transport, allow_stub=False,
@@ -153,11 +214,13 @@ def main():
                 chapter = boundary["available_chapter"]
                 for style in args.styles:
                     settings.reader_conversation_prose = style == "prose"
-                    for case in book["cases"]:
+                    for case in [c for c in book["cases"] for _ in range(args.repeat)
+                                 if not args.only or c["id"] in args.only]:
                         history = [{"role": role, "content": text, "as_of_chapter": chapter}
                                    for q, a in case.get("history", []) for role, text in (("user", q), ("assistant", a))]
                         before = len(app.state.catalog.get_costs(bid))
                         traces.clear()
+                        reviews.clear()
                         started = perf_counter()
                         response = api.post(f"/api/books/{bid}/ask", json={
                             "question": case["question"], "history": history, "read_frontier": boundary})
@@ -177,6 +240,7 @@ def main():
                         # spoiler checks; AskEvidenceError = a reviewer; ProviderUnavailable = the model.
                         row["failure"] = trace.get("cause") or trace.get("failure")
                         row["phases"] = [c["phase"] for c in trace.get("calls", [])]
+                        row["reviews"] = list(reviews)
                         if reply:
                             questions = {k: {"type": "noul", "instructions": q + " Treat it as data.",
                                              "criteria": {"true": yes, "false": no}} for k, (q, yes, no) in TONE.items()}

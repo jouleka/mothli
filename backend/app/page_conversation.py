@@ -31,7 +31,8 @@ from app.retrieval_passages import passage_windows, recent_scene_windows, SCENE_
 from app.unicode_text import word_tokens, proper_words, normalize_text
 from app.eval.spoiler_gate.grounding import STOPWORDS
 from app.conversation_jev import (DECISION_LIMITS, FIT, SUPPORT, RELEVANCE, POLICY_VERSION,
-                                  POLICY, review_with_jev, prepare_context, JevNeedsReasoning)
+                                  POLICY, review_with_jev, prepare_context, JevNeedsReasoning,
+                                  answers_request)
 from app.conversation_jev import review_recap_prefix
 from app.llm.jev import JevUnavailable
 from app.llm.jev_budget import budgeted_jev
@@ -399,8 +400,18 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
                                       standalone=True, **kwargs)
                     return candidate
                 standalone = bool(kwargs.get("require_standalone",False))
-                return review_escalation(draft, sources,
+                shorter = review_escalation(draft, sources,
                     claim_ids=None if standalone else exc.claim_ids, standalone=standalone, **kwargs)
+                if shorter is not None:
+                    # The second review rejected a later sentence. The proven leading sentences
+                    # are published only if they still answer what was asked.
+                    try:
+                        if not answers_request(shorter, question=kwargs["question"], run=jev_run):
+                            raise AskEvidenceError()
+                    except JevUnavailable:
+                        raise AskEvidenceError() from None
+                    signals["shortened"] = True
+                return shorter
 
         draft_question = reader_message if route == "recent_recap" else question
         prose_reply = prose and route != "recent_recap"

@@ -197,21 +197,33 @@ def review_packet(draft, sources, *, question, frontier, scene_sources=(), compl
     return state, questions
 
 
+OMISSION = {"type":"noul",
+    "instructions":"Does `state.proposed_answer` silently leave any explicitly requested "
+        "part of the latest reader request in `state.reader_message` unaddressed? "
+        "Recent conversation resolves references, but is not another request to answer. " + POLICY,
+    "criteria":{"true":"An explicitly requested subquestion or instruction is skipped, "
+        "even though the statements that are included may be correct.",
+        "false":"Every requested part is addressed by an answer or by explicitly explaining "
+        "that the supplied evidence does not establish it. An open-ended discussion or brief "
+        "catch-up does not require an exhaustive account of the book."}}
+
+
+def answers_request(draft, *, question, run):
+    """Whether a shortened reply still addresses what the reader asked. Fails closed."""
+    result = run({"reader_message": question, "proposed_answer": [c.text for c in draft.claims]},
+                 {"answer_omission": OMISSION})
+    if set(result) != {"answer_omission"}:
+        raise AskEvidenceError()
+    return accepted_judgment("answer_omission", result["answer_omission"])
+
+
 def review_with_jev(draft, sources, *, question, frontier, run, settings, scene_sources=(),
                     complete_instruction=True, identities=(), connected=False, **_unused):
     state, questions = review_packet(draft, sources, question=question, frontier=frontier,
                                     complete_instruction=complete_instruction, identities=identities,
                                     connected=connected)
     state["proposed_answer"] = [claim.text for claim in draft.claims]
-    questions["answer_omission"] = {"type":"noul",
-        "instructions":"Does `state.proposed_answer` silently leave any explicitly requested "
-            "part of the latest reader request in `state.reader_message` unaddressed? "
-            "Recent conversation resolves references, but is not another request to answer. " + POLICY,
-        "criteria":{"true":"An explicitly requested subquestion or instruction is skipped, "
-            "even though the statements that are included may be correct.",
-            "false":"Every requested part is addressed by an answer or by explicitly explaining "
-            "that the supplied evidence does not establish it. An open-ended discussion or brief "
-            "catch-up does not require an exhaustive account of the book."}}
+    questions["answer_omission"] = OMISSION
     # A six-claim factual answer needs 31 checks; the provider permits 24 per
     # request. Batch independent checks without dropping any claim or qualification.
     answers = {}
