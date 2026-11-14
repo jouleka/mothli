@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     jev_enabled: bool = False
     typesafe_api_key: SecretStr | None = None
     jev_windows_credential: bool = False
-    jev_model: Literal["jev-1.13.0", "jev-1.14.0"] = "jev-1.13.0"
+    # 1.14.0 is the one version in use. 1.13.0 is still accepted so an older environment file
+    # starts; on the repo's review controls it sent more correct answers to the slow review.
+    jev_model: Literal["jev-1.13.0", "jev-1.14.0"] = "jev-1.14.0"
     jev_timeout_seconds: float = Field(default=5.0, gt=0, le=15)
     jev_selection_enabled: bool = True
     jev_evidence_enabled: bool = True

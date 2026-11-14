@@ -470,6 +470,31 @@ In all three the Gutenberg header and the critical preface are absent from every
 - **Prose stays off by default.** It failed 2 of 12 on the second book in both runs.
 - Every answered question had its expected facts, apart from one prose reaction that said "He" where the check looked for "Darcy"; the check was too strict and has been widened.
 
+## 6h. Evaluation on the direct API; Jev 1.14.0 becomes the default
+
+Terra on the OpenAI API, fixed importer, chapter memory off, 24 questions in both styles, one run per Jev version.
+
+| Jev | Book | Style | As expected | Second review used | Median time | Slowest | Cost per question |
+|---|---|---|---|---|---|---|---|
+| 1.14.0 | Karamazov | claims | 11 of 12 | 3 | 3.0 s | 7.3 s | $0.006 |
+| 1.14.0 | Karamazov | prose | 12 of 12 | 2 | 3.4 s | 7.7 s | $0.006 |
+| 1.14.0 | Pride and Prejudice | claims | 12 of 12 | 2 | 2.8 s | 5.9 s | $0.006 |
+| 1.14.0 | Pride and Prejudice | prose | 10 of 12 | 4 | 3.4 s | 10.7 s | $0.007 |
+| 1.13.0 | Karamazov | claims | 11 of 12 | 3 | 2.8 s | 9.5 s | $0.003 |
+| 1.13.0 | Karamazov | prose | 12 of 12 | 3 | 3.1 s | 6.2 s | $0.005 |
+| 1.13.0 | Pride and Prejudice | claims | 12 of 12 | 3 | 2.5 s | 8.0 s | $0.005 |
+| 1.13.0 | Pride and Prejudice | prose | 9 of 12 | 4 | 3.2 s | 12.0 s | $0.006 |
+
+- **No spoilers in 96 replies.**
+- **Production speed is about 3 s median,** 6–12 s when the second review runs. Still above the 1.5–2 s target.
+- **Every failure was a reviewer rejection** (`AskEvidenceError`), not the deterministic gates and not the model provider. Seven of the eight went through the second review and were rejected there.
+- **1.14.0: 45 of 48 as expected; 1.13.0: 44 of 48.** Second reviews 11 against 13. A small edge, consistent with the control cases.
+- **Prose still fails more on Pride and Prejudice** (2 and 3 of 12). "Why does Charlotte think Jane should show more affection?" has now failed in prose in all four runs.
+- **"Who is Alyosha again?" failed once** (claims style, 1.14.0), rejected by the second review. The nickname link makes it reliable, not certain.
+- Spend for both runs: $0.53.
+
+`jev_model` now defaults to `jev-1.14.0`. `jev-1.13.0` is still accepted so an older environment file starts.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
