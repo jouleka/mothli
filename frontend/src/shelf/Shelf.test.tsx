@@ -525,3 +525,11 @@ describe("A book's own cover", () => {
     expect(plain.querySelector(".cover-title")!.textContent).toBe("Dracula");
   });
 });
+
+test("the shelf links to the reading history brought in from other apps", async () => {
+  const user = userEvent.setup();
+  const onHistory = vi.fn();
+  render(<Shelf onOpen={() => {}} onHistory={onHistory} />);
+  await user.click(await screen.findByRole("button", { name: "Reading history" }));
+  expect(onHistory).toHaveBeenCalled();
+});

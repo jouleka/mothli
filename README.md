@@ -25,6 +25,10 @@ SQLite story-memory engine, and an experimental hosted multi-user foundation.
   rule if you need one. Covers are fetched once from Project Gutenberg's mirror and kept in the data
   directory. A book is downloaded only when a reader adds it; set `CLASSICS_ENABLED=false` for an
   offline install.
+- Reading history: bring your list, ratings, reviews, highlights and notes from other reading apps by
+  dropping in the files they export (Goodreads and StoryGraph libraries, Kindle `My Clippings.txt`,
+  Libby exports). Files are read in the browser; titles are matched to the free Library so a book
+  can be added with a tap. Copy-protected books are never opened or converted.
 - Maintain a chapter-bounded, bitemporal story memory.
 - Catch up and discuss people or passages in one continuing Mothli conversation.
 - Keep highlights, notes, bookmarks, and explicitly saved Mothli replies in Notebook.

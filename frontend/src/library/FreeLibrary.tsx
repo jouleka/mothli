@@ -79,7 +79,7 @@ function rememberFilters(filters: Filters) {
 }
 
 /** Real cover art over a cloth cover: the cloth shows while the picture loads and when there is none. */
-function Cover({ book, eager = false }: { book: Classic; eager?: boolean }) {
+export function Cover({ book, eager = false }: { book: Classic; eager?: boolean }) {
   const [state, setState] = useState<"loading" | "shown" | "none">("loading");
   const cloth: Book = { book_id: book.id, title: book.title, author: book.author };
   return (

@@ -31,6 +31,41 @@ export type ClassicsCatalog = {
   moods: { id: string; label: string }[];
   books: Classic[];
 };
+/** A title in the reader's history from other reading apps. */
+export type HistoryEntry = {
+  id: number;
+  title: string;
+  author: string;
+  status: "read" | "reading" | "want" | "abandoned" | null;
+  rating: number | null;
+  finished_on: string | null;
+  added_on: string | null;
+  /** The free-library book this title is, when there is one; `book_id` once it is on the shelf. */
+  classic_id: string | null;
+  book_id: string | null;
+  sources: string[];
+  highlights: number;
+  has_review: boolean;
+};
+export type HistoryPage = {
+  books: number;
+  highlights: number;
+  with_highlights: number;
+  free: number;
+  by_status: Record<"read" | "reading" | "want" | "abandoned", number>;
+  matches: number;
+  entries: HistoryEntry[];
+};
+export type HistoryDetail = HistoryEntry & {
+  review: string | null;
+  isbn: string | null;
+  marks: { id: number; text: string; note: string | null; location: string | null; made_at: string | null; source: string }[];
+};
+export type HistoryBatch = {
+  source: "goodreads" | "storygraph" | "kindle" | "libby";
+  books: object[];
+  highlights: object[];
+};
 export type ClassicsSearch = {
   q?: string;
   language?: string;
@@ -332,6 +367,27 @@ export const api = {
       j<{ shelves: ClassicShelf[] }>(r),
     ),
   classic: (id: string) => fetch(`/api/classics/${encodeURIComponent(id)}`).then((r) => j<ClassicDetail>(r)),
+  history: (search: { status?: string; only?: string; q?: string; offset?: number; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (search.status) params.set("status", search.status);
+    if (search.only) params.set("only", search.only);
+    if (search.q) params.set("q", search.q);
+    if (search.offset) params.set("offset", String(search.offset));
+    if (search.limit) params.set("limit", String(search.limit));
+    const query = params.toString();
+    return fetch(`/api/history${query ? `?${query}` : ""}`, { cache: "no-store" }).then((r) => j<HistoryPage>(r));
+  },
+  historyEntry: (id: number) => fetch(`/api/history/${id}`, { cache: "no-store" }).then((r) => j<HistoryDetail>(r)),
+  importHistory: (batch: HistoryBatch) =>
+    fetch("/api/history/import", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...csrfHeaders() },
+      body: JSON.stringify(batch),
+    }).then((r) => j<{ books_added: number; books_updated: number; highlights_added: number; skipped: number }>(r)),
+  forgetHistory: (id?: number) =>
+    fetch(id === undefined ? "/api/history" : `/api/history/${id}`, { method: "DELETE", headers: csrfHeaders() }).then((r) => {
+      if (!r.ok) throw new Error("Couldn’t remove it.");
+    }),
   /** Says which covers the page is about to show, so the server starts fetching them. */
   warmCovers: (ids: string[]) =>
     fetch("/api/classics/covers/warm", {
