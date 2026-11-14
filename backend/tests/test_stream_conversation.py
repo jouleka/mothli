@@ -175,3 +175,25 @@ def test_a_doubted_sentence_gets_one_second_look_which_alone_decides(page_env, m
     assert events[-1]["answer"]["dropped_sentences"] == 2 and "abroad" not in response.text and "dawn" not in response.text
     phases = [c["phase"] for c in events[-1]["answer"]["cost"]["calls"]]
     assert phases.count("stream-second-look") == 2
+
+
+def test_a_streamed_reply_reads_the_book_alongside_other_requests_instead_of_locking_it():
+    """Treated as a change to the book, it waited for every open read and blocked new ones."""
+    import asyncio
+    from app.deps import book_lifecycle
+
+    async def scenario():
+        app = SimpleNamespace(state=SimpleNamespace(book_request_locks={}))
+        def request(method, path):
+            return SimpleNamespace(app=app, method=method, url=SimpleNamespace(path=path))
+        reading = book_lifecycle("b", request("GET", "/api/books/b/epub"))
+        await reading.__anext__()                      # a read that stays open
+        streaming = book_lifecycle("b", request("POST", "/api/books/b/ask/stream"))
+        await asyncio.wait_for(streaming.__anext__(), timeout=1)
+        later = book_lifecycle("b", request("GET", "/api/books/b/read-frontier"))
+        await asyncio.wait_for(later.__anext__(), timeout=1)
+        for lease in (later, streaming, reading):
+            with pytest.raises(StopAsyncIteration):
+                await lease.__anext__()
+
+    asyncio.run(scenario())

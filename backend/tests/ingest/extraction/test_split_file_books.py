@@ -100,3 +100,9 @@ def test_prose_ahead_of_the_first_anchor_is_kept_when_the_file_is_not_front_matt
                                                          ("a.html", "c2", "CHAPTER II.")]), "b")
     assert chapters[0]["text"].index("PROLOGUE_TEXT") < chapters[0]["text"].index("ONE.")
     assert "PROLOGUE_TEXT" not in chapters[1]["text"]
+
+
+def test_a_chapter_inside_a_shared_file_keeps_its_anchor_in_the_link():
+    """The reader tells a file's chapters apart, and opens citations, by this anchor."""
+    _result, chapters = segment_for_ingest(_gutenberg_like(), "bk")
+    assert [c["href"] for c in chapters] == ["f0.html#c1", "f0.html#c2", "f1.html#c3", "f3.html#c4"]

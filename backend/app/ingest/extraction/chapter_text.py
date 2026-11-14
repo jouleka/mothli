@@ -231,7 +231,9 @@ def segment_for_ingest(epub, book_id):
             chapters.append({
                 "ordinal": atom.revealed_at,
                 "key": atom.chapter_key,
-                "href": atom.href,
+                # A chapter that starts inside a shared file keeps its anchor: the reader needs it
+                # to tell which of that file's chapters a page belongs to, and to open citations there.
+                "href": atom.href + (f"#{atom.frag}" if getattr(atom, "frag", "") else ""),
                 "title": atom.title,
                 "part_label": atom.part_label,
                 "text": text,
