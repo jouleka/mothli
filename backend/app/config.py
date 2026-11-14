@@ -59,7 +59,9 @@ class Settings(BaseSettings):
     # One spoken reply instead of separate cited paragraphs. Same evidence and spoiler checks.
     reader_conversation_prose: bool = False
     # Streamed replies: one plain-prose writer, each sentence checked by Jev before it is shown.
-    reader_conversation_stream: bool = False
+    # Unset, it follows READER_CONVERSATION_JEV: on wherever that path is on. Set false to keep
+    # the reviewed, non-streamed replies.
+    reader_conversation_stream: bool | None = None
     reader_conversation_draft_effort: Literal["low", "medium"] = "medium"
     reader_conversation_review_effort: Literal["low", "medium"] = "medium"
     # One model call in a page conversation. The provider default (120 s) is far past the
@@ -149,6 +151,8 @@ class Settings(BaseSettings):
     def validate_hosted_auth(self):
         if not self.reader_memory_ingest and (self.deployment_mode != "local" or not self.reader_page_context):
             raise ValueError("deferred memory ingestion requires local page context")
+        if self.reader_conversation_stream is None:
+            self.reader_conversation_stream = self.reader_conversation_jev
         if self.reader_conversation_stream and not self.reader_conversation_jev:
             raise ValueError("READER_CONVERSATION_STREAM requires READER_CONVERSATION_JEV")
         if self.reader_conversation_prose and not self.reader_conversation_jev:

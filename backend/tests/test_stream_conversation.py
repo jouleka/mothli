@@ -141,9 +141,20 @@ def test_stream_with_nothing_cleared_ends_empty_and_an_outage_shows_nothing(page
     assert [e["type"] for e in events] == ["error"] and events[0]["status"] == 503 and "cobalt" not in response.text
 
 
+def test_streaming_follows_the_jev_conversation_setting_unless_set():
+    from app.config import Settings
+    jev = dict(_env_file=None, reader_page_context=True, jev_enabled=True, reader_conversation_jev=True)
+    assert Settings(_env_file=None).reader_conversation_stream is False
+    assert Settings(**jev).reader_conversation_stream is True
+    assert Settings(**jev, reader_conversation_stream=False).reader_conversation_stream is False
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, reader_conversation_stream=True)
+
+
 def test_stream_is_off_unless_enabled(page_env):
     api, bid, app, settings = page_env
     point = confirm(api, bid)
+    settings.reader_conversation_stream = False
     assert api.post(f"/api/books/{bid}/ask/stream",
                     json={"question": "What did Mara do?", "read_frontier": point}).status_code == 404
 

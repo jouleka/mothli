@@ -634,6 +634,17 @@ A sentence Jev doubts now gets one second look from Terra (low effort, one true/
 - **Cost of the fix:** 35 second looks across 48 replies. A reply whose first sentence is doubted starts about a second later (the slowest tenth of first words is 3.2 s or more).
 - **This removes one of the looser points in 6j:** a doubted sentence is again decided by the reasoning model, not dropped or shown on Jev's score alone.
 
+## 6l. Checked in the running app; streaming becomes the default
+
+Opening Pride and Prejudice in the reader with streaming on found two faults that no test had exercised. With either one no reply appeared.
+
+- **Wrong chapter for the page.** A chapter inside a shared file had no anchor in its manifest link, so the reader assigned every page of that file to the file's last chapter and the position check returned 422. The link now carries the anchor, and text ahead of a file's first anchor maps to the previous chapter. This affected the reviewed path as well. Books of this kind need re-importing.
+- **Deadlock.** `/ask/stream` was not on the list of requests that read a book alongside others, so it took the exclusive lease and waited on the reader's own open requests.
+
+Five questions asked in the chat panel at the start of Chapter VII: first sentence on screen at 1.4–3.1 s, finished at 1.4–4.3 s, a follow-up resolved from the conversation, and both spoiler probes answered "we haven't got there yet".
+
+`READER_CONVERSATION_STREAM` now follows `READER_CONVERSATION_JEV` when unset. Set it to false for the reviewed, non-streamed replies.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
