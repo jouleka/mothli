@@ -469,6 +469,15 @@ def _segment(zf, book_id):
                             _doc_epubtype(zf, f))
         if cls[f] == 'body' and S.LICENSE_RE.search(txt):
             trailing_lic.append(posixpath.basename(f))
+    # A whole-file class cannot describe a file that holds BOTH front matter and chapters. Project
+    # Gutenberg splits a book into arbitrary files, so its first file carries the PG header, the
+    # title page AND the opening chapters; classifying that file 'front' silently dropped them.
+    # A front file whose ToC leaves name chapters is body. Its leaves before the first chapter
+    # leaf stay front (dropped in _anchor_atoms), as does its text before the first kept anchor.
+    promoted = [f for f in order if cls[f] == 'front' and f != navh and any(
+        ff == f and fr and leaf and S._has_chapter_evidence(lab, '') for ff, fr, lab, leaf in toc)]
+    for f in promoted:
+        cls[f] = 'body'
     body_idx = [k for k, f in enumerate(order) if cls[f] == 'body']
     if not body_idx:
         return SegmentResult(
@@ -482,9 +491,10 @@ def _segment(zf, book_id):
     bodyset = set(body_files)
     toc_leaves = [(f, fr, lab, leaf) for (f, fr, lab, leaf) in toc if f in bodyset and leaf]
 
-    if len(toc_leaves) > max(1, len(body_files)) * 1.3:
+    # Chapters that begin inside a front-matter file can only be separated at their anchors.
+    if promoted or len(toc_leaves) > max(1, len(body_files)) * 1.3:
         mode = 'anchor-driven'
-        atoms, flags = _anchor_atoms(book_id, toc_leaves, chars)
+        atoms, flags = _anchor_atoms(book_id, toc_leaves, chars, body_files, set(promoted), words)
     else:
         mode = 'file-driven'
         atoms, flags = _file_atoms(book_id, body_files, label_for_file, head, words, chars)
@@ -493,6 +503,14 @@ def _segment(zf, book_id):
     covered = {f for a in atoms for f in a.source_files}
     uncovered = sorted({posixpath.basename(f) for f in body_files}
                        - {posixpath.basename(f) for f in covered})
+    if uncovered and mode == 'anchor-driven':
+        # A near-empty wrapper page (a cover or title shim) has no prose to lose and no reader
+        # position inside it worth mapping; it must not block the whole book.
+        trivial = sorted(b for b in uncovered if all(
+            words[f] < TRIVIAL_DOC_WORDS for f in body_files if posixpath.basename(f) == b))
+        if trivial:
+            flags = flags + [f"ignored {len(trivial)} near-empty body doc(s) with no ToC entry: {trivial[:4]}"]
+            uncovered = [b for b in uncovered if b not in trivial]
     if uncovered:
         # ADR 0001 #4 decided flag-not-fail; ingestion (LIT-6/7) MUST gate on this flag, because an
         # uncovered body file means the frontier's bounds do not span it and a reader inside it would
@@ -574,16 +592,29 @@ def _file_atoms(book_id, body_files, label_for_file, head, words, chars):
     return out, flags
 
 
-def _anchor_atoms(book_id, toc_leaves, chars):
+TRIVIAL_DOC_WORDS = 20
+
+
+def _anchor_atoms(book_id, toc_leaves, chars, body_files=(), promoted=frozenset(), words=None):
     """Anchor-driven (many chapters per file: one atom per leaf ToC navPoint). char_len is an even-split
     approximation per file (the real reader, LIT-13, supplies exact CFI ranges). The D-A8 divider-merge
-    is file-driven only; anchor-driven divider handling is a routed follow-up."""
+    is file-driven only; anchor-driven divider handling is a routed follow-up.
+
+    A body file with NO kept leaf is a chapter continuing across a file split. It joins the
+    preceding atom's ``source_files`` (its text is appended there by chapter_text), so the
+    frontier spans it and no prose is lost. With no preceding atom it stays uncovered."""
     flags = ["anchor-driven char_len is an even-split approximation (refined by LIT-13 CFI ranges)"]
-    picked, seen, dropped = [], set(), []
+    picked, seen, dropped, front_leaves = [], set(), [], []
+    chapter_started = set()
     for f, fr, lab, _leaf in toc_leaves:
         if (f, fr) in seen:
             continue
         seen.add((f, fr))
+        if f in promoted and f not in chapter_started:
+            if not S._has_chapter_evidence(lab, ''):
+                front_leaves.append(lab or '(untitled)')   # title page / preface ahead of chapter one
+                continue
+            chapter_started.add(f)
         if (S.is_front_label(lab, '') or S.LICENSE_RE.search(lab or '')
                 or 'project gutenberg' in (lab or '').lower()):
             dropped.append(lab or '(untitled)')          # auditable: an over-strip is visible, not silent
@@ -591,11 +622,30 @@ def _anchor_atoms(book_id, toc_leaves, chars):
         picked.append({'href': f, 'frag': fr, 'title': lab or '(untitled)'})
     if dropped:
         flags.append(f"dropped {len(dropped)} ToC leaf(s) as front/license-matter: {dropped[:4]}")
+    if front_leaves:
+        flags.append(f"dropped {len(front_leaves)} ToC leaf(s) ahead of the first chapter in a file that "
+                     f"opens with front matter: {front_leaves[:4]}")
     per_file = Counter(p['href'] for p in picked)
+    # Spine order decides which atom a leafless continuation file follows.
+    position = {f: k for k, f in enumerate(body_files)}
+    extra = {i: [] for i in range(len(picked))}
+    with_atoms = {p['href'] for p in picked}
+    for f in body_files:
+        if f in with_atoms or (words is not None and words.get(f, 0) < TRIVIAL_DOC_WORDS):
+            continue
+        earlier = [i for i, p in enumerate(picked) if position.get(p['href'], -1) < position[f]]
+        if earlier:
+            extra[earlier[-1]].append(f)
+    absorbed = [posixpath.basename(f) for files in extra.values() for f in files]
+    if absorbed:
+        flags.append(f"joined {len(absorbed)} body file(s) with no ToC entry to the preceding chapter: "
+                     f"{absorbed[:4]}")
     out = []
     for i, p in enumerate(picked, start=1):
-        clen = max(1, chars.get(p['href'], 1) // per_file[p['href']])
+        clen = max(1, chars.get(p['href'], 1) // per_file[p['href']]) + sum(
+            chars.get(f, 0) for f in extra[i - 1])
         key = f"{book_id}:{p['href']}" + (f"#{p['frag']}" if p['frag'] else "")
         out.append(ChapterAtom(revealed_at=i, chapter_key=key, href=p['href'], frag=p['frag'],
-                               title=p['title'], part_label='', char_len=clen, source_files=(p['href'],)))
+                               title=p['title'], part_label='', char_len=clen,
+                               source_files=(p['href'], *extra[i - 1])))
     return tuple(out), flags
