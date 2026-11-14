@@ -3,6 +3,7 @@
  * the free library has the book, it can be added from here. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Book, type HistoryDetail, type HistoryEntry, type HistoryPage } from "../api";
+import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupportedBookMessage } from "../import/bookFiles";
 import { Cover } from "../library/FreeLibrary";
 import { BookCover } from "../shelf/Shelf";
 import { Button } from "../ui/Button";
@@ -131,9 +132,9 @@ const GUIDES: { name: string; steps: string }[] = [
   },
 ];
 
-type Chosen = { name: string; parsed?: ParsedHistory; database?: File; problem?: string };
+type Chosen = { name: string; parsed?: ParsedHistory; database?: File; book?: File; problem?: string };
 type Progress = { done: number; total: number };
-type Outcome = { books: number; updated: number; highlights: number; skipped: number };
+type Outcome = { books: number; updated: number; highlights: number; skipped: number; shelved?: number };
 
 function Importer({ onImported, startOpen }: { onImported: () => Promise<number>; startOpen: boolean }) {
   const input = useRef<HTMLInputElement>(null);
@@ -150,6 +151,7 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
 
   const ready = chosen.flatMap((file) => (file.parsed ? [file.parsed] : []));
   const databases = chosen.flatMap((file) => (file.database ? [file.database] : []));
+  const bookFiles = chosen.flatMap((file) => (file.book ? [file.book] : []));
   const totals = summarize(ready);
   const [token, setToken] = useState("");
   const [asking, setAsking] = useState(false);
@@ -167,6 +169,12 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
               ? { name: file.name, problem: "This database is too large to bring in." }
               : { name: file.name, database: file };
           }
+          // a book among the exports goes on the shelf: people switching apps bring both at once
+          const kind = bookFileKind(file);
+          if (kind !== "unknown") {
+            const unsupported = unsupportedBookMessage(kind);
+            return unsupported ? { name: file.name, problem: unsupported } : { name: file.name, book: file };
+          }
           if (file.size > MAX_FILE_BYTES) return { name: file.name, problem: "This file is too large to be a reading history." };
           const parsed = parseHistoryFile(file.name, await readFile(file));
           if (!parsed.books.length && !parsed.highlights.length) return { name: file.name, problem: "There is nothing in this file to bring in." };
@@ -183,7 +191,8 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
   };
 
   const bringIn = async () => {
-    const total = totals.books + totals.highlights + databases.length;
+    const total = totals.books + totals.highlights + databases.length + bookFiles.length;
+    const unread: Chosen[] = [];
     const sum: Outcome = { books: 0, updated: 0, highlights: 0, skipped: 0 };
     let done = 0;
     setProblem(null);
@@ -218,9 +227,22 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
         done += databases.length;
         setProgress({ done, total });
       }
+      let shelved = 0;
+      for (const file of bookFiles) {
+        try {
+          await api.importBook(await prepareBookUpload(file));
+          shelved += 1;
+        } catch (error) {
+          const said = error instanceof Error ? error.message : "";
+          if (/already imported/i.test(said)) shelved += 1;
+          else unread.push({ name: file.name, problem: said || "We couldn’t add this book." });
+        }
+        done += 1;
+        setProgress({ done, total });
+      }
       const free = await onImported();
-      setOutcome({ ...sum, free });
-      setChosen([]);
+      setOutcome({ ...sum, shelved, free });
+      setChosen(unread);
     } catch (error) {
       // a database the server could not read says why; anything else is a dropped connection
       const said = error instanceof Error && databases.length && /Kobo|Apple Books|database/.test(error.message) ? error.message : null;
@@ -250,6 +272,7 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
     totals.books ? plural(totals.books, "book") : null,
     totals.highlights ? plural(totals.highlights, "highlight") : null,
     databases.length ? plural(databases.length, "reader database") : null,
+    bookFiles.length ? `${plural(bookFiles.length, "book")} for your shelf` : null,
   ].filter(Boolean);
   const listed = what.length > 1 ? `${what.slice(0, -1).join(", ")} and ${what[what.length - 1]}` : (what[0] ?? "");
 
@@ -281,7 +304,7 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
         }}
       >
         <Icon name="download" size={26} />
-        <p className="rh-drop-title">Drop your export files here</p>
+        <p className="rh-drop-title">Drop your export files and your books here</p>
         <p className="rh-drop-hint">
           Goodreads · StoryGraph · Kindle · Kobo · Apple Books · Readwise · Libby · KOReader · Calibre · any spreadsheet
         </p>
@@ -293,7 +316,7 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
           className="sr-only"
           type="file"
           multiple
-          accept=".csv,.txt,.json,.html,.htm,.sqlite,.sqlite3,.db,text/csv,text/plain,application/json,text/html"
+          accept={`.csv,.txt,.json,.html,.htm,.sqlite,.sqlite3,.db,text/csv,text/plain,application/json,text/html,${BOOK_ACCEPT}`}
           aria-label="Choose export files"
           onChange={(event) => {
             void choose(event.currentTarget.files);
@@ -305,9 +328,11 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
       {chosen.length > 0 && (
         <ul className="rh-files" aria-label="Chosen files">
           {chosen.map((file, index) => (
-            <li key={`${file.name}-${index}`} data-bad={!file.parsed && !file.database}>
+            <li key={`${file.name}-${index}`} data-bad={!file.parsed && !file.database && !file.book}>
               <strong>{file.name}</strong>
-              {file.database ? (
+              {file.book ? (
+                <span>A book. It goes on your shelf when you import.</span>
+              ) : file.database ? (
                 <span>A Kobo or Apple Books database. It is read when you import.</span>
               ) : file.parsed ? (
                 <span>
@@ -327,7 +352,7 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
         </ul>
       )}
 
-      {(ready.length > 0 || databases.length > 0) && (
+      {(ready.length > 0 || databases.length > 0 || bookFiles.length > 0) && (
         <div className="rh-go">
           <Button variant="primary" aria-busy={progress !== null} disabled={progress !== null} onClick={() => void bringIn()}>
             {progress
@@ -347,11 +372,14 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
         <p className="rh-outcome" role="status">
           <Icon name="check" size={16} />
           <span>
+            {outcome.shelved ? `Put ${plural(outcome.shelved, "book")} on your shelf. ` : ""}
             {outcome.books || outcome.highlights
               ? `Brought in ${[outcome.books ? plural(outcome.books, "new book") : null, outcome.highlights ? plural(outcome.highlights, "new highlight") : null]
                   .filter(Boolean)
                   .join(" and ")}.`
-              : "Everything in those files was already here."}
+              : outcome.shelved
+                ? ""
+                : "Everything in those files was already here."}
             {outcome.updated > 0 && ` Filled in details for ${plural(outcome.updated, "book")} you already had.`}
             {outcome.free > 0 && ` ${plural(outcome.free, "book")} on your list ${outcome.free === 1 ? "is" : "are"} free to read here.`}
             {outcome.skipped > 0 && ` ${plural(outcome.skipped, "item")} could not be kept.`}
@@ -399,8 +427,9 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
         </dl>
       </details>
       <p className="rh-honest">
-        This brings your list, ratings, reviews, highlights and notes. Books bought in Kindle, Apple Books and similar
-        stores are copy-protected, so the books themselves can’t be moved. Your files are read by your own Mothli and
+        This brings your list, ratings, reviews, highlights and notes, and any book files you have without copy
+        protection ({BOOK_FORMATS}). Books bought in Kindle, Apple Books and similar stores are usually copy-protected,
+        and those files can’t be opened here or anywhere else but their own app. Your files are read by your own Mothli and
         go nowhere else.
       </p>
     </section>
@@ -469,6 +498,35 @@ function EntrySheet({
     }
   };
 
+  const copy = useRef<HTMLInputElement>(null);
+  const addOwn = async (file: File | undefined) => {
+    if (!file) return;
+    const unsupported = unsupportedBookMessage(bookFileKind(file));
+    if (unsupported) {
+      setProblem(unsupported);
+      return;
+    }
+    setAdding(true);
+    setProblem(null);
+    try {
+      let bookId: string;
+      try {
+        bookId = (await api.importBook(await prepareBookUpload(file))).book_id;
+      } catch (error) {
+        // the very file is on the shelf already: it only needs tying to this title
+        const already = error instanceof Error ? error.message.match(/already imported as '([^']+)'/) : null;
+        if (!already) throw error;
+        bookId = already[1];
+      }
+      await api.setHistoryBook(entry.id, bookId).catch(() => undefined);
+      onAdded(entry, bookId);
+    } catch (error) {
+      setProblem(error instanceof Error && error.message ? error.message : "Couldn’t add this book. Try again.");
+    } finally {
+      setAdding(false);
+    }
+  };
+
   const facts = [
     entry.status ? STATUS_NAMES[entry.status] : null,
     longDate(entry.finished_on),
@@ -503,10 +561,26 @@ function EntrySheet({
                 {adding ? "Adding to your books…" : "Add it free"}
               </Button>
             ) : (
-              <p className="rh-none">
-                This one isn’t in the free Library. If you have your own copy without copy protection, add it from your
-                shelf with “Add a book”.
-              </p>
+              <>
+                <Button variant="primary" aria-busy={adding} disabled={adding} onClick={() => copy.current?.click()}>
+                  {adding ? "Adding your copy…" : "Add my copy"}
+                </Button>
+                <input
+                  ref={copy}
+                  className="sr-only"
+                  type="file"
+                  accept={BOOK_ACCEPT}
+                  aria-label={`Choose your copy of ${entry.title}`}
+                  onChange={(event) => {
+                    void addOwn(event.currentTarget.files?.[0]);
+                    event.currentTarget.value = "";
+                  }}
+                />
+                <p className="rh-none">
+                  We don’t have this book to give you, but you can read your own. Choose the file ({BOOK_FORMATS}),
+                  wherever you got it. Only copy-protected files can’t be opened.
+                </p>
+              </>
             )}
           </div>
           {problem && (

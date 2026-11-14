@@ -6,13 +6,14 @@ dates, ratings and the reader's own highlights and notes."""
 import os
 import tempfile
 import threading
+from difflib import SequenceMatcher
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from app.classics import find_classic, match_title, source_tag
+from app.classics import author_key, find_classic, match_title, source_tag, title_key
 from app.deps import get_catalog, get_settings
 from app.history import STATUSES, ReadingHistory
 from app.history_sources import UnreadableSource, fetch_readwise, is_sqlite, read_databases
@@ -65,16 +66,36 @@ class ImportBatch(BaseModel):
     highlights: list[ImportedHighlight] = Field(default_factory=list, max_length=MAX_BATCH_HIGHLIGHTS)
 
 
+def _own_copy(entry, by_title):
+    """The reader's own book on the shelf that this title is: same title, and the same author give
+    or take a spelling. A book the reader added themselves is theirs to read whatever it is."""
+    surname = author_key(entry["author"])
+    for other, book_id in by_title.get(title_key(entry["title"]), ()):
+        if surname == other or not surname or not other or SequenceMatcher(None, surname, other).ratio() >= 0.84:
+            return book_id
+    return None
+
+
 def _with_shelf(entries, catalog, settings):
-    """Says, for each title, whether it is already on the shelf or free to add from the library."""
-    shelved = {book["source"]: book["book_id"] for book in catalog.list_books() if book.get("source")}
+    """Says, for each title, whether it is on the shelf already or free to add from the library."""
+    books = catalog.list_books()
+    shelved = {book["source"]: book["book_id"] for book in books if book.get("source")}
+    on_shelf = {book["book_id"] for book in books}
+    by_title = {}
+    for book in books:
+        key = title_key(book.get("title") or "")
+        if key:
+            by_title.setdefault(key, []).append((author_key(book.get("author") or ""), book["book_id"]))
     rule = settings.classics_min_years_since_death
     for entry in entries:
         classic = None
         if settings.classics_enabled and entry["classic_id"]:
             classic = find_classic(entry["classic_id"], min_years_since_death=rule)
         entry["classic_id"] = classic["id"] if classic else None
-        entry["book_id"] = shelved.get(source_tag(classic)) if classic else None
+        said = entry.pop("own_book_id", None)
+        entry["book_id"] = ((said if said in on_shelf else None)
+                            or (shelved.get(source_tag(classic)) if classic else None)
+                            or _own_copy(entry, by_title))
     return entries
 
 
@@ -195,6 +216,22 @@ def history_entry(entry_id: int, catalog=Depends(get_catalog), settings=Depends(
     if entry is None:
         raise HTTPException(404, "unknown title")
     return _with_shelf([entry], catalog, settings)[0]
+
+
+class OwnCopy(BaseModel):
+    book_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+@router.put("/{entry_id}/book")
+def set_own_copy(entry_id: int, copy: OwnCopy, catalog=Depends(get_catalog), settings=Depends(get_settings)):
+    """The reader added their own file for this title: remember which shelf book it is, so the
+    history opens it even when the file names the book differently."""
+    if catalog.get_book(copy.book_id) is None:
+        raise HTTPException(404, "unknown book")
+    store = _history(settings)
+    if not store.set_own_copy(entry_id, copy.book_id):
+        raise HTTPException(404, "unknown title")
+    return _with_shelf([store.detail(entry_id)], catalog, settings)[0]
 
 
 @router.delete("/{entry_id}", status_code=204)

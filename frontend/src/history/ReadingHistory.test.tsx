@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   addClassic: vi.fn(),
   importHistoryDatabases: vi.fn(),
   importReadwise: vi.fn(),
+  importBook: vi.fn(),
+  setHistoryBook: vi.fn(),
 }));
 vi.mock("../api", () => ({ api: mocks }));
 
@@ -90,6 +92,8 @@ beforeEach(() => {
   mocks.addClassic.mockReset();
   mocks.importHistoryDatabases.mockReset();
   mocks.importReadwise.mockReset();
+  mocks.importBook.mockReset();
+  mocks.setHistoryBook.mockReset().mockResolvedValue({});
 });
 
 describe("Your reading history", () => {
@@ -98,7 +102,8 @@ describe("Your reading history", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Your reading history" })).toBeTruthy();
     expect(await screen.findByRole("heading", { name: "Bring in your files" })).toBeTruthy();
     expect(screen.getByText(/Goodreads · StoryGraph · Kindle · Kobo · Apple Books · Readwise · Libby/)).toBeTruthy();
-    expect(screen.getByText(/copy-protected, so the books themselves can’t be moved/)).toBeTruthy();
+    expect(screen.getByText(/any book files you have without copy\s+protection \(EPUB, FB2, MOBI or AZW3\)/)).toBeTruthy();
+    expect(screen.getByText(/usually copy-protected,\s+and those files can’t be opened here or anywhere else but their own app/)).toBeTruthy();
     await userEvent.setup().click(screen.getByText("How do I get my files?"));
     expect(screen.getByText(/My Clippings.txt/)).toBeTruthy();
     expect(screen.getByText(/KoboReader.sqlite/)).toBeTruthy();
@@ -209,20 +214,92 @@ describe("Your reading history", () => {
     expect(onOpen).toHaveBeenCalledWith("bkpride");
   });
 
-  test("a book that is not in the free library says how to bring your own copy, and can be removed", async () => {
+  test("a book we do not have can be read from the reader's own file, added right there", async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    const onOpen = vi.fn();
+    mocks.history.mockResolvedValue(full);
+    mocks.historyEntry.mockResolvedValue({ ...hugo, review: null, isbn: null, marks: [] });
+    mocks.importBook.mockResolvedValue({ book_id: "bkhugo" });
+    render(<ReadingHistory onBack={() => {}} onOpen={onOpen} />);
+    await user.click(await screen.findByRole("button", { name: "The Seven Husbands of Evelyn Hugo, Taylor Jenkins Reid" }));
+    const sheet = screen.getByRole("dialog");
+    expect(within(sheet).getByText(/you can read your own/)).toBeTruthy();
+    expect(within(sheet).getByText(/Only copy-protected files can’t be opened/)).toBeTruthy();
+    expect(within(sheet).queryByRole("button", { name: "Add it free" })).toBeNull();
+    expect(within(sheet).getByRole("button", { name: "Add my copy" })).toBeTruthy();
+
+    const file = new File(["PK epub bytes"], "evelyn-hugo.epub", { type: "application/epub+zip" });
+    await user.upload(within(sheet).getByLabelText("Choose your copy of The Seven Husbands of Evelyn Hugo"), file);
+    await user.click(await within(sheet).findByRole("button", { name: "Start reading" }));
+    expect(mocks.importBook).toHaveBeenCalledTimes(1);
+    expect(mocks.setHistoryBook).toHaveBeenCalledWith(2, "bkhugo");
+    expect(onOpen).toHaveBeenCalledWith("bkhugo");
+  });
+
+  test("a file already on the shelf is tied to the title, and a copy-protected or unreadable one says why", async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    mocks.history.mockResolvedValue(full);
+    mocks.historyEntry.mockResolvedValue({ ...hugo, review: null, isbn: null, marks: [] });
+    render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
+    await user.click(await screen.findByRole("button", { name: /Evelyn Hugo/ }));
+    const sheet = screen.getByRole("dialog");
+    const picker = within(sheet).getByLabelText("Choose your copy of The Seven Husbands of Evelyn Hugo");
+
+    mocks.importBook.mockRejectedValueOnce(new Error("This book is copy-protected (DRM), so it can’t be opened here."));
+    await user.upload(picker, new File(["x"], "locked.epub", { type: "application/epub+zip" }));
+    expect((await within(sheet).findByRole("alert")).textContent).toContain("copy-protected");
+    expect(within(sheet).getByRole("button", { name: "Add my copy" })).toBeTruthy();
+
+    await user.upload(picker, new File(["x"], "scan.pdf", { type: "application/pdf" }));
+    expect((await within(sheet).findByRole("alert")).textContent).toMatch(/PDF/);
+
+    mocks.importBook.mockRejectedValueOnce(new Error("book already imported as 'bkold'"));
+    await user.upload(picker, new File(["x"], "evelyn.epub", { type: "application/epub+zip" }));
+    expect(await within(sheet).findByRole("button", { name: "Start reading" })).toBeTruthy();
+    expect(mocks.setHistoryBook).toHaveBeenCalledWith(2, "bkold");
+  });
+
+  test("a title can be removed from the history", async () => {
     const user = userEvent.setup();
     mocks.history.mockResolvedValue(full);
     mocks.historyEntry.mockResolvedValue({ ...hugo, review: null, isbn: null, marks: [] });
     render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
-    const row = await screen.findByRole("button", { name: "The Seven Husbands of Evelyn Hugo, Taylor Jenkins Reid" });
-    await user.click(row);
+    await user.click(await screen.findByRole("button", { name: /Evelyn Hugo/ }));
     const sheet = screen.getByRole("dialog");
-    expect(within(sheet).getByText(/isn’t in the free Library/)).toBeTruthy();
-    expect(within(sheet).queryByRole("button", { name: "Add it free" })).toBeNull();
     await user.click(within(sheet).getByRole("button", { name: "Remove from my history" }));
     await user.click(within(sheet).getByRole("button", { name: "Yes, remove" }));
     expect(mocks.forgetHistory).toHaveBeenCalledWith(2);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  test("books dropped with the exports go on the shelf in the same import", async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    mocks.importHistory.mockResolvedValue({ books_added: 2, books_updated: 0, highlights_added: 0, skipped: 0 });
+    mocks.importBook
+      .mockResolvedValueOnce({ book_id: "bk1" })
+      .mockRejectedValueOnce(new Error("book already imported as 'bk0'"))
+      .mockRejectedValueOnce(new Error("This book is copy-protected (DRM), so it can’t be opened here."));
+    render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
+    await user.upload(await screen.findByLabelText("Choose export files"), [
+      new File([GOODREADS], "goodreads_library_export.csv"),
+      new File(["x"], "one.epub", { type: "application/epub+zip" }),
+      new File(["x"], "two.epub", { type: "application/epub+zip" }),
+      new File(["x"], "locked.epub", { type: "application/epub+zip" }),
+      new File(["x"], "scan.pdf", { type: "application/pdf" }),
+    ]);
+    const files = within(await screen.findByRole("list", { name: "Chosen files" }));
+    expect(files.getAllByText("A book. It goes on your shelf when you import.")).toHaveLength(3);
+    expect(files.getByText(/PDF/)).toBeTruthy();
+    mocks.history.mockResolvedValue(full);
+    await user.click(screen.getByRole("button", { name: "Import 2 books and 3 books for your shelf" }));
+    const outcome = await screen.findByRole("status");
+    expect(outcome.textContent).toContain("Put 2 books on your shelf.");
+    expect(outcome.textContent).toContain("Brought in 2 new books.");
+    // the one that could not be added stays listed, with the reason
+    const left = within(screen.getByRole("list", { name: "Chosen files" }));
+    expect(left.getByText("locked.epub")).toBeTruthy();
+    expect(left.getByText(/copy-protected/)).toBeTruthy();
+    expect(left.queryByText("one.epub")).toBeNull();
   });
 
   test("everything imported can be removed, after asking", async () => {

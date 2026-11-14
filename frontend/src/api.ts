@@ -398,6 +398,13 @@ export const api = {
       headers: { "content-type": "application/json", ...csrfHeaders() },
       body: JSON.stringify({ token }),
     }).then((r) => j<HistorySources>(r)),
+  /** Records that a book on the shelf is the reader's own copy of a title in their history. */
+  setHistoryBook: (id: number, bookId: string) =>
+    fetch(`/api/history/${id}/book`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", ...csrfHeaders() },
+      body: JSON.stringify({ book_id: bookId }),
+    }).then((r) => j<HistoryDetail>(r)),
   forgetHistory: (id?: number) =>
     fetch(id === undefined ? "/api/history" : `/api/history/${id}`, { method: "DELETE", headers: csrfHeaders() }).then((r) => {
       if (!r.ok) throw new Error("Couldn’t remove it.");
