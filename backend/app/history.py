@@ -63,6 +63,8 @@ class ReadingHistory:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
+        if "own_book_id" not in {row["name"] for row in self._conn.execute("PRAGMA table_info(entries)")}:
+            self._conn.execute("ALTER TABLE entries ADD COLUMN own_book_id TEXT")
         self._conn.commit()
 
     def close(self):
@@ -157,6 +159,7 @@ class ReadingHistory:
     def _public(row):
         entry = {key: row[key] for key in ("id", "title", "author", "status", "rating", "finished_on", "added_on", "classic_id")}
         entry["sources"] = [name for name in row["sources"].split(",") if name]
+        entry["own_book_id"] = row["own_book_id"]
         entry["highlights"] = row["highlight_count"]
         entry["has_review"] = bool(row["review"])
         return entry
@@ -202,6 +205,11 @@ class ReadingHistory:
                 " ORDER BY position IS NULL, position, id", (entry_id,)).fetchall()
         return {**self._public(row), "review": row["review"], "isbn": row["isbn"],
                 "marks": [dict(mark) for mark in marks]}
+
+    def set_own_copy(self, entry_id, book_id):
+        """Records that a book on the shelf is the reader's copy of this title."""
+        with self._lock, self._conn:
+            return self._conn.execute("UPDATE entries SET own_book_id = ? WHERE id = ?", (book_id, entry_id)).rowcount
 
     def forget(self, entry_id=None):
         """Remove one title with its highlights, or everything that was imported."""

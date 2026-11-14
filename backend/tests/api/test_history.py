@@ -3,7 +3,7 @@ library, and never a way to send this server anything but titles, dates and the 
 import pytest
 from fastapi.testclient import TestClient
 
-from _epub import three_chapter_book
+from _epub import epub_ncx, three_chapter_book
 from app import classics
 from app.api import classics as classics_api
 from app.config import Settings
@@ -127,3 +127,41 @@ def test_a_highlight_with_no_words_and_a_book_with_no_real_title_are_left_out(c)
         {"title": "Deep Work", "author": "Cal Newport", "text": "   "},
         {"title": "(Unknown)", "author": "", "text": "orphan"}]}).json()
     assert counts["books_added"] == 0 and counts["highlights_added"] == 0
+
+
+def test_a_book_the_reader_added_themselves_is_recognised_in_their_history(c):
+    # not in the free library: the reader brings their own copy, and the history then opens it
+    c.post("/api/history/import", json={"source": "goodreads", "books": [
+        {"title": "The Seven Husbands of Evelyn Hugo: A Novel", "author": "Taylor Jenkins Reid", "status": "read"},
+        {"title": "Synthetic", "author": "Somebody Else", "status": "want"}]})
+    before = {entry["title"]: entry for entry in c.get("/api/history").json()["entries"]}
+    assert all(entry["book_id"] is None and entry["classic_id"] is None for entry in before.values())
+    own = epub_ncx([("c1.xhtml", "One", "One", "Evelyn tells her story. " * 30)],
+                   title="The Seven Husbands of Evelyn Hugo", author="Taylor Jenkins Reid")
+    book_id = c.post("/api/books", files={"file": ("evelyn.epub", own, "application/epub+zip")}).json()["book_id"]
+    after = {entry["title"]: entry for entry in c.get("/api/history").json()["entries"]}
+    assert after["The Seven Husbands of Evelyn Hugo: A Novel"]["book_id"] == book_id
+    # a different author's book of the same name is not mistaken for it
+    assert after["Synthetic"]["book_id"] is None
+    other = epub_ncx([("c1.xhtml", "One", "One", "A different book entirely. " * 30)], title="Synthetic", author="Jane Doe")
+    c.post("/api/books", files={"file": ("other.epub", other, "application/epub+zip")})
+    assert c.get(f"/api/history/{after['Synthetic']['id']}").json()["book_id"] is None
+
+
+def test_the_reader_can_say_which_shelf_book_is_their_copy(c):
+    c.post("/api/history/import", json={"source": "goodreads", "books": [
+        {"title": "Tomorrow, and Tomorrow, and Tomorrow", "author": "Gabrielle Zevin", "status": "reading"}]})
+    entry = c.get("/api/history").json()["entries"][0]
+    # the file calls itself something else entirely, so only the reader's say-so links it
+    own = epub_ncx([("c1.xhtml", "One", "One", "Sam and Sadie make a game. " * 30)], title="TTT final", author="unknown")
+    book_id = c.post("/api/books", files={"file": ("ttt.epub", own, "application/epub+zip")}).json()["book_id"]
+    assert c.get(f"/api/history/{entry['id']}").json()["book_id"] is None
+    linked = c.put(f"/api/history/{entry['id']}/book", json={"book_id": book_id})
+    assert linked.status_code == 200 and linked.json()["book_id"] == book_id
+    assert c.get("/api/history").json()["entries"][0]["book_id"] == book_id
+    assert "own_book_id" not in c.get("/api/history").json()["entries"][0]
+    assert c.put(f"/api/history/{entry['id']}/book", json={"book_id": "nope"}).status_code == 404
+    assert c.put("/api/history/9999/book", json={"book_id": book_id}).status_code == 404
+    # once the book is taken off the shelf, the history no longer offers to open it
+    assert c.delete(f"/api/books/{book_id}").status_code == 204
+    assert c.get(f"/api/history/{entry['id']}").json()["book_id"] is None
