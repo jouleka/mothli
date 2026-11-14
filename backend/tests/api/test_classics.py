@@ -206,3 +206,89 @@ def test_fetch_is_bounded_in_size_hops_and_failure():
 
     with pytest.raises(classics.ClassicUnavailable, match="Couldn’t reach"):
         classics.fetch_classic(ENTRY, max_bytes=1000, client=_client(offline))
+
+
+def test_browsing_by_genre_and_by_mood(env):
+    c, _calls = env
+    summary = c.get("/api/classics", params={"limit": 1}).json()
+    assert {"id": "mystery", "label": "Mystery & crime"} in summary["genres"]
+    assert {"id": "laugh", "label": "Make me laugh"} in summary["moods"]
+    mystery = c.get("/api/classics", params={"genre": "mystery", "limit": 5}).json()
+    assert mystery["books"][0]["title"] == "The Adventures of Sherlock Holmes" and 1000 < mystery["matches"] < 5000
+    chills = c.get("/api/classics", params={"mood": "chills", "q": "stoker"}).json()
+    assert [book["title"] for book in chills["books"]][:1] == ["Dracula"]
+    both = c.get("/api/classics", params={"mood": "quick", "genre": "horror", "limit": 60}).json()
+    assert 0 < both["matches"] < mystery["matches"]
+    for book in both["books"]:
+        detail = c.get(f"/api/classics/{book['id']}").json()
+        assert detail["minutes"] and detail["minutes"] <= 110
+        assert "horror" in {genre["id"] for genre in detail["genres"]}
+    assert c.get("/api/classics", params={"genre": "nonsense"}).json()["books"] == []
+    assert c.get("/api/classics", params={"mood": "Robert'); DROP"}).status_code == 422
+
+
+def test_front_page_has_a_shelf_for_the_most_read_each_mood_and_some_genres(env):
+    c, _calls = env
+    assert c.post("/api/classics/1342").status_code == 201
+    shelves = c.get("/api/classics/front").json()["shelves"]
+    assert shelves[0]["kind"] == "popular" and shelves[0]["books"][0]["title"] == "Pride and Prejudice"
+    assert shelves[0]["books"][0]["book_id"] is not None
+    assert {shelf["id"] for shelf in shelves if shelf["kind"] == "mood"} == {mood.id for mood in classics.MOODS}
+    assert all(4 <= len(shelf["books"]) <= classics.SHELF_SIZE for shelf in shelves)
+    french = c.get("/api/classics/front", params={"language": "fr"}).json()["shelves"]
+    assert french and {book["language"] for shelf in french for book in shelf["books"]} == {"fr"}
+
+
+def test_a_book_page_has_a_description_a_length_and_its_genres(env):
+    c, _calls = env
+    detail = c.get("/api/classics/1342").json()
+    assert detail["title"] == "Pride and Prejudice" and detail["book_id"] is None
+    assert "Elizabeth Bennet" in detail["blurb"] and len(detail["blurb"]) <= 300
+    assert 300 < detail["minutes"] < 900
+    assert {"id": "romance", "label": "Romance"} in detail["genres"]
+    assert detail["source_url"] == "https://www.gutenberg.org/ebooks/1342"
+    assert c.get("/api/classics/not-a-book").status_code == 404
+
+
+JPEG = b"\xff\xd8\xff\xe0" + b"0" * 64
+
+
+def test_cover_art_is_fetched_once_kept_on_disk_and_served_as_an_image(env, monkeypatch, tmp_path):
+    c, _calls = env
+    asked = []
+
+    def fake_cover(entry, *, client=None):
+        asked.append(entry["pg"])
+        return JPEG if entry["pg"] == 1342 else None
+
+    monkeypatch.setattr(classics_api, "fetch_cover", fake_cover)
+    classics_api._missing_covers.clear()
+    first = c.get("/api/classics/1342/cover")
+    assert first.status_code == 200 and first.content == JPEG
+    assert first.headers["content-type"] == "image/jpeg" and first.headers["x-content-type-options"] == "nosniff"
+    assert "max-age" in first.headers["cache-control"]
+    assert c.get("/api/classics/1342/cover").content == JPEG
+    assert asked == [1342]
+    assert list((tmp_path / "data" / "classics-covers").iterdir())[0].name == "1342.img"
+    # a book with no usable cover is a plain 404, and the mirror is not asked again
+    assert c.get("/api/classics/345/cover").status_code == 404
+    assert c.get("/api/classics/345/cover").status_code == 404
+    assert asked == [1342, 345]
+    assert c.get("/api/classics/not-a-book/cover").status_code == 404
+
+
+def test_fetch_cover_accepts_only_a_real_image_from_the_mirror():
+    seen = []
+
+    def image(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, content=JPEG)
+
+    assert classics.fetch_cover(ENTRY, client=_client(image)) == JPEG
+    assert seen == ["https://gutenberg.pglaf.org/cache/epub/158/pg158.cover.medium.jpg"]
+    assert classics.fetch_cover(ENTRY, client=_client(lambda r: httpx.Response(200, content=b"<html>no</html>"))) is None
+    assert classics.fetch_cover(ENTRY, client=_client(lambda r: httpx.Response(404))) is None
+    huge = _client(lambda r: httpx.Response(200, content=b"\xff\xd8\xff" + b"0" * (classics.MAX_COVER_BYTES + 1)))
+    assert classics.fetch_cover(ENTRY, client=huge) is None
+    elsewhere = _client(lambda r: httpx.Response(302, headers={"location": "https://evil.example/x.jpg"}))
+    assert classics.fetch_cover(ENTRY, client=elsewhere) is None
