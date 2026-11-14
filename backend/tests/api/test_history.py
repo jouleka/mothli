@@ -165,3 +165,15 @@ def test_the_reader_can_say_which_shelf_book_is_their_copy(c):
     # once the book is taken off the shelf, the history no longer offers to open it
     assert c.delete(f"/api/books/{book_id}").status_code == 204
     assert c.get(f"/api/history/{entry['id']}").json()["book_id"] is None
+
+
+def test_a_glimpse_is_one_of_the_readers_own_marked_passages(c):
+    assert c.get("/api/history/glimpse").json() == {"mark": None}
+    c.post("/api/history/import", json={"source": "kindle", "highlights": [
+        {"title": "Deep Work", "author": "Cal Newport", "text": "too short"},
+        {"title": "Deep Work", "author": "Cal Newport", "text": "", "note": "a note alone is not a passage to quote back"},
+        {"title": "Deep Work", "author": "Cal Newport",
+         "text": "Clarity about what matters provides clarity about what does not."}]})
+    mark = c.get("/api/history/glimpse").json()["mark"]
+    assert mark["text"].startswith("Clarity about what matters") and mark["title"] == "Deep Work"
+    assert mark["author"] == "Cal Newport" and isinstance(mark["entry_id"], int)

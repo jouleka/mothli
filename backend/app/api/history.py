@@ -210,6 +210,12 @@ def list_history(
     return {**store.summary(), "matches": matches, "entries": _with_shelf(page, catalog, settings)}
 
 
+@router.get("/glimpse")
+def history_glimpse(settings=Depends(get_settings)):
+    """A passage the reader once marked, for the page to greet them with. None when there are none."""
+    return {"mark": _history(settings).glimpse()}
+
+
 @router.get("/{entry_id}")
 def history_entry(entry_id: int, catalog=Depends(get_catalog), settings=Depends(get_settings)):
     entry = _history(settings).detail(entry_id)

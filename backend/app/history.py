@@ -206,6 +206,14 @@ class ReadingHistory:
         return {**self._public(row), "review": row["review"], "isbn": row["isbn"],
                 "marks": [dict(mark) for mark in marks]}
 
+    def glimpse(self):
+        """One passage the reader once marked, picked at random: something of theirs to greet them with."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT h.text, e.id AS entry_id, e.title, e.author FROM highlights h JOIN entries e ON e.id = h.entry_id"
+                " WHERE LENGTH(h.text) BETWEEN 40 AND 360 ORDER BY RANDOM() LIMIT 1").fetchone()
+        return dict(row) if row else None
+
     def set_own_copy(self, entry_id, book_id):
         """Records that a book on the shelf is the reader's copy of this title."""
         with self._lock, self._conn:

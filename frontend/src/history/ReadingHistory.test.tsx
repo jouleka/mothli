@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   importReadwise: vi.fn(),
   importBook: vi.fn(),
   setHistoryBook: vi.fn(),
+  historyGlimpse: vi.fn(),
 }));
 vi.mock("../api", () => ({ api: mocks }));
 
@@ -94,21 +95,52 @@ beforeEach(() => {
   mocks.importReadwise.mockReset();
   mocks.importBook.mockReset();
   mocks.setHistoryBook.mockReset().mockResolvedValue({});
+  mocks.historyGlimpse.mockReset().mockResolvedValue({ mark: null });
 });
 
 describe("Your reading history", () => {
-  test("starts with a place to bring files, says what it reads and what it cannot move", async () => {
+  test("starts by asking where you have been reading, and shows what to fetch from each app", async () => {
+    const user = userEvent.setup();
     const { container } = render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
     expect(screen.getByRole("heading", { level: 1, name: "Your reading history" })).toBeTruthy();
-    expect(await screen.findByRole("heading", { name: "Bring in your files" })).toBeTruthy();
-    expect(screen.getByText(/Goodreads · StoryGraph · Kindle · Kobo · Apple Books · Readwise · Libby/)).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Where have you been reading?" })).toBeTruthy();
+    expect(screen.getByText("Tell me where you’ve been reading.")).toBeTruthy();
+    const apps = within(screen.getByRole("list", { name: "Reading apps" }));
+    expect(apps.getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "GGoodreadsYour list, ratings, reviews",
+      "KKindleHighlights and notes",
+      "KKoboLibrary, progress, highlights",
+      "AApple BooksLibrary, progress, highlights",
+      "SStoryGraphYour list, ratings, reviews",
+      "RReadwiseEvery highlight, in one go",
+      "LLibbyHighlights and loans",
+      "SSomewhere elseKOReader, Calibre, your own list",
+    ]);
+    // nothing is asked for until an app is picked; the drop zone is always there
+    expect(screen.getByText("Drop your files here")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: /How to bring/ })).toBeNull();
+    expect(screen.queryByLabelText("Your Readwise access token")).toBeNull();
+
+    const kindle = apps.getByRole("button", { name: /Kindle/ });
+    await user.click(kindle);
+    expect(kindle.getAttribute("aria-pressed")).toBe("true");
+    const how = within(screen.getByRole("region", { name: "How to bring your Kindle history" }));
+    expect(how.getByRole("heading", { name: "On a Kindle e-reader" })).toBeTruthy();
+    expect(how.getByRole("heading", { name: "In the Kindle app on a phone or tablet" })).toBeTruthy();
+    expect(how.getByText(/My Clippings.txt/)).toBeTruthy();
+    expect(screen.getByText("Drop your Kindle file here")).toBeTruthy();
+
+    await user.click(apps.getByRole("button", { name: /Kobo/ }));
+    expect(screen.getByText(/KoboReader.sqlite/)).toBeTruthy();
+    expect(screen.queryByText(/My Clippings.txt/)).toBeNull();
+    await user.click(apps.getByRole("button", { name: /Apple Books/ }));
+    expect(screen.getByText(/Apple gives no way to do this from an iPhone or iPad/)).toBeTruthy();
+    await user.click(apps.getByRole("button", { name: /Somewhere else/ }));
+    expect(screen.getByText(/Google Play Books isn’t possible yet/)).toBeTruthy();
+    expect(screen.getByText("Drop your file here")).toBeTruthy();
+
     expect(screen.getByText(/any book files you have without copy\s+protection \(EPUB, FB2, MOBI or AZW3\)/)).toBeTruthy();
     expect(screen.getByText(/usually copy-protected,\s+and those files can’t be opened here or anywhere else but their own app/)).toBeTruthy();
-    await userEvent.setup().click(screen.getByText("How do I get my files?"));
-    expect(screen.getByText(/My Clippings.txt/)).toBeTruthy();
-    expect(screen.getByText(/KoboReader.sqlite/)).toBeTruthy();
-    expect(screen.getByText(/Apple gives no way to do this from an iPhone or iPad/)).toBeTruthy();
-    expect(screen.getByText(/Play Books keeps your notes as Google Docs/)).toBeTruthy();
     expect(await axeAA(container)).toHaveNoViolations();
   });
 
@@ -183,8 +215,17 @@ describe("Your reading history", () => {
     expect(within(row).getByText("1 highlight")).toBeTruthy();
     expect(within(row).getByRole("img", { name: "5 out of 5 stars" })).toBeTruthy();
     expect(screen.getByText(/2 books and 1 highlight so far/)).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Bring in your files" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Import more" })).toBeTruthy();
+    // the open book counts what came across, and each count is a way in
+    const glance = within(screen.getByRole("list", { name: "At a glance" }));
+    expect(glance.getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
+      "1 book read", "1 to read", "1 passage marked", "1 free to read here",
+    ]);
+    // with a history, the import desk waits behind a button
+    expect(screen.queryByRole("heading", { name: "Where have you been reading?" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Bring more in" }));
+    expect(screen.getByRole("heading", { name: "Where have you been reading?" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Close import" }));
+    expect(screen.queryByRole("heading", { name: "Where have you been reading?" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Set aside/ })).toBeNull();
     expect(await axeAA(container)).toHaveNoViolations();
 
@@ -312,7 +353,7 @@ describe("Your reading history", () => {
     mocks.history.mockResolvedValue(nothing);
     await user.click(screen.getByRole("button", { name: "Yes, remove it all" }));
     expect(mocks.forgetHistory).toHaveBeenCalledWith();
-    expect(await screen.findByRole("heading", { name: "Bring in your files" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Where have you been reading?" })).toBeTruthy();
   });
 
   test("a Kobo or Apple Books database is recognised and read on the server with the other files", async () => {
@@ -349,7 +390,8 @@ describe("Your reading history", () => {
       books_added: 12, books_updated: 0, highlights_added: 480, skipped: 0, sources: [{ source: "readwise", books: 12, highlights: 480 }],
     });
     render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
-    const field = (await screen.findByLabelText(/Use Readwise\?/)) as HTMLInputElement;
+    await user.click(await screen.findByRole("button", { name: /Readwise/ }));
+    const field = screen.getByLabelText("Your Readwise access token") as HTMLInputElement;
     expect(field.type).toBe("password");
     const go = screen.getByRole("button", { name: "Bring from Readwise" }) as HTMLButtonElement;
     expect(go.disabled).toBe(true);
@@ -365,8 +407,41 @@ describe("Your reading history", () => {
     const user = userEvent.setup();
     mocks.importReadwise.mockRejectedValue(new Error("Readwise didn’t accept that access token. Copy it again from readwise.io/access_token."));
     render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
-    await user.type(await screen.findByLabelText(/Use Readwise\?/), "x".repeat(32));
+    await user.click(await screen.findByRole("button", { name: /Readwise/ }));
+    await user.type(screen.getByLabelText("Your Readwise access token"), "x".repeat(32));
     await user.click(screen.getByRole("button", { name: "Bring from Readwise" }));
     expect((await screen.findByRole("alert")).textContent).toContain("didn’t accept that access token");
+  });
+
+  test("greets a returning reader with something they once underlined, which opens its book", async () => {
+    const user = userEvent.setup();
+    mocks.history.mockResolvedValue(full);
+    mocks.historyGlimpse.mockResolvedValue({
+      mark: { text: "It is a truth universally acknowledged", entry_id: 1, title: "Pride and Prejudice", author: "Jane Austen" },
+    });
+    render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
+    expect(await screen.findByText("Something you once underlined")).toBeTruthy();
+    expect(screen.getByText("It is a truth universally acknowledged")).toBeTruthy();
+    const greeting = screen.getByText("Something you once underlined").closest("figure") as HTMLElement;
+    await user.click(within(greeting).getByRole("button", { name: "Pride and Prejudice, Jane Austen" }));
+    expect(await screen.findByRole("dialog", { name: "Pride and Prejudice" })).toBeTruthy();
+    expect(mocks.historyEntry).toHaveBeenCalledWith(1);
+  });
+
+  test("finished books sit under the year they were finished", async () => {
+    const user = userEvent.setup();
+    const older = { ...hugo, id: 3, title: "Dracula", author: "Bram Stoker", status: "read" as const, finished_on: "2020-10-31" };
+    const undated = { ...hugo, id: 4, title: "Circe", author: "Madeline Miller", status: "read" as const, finished_on: null };
+    mocks.history.mockImplementation(async (search: { status?: string } = {}) =>
+      search.status === "read" ? { ...full, matches: 3, entries: [austen, older, undated] } : full,
+    );
+    render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
+    await screen.findByRole("button", { name: "Pride and Prejudice, Jane Austen" });
+    expect(screen.queryByRole("heading", { level: 3, name: "2021" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "1 book read" }));
+    expect(await screen.findByRole("heading", { level: 3, name: "2021" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 3, name: "2020" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 3, name: "Sometime before" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Read 1/ }).getAttribute("aria-pressed")).toBe("true");
   });
 });
