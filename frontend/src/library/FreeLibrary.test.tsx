@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { axeAA } from "../test-a11y";
@@ -182,5 +182,47 @@ describe("The Library", () => {
     await user.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect(await screen.findByRole("region", { name: "Most read right now" })).toBeTruthy();
+  });
+
+  test("the mood and genre rows slide with the mouse wheel and by pulling, without picking a chip", async () => {
+    render(<FreeLibrary onBack={() => {}} onOpen={() => {}} />);
+    const chip = await screen.findByRole("button", { name: "Keep me up at night" });
+    const row = chip.closest("ul")!;
+    Object.defineProperty(row, "scrollWidth", { configurable: true, value: 900 });
+    Object.defineProperty(row, "clientWidth", { configurable: true, value: 300 });
+
+    // rolling down slides the row and keeps the page still; at the start, rolling up is left to the page
+    const down = new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true });
+    row.dispatchEvent(down);
+    expect(row.scrollLeft).toBe(120);
+    expect(down.defaultPrevented).toBe(true);
+    row.scrollLeft = 0;
+    const up = new WheelEvent("wheel", { deltaY: -120, bubbles: true, cancelable: true });
+    row.dispatchEvent(up);
+    expect(up.defaultPrevented).toBe(false);
+    // a sideways gesture is the browser's own business
+    const sideways = new WheelEvent("wheel", { deltaX: 80, deltaY: 5, bubbles: true, cancelable: true });
+    row.dispatchEvent(sideways);
+    expect(sideways.defaultPrevented).toBe(false);
+
+    const pointer = (type: string, clientX: number) => {
+      const event = new MouseEvent(type, { clientX, button: 0, bubbles: true, cancelable: true });
+      Object.defineProperties(event, { pointerType: { value: "mouse" }, pointerId: { value: 1 } });
+      chip.dispatchEvent(event);
+    };
+    pointer("pointerdown", 250);
+    pointer("pointermove", 100);
+    expect(row.scrollLeft).toBe(150);
+    expect(row.dataset.pulling).toBe("true");
+    pointer("pointerup", 100);
+    expect(row.dataset.pulling).toBeUndefined();
+    fireEvent.click(chip);
+    expect(chip.getAttribute("aria-pressed")).toBe("false");
+
+    // a press that does not move is still a click
+    pointer("pointerdown", 100);
+    pointer("pointerup", 100);
+    fireEvent.click(chip);
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
   });
 });

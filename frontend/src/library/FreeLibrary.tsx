@@ -1,7 +1,7 @@
 /** The Library: a page for finding a public-domain book to read. A reader can search, pick a mood
  * or a genre, or just wander along the shelves; a book is only downloaded when they add it. The
  * catalogue lives on the reader's own server, which also serves the cover art. */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   api,
   type Book,
@@ -74,6 +74,7 @@ function Cover({ book }: { book: Classic }) {
           alt=""
           loading="lazy"
           decoding="async"
+          draggable={false}
           onLoad={() => setState("shown")}
           onError={() => setState("none")}
         />
@@ -112,6 +113,104 @@ function Ghosts() {
   );
 }
 
+const DRAG_STARTS_AFTER_PX = 6;
+
+/** Lets a sideways row be moved the ways a hand expects: grab it with the mouse and pull, or (when
+ * `wheel` is set) roll the mouse wheel over it. Touch and trackpads already scroll it natively.
+ * A pull that moved the row is not also a click on whatever was under the pointer. */
+function useSlide(ref: RefObject<HTMLElement | null>, { wheel = false }: { wheel?: boolean } = {}) {
+  useEffect(() => {
+    const row = ref.current;
+    if (!row) return;
+    let start: { x: number; left: number; id: number } | null = null;
+    let pulled = false;
+
+    const down = (event: PointerEvent) => {
+      if (event.pointerType !== "mouse" || event.button !== 0) return;
+      start = { x: event.clientX, left: row.scrollLeft, id: event.pointerId };
+      pulled = false;
+    };
+    const move = (event: PointerEvent) => {
+      if (!start || event.pointerId !== start.id) return;
+      const moved = event.clientX - start.x;
+      if (!pulled && Math.abs(moved) < DRAG_STARTS_AFTER_PX) return;
+      if (!pulled) {
+        pulled = true;
+        row.dataset.pulling = "true";
+        row.setPointerCapture?.(start.id);
+      }
+      row.scrollLeft = start.left - moved;
+    };
+    const up = (event: PointerEvent) => {
+      if (!start || event.pointerId !== start.id) return;
+      row.releasePointerCapture?.(start.id);
+      delete row.dataset.pulling;
+      start = null;
+    };
+    const click = (event: MouseEvent) => {
+      if (!pulled) return;
+      pulled = false;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    const roll = (event: WheelEvent) => {
+      // a sideways gesture (trackpad, tilt wheel) scrolls the row by itself; turn an up/down roll
+      // into a sideways one, unless the row is already at that end, so the page can still move on
+      if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+      const room = event.deltaY > 0 ? row.scrollWidth - row.clientWidth - row.scrollLeft : row.scrollLeft;
+      if (room <= 1) return;
+      event.preventDefault();
+      row.scrollLeft += event.deltaMode === 1 ? event.deltaY * 32 : event.deltaY;
+    };
+
+    row.addEventListener("pointerdown", down);
+    row.addEventListener("pointermove", move);
+    row.addEventListener("pointerup", up);
+    row.addEventListener("pointercancel", up);
+    row.addEventListener("click", click, true);
+    if (wheel) row.addEventListener("wheel", roll, { passive: false });
+    return () => {
+      row.removeEventListener("pointerdown", down);
+      row.removeEventListener("pointermove", move);
+      row.removeEventListener("pointerup", up);
+      row.removeEventListener("pointercancel", up);
+      row.removeEventListener("click", click, true);
+      row.removeEventListener("wheel", roll);
+    };
+  }, [ref, wheel]);
+}
+
+/** One line of chips that slides sideways: pull it, or roll the wheel over it. It fades at
+ * whichever edge has more beyond it. */
+function ChipRow({ labelledBy, heading, children }: { labelledBy: string; heading: ReactNode; children: ReactNode }) {
+  const list = useRef<HTMLUListElement>(null);
+  const [more, setMore] = useState({ left: false, right: false });
+  useSlide(list, { wheel: true });
+  const measure = useCallback(() => {
+    const row = list.current;
+    if (!row) return;
+    const left = row.scrollLeft > 4;
+    const right = row.scrollLeft + row.clientWidth < row.scrollWidth - 4;
+    setMore((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
+  }, []);
+  useEffect(() => {
+    measure();
+    const row = list.current;
+    if (!row || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [measure, children]);
+  return (
+    <div className="fl-chips" role="group" aria-labelledby={labelledBy}>
+      {heading}
+      <ul ref={list} className="fl-slide" onScroll={measure} data-more-left={more.left} data-more-right={more.right}>
+        {children}
+      </ul>
+    </div>
+  );
+}
+
 function ShelfRow({
   shelf,
   owned,
@@ -124,6 +223,7 @@ function ShelfRow({
   onSeeAll?: () => void;
 }) {
   const row = useRef<HTMLUListElement>(null);
+  useSlide(row);
   const headingId = `fl-shelf-${shelf.kind}-${shelf.id}`;
   const slide = (direction: 1 | -1) => {
     const list = row.current;
@@ -151,7 +251,7 @@ function ShelfRow({
           </button>
         </div>
       </header>
-      <ul className="fl-row" ref={row}>
+      <ul className="fl-row fl-slide" ref={row}>
         {shelf.books.map((book) => (
           <li key={book.id}>
             <BookCard book={book} onShelf={owned(book)} onPick={onPick} />
@@ -477,11 +577,14 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
 
         {summary && (
           <nav className="fl-browse" aria-label="Browse the library">
-            <div className="fl-chips" role="group" aria-labelledby="fl-moods-title">
-              <h2 id="fl-moods-title" className="m-hand fl-chips-title">
-                How are you feeling?
-              </h2>
-              <ul>
+            <ChipRow
+              labelledBy="fl-moods-title"
+              heading={
+                <h2 id="fl-moods-title" className="m-hand fl-chips-title">
+                  How are you feeling?
+                </h2>
+              }
+            >
                 {summary.moods.map((mood) => (
                   <li key={mood.id}>
                     <button
@@ -494,13 +597,15 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
                     </button>
                   </li>
                 ))}
-              </ul>
-            </div>
-            <div className="fl-chips" role="group" aria-labelledby="fl-genres-title">
-              <h2 id="fl-genres-title" className="fl-chips-label">
-                Or pick a kind of book
-              </h2>
-              <ul>
+            </ChipRow>
+            <ChipRow
+              labelledBy="fl-genres-title"
+              heading={
+                <h2 id="fl-genres-title" className="fl-chips-label">
+                  Or pick a kind of book
+                </h2>
+              }
+            >
                 {summary.genres.map((genre) => (
                   <li key={genre.id}>
                     <button
@@ -513,8 +618,7 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
                     </button>
                   </li>
                 ))}
-              </ul>
-            </div>
+            </ChipRow>
           </nav>
         )}
 
