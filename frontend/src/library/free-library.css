@@ -72,12 +72,20 @@
   display: flex;
   gap: 10px;
   margin: 0 -8px;
-  padding: 3px 48px 3px 8px;
+  padding: 3px 8px;
   list-style: none;
   overflow-x: auto;
   scrollbar-width: none;
-  mask-image: linear-gradient(90deg, #000 calc(100% - 64px), transparent);
+  /* fades only at an edge that has more beyond it */
+  mask-image: linear-gradient(90deg, transparent, #000 var(--fl-fade-left, 0px), #000 calc(100% - var(--fl-fade-right, 0px)), transparent);
 }
+.fl-chips ul[data-more-left="true"] { --fl-fade-left: 64px; }
+.fl-chips ul[data-more-right="true"] { --fl-fade-right: 64px; }
+/* a row that can be pulled sideways with the mouse */
+.fl-slide { user-select: none; -webkit-user-select: none; }
+.fl-slide img { -webkit-user-drag: none; }
+.fl-slide[data-pulling="true"] { cursor: grabbing; scroll-snap-type: none; }
+.fl-slide[data-pulling="true"] * { cursor: grabbing; pointer-events: none; }
 .fl-chips ul::-webkit-scrollbar { display: none; }
 .fl-chips li { flex: none; }
 .fl-chips-title { margin: 0 0 10px; font-size: 30px; font-weight: 500; line-height: 1; }
@@ -350,7 +358,7 @@
   .fl-search { flex: none; height: 56px; padding: 0 16px; }
   .mothli-library .fl-search input { font-size: 19px; }
   .fl-language select { width: 100%; max-width: none; height: 48px; }
-  .fl-chips ul { margin: 0 -20px; padding: 3px 48px 3px 20px; }
+  .fl-chips ul { margin: 0 -20px; padding: 3px 20px; }
   .fl-chips-title { font-size: 26px; }
   .fl-shelf { margin-top: 36px; }
   .fl-shelf-head h2,
