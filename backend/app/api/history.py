@@ -4,21 +4,26 @@ The reader's browser parses the files they exported and sends plain records here
 time. No file, credential or address of another service ever reaches this server: only titles,
 dates, ratings and the reader's own highlights and notes."""
 import os
+import tempfile
 import threading
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from app.classics import find_classic, match_title, source_tag
 from app.deps import get_catalog, get_settings
 from app.history import STATUSES, ReadingHistory
+from app.history_sources import UnreadableSource, fetch_readwise, is_sqlite, read_databases
 
 router = APIRouter(prefix="/api/history", tags=["history"])
 
 MAX_BATCH_BOOKS = 500
 MAX_BATCH_HIGHLIGHTS = 1000
-Source = Literal["goodreads", "storygraph", "kindle", "libby"]
+Source = Literal["goodreads", "storygraph", "kindle", "libby", "readwise", "koreader", "calibre", "other"]
+MAX_DATABASE_FILES = 3
+MAX_DATABASE_BYTES = 600 * 1024 * 1024  # all files of one upload together; a Kobo database is tens of MB
 _DATE = r"^\d{4}-\d{2}-\d{2}$"
 _stores = {}
 _stores_lock = threading.Lock()
@@ -85,6 +90,87 @@ def import_history(batch: ImportBatch, settings=Depends(get_settings)):
         [mark.model_dump() for mark in batch.highlights if mark.text.strip() or (mark.note or "").strip()],
         match=match)
     return counts
+
+
+def _matcher(settings):
+    rule = settings.classics_min_years_since_death
+    if not settings.classics_enabled:
+        return None
+    return lambda title, author: match_title(title, author, min_years_since_death=rule)
+
+
+def _merge(store, source, books, highlights, settings):
+    """Imports a source read on the server, in batches, and adds up what changed."""
+    total = {"books_added": 0, "books_updated": 0, "highlights_added": 0, "skipped": 0}
+    match = _matcher(settings)
+    for at in range(0, max(len(books), 1), MAX_BATCH_BOOKS):
+        counts = store.import_batch(source, books[at:at + MAX_BATCH_BOOKS], [], match=match)
+        total = {key: total[key] + counts[key] for key in total}
+    for at in range(0, len(highlights), MAX_BATCH_HIGHLIGHTS):
+        counts = store.import_batch(source, [], highlights[at:at + MAX_BATCH_HIGHLIGHTS], match=match)
+        total = {key: total[key] + counts[key] for key in total}
+    return total
+
+
+def _import_databases(paths, settings):
+    store = _history(settings)
+    total = {"books_added": 0, "books_updated": 0, "highlights_added": 0, "skipped": 0}
+    sources = []
+    for source, books, highlights in read_databases(paths):
+        counts = _merge(store, source, books, highlights, settings)
+        total = {key: total[key] + counts[key] for key in total}
+        sources.append({"source": source, "books": len(books), "highlights": len(highlights)})
+    return {**total, "sources": sources}
+
+
+@router.post("/import-databases")
+async def import_databases(request: Request, settings=Depends(get_settings)):
+    """Kobo's KoboReader.sqlite, or the two Apple Books database files from a Mac. The files are
+    kept only for the moment it takes to read them."""
+    declared = request.headers.get("content-length", "")
+    if not declared.isdigit() or int(declared) > MAX_DATABASE_BYTES:
+        raise HTTPException(413, "These files are too large to be reading databases.")
+    try:
+        form = await request.form(max_files=MAX_DATABASE_FILES, max_fields=4)
+    except Exception as error:  # noqa: BLE001 - any malformed upload is the sender's mistake, not ours
+        raise HTTPException(422, "That upload could not be read.") from error
+    uploads = [item for item in form.getlist("files") if hasattr(item, "read")]
+    if not uploads:
+        raise HTTPException(422, "no files")
+    paths = []
+    try:
+        with tempfile.TemporaryDirectory(prefix="history-", dir=settings.data_dir) as folder:
+            for index, upload in enumerate(uploads):
+                head = await upload.read(16)
+                if not is_sqlite(head):
+                    raise HTTPException(422, "One of these files is not a reading database.")
+                path = os.path.join(folder, f"{index}.sqlite")
+                with open(path, "wb") as out:
+                    out.write(head)
+                    while chunk := await upload.read(1024 * 1024):
+                        out.write(chunk)
+                paths.append(path)
+            return await run_in_threadpool(_import_databases, paths, settings)
+    except UnreadableSource as error:
+        raise HTTPException(422, str(error)) from error
+    finally:
+        await form.close()
+
+
+class ReadwiseAccount(BaseModel):
+    token: str = Field(min_length=20, max_length=120, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+@router.post("/readwise")
+def import_readwise(account: ReadwiseAccount, settings=Depends(get_settings)):
+    """Brings a reader's highlights from Readwise with the access token they paste. The token is
+    used for this request and not kept."""
+    try:
+        books, highlights = fetch_readwise(account.token)
+    except UnreadableSource as error:
+        raise HTTPException(502, str(error)) from error
+    counts = _merge(_history(settings), "readwise", books, highlights, settings)
+    return {**counts, "sources": [{"source": "readwise", "books": len(books), "highlights": len(highlights)}]}
 
 
 @router.get("")

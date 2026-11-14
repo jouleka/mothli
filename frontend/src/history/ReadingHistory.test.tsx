@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   importHistory: vi.fn(),
   forgetHistory: vi.fn(),
   addClassic: vi.fn(),
+  importHistoryDatabases: vi.fn(),
+  importReadwise: vi.fn(),
 }));
 vi.mock("../api", () => ({ api: mocks }));
 
@@ -86,6 +88,8 @@ beforeEach(() => {
   mocks.importHistory.mockReset().mockResolvedValue({ books_added: 0, books_updated: 0, highlights_added: 0, skipped: 0 });
   mocks.forgetHistory.mockReset().mockResolvedValue(undefined);
   mocks.addClassic.mockReset();
+  mocks.importHistoryDatabases.mockReset();
+  mocks.importReadwise.mockReset();
 });
 
 describe("Your reading history", () => {
@@ -93,10 +97,13 @@ describe("Your reading history", () => {
     const { container } = render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
     expect(screen.getByRole("heading", { level: 1, name: "Your reading history" })).toBeTruthy();
     expect(await screen.findByRole("heading", { name: "Bring in your files" })).toBeTruthy();
-    expect(screen.getByText("Goodreads · StoryGraph · Kindle highlights · Libby")).toBeTruthy();
+    expect(screen.getByText(/Goodreads · StoryGraph · Kindle · Kobo · Apple Books · Readwise · Libby/)).toBeTruthy();
     expect(screen.getByText(/copy-protected, so the books themselves can’t be moved/)).toBeTruthy();
     await userEvent.setup().click(screen.getByText("How do I get my files?"));
     expect(screen.getByText(/My Clippings.txt/)).toBeTruthy();
+    expect(screen.getByText(/KoboReader.sqlite/)).toBeTruthy();
+    expect(screen.getByText(/Apple gives no way to do this from an iPhone or iPad/)).toBeTruthy();
+    expect(screen.getByText(/Play Books keeps your notes as Google Docs/)).toBeTruthy();
     expect(await axeAA(container)).toHaveNoViolations();
   });
 
@@ -229,5 +236,60 @@ describe("Your reading history", () => {
     await user.click(screen.getByRole("button", { name: "Yes, remove it all" }));
     expect(mocks.forgetHistory).toHaveBeenCalledWith();
     expect(await screen.findByRole("heading", { name: "Bring in your files" })).toBeTruthy();
+  });
+
+  test("a Kobo or Apple Books database is recognised and read on the server with the other files", async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    const database = new File([new TextEncoder().encode("SQLite format 3\u0000"), new Uint8Array(64)], "KoboReader.sqlite");
+    mocks.importHistory.mockResolvedValue({ books_added: 2, books_updated: 0, highlights_added: 0, skipped: 0 });
+    mocks.importHistoryDatabases.mockResolvedValue({
+      books_added: 40, books_updated: 1, highlights_added: 300, skipped: 0, sources: [{ source: "kobo", books: 41, highlights: 300 }],
+    });
+    render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
+    await user.upload(await screen.findByLabelText("Choose export files"), [database, new File([GOODREADS], "g.csv")]);
+    expect(await screen.findByText("A Kobo or Apple Books database. It is read when you import.")).toBeTruthy();
+    mocks.history.mockResolvedValue(full);
+    await user.click(screen.getByRole("button", { name: "Import 2 books and 1 reader database" }));
+    const outcome = await screen.findByRole("status");
+    expect(outcome.textContent).toContain("Brought in 42 new books and 300 new highlights.");
+    expect(outcome.textContent).toContain("Filled in details for 1 book you already had.");
+    expect(mocks.importHistoryDatabases).toHaveBeenCalledWith([database]);
+  });
+
+  test("a database the server cannot read says why", async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    const database = new File([new TextEncoder().encode("SQLite format 3\u0000")], "AEAnnotation.sqlite");
+    mocks.importHistoryDatabases.mockRejectedValue(new Error("That is the Apple Books highlights file. Bring the library file from the BKLibrary folder with it."));
+    render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
+    await user.upload(await screen.findByLabelText("Choose export files"), database);
+    await user.click(await screen.findByRole("button", { name: "Import 1 reader database" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Bring the library file from the BKLibrary folder");
+  });
+
+  test("Readwise highlights come with one pasted token, which is cleared afterwards", async () => {
+    const user = userEvent.setup();
+    mocks.importReadwise.mockResolvedValue({
+      books_added: 12, books_updated: 0, highlights_added: 480, skipped: 0, sources: [{ source: "readwise", books: 12, highlights: 480 }],
+    });
+    render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
+    const field = (await screen.findByLabelText(/Use Readwise\?/)) as HTMLInputElement;
+    expect(field.type).toBe("password");
+    const go = screen.getByRole("button", { name: "Bring from Readwise" }) as HTMLButtonElement;
+    expect(go.disabled).toBe(true);
+    await user.type(field, "  abcDEF1234567890abcDEF1234567890  ");
+    mocks.history.mockResolvedValue(full);
+    await user.click(go);
+    expect(mocks.importReadwise).toHaveBeenCalledWith("abcDEF1234567890abcDEF1234567890");
+    expect((await screen.findByRole("status")).textContent).toContain("Brought in 12 new books and 480 new highlights.");
+    expect(field.value).toBe("");
+  });
+
+  test("a token Readwise refuses is explained", async () => {
+    const user = userEvent.setup();
+    mocks.importReadwise.mockRejectedValue(new Error("Readwise didn’t accept that access token. Copy it again from readwise.io/access_token."));
+    render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
+    await user.type(await screen.findByLabelText(/Use Readwise\?/), "x".repeat(32));
+    await user.click(screen.getByRole("button", { name: "Bring from Readwise" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("didn’t accept that access token");
   });
 });

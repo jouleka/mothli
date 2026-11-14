@@ -10,6 +10,7 @@ import { Icon } from "../ui/Icon";
 import { Moth } from "../ui/Moth";
 import { MothliMark } from "../ui/MothliMark";
 import {
+  isDatabase,
   parseHistoryFile,
   SOURCE_NAMES,
   summarize,
@@ -22,6 +23,7 @@ import "../library/free-library.css";
 import "./reading-history.css";
 
 const MAX_FILE_BYTES = 60 * 1024 * 1024;
+const MAX_DATABASE_BYTES = 500 * 1024 * 1024;
 const BATCH_BOOKS = 400;
 const BATCH_HIGHLIGHTS = 800;
 const PAGE = 60;
@@ -48,6 +50,18 @@ function readFile(file: File): Promise<string> {
   });
 }
 
+/** The first bytes of a file, to tell a database from an export without reading all of it. */
+function readHead(file: File): Promise<Uint8Array> {
+  const head = file.slice(0, 16);
+  if (typeof head.arrayBuffer === "function") return head.arrayBuffer().then((buffer) => new Uint8Array(buffer));
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(head);
+  });
+}
+
 function Stars({ rating }: { rating: number }) {
   const whole = Math.round(rating);
   return (
@@ -70,26 +84,54 @@ function Thumb({ entry }: { entry: HistoryEntry }) {
   );
 }
 
-const GUIDES: { source: ImportSource; steps: string }[] = [
+const GUIDES: { name: string; steps: string }[] = [
   {
-    source: "goodreads",
+    name: "Goodreads",
     steps: "On the Goodreads website (not the app): My Books, then Tools, then “Import and export”, then “Export Library”. Bring the goodreads_library_export.csv file it gives you.",
   },
   {
-    source: "storygraph",
+    name: "StoryGraph",
     steps: "On StoryGraph: Manage Account, then “Export StoryGraph Library”. A link to the file arrives by email.",
   },
   {
-    source: "kindle",
+    name: "Kindle e-reader",
     steps: "Plug your Kindle into a computer with its cable. Open the Kindle drive, then the “documents” folder, and bring the file called “My Clippings.txt”. It holds every highlight and note made on that device.",
   },
   {
-    source: "libby",
-    steps: "In Libby: open a book’s Reading Journey and choose “Export Reading Data”, or open your Timeline and choose Actions, then “Export Timeline”. Pick “Data”.",
+    name: "Kindle app on a phone or tablet",
+    steps: "Open a book, open its Notebook (the page icon), choose Share or Export, and email it to yourself. Bring the .html file from that email. It is one file per book.",
+  },
+  {
+    name: "Kobo",
+    steps: "Plug your Kobo into a computer. Turn on “show hidden files”, open the folder called “.kobo” on the Kobo drive, and bring the file “KoboReader.sqlite”. It holds your library, what you have finished, and every highlight and note.",
+  },
+  {
+    name: "Apple Books on a Mac",
+    steps: "In Finder choose Go, then “Go to Folder”, and paste ~/Library/Containers/com.apple.iBooksX/Data/Documents. Bring the .sqlite file from the “BKLibrary” folder and the .sqlite file from the “AEAnnotation” folder together. Apple gives no way to do this from an iPhone or iPad.",
+  },
+  {
+    name: "Readwise",
+    steps: "If your highlights from Kindle, Apple Books, Kobo and others already sync to Readwise, paste your access token above to bring them all at once. Or, on Readwise, choose Export, then CSV, and bring that file.",
+  },
+  {
+    name: "Libby",
+    steps: "Open a book’s Reading Journey and choose “Export Reading Data”, or open your Timeline and choose Actions, then “Export Timeline”. Pick “Data”.",
+  },
+  {
+    name: "KOReader",
+    steps: "In a book, open the top menu, the tools tab, “Export highlights”, and export as JSON. Bring that file.",
+  },
+  {
+    name: "Calibre, Hardcover, BookWyrm, LibraryThing, or your own list",
+    steps: "Export or save your books as a CSV file. Any spreadsheet works if it has a column for the title and one for the author; shelves, ratings and dates are read when they are there.",
+  },
+  {
+    name: "Google Play Books",
+    steps: "Not yet. Play Books keeps your notes as Google Docs, which we can’t read reliably so far. Books you uploaded yourself, or bought without copy protection, can be exported from Play Books and added from your shelf.",
   },
 ];
 
-type Chosen = { name: string; parsed?: ParsedHistory; problem?: string };
+type Chosen = { name: string; parsed?: ParsedHistory; database?: File; problem?: string };
 type Progress = { done: number; total: number };
 type Outcome = { books: number; updated: number; highlights: number; skipped: number };
 
@@ -107,7 +149,10 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
   const [problem, setProblem] = useState<string | null>(null);
 
   const ready = chosen.flatMap((file) => (file.parsed ? [file.parsed] : []));
+  const databases = chosen.flatMap((file) => (file.database ? [file.database] : []));
   const totals = summarize(ready);
+  const [token, setToken] = useState("");
+  const [asking, setAsking] = useState(false);
 
   const choose = async (files: FileList | File[] | null) => {
     const list = Array.from(files ?? []);
@@ -116,8 +161,13 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
     setProblem(null);
     const read = await Promise.all(
       list.map(async (file): Promise<Chosen> => {
-        if (file.size > MAX_FILE_BYTES) return { name: file.name, problem: "This file is too large to be a reading history." };
         try {
+          if (isDatabase(await readHead(file))) {
+            return file.size > MAX_DATABASE_BYTES
+              ? { name: file.name, problem: "This database is too large to bring in." }
+              : { name: file.name, database: file };
+          }
+          if (file.size > MAX_FILE_BYTES) return { name: file.name, problem: "This file is too large to be a reading history." };
           const parsed = parseHistoryFile(file.name, await readFile(file));
           if (!parsed.books.length && !parsed.highlights.length) return { name: file.name, problem: "There is nothing in this file to bring in." };
           return { name: file.name, parsed };
@@ -133,7 +183,7 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
   };
 
   const bringIn = async () => {
-    const total = totals.books + totals.highlights;
+    const total = totals.books + totals.highlights + databases.length;
     const sum: Outcome = { books: 0, updated: 0, highlights: 0, skipped: 0 };
     let done = 0;
     setProblem(null);
@@ -159,16 +209,49 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
           setProgress({ done, total });
         }
       }
+      if (databases.length) {
+        const result = await api.importHistoryDatabases(databases);
+        sum.books += result.books_added;
+        sum.updated += result.books_updated;
+        sum.highlights += result.highlights_added;
+        sum.skipped += result.skipped;
+        done += databases.length;
+        setProgress({ done, total });
+      }
       const free = await onImported();
       setOutcome({ ...sum, free });
       setChosen([]);
-    } catch {
-      setProblem("The import stopped part-way. What was brought in so far is kept; you can run it again safely.");
+    } catch (error) {
+      // a database the server could not read says why; anything else is a dropped connection
+      const said = error instanceof Error && databases.length && /Kobo|Apple Books|database/.test(error.message) ? error.message : null;
+      setProblem(said ?? "The import stopped part-way. What was brought in so far is kept; you can run it again safely.");
       await onImported().catch(() => 0);
     } finally {
       setProgress(null);
     }
   };
+
+  const fromReadwise = async () => {
+    setAsking(true);
+    setProblem(null);
+    setOutcome(null);
+    try {
+      const result = await api.importReadwise(token.trim());
+      setToken("");
+      const free = await onImported();
+      setOutcome({ books: result.books_added, updated: result.books_updated, highlights: result.highlights_added, skipped: result.skipped, free });
+    } catch (error) {
+      setProblem(error instanceof Error && /Readwise/.test(error.message) ? error.message : "Couldn’t bring your Readwise highlights. Try again.");
+    } finally {
+      setAsking(false);
+    }
+  };
+  const what = [
+    totals.books ? plural(totals.books, "book") : null,
+    totals.highlights ? plural(totals.highlights, "highlight") : null,
+    databases.length ? plural(databases.length, "reader database") : null,
+  ].filter(Boolean);
+  const listed = what.length > 1 ? `${what.slice(0, -1).join(", ")} and ${what[what.length - 1]}` : (what[0] ?? "");
 
   if (!open) {
     return (
@@ -199,7 +282,9 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
       >
         <Icon name="download" size={26} />
         <p className="rh-drop-title">Drop your export files here</p>
-        <p className="rh-drop-hint">Goodreads · StoryGraph · Kindle highlights · Libby</p>
+        <p className="rh-drop-hint">
+          Goodreads · StoryGraph · Kindle · Kobo · Apple Books · Readwise · Libby · KOReader · Calibre · any spreadsheet
+        </p>
         <Button variant="primary" disabled={progress !== null} onClick={() => input.current?.click()}>
           Choose files
         </Button>
@@ -208,7 +293,7 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
           className="sr-only"
           type="file"
           multiple
-          accept=".csv,.txt,.json,text/csv,text/plain,application/json"
+          accept=".csv,.txt,.json,.html,.htm,.sqlite,.sqlite3,.db,text/csv,text/plain,application/json,text/html"
           aria-label="Choose export files"
           onChange={(event) => {
             void choose(event.currentTarget.files);
@@ -220,9 +305,11 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
       {chosen.length > 0 && (
         <ul className="rh-files" aria-label="Chosen files">
           {chosen.map((file, index) => (
-            <li key={`${file.name}-${index}`} data-bad={!file.parsed}>
+            <li key={`${file.name}-${index}`} data-bad={!file.parsed && !file.database}>
               <strong>{file.name}</strong>
-              {file.parsed ? (
+              {file.database ? (
+                <span>A Kobo or Apple Books database. It is read when you import.</span>
+              ) : file.parsed ? (
                 <span>
                   {SOURCE_NAMES[file.parsed.source]}:{" "}
                   {[
@@ -240,14 +327,12 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
         </ul>
       )}
 
-      {ready.length > 0 && (
+      {(ready.length > 0 || databases.length > 0) && (
         <div className="rh-go">
           <Button variant="primary" aria-busy={progress !== null} disabled={progress !== null} onClick={() => void bringIn()}>
             {progress
               ? `Importing… ${count(progress.done)} of ${count(progress.total)}`
-              : `Import ${[totals.books ? plural(totals.books, "book") : null, totals.highlights ? plural(totals.highlights, "highlight") : null]
-                  .filter(Boolean)
-                  .join(" and ")}`}
+              : `Import ${listed}`}
           </Button>
           {progress && <progress value={progress.done} max={Math.max(progress.total, 1)} aria-label="Import progress" />}
         </div>
@@ -274,12 +359,40 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
         </p>
       )}
 
+      <form
+        className="rh-readwise"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (token.trim() && !asking) void fromReadwise();
+        }}
+      >
+        <label htmlFor="rh-readwise-token">
+          <strong>Use Readwise?</strong> Paste your access token from readwise.io/access_token to bring every book
+          highlight it holds. The token is used once and not kept.
+        </label>
+        <div>
+          <input
+            id="rh-readwise-token"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="Readwise access token"
+            value={token}
+            maxLength={120}
+            onChange={(event) => setToken(event.currentTarget.value)}
+          />
+          <Button type="submit" aria-busy={asking} disabled={asking || token.trim().length < 20}>
+            {asking ? "Bringing your highlights…" : "Bring from Readwise"}
+          </Button>
+        </div>
+      </form>
+
       <details className="rh-guides">
         <summary>How do I get my files?</summary>
         <dl>
           {GUIDES.map((guide) => (
-            <div key={guide.source}>
-              <dt>{SOURCE_NAMES[guide.source]}</dt>
+            <div key={guide.name}>
+              <dt>{guide.name}</dt>
               <dd>{guide.steps}</dd>
             </div>
           ))}
@@ -287,7 +400,8 @@ function Importer({ onImported, startOpen }: { onImported: () => Promise<number>
       </details>
       <p className="rh-honest">
         This brings your list, ratings, reviews, highlights and notes. Books bought in Kindle, Apple Books and similar
-        stores are copy-protected, so the books themselves can’t be moved. Nothing leaves your own Mothli.
+        stores are copy-protected, so the books themselves can’t be moved. Your files are read by your own Mothli and
+        go nowhere else.
       </p>
     </section>
   );
