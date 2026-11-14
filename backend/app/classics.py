@@ -18,6 +18,7 @@ set ``CLASSICS_MIN_YEARS_SINCE_DEATH``; books with an unrecorded death year are 
 """
 import gzip
 import re
+import threading
 import unicodedata
 from collections import Counter
 from datetime import UTC, datetime
@@ -120,7 +121,8 @@ class _Row(NamedTuple):
     title: str
     author: str
     blurb: str
-    hay: str
+    title_key: str  # the title, folded for matching
+    hay: str  # title and author, folded
 
 
 def fold(text):
@@ -141,8 +143,12 @@ def _rows():
                 raise ValueError(f"classics catalogue has an invalid or duplicate book number {pg!r}")
             seen.add(number)
             rows.append(_Row(number, language, int(died), int(kb), frozenset(genres.split()) & GENRES.keys(),
-                             title, author, blurb, fold(f"{title} {author}")))
+                             title, author, blurb, fold(title), fold(f"{title} {author}")))
     return tuple(rows)
+
+
+def _mood_has(mood, row):
+    return bool(mood.genres & row.genres) and (not mood.quick or 0 < row.kb <= QUICK_READ_KB)
 
 
 @lru_cache(maxsize=8)
@@ -153,6 +159,24 @@ def _eligible(min_years_since_death, year):
         rows = tuple(row for row in rows if row.died and year - row.died > min_years_since_death)
     languages = tuple({"code": code, "count": count} for code, count in Counter(row.language for row in rows).most_common())
     return rows, {row.pg: row for row in rows}, languages
+
+
+@lru_cache(maxsize=8)
+def _buckets(min_years_since_death, year):
+    """The rows of each language, genre and mood, most popular first.
+
+    Built once, so that picking a filter reads a ready-made list instead of sifting the whole
+    catalogue: a single filter with no search words is answered by slicing its bucket."""
+    rows = _eligible(min_years_since_death, year)[0]
+    found = {}
+    for row in rows:
+        found.setdefault(("language", row.language), []).append(row)
+        for genre in row.genres:
+            found.setdefault(("genre", genre), []).append(row)
+        for mood in MOODS:
+            if _mood_has(mood, row):
+                found.setdefault(("mood", mood.id), []).append(row)
+    return {key: tuple(bucket) for key, bucket in found.items()}
 
 
 def _offer(min_years_since_death, today):
@@ -181,14 +205,46 @@ def _wanted(language=None, genre=None, mood=None):
             return False
         if genre and genre not in row.genres:
             return False
-        if feeling is not None:
-            if not feeling.genres & row.genres:
-                return False
-            if feeling.quick and not 0 < row.kb <= QUICK_READ_KB:
-                return False
-        return True
+        return feeling is None or _mood_has(feeling, row)
 
     return test
+
+
+def _rank(row, phrase, words):
+    """How well a row answers a search. The book whose title is exactly what was typed comes first;
+    then titles containing the words and books by an author of that name, together, most-read first
+    (so an author's own books are not buried under books about them); then everything else."""
+    title = row.title_key
+    if title == phrase:
+        return 0
+    author = row.hay[len(title) + 1:]
+    if phrase in title or all(word in author for word in words):
+        return 1
+    return 2
+
+
+@lru_cache(maxsize=48)
+def _matches(words, language, genre, mood, min_years_since_death, year):
+    """Every row a search or filter selects, best first. Kept, so that the next page of the same
+    search, and a filter picked a second time, cost nothing."""
+    rows = _eligible(min_years_since_death, year)[0]
+    if (genre and genre not in GENRES) or (mood and mood not in _MOODS):
+        return ()
+    buckets = _buckets(min_years_since_death, year)
+    chosen = [buckets.get(key, ()) for key in (("language", language), ("genre", genre), ("mood", mood)) if key[1]]
+    if not chosen:
+        pool, rest = rows, None
+    else:
+        pool = min(chosen, key=len)  # sift the smallest list; the other filters are checked per row
+        rest = _wanted(language, genre, mood) if len(chosen) > 1 else None
+    if not words:
+        return pool if rest is None else tuple(row for row in pool if rest(row))
+    phrase = " ".join(words)
+    found = [row for row in pool
+             if all(word in row.hay for word in words) and (rest is None or rest(row))]
+    # the sort is stable, so within a rank the most-read book still comes first
+    found.sort(key=lambda row: _rank(row, phrase, words))
+    return tuple(found)
 
 
 def catalog_summary(*, min_years_since_death=0, today=None):
@@ -199,27 +255,35 @@ def catalog_summary(*, min_years_since_death=0, today=None):
             "moods": [{"id": mood.id, "label": mood.label} for mood in MOODS]}
 
 
-def front_page(*, language=None, min_years_since_death=0, today=None):
-    """The shelves a reader sees before searching: most read, each mood, and a few genres."""
-    rows, _index, _languages = _offer(min_years_since_death, today)
+@lru_cache(maxsize=16)
+def _front_rows(language, min_years_since_death, year):
+    rows = _eligible(min_years_since_death, year)[0]
+    buckets = _buckets(min_years_since_death, year)
     in_language = _wanted(language)
     # reference works top the download counts; the opening shelf is for books people sit down and read
-    plan = [("popular", "popular", "Most read right now", lambda row: bool(row.genres) and in_language(row))]
-    plan += [("mood", mood.id, mood.label, _wanted(language, mood=mood.id)) for mood in MOODS]
-    plan += [("genre", genre, GENRES[genre], _wanted(language, genre=genre)) for genre in _FRONT_GENRES]
+    plan = [("popular", "popular", "Most read right now", (row for row in rows if row.genres))]
+    plan += [("mood", mood.id, mood.label, buckets.get(("mood", mood.id), ())) for mood in MOODS]
+    plan += [("genre", genre, GENRES[genre], buckets.get(("genre", genre), ())) for genre in _FRONT_GENRES]
     shelves, shown = [], set()
-    for kind, shelf_id, title, test in plan:
+    for kind, shelf_id, title, pool in plan:
         books = []
-        for row in rows:
+        for row in pool:
             # a book sits on one shelf only, so the page is not the same dozen titles over and over
-            if row.pg not in shown and test(row):
+            if row.pg not in shown and in_language(row):
                 shown.add(row.pg)
-                books.append(_entry(row))
+                books.append(row)
                 if len(books) == SHELF_SIZE:
                     break
         if len(books) >= 4:
-            shelves.append({"kind": kind, "id": shelf_id, "title": title, "books": books})
-    return shelves
+            shelves.append((kind, shelf_id, title, tuple(books)))
+    return tuple(shelves)
+
+
+def front_page(*, language=None, min_years_since_death=0, today=None):
+    """The shelves a reader sees before searching: most read, each mood, and a few genres."""
+    year = (today or datetime.now(UTC)).year
+    return [{"kind": kind, "id": shelf_id, "title": title, "books": [_entry(row) for row in books]}
+            for kind, shelf_id, title, books in _front_rows(language or None, max(int(min_years_since_death), 0), year)]
 
 
 def search(query="", *, language=None, genre=None, mood=None, offset=0, limit=40,
@@ -227,23 +291,13 @@ def search(query="", *, language=None, genre=None, mood=None, offset=0, limit=40
     """One page of books whose title or author contains every word of ``query``, within a language,
     genre and mood when those are given.
 
-    Returns ``(matches, page)``. Rows keep the catalogue's order, most popular first."""
-    rows, _index, _languages = _offer(min_years_since_death, today)
-    test = _wanted(language, genre, mood)
-    if test is None:
-        return 0, []
-    words = fold(query).split()[:8]
+    Returns ``(matches, page)``. Without search words the order is most-read first; with them, the
+    closest titles come first and most-read breaks ties."""
+    year = (today or datetime.now(UTC)).year
+    words = tuple(fold(query).split()[:8])
+    found = _matches(words, language or None, genre or None, mood or None, max(int(min_years_since_death), 0), year)
     offset, limit = max(int(offset), 0), min(max(int(limit), 1), MAX_PAGE)
-    matches, page = 0, []
-    for row in rows:
-        if not test(row):
-            continue
-        if words and not all(word in row.hay for word in words):
-            continue
-        if offset <= matches < offset + limit:
-            page.append(_entry(row))
-        matches += 1
-    return matches, page
+    return len(found), [_entry(row) for row in found[offset:offset + limit]]
 
 
 def find_classic(classic_id, *, min_years_since_death=0, today=None):
@@ -266,18 +320,29 @@ def _checked(url):
     return url
 
 
+_cover_client_lock = threading.Lock()
+_cover_client = None
+
+
+def _shared_cover_client():
+    """One client for all cover fetches, so connections to the mirror are opened once and reused."""
+    global _cover_client
+    with _cover_client_lock:
+        if _cover_client is None:
+            _cover_client = httpx.Client(
+                timeout=httpx.Timeout(12.0, connect=6.0), follow_redirects=False,
+                headers={"user-agent": _USER_AGENT},
+                limits=httpx.Limits(max_connections=16, max_keepalive_connections=16, keepalive_expiry=60))
+        return _cover_client
+
+
 def fetch_cover(entry, *, client=None):
     """The book's cover image from the mirror, or None when it has none we can use."""
-    own = client is None
-    client = client or httpx.Client(timeout=httpx.Timeout(12.0, connect=6.0), follow_redirects=False,
-                                    headers={"user-agent": _USER_AGENT})
+    client = client or _shared_cover_client()
     try:
         blob = _download(client, _COVER_URL.format(pg=int(entry["pg"])), MAX_COVER_BYTES)
     except (_Missing, ClassicUnavailable, httpx.HTTPError):
         return None
-    finally:
-        if own:
-            client.close()
     return blob if image_type(blob) else None
 
 

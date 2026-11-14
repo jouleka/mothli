@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   classicsFront: vi.fn(),
   classic: vi.fn(),
   addClassic: vi.fn(),
+  warmCovers: vi.fn(),
 }));
 vi.mock("../api", () => ({ api: mocks }));
 
@@ -59,6 +60,7 @@ beforeEach(() => {
   mocks.classicsFront.mockReset().mockResolvedValue(front);
   mocks.classic.mockReset().mockImplementation(async (id: string) => detail(id === "345" ? dracula : emma));
   mocks.addClassic.mockReset();
+  mocks.warmCovers.mockReset().mockResolvedValue({ started: 0 });
   mocks.classics.mockReset().mockImplementation(async (search: { mood?: string; q?: string; offset?: number } = {}) => {
     if (search.q) return page([]);
     if (search.mood === "chills") return search.offset ? page([carmilla], 2) : page([dracula], 2);
@@ -87,19 +89,34 @@ describe("The Library", () => {
     await user.click(mood);
     expect(mood.getAttribute("aria-pressed")).toBe("true");
     expect(await screen.findByText("2 books")).toBeTruthy();
-    expect(mocks.classics).toHaveBeenLastCalledWith({ q: "", language: "", genre: "", mood: "chills" });
+    const chills = { q: "", language: "", genre: "", mood: "chills", limit: 60 };
+    expect(mocks.classics).toHaveBeenCalledWith(chills);
+    // the next page is fetched ahead, and the server is told which covers are about to be shown
+    await waitFor(() => expect(mocks.classics).toHaveBeenLastCalledWith({ ...chills, offset: 1 }));
+    await waitFor(() => expect(mocks.warmCovers).toHaveBeenCalledWith(["10007"]));
+    expect(mocks.warmCovers).toHaveBeenCalledWith(["345"]);
+    expect(mocks.warmCovers).toHaveBeenCalledWith(["158", "1727", "345"]);
     expect(window.location.search).toBe("?library=1&feel=chills");
     expect(screen.getByRole("heading", { level: 2, name: "Keep me up at night" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Most read right now" })).toBeNull();
 
+    const asked = mocks.classics.mock.calls.length;
     await user.click(screen.getByRole("button", { name: "Show more" }));
-    expect(await screen.findByRole("button", { name: "Carmilla, Joseph Sheridan Le Fanu" })).toBeTruthy();
-    expect(mocks.classics).toHaveBeenLastCalledWith({ q: "", language: "", genre: "", mood: "chills", offset: 1 });
+    // already fetched: the next page appears without another request
+    expect(screen.getByRole("button", { name: "Carmilla, Joseph Sheridan Le Fanu" })).toBeTruthy();
+    expect(mocks.classics.mock.calls.length).toBe(asked);
     expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Back to the shelves" }));
-    expect(await screen.findByRole("region", { name: "Most read right now" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Most read right now" })).toBeTruthy();
     expect(window.location.search).toBe("?library=1");
+
+    // going back to a filter already seen shows it at once, both pages, asking for nothing
+    await user.click(screen.getByRole("button", { name: "Keep me up at night" }));
+    expect(screen.getByRole("button", { name: "Carmilla, Joseph Sheridan Le Fanu" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Dracula, Bram Stoker" })).toBeTruthy();
+    expect(mocks.classics.mock.calls.length).toBe(asked);
+    expect(mocks.classicsFront).toHaveBeenCalledTimes(1);
   });
 
   test("See all on a shelf, a genre and a language each filter the catalogue", async () => {

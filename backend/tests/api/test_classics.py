@@ -2,6 +2,7 @@
 
 The network is never touched here: the download is replaced with a synthetic EPUB, and the
 fetcher itself is exercised against an in-memory transport."""
+import threading
 from datetime import UTC, datetime
 
 import httpx
@@ -262,7 +263,6 @@ def test_cover_art_is_fetched_once_kept_on_disk_and_served_as_an_image(env, monk
         return JPEG if entry["pg"] == 1342 else None
 
     monkeypatch.setattr(classics_api, "fetch_cover", fake_cover)
-    classics_api._missing_covers.clear()
     first = c.get("/api/classics/1342/cover")
     assert first.status_code == 200 and first.content == JPEG
     assert first.headers["content-type"] == "image/jpeg" and first.headers["x-content-type-options"] == "nosniff"
@@ -292,3 +292,47 @@ def test_fetch_cover_accepts_only_a_real_image_from_the_mirror():
     assert classics.fetch_cover(ENTRY, client=huge) is None
     elsewhere = _client(lambda r: httpx.Response(302, headers={"location": "https://evil.example/x.jpg"}))
     assert classics.fetch_cover(ENTRY, client=elsewhere) is None
+
+
+def test_the_page_can_ask_for_covers_ahead_and_each_is_fetched_only_once(env, monkeypatch):
+    c, _calls = env
+    asked, release = [], threading.Event()
+
+    def slow_cover(entry, *, client=None):
+        asked.append(entry["pg"])
+        release.wait(5)
+        return JPEG
+
+    monkeypatch.setattr(classics_api, "fetch_cover", slow_cover)
+    warmed = c.post("/api/classics/covers/warm", json={"ids": ["1342", "84", "84", "not-a-book", "0"]})
+    assert warmed.status_code == 202 and warmed.json() == {"started": 2}
+    # asking again while they are on their way starts nothing new, and the picture waits for that fetch
+    assert c.post("/api/classics/covers/warm", json={"ids": ["1342"]}).json() == {"started": 0}
+    threading.Timer(0.2, release.set).start()
+    assert c.get("/api/classics/1342/cover").content == JPEG
+    assert c.get("/api/classics/84/cover").content == JPEG
+    assert sorted(asked) == [84, 1342]
+    assert c.post("/api/classics/covers/warm", json={"ids": ["1342", "84"]}).json() == {"started": 0}
+    assert c.post("/api/classics/covers/warm", json={"ids": ["1"] * 151}).status_code == 422
+
+
+def test_search_puts_the_closest_titles_first_then_the_most_read(env):
+    c, _calls = env
+    emma = [book["title"] for book in c.get("/api/classics", params={"q": "emma", "limit": 5}).json()["books"]]
+    assert emma[0] == "Emma"
+    war = [book["title"] for book in c.get("/api/classics", params={"q": "war and peace", "limit": 3}).json()["books"]]
+    assert war[0] == "War and Peace"
+    # an author search is unranked by title, so it stays most-read first
+    austen = [book["title"] for book in c.get("/api/classics", params={"q": "jane austen", "limit": 2}).json()["books"]]
+    assert austen[0] == "Pride and Prejudice"
+
+
+def test_a_single_filter_is_a_ready_made_list_and_pages_agree(env):
+    c, _calls = env
+    whole = classics.search("", genre="poetry", limit=60)
+    assert whole[0] == len(classics._buckets(0, datetime.now(UTC).year)[("genre", "poetry")])
+    first = c.get("/api/classics", params={"genre": "poetry", "language": "fr", "limit": 30}).json()
+    second = c.get("/api/classics", params={"genre": "poetry", "language": "fr", "limit": 30, "offset": 30}).json()
+    assert first["matches"] == second["matches"] > 30
+    assert not {book["id"] for book in first["books"]} & {book["id"] for book in second["books"]}
+    assert {book["language"] for book in first["books"] + second["books"]} == {"fr"}

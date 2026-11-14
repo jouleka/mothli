@@ -154,7 +154,7 @@
   height: 100%;
   object-fit: cover;
   opacity: 0;
-  transition: opacity 260ms;
+  transition: opacity 160ms;
 }
 .fl-cover[data-art="shown"] img { opacity: 1; }
 /* the shadow of the spine, over cloth and picture alike */
@@ -263,6 +263,8 @@
   padding: 0;
   list-style: none;
 }
+/* the last list, held for the instant before the new one arrives */
+.fl-grid[data-stale="true"] { opacity: 0.5; pointer-events: none; }
 .fl-sentinel { height: 1px; grid-column: 1 / -1; }
 .fl-more { display: flex; justify-content: center; margin-top: 36px; }
 .fl-empty { display: grid; justify-items: center; gap: 16px; padding: 56px 0 24px; text-align: center; }
