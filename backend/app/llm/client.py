@@ -229,7 +229,8 @@ class LLMClient:
         if schema is not None and schema.__name__ in {"ConversationDraft", "SceneConversationDraft", "ProseConversationDraft", "ConversationReply", "SelectionDraft"}:
             return getattr(self, "conversation_draft_effort", "medium")
         if schema is not None and schema.__name__ in {
-                "ConversationEvidenceReview", "ConversationVerdict", "ConversationEscalation", "SelectionVerdict"}:
+                "ConversationEvidenceReview", "ConversationVerdict", "ConversationEscalation", "SelectionVerdict",
+                "SentenceVerdict"}:
             return getattr(self, "conversation_review_effort", "medium")
         if schema is not None and schema.__name__ in {
                 "Extraction", "SourceSelection", "PreparedQuestions"}:

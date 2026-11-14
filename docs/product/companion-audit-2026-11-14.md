@@ -548,7 +548,7 @@ A third reply path, off by default: `backend/app/stream_conversation.py`, served
 | Deterministic gate | Unread names, foreshadowing and event binding, per sentence | 0 |
 | Show | A sentence appears once it and every sentence before it are settled. A doubted sentence is dropped; later ones are judged again without it | |
 
-There is no second review, no routing before the writer, and no redraft.
+There is no routing before the writer and no redraft. As first built there was no second review either; section 6k adds one for doubted sentences and supersedes the numbers below.
 
 ### What changed in the guarantee
 
@@ -582,6 +582,57 @@ Over real HTTP (uvicorn, not the test client) sentences reached the client separ
 - **Not built:** a short "book so far" sheet, conversation memory on the server (history still comes from the browser), and removal of the two older paths.
 
 Tests: `tests/test_stream_conversation.py` (14), two in `AskTheBook.test.tsx`. Backend and frontend suites pass.
+
+## 6k. Dropped sentences in streamed replies: cause and fix
+
+### Cause (measured)
+
+Every sentence judgment from 48 streamed replies was saved with its passages (125 sentences) and each was given a careful offline review by Terra at medium effort as a reference.
+
+| | Count | Reference says correct |
+|---|---|---|
+| Shown by the Jev check | 92 | 90 |
+| Dropped by the Jev check | 33 | 31 |
+
+- **31 of 33 drops were correct sentences.** Jev scores many true conversational sentences 0.5–0.79 for support, or 0.3–0.6 on the time and cause checks ("later", "eventually", "after").
+- **The two shown sentences the reference rejected** gave Fyodor Pavlovitch or Mitya the surname Karamazov when the ten passages did not carry it. The surname is in the read pages.
+- **No score limit fixes it.** One sentence that went too far ("we haven't learned who kills him", repeating the reader's premise) scored 0.63 for support, inside the band of the true sentences. Lowering the support limit to recover them would show it.
+- **Giving Jev fewer, closer passages made it worse:** the closest three recovered 80 of 121 true sentences against 90 with all ten.
+- **The 28 known-bad controls, run six times, were never cleared** at any limit tried, so they do not discriminate between settings.
+
+### Fix
+
+A sentence Jev doubts now gets one second look from Terra (low effort, one true/false answer), which alone decides. Two Jev findings cannot be overruled, because the second look missed them on the controls: a dropped condition at 0.7 or more, and a wrongly placed event at 0.45 or more. At most four second looks per reply; an error or a fifth doubted sentence drops the sentence.
+
+| Second look, measured offline | Result |
+|---|---|
+| Time per call | median 1.1 s, 90% under 1.8 s |
+| Correct sentences Jev had dropped | 31 of 31 accepted |
+| Sentences the reference rejected | 3 of 4 rejected (accepted one "Karamazov" surname) |
+| Bad controls | 24 of 27 rejected; the 3 accepted are dropped-condition cases Jev blocks |
+| Good controls | 19 of 19 accepted |
+| With no reasoning effort | no faster, and it accepted the wrongly placed event; not used |
+
+### Result (direct API, Jev 1.14.0, 24 questions run twice)
+
+| | Reviewed path | Streamed, Jev only | Streamed, with second look |
+|---|---|---|---|
+| As expected | 48 of 48 | 46 of 48 | 48 of 48 |
+| Empty replies | 0 | 6 | 0 |
+| Spoilers | 0 | 0 | 0 |
+| Sentences dropped | n/a | 41 | 4 |
+| Expected facts present | 55 of 56 | 39 of 56 | 50 of 56 |
+| Time to first words, median | 2.8–3.5 s | 1.5 s | 1.6 s |
+| Time to first words, slowest tenth | up to 10 s | under 3.7 s | 3.2 s or more |
+| Total time, median | 2.8–3.5 s | 2.0 s | 2.6 s |
+| Slowest | 10.1 s | 4.0 s | 4.8 s |
+| "Sounds like a person talking" | 0.39–0.44 | 0.62 | 0.59 |
+| Cost per question | $0.005–0.006 | $0.003–0.006 | $0.0045 |
+
+- **Audit of what the second look let through:** of the 33 sentences Jev doubted in this run, 30 were shown and the reference review judged all 30 correct. It dropped 3, of which the reference judged 2 unsupported and 1 correct.
+- **The six "missing facts" are mostly the scoring patterns,** not the replies: three replies described Bingley by his income rather than the listed words, and two reactions were answered without naming a detail.
+- **Cost of the fix:** 35 second looks across 48 replies. A reply whose first sentence is doubted starts about a second later (the slowest tenth of first words is 3.2 s or more).
+- **This removes one of the looser points in 6j:** a doubted sentence is again decided by the reasoning model, not dropped or shown on Jev's score alone.
 
 ## 7. Proposed target
 

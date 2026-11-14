@@ -12,7 +12,7 @@ from test_page_read_frontier import page_env as page_env, confirm  # noqa: E402,
 
 from app.ask_evidence import AskEvidenceError  # noqa: E402
 from app.stream_conversation import (  # noqa: E402
-    gate_sentences, sentence_cleared, sentence_packet, take_sentences)
+    gate_sentences, sentence_blocked, sentence_cleared, sentence_packet, take_sentences)
 
 
 def test_titles_initials_and_unfinished_text_do_not_end_a_sentence():
@@ -77,9 +77,18 @@ def events_of(response):
     return [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
 
 
-def stream_models(app, monkeypatch, reply, *, unsupported=(), down=False):
+def stream_models(app, monkeypatch, reply, *, unsupported=(), down=False, second=None, sure=()):
+    """``unsupported`` words make Jev doubt a sentence; ``second`` maps a word to the second
+    look's verdict (default: it agrees with the doubt); ``sure`` words make Jev certain."""
+    looked = []
+
     def complete(system, user, tier="cheap", schema=None):
-        assert schema is None and "SOURCE PASSAGES" in user
+        if schema is not None:
+            assert schema.__name__ == "SentenceVerdict" and "SOURCE PASSAGES" not in user
+            sentence = json.loads(user)["sentence"]
+            looked.append(sentence)
+            return {"supported": any(ok and word in sentence for word, ok in (second or {}).items())}, {"in": 90, "out": 5}
+        assert "SOURCE PASSAGES" in user
         return reply, {"in": 100, "out": 40}
 
     def evaluate(state, questions):
@@ -91,10 +100,13 @@ def stream_models(app, monkeypatch, reply, *, unsupported=(), down=False):
         return {name: {"noul": .01 if chat else .9} if name == "book_assertion"
                 else {"choice": "unestablished" if bad else "supported",
                       "probabilities": {"supported": .1 if bad else .95}} if q["type"] == "choice"
-                else {"noul": .01} for name, q in questions.items()}, {"in": 50, "out": 5}
+                else {"noul": .95 if name == "dropped_condition" and any(
+                    word in state.get("sentence", "") for word in sure) else .01}
+                for name, q in questions.items()}, {"in": 50, "out": 5}
 
     monkeypatch.setattr(app.state.client, "complete", complete)
     app.state.client.jev = SimpleNamespace(model="jev-1.14.0", evaluate=evaluate, close=lambda: None)
+    return looked
 
 
 def test_stream_shows_checked_sentences_in_order_and_withholds_the_doubted_one(page_env, monkeypatch):
@@ -134,3 +146,32 @@ def test_stream_is_off_unless_enabled(page_env):
     point = confirm(api, bid)
     assert api.post(f"/api/books/{bid}/ask/stream",
                     json={"question": "What did Mara do?", "read_frontier": point}).status_code == 404
+
+
+def test_a_dropped_condition_or_misplaced_event_jev_is_sure_of_cannot_be_overruled():
+    assert sentence_blocked(answers(added=.01)) is False
+    sure = answers()
+    sure["dropped_condition"]["noul"] = .7
+    assert sentence_blocked(sure) is True
+    placed = answers()
+    placed["unestablished_location"]["noul"] = .45
+    assert sentence_blocked(placed) is True
+
+
+def test_a_doubted_sentence_gets_one_second_look_which_alone_decides(page_env, monkeypatch):
+    api, bid, app, settings = page_env
+    point = confirm(api, bid)
+    settings.reader_conversation_jev = settings.reader_conversation_stream = True
+    looked = stream_models(
+        app, monkeypatch, "Mara put the cobalt key in a red tin. She seems careful with it. "
+        "She later sold it abroad. She must return it at dawn.",
+        unsupported=["careful", "abroad"], second={"careful": True, "abroad": False}, sure=["dawn"])
+    response = api.post(f"/api/books/{bid}/ask/stream", json={"question": "What did Mara do?", "read_frontier": point})
+    events = events_of(response)
+    assert [e["text"] for e in events if e["type"] == "sentence"] == [
+        "Mara put the cobalt key in a red tin.", "She seems careful with it."]
+    # Cleared sentences and the one Jev is sure about never reach the second look.
+    assert sorted(looked) == ["She later sold it abroad.", "She seems careful with it."]
+    assert events[-1]["answer"]["dropped_sentences"] == 2 and "abroad" not in response.text and "dawn" not in response.text
+    phases = [c["phase"] for c in events[-1]["answer"]["cost"]["calls"]]
+    assert phases.count("stream-second-look") == 2
