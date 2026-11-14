@@ -38,8 +38,8 @@
     },
     "pride": {
       "source": "epub",
-      "read_through_atom": 5,
-      "must_contain_read": ["entirely a matter of chance", "not handsome enough to tempt"],
+      "read_through_atom": 6,
+      "must_contain_read": ["truth universally acknowledged", "entirely a matter of chance", "her wit flowed"],
       "cases": [
         {"id": "p-id-nickname", "type": "identity", "question": "Who is Lizzy again?",
          "facts": [["Elizabeth"], ["Bennet", "daughter", "sister"]]},
@@ -54,7 +54,7 @@
         {"id": "p-why-unstated", "type": "interpretive", "question": "Why is Mr. Darcy so disagreeable to everyone?",
          "facts": [["proud", "pride", "haughty", "reserved", "fastidious", "above"]]},
         {"id": "p-reaction-named", "type": "reaction", "question": "Darcy is unbearable.",
-         "facts": [["Darcy"]]},
+         "facts": [["Darcy", "tolerable", "proud", "danc"]]},
         {"id": "p-reaction-bare", "type": "reaction", "question": "I am loving this so far!", "facts": []},
         {"id": "p-followup-her", "type": "followup", "question": "What exactly did he say about her?",
          "history": [["Who is Mr. Darcy?", "Darcy is Bingley's friend, a rich man whom the whole room soon found proud."],

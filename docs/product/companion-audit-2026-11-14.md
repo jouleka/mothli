@@ -425,6 +425,51 @@ None of three Project Gutenberg editions of Pride and Prejudice imports cleanly 
 
 The companion cannot know chapters the importer never stored, and atom numbers no longer match chapter numbers. This affects "Pick a classic". Not investigated further and not fixed.
 
+## 6g. Import fix, second-review test, and a second evaluation run
+
+### Import (fixed)
+
+Two bugs in how books with several chapters per file are split, which is how Project Gutenberg packages its EPUBs:
+
+- **A file opening with the Gutenberg header was classified as front matter as a whole,** so chapters inside it were dropped (`signals.py`: `START_RE` in the first 4,000 characters). Such a file is now treated as body when its table-of-contents entries name chapters; its entries and text ahead of the first chapter stay out.
+- **A chapter continuing across a file split lost the part in the next file.** Text ahead of a file's first anchor is now appended to the preceding atom, the same nearest-preceding-anchor rule already used inside one file. A whole file with no entry of its own joins the preceding atom too.
+
+| Edition | Before | After |
+|---|---|---|
+| 1342, EPUB3 with images | refused | 61 atoms, 685,566 characters, no blocking flag |
+| 1342, EPUB without images | 60 atoms, 625,340 characters, Chapter I missing | 61 atoms, 685,690 characters, Chapter I in atom 1 |
+| 42671 | 59 atoms, 616,866 characters, starts at Chapter VIII | 66 atoms, 683,215 characters, Chapter I in atom 1 |
+
+In all three the Gutenberg header and the critical preface are absent from every atom, and Chapter VI is complete. Tests: `tests/ingest/extraction/test_split_file_books.py`. Full backend suite passes.
+
+**Consequence:** a book of this kind imported before the fix has a stored chapter list that no longer matches, so the app will ask for it to be re-imported. Books with one chapter per file are unaffected. No real Karamazov EPUB was available here to confirm the proven corpus book is unchanged; its fixture-based tests pass.
+
+### Second review (tested, not changed)
+
+- **How often it matters.** Across 65 reviewed live answers it fired 16 times: 13 approved the draft unchanged and 3 rejected it. All 3 rejections had a weak support score (0.51–0.67).
+- **A narrower trigger was unsafe.** Skipping the review when support is at least 0.9 and only a side check (time, place, cause, qualification) is marginal let a known-bad control through on both Jev versions: "Nell lent Mara a key at the inn" (support 0.96–0.98, place check 0.36–0.55). The thresholds are unchanged.
+- **Jev version on the 47 repo controls, each run twice:**
+
+| | Unsupported answers cleared by Jev alone | Supported answers cleared without Terra |
+|---|---|---|
+| Jev 1.13.0 | 0 of 56 | 26 of 38 |
+| Jev 1.14.0 | 0 of 56 | 34 of 38 |
+
+### Evaluation with Jev 1.14.0 and the fixed importer (CLI transport, one run each)
+
+| Book | Style | As expected | Second review used | Median time (CLI) | Spoken (Jev) |
+|---|---|---|---|---|---|
+| Karamazov | claims | 12 of 12 | 2 (was 3) | 5.7 s | 0.34 |
+| Karamazov | prose | 12 of 12 | 2 (was 6) | 6.4 s | 0.40 |
+| Pride and Prejudice | claims | 11 of 12 | 4 (was 4) | 5.4 s | 0.34 |
+| Pride and Prejudice | prose | 10 of 12 | 5 (was 6) | 7.3 s | 0.44 |
+
+- **No spoilers** in another 48 replies.
+- **Jev 1.14.0 helped on one book and not the other.** Second reviews fell from 9 to 4 on Karamazov and from 10 to 9 on Pride and Prejudice.
+- **Pride and Prejudice still loses answers.** Three of 24 failed to clear review (one claims, two prose); in the earlier run it was two of 24, both prose. "Why does Charlotte think Jane should show more affection?" failed in prose in both runs. The runner does not yet record why a reply was rejected, so the cause is not known.
+- **Prose stays off by default.** It failed 2 of 12 on the second book in both runs.
+- Every answered question had its expected facts, apart from one prose reaction that said "He" where the check looked for "Darcy"; the check was too strict and has been widened.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
