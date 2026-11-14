@@ -18,7 +18,11 @@ import { Moth } from "../ui/Moth";
 import { MothliMark } from "../ui/MothliMark";
 import "./free-library.css";
 
-const SEARCH_DELAY_MS = 250;
+/** A pause while someone is typing, so half-typed words are not searched. A click waits for nothing. */
+const TYPING_DELAY_MS = 160;
+const PAGE = 60;
+const MAX_WARM = 150;
+const KEPT_SEARCHES = 30;
 const LANGUAGE_CHOICES = 40;
 const GHOSTS = Array.from({ length: 12 }, (_, index) => index);
 
@@ -39,6 +43,19 @@ function readingTime(minutes: number | null) {
   if (minutes < 50) return `About ${Math.max(5, Math.round(minutes / 5) * 5)} minutes`;
   const hours = Math.round(minutes / 30) / 2;
   return `About ${hours === 1 ? "an hour" : `${hours} hours`}`;
+}
+
+type Results = { key: string; matches: number; books: Classic[] };
+
+/** Tells the server which covers are about to be shown, so it fetches them ahead, several at once. */
+function warmCovers(books: Classic[]) {
+  const ids = books.slice(0, MAX_WARM).map((book) => book.id);
+  if (ids.length) void api.warmCovers(ids).catch(() => {});
+}
+
+/** The front page's books in the order they come into view: the start of every shelf, then the rest. */
+function firstInView(shelves: ClassicShelf[]) {
+  return [...shelves.flatMap((shelf) => shelf.books.slice(0, 7)), ...shelves.flatMap((shelf) => shelf.books.slice(7))];
 }
 
 function filtersFromLocation(): Filters {
@@ -62,7 +79,7 @@ function rememberFilters(filters: Filters) {
 }
 
 /** Real cover art over a cloth cover: the cloth shows while the picture loads and when there is none. */
-function Cover({ book }: { book: Classic }) {
+function Cover({ book, eager = false }: { book: Classic; eager?: boolean }) {
   const [state, setState] = useState<"loading" | "shown" | "none">("loading");
   const cloth: Book = { book_id: book.id, title: book.title, author: book.author };
   return (
@@ -72,7 +89,7 @@ function Cover({ book }: { book: Classic }) {
         <img
           src={`/api/classics/${encodeURIComponent(book.id)}/cover`}
           alt=""
-          loading="lazy"
+          loading={eager ? "eager" : "lazy"}
           decoding="async"
           draggable={false}
           onLoad={() => setState("shown")}
@@ -83,10 +100,21 @@ function Cover({ book }: { book: Classic }) {
   );
 }
 
-function BookCard({ book, onShelf, onPick }: { book: Classic; onShelf: boolean; onPick: (book: Classic) => void }) {
+function BookCard({
+  book,
+  onShelf,
+  onPick,
+  eager = false,
+}: {
+  book: Classic;
+  onShelf: boolean;
+  onPick: (book: Classic) => void;
+  /** Among the first books on the page: its cover is fetched at once rather than when scrolled to. */
+  eager?: boolean;
+}) {
   return (
     <button type="button" className="fl-card" onClick={() => onPick(book)} aria-label={`${book.title}, ${book.author}`}>
-      <Cover book={book} />
+      <Cover book={book} eager={eager} />
       <span className="fl-card-title">{book.title}</span>
       <span className="fl-card-author">{book.author}</span>
       {onShelf && (
@@ -216,7 +244,9 @@ function ShelfRow({
   owned,
   onPick,
   onSeeAll,
+  eager = false,
 }: {
+  eager?: boolean;
   shelf: ClassicShelf;
   owned: (book: Classic) => boolean;
   onPick: (book: Classic) => void;
@@ -252,9 +282,9 @@ function ShelfRow({
         </div>
       </header>
       <ul className="fl-row fl-slide" ref={row}>
-        {shelf.books.map((book) => (
+        {shelf.books.map((book, index) => (
           <li key={book.id}>
-            <BookCard book={book} onShelf={owned(book)} onPick={onPick} />
+            <BookCard book={book} onShelf={owned(book)} onPick={onPick} eager={eager && index < 8} />
           </li>
         ))}
       </ul>
@@ -386,7 +416,7 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
   const [filters, setFilters] = useState<Filters>(filtersFromLocation);
   const [summary, setSummary] = useState<ClassicsCatalog | null>(null);
   const [shelves, setShelves] = useState<{ language: string; shelves: ClassicShelf[] } | null>(null);
-  const [results, setResults] = useState<{ key: string; matches: number; books: Classic[] } | null>(null);
+  const [results, setResults] = useState<Results | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [added, setAdded] = useState<Record<string, string>>({});
@@ -421,9 +451,24 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
     };
   }, [attempt]);
 
+  // What has been loaded, so that going back to a filter, a search or the shelves costs nothing.
+  const kept = useRef({
+    pages: new Map<string, Results>(),
+    fronts: new Map<string, ClassicShelf[]>(),
+    next: null as { key: string; offset: number; page: ClassicsCatalog } | null,
+  });
+  const typed = useRef(needle);
+
+  useEffect(() => {
+    if (!results) return;
+    const pages = kept.current.pages;
+    pages.delete(results.key);
+    pages.set(results.key, results);
+    if (pages.size > KEPT_SEARCHES) pages.delete(pages.keys().next().value as string);
+  }, [results]);
+
   useEffect(() => {
     let stale = false;
-    setLoading(true);
     setFailed(false);
     const done = () => {
       if (!stale) setLoading(false);
@@ -431,12 +476,23 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
     const fail = () => {
       if (!stale) setFailed(true);
     };
+    const wasTyping = typed.current !== needle;
+    typed.current = needle;
     if (wandering) {
       const language = filters.language;
+      const front = kept.current.fronts.get(language);
+      if (front) {
+        setShelves({ language, shelves: front });
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
       api
         .classicsFront(language)
-        .then((front) => {
-          if (!stale) setShelves({ language, shelves: front.shelves });
+        .then((loaded) => {
+          kept.current.fronts.set(language, loaded.shelves);
+          warmCovers(firstInView(loaded.shelves));
+          if (!stale) setShelves({ language, shelves: loaded.shelves });
         })
         .catch(fail)
         .finally(done);
@@ -444,37 +500,80 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
         stale = true;
       };
     }
-    const timer = window.setTimeout(() => {
-      api
-        .classics(search)
-        .then((page) => {
-          if (!stale) setResults({ key, matches: page.matches, books: page.books });
-        })
-        .catch(fail)
-        .finally(done);
-    }, SEARCH_DELAY_MS);
+    const page = kept.current.pages.get(key);
+    if (page) {
+      setResults(page);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const timer = window.setTimeout(
+      () => {
+        api
+          .classics({ ...search, limit: PAGE })
+          .then((loaded) => {
+            warmCovers(loaded.books);
+            if (!stale) setResults({ key, matches: loaded.matches, books: loaded.books });
+          })
+          .catch(fail)
+          .finally(done);
+      },
+      wasTyping ? TYPING_DELAY_MS : 0,
+    );
     return () => {
       stale = true;
       window.clearTimeout(timer);
     };
-  }, [wandering, key, search, filters.language, attempt]);
+  }, [wandering, key, search, needle, filters.language, attempt]);
 
   const current = results && results.key === key ? results : null;
+  // Until a new list arrives the last one stays up, dimmed, rather than flashing to empty boxes.
+  const showing = current ?? (wandering ? null : results);
   const hasMore = current !== null && current.books.length < current.matches;
+
+  // The next page is fetched, and its covers started, before the reader reaches the end of this one.
+  useEffect(() => {
+    if (!current || current.books.length >= current.matches) return;
+    const at = current.key;
+    const offset = current.books.length;
+    const ready = kept.current.next;
+    if (ready && ready.key === at && ready.offset === offset) return;
+    let stale = false;
+    api
+      .classics({ ...search, offset, limit: PAGE })
+      .then((page) => {
+        if (stale) return;
+        kept.current.next = { key: at, offset, page };
+        warmCovers(page.books);
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [current, search]);
+
   const fetchingMore = useRef(false);
   const loadMore = useCallback(() => {
-    if (!current || fetchingMore.current || current.books.length >= current.matches) return;
-    fetchingMore.current = true;
+    if (!current || current.books.length >= current.matches) return;
     const at = current.key;
+    const offset = current.books.length;
+    const append = (page: ClassicsCatalog) =>
+      setResults((prev) => {
+        if (!prev || prev.key !== at) return prev;
+        const seen = new Set(prev.books.map((book) => book.id));
+        return { ...prev, matches: page.matches, books: [...prev.books, ...page.books.filter((book) => !seen.has(book.id))] };
+      });
+    const ready = kept.current.next;
+    if (ready && ready.key === at && ready.offset === offset) {
+      kept.current.next = null;
+      append(ready.page);
+      return;
+    }
+    if (fetchingMore.current) return;
+    fetchingMore.current = true;
     api
-      .classics({ ...search, offset: current.books.length })
-      .then((page) =>
-        setResults((prev) => {
-          if (!prev || prev.key !== at) return prev;
-          const seen = new Set(prev.books.map((book) => book.id));
-          return { ...prev, matches: page.matches, books: [...prev.books, ...page.books.filter((book) => !seen.has(book.id))] };
-        }),
-      )
+      .classics({ ...search, offset, limit: PAGE })
+      .then(append)
       .catch(() => setFailed(true))
       .finally(() => {
         fetchingMore.current = false;
@@ -486,7 +585,7 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
     const target = sentinel.current;
     if (!target || !hasMore || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver((entries) => entries.some((entry) => entry.isIntersecting) && loadMore(), {
-      rootMargin: "600px 0px",
+      rootMargin: "1400px 0px",
     });
     observer.observe(target);
     return () => observer.disconnect();
@@ -632,9 +731,10 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
         {wandering ? (
           <div className="fl-shelves" aria-busy={loading && !shownShelves}>
             {shownShelves
-              ? shownShelves.map((shelf) => (
+              ? shownShelves.map((shelf, index) => (
                   <ShelfRow
                     key={`${shelf.kind}-${shelf.id}`}
+                    eager={index < 2}
                     shelf={shelf}
                     owned={owned}
                     onPick={pick}
@@ -671,11 +771,11 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
                 Back to the shelves
               </button>
             </header>
-            <ul className="fl-grid" aria-label="Books" aria-busy={!current}>
-              {current ? (
-                current.books.map((book) => (
+            <ul className="fl-grid" aria-label="Books" aria-busy={!current} data-stale={!current && showing !== null}>
+              {showing ? (
+                showing.books.map((book, index) => (
                   <li key={book.id}>
-                    <BookCard book={book} onShelf={owned(book)} onPick={pick} />
+                    <BookCard book={book} onShelf={owned(book)} onPick={pick} eager={index < 18} />
                   </li>
                 ))
               ) : (

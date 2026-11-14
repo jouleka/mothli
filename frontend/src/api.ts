@@ -332,6 +332,13 @@ export const api = {
       j<{ shelves: ClassicShelf[] }>(r),
     ),
   classic: (id: string) => fetch(`/api/classics/${encodeURIComponent(id)}`).then((r) => j<ClassicDetail>(r)),
+  /** Says which covers the page is about to show, so the server starts fetching them. */
+  warmCovers: (ids: string[]) =>
+    fetch("/api/classics/covers/warm", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...csrfHeaders() },
+      body: JSON.stringify({ ids }),
+    }).then((r) => j<{ started: number }>(r)),
   addClassic: (id: string) =>
     fetch(`/api/classics/${encodeURIComponent(id)}`, { method: "POST", headers: csrfHeaders() }).then(
       (r) => j<{ book_id: string }>(r),

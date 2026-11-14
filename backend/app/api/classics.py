@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel, Field
 
 from app.api.books import import_epub_blob
 from app.classics import (
@@ -27,6 +28,7 @@ from app.classics import (
     search,
     source_tag,
 )
+from app.classics_covers import CoverCache
 from app.deps import get_catalog, get_settings, get_store
 
 router = APIRouter(prefix="/api/classics", tags=["classics"])
@@ -43,9 +45,27 @@ def _tag():
 
 _BASE = {"source": SOURCE_NAME, "source_url": SOURCE_URL}
 _COVER_HEADERS = {"cache-control": "private, max-age=604800", "x-content-type-options": "nosniff"}
-_MISSING_COVERS_MAX = 20_000
-_missing_covers = set()  # books the mirror has no usable cover for; not asked again until restart
-_cover_lock = threading.Lock()
+MAX_WARM = 150
+_caches = {}
+_caches_lock = threading.Lock()
+
+
+def _covers(settings):
+    """The cover cache for this install's data directory."""
+    folder = str(Path(settings.data_dir) / "classics-covers")
+    with _caches_lock:
+        cache = _caches.get(folder)
+        if cache is None:
+            cache = _caches[folder] = CoverCache(folder)
+        return cache
+
+
+def _fetch(entry):
+    return fetch_cover(entry)
+
+
+class WarmCovers(BaseModel):
+    ids: list[str] = Field(max_length=MAX_WARM)
 
 
 def _card(entry, shelved):
@@ -112,26 +132,23 @@ def classic_detail(classic_id: str, catalog=Depends(get_catalog), settings=Depen
 @router.get("/{classic_id}/cover")
 def classic_cover(classic_id: str, settings=Depends(get_settings)):
     entry = _find(classic_id, settings)
-    folder = Path(settings.data_dir) / "classics-covers"
-    path = folder / f"{entry['pg']}.img"
-    if path.is_file():
-        blob = path.read_bytes()
-        kind = image_type(blob)
-        if kind:
-            return Response(blob, media_type=kind, headers=_COVER_HEADERS)
-    if entry["pg"] in _missing_covers:
-        raise HTTPException(404, "no cover")
-    blob = fetch_cover(entry)
+    blob = _covers(settings).get(entry, _fetch)
     if blob is None:
-        with _cover_lock:
-            if len(_missing_covers) < _MISSING_COVERS_MAX:
-                _missing_covers.add(entry["pg"])
         raise HTTPException(404, "no cover")
-    folder.mkdir(parents=True, exist_ok=True)
-    partial = folder / f"{entry['pg']}.{threading.get_ident()}.part"
-    partial.write_bytes(blob)
-    partial.replace(path)
     return Response(blob, media_type=image_type(blob), headers=_COVER_HEADERS)
+
+
+@router.post("/covers/warm", status_code=202)
+def warm_covers(body: WarmCovers, settings=Depends(get_settings)):
+    """The page says which covers it is about to show, so they are being fetched, several at a
+    time, before the pictures are asked for. Only catalogue books are fetched; anything else in
+    the list is ignored."""
+    if not settings.classics_enabled:
+        raise HTTPException(404, "the library is switched off")
+    rule = settings.classics_min_years_since_death
+    entries = [entry for entry in (find_classic(classic_id, min_years_since_death=rule) for classic_id in body.ids)
+               if entry is not None]
+    return {"started": _covers(settings).warm(entries, _fetch)}
 
 
 @router.post("/{classic_id}", status_code=201)
