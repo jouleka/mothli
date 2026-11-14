@@ -64,6 +64,7 @@ const BOOK_USAGE_LIMIT_MESSAGE =
 const REQUEST_TOO_LARGE_MESSAGE = "That’s a lot of pages at once. Pick a passage and we can start there.";
 // Legacy storage namespace preserves existing conversations after the Mothli rename.
 const STORAGE_PREFIX = "litlet.pip.conversation:";
+const spokenSeeds = new Set<string>();
 function storageKey(bookId: string, owner: string, pass: string) {
   return `${STORAGE_PREFIX}${encodeURIComponent(owner)}:${encodeURIComponent(bookId)}:${encodeURIComponent(pass)}`;
 }
@@ -82,13 +83,17 @@ function readableBookAnswer(answer: AskAnswer): string {
         return "Pick a passage and let’s start there.";
       case "paratext_only":
         return "We’re still in the opening pages. Pick a passage to talk about.";
+      case "ahead":
+        return "We haven’t got there yet. I only know the pages you’ve read, so I can’t say what’s coming.";
       default:
-        return "I couldn’t find enough in your read pages to answer that. Which passage did you mean?";
+        return "I can’t find that in what you’ve read so far. If it’s on these pages, point me to the bit you mean.";
     }
   }
   const body = answer.answer_type === "recap"
     ? (answer.recap ?? "")
-    : answer.claims.map((claim) => claim.text).join("\n\n");
+    : answer.style === "prose"
+      ? [...answer.claims.map((claim) => claim.text), answer.closing].filter(Boolean).join(" ")
+      : answer.claims.map((claim) => claim.text).join("\n\n");
   return [answer.acknowledgment, body].filter(Boolean).join("\n\n");
 }
 function isStoredExchange(value: unknown): value is AskExchange {
@@ -462,9 +467,11 @@ export function AskTheBook({
             : reason instanceof ApiError && reason.status === 502 && /cleared against (your read pages|the selected passage)/i.test(reason.message)
             ? scopeSelection
               ? "I couldn’t verify that from the selected passage. Try selecting a little more context."
-              : "I couldn’t verify that against your read pages. Try naming the person or moment you mean."
+              : "I couldn’t back that up from your pages, so I’d rather not guess. Try naming the person or moment you mean."
             : reason instanceof ApiError && reason.status === 409
             ? "Your reading position changed. Please try again from this page."
+            : reason instanceof ApiError && reason.code === "ask_timeout"
+            ? "That took too long, so I stopped. Try again?"
             : "I couldn’t get a reply. Try again?";
         session.update({ error: message });
       }
@@ -533,10 +540,11 @@ export function AskTheBook({
     };
   }, [compact]);
   // Mothli speaks first: a recap already in hand, or a chapter closeout fetched once on open.
-  const seededRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!seed || seededRef.current === seed.id) return;
-    seededRef.current = seed.id;
+    // The panel unmounts when closed, so a ref would forget: reopening must not replay the
+    // last seed (a second paid closeout, a repeated question, or a duplicated recap).
+    if (!seed || spokenSeeds.has(seed.id)) return;
+    spokenSeeds.add(seed.id);
     setTab("talk");
     if (seed.kind === "ask") {
       void send(seed.prompt, true);

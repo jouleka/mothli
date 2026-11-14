@@ -139,15 +139,19 @@ export type AskCost = {
   calls: { provider: string; model: string; usd: string }[];
   payer: string;
 };
+export const ASK_TIMEOUT_MS = 60_000;
 export type AskAnswer = {
   as_of_chapter: number; insufficient_evidence: boolean; claims: AskClaim[];
   citations: AskCitation[]; cost: AskCost | null;
   answer_type?: "recap" | "conversation";
+  // "prose": the claims are the sentences of one spoken reply, shown as a single paragraph.
+  style?: "prose";
+  closing?: string;
   calculation?: string;
   message?: string;
   acknowledgment?: string | null;
   recap?: string | null;
-  status?: "ready" | "preparing" | "preparation_failed" | "not_started" | "paratext_only";
+  status?: "ready" | "preparing" | "preparation_failed" | "not_started" | "paratext_only" | "ahead";
   read_frontier?: ReadFrontier;
 };
 export type SelectionAction = "explain" | "define" | "translate";
@@ -611,12 +615,21 @@ export const api = {
   readFrontier: (id: string, anchor?: ReadAnchor) => fetch(`/api/books/${id}/read-frontier`, anchor ? {
     method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders() }, body: JSON.stringify(anchor),
   } : {}).then((r) => j<ReadFrontier>(r)),
-  askBook: (id: string, question: string, bookmark?: number, history?: ConversationMessage[], readFrontier?: ReadFrontier) =>
-    fetch(`/api/books/${id}/ask`, {
+  askBook: (id: string, question: string, bookmark?: number, history?: ConversationMessage[], readFrontier?: ReadFrontier) => {
+    // A reply that has not arrived in a minute is not coming: stop waiting instead of leaving
+    // the reader on the thinking dots with no way forward but Cancel.
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
+    return fetch(`/api/books/${id}/ask`, {
       method: "POST",
       headers: { "content-type": "application/json", ...csrfHeaders() },
       body: JSON.stringify({ question, ...(bookmark != null ? { bookmark } : {}), ...(history?.length ? { history } : {}), ...(readFrontier ? {read_frontier:readFrontier} : {}) }),
-    }).then((r) => j<AskAnswer>(r)),
+      signal: controller.signal,
+    }).then((r) => j<AskAnswer>(r)).catch((error: unknown) => {
+      if (controller.signal.aborted) throw new ApiError("The reply is taking longer than expected.", 504, "ask_timeout");
+      throw error;
+    }).finally(() => window.clearTimeout(timeout));
+  },
   selectionAction: (
     id: string,
     value: { action: SelectionAction; text: string; atom: number; cfi: string; question?: string; history?: ConversationMessage[] },

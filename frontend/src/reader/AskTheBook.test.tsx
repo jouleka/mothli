@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { axeAA } from "../test-a11y";
 const mocks = vi.hoisted(() => ({
@@ -103,8 +103,34 @@ describe("Mothli conversation", () => {
     mocks.askBook.mockRejectedValue(new ApiError("reply could not be cleared against your read pages", 502));
     render(<AskTheBook {...props} />);
     submit("Who was that?");
-    await screen.findByText("I couldn’t verify that against your read pages. Try naming the person or moment you mean.");
+    await screen.findByText("I couldn’t back that up from your pages, so I’d rather not guess. Try naming the person or moment you mean.");
     expect(screen.queryByText(answer.claims[0].text)).toBeNull();
+  });
+
+  test("says so when the reader asks about pages they have not reached", async () => {
+    mocks.askBook.mockResolvedValue({ ...answer, insufficient_evidence: true, claims: [], citations: [], status: "ahead" });
+    render(<AskTheBook {...props} />);
+    submit("Who dies in the end?");
+    await screen.findByText(/We haven’t got there yet\./);
+  });
+
+  test("shows a prose reply as one paragraph with its closing line", async () => {
+    mocks.askBook.mockResolvedValue({ ...answer, style: "prose", closing: "Did it read that way to you?",
+      claims: [{ text: "She couldn’t stand him any more.", citation_ids: [1] },
+               { text: "He’d taken all her money.", citation_ids: [1] }] });
+    render(<AskTheBook {...props} />);
+    submit("Why did she leave?");
+    await screen.findByText("She couldn’t stand him any more. He’d taken all her money. Did it read that way to you?");
+  });
+
+  test("does not replay a seeded question when the panel is reopened", async () => {
+    const seed = { id: "seed-reopen-1", kind: "ask" as const, prompt: "Remind me who Aldric is" };
+    const first = render(<AskTheBook {...props} seed={seed} />);
+    await waitFor(() => expect(mocks.askBook).toHaveBeenCalledTimes(1));
+    first.unmount();
+    render(<AskTheBook {...props} seed={seed} />);
+    await screen.findByLabelText("Message Mothli");
+    expect(mocks.askBook).toHaveBeenCalledTimes(1);
   });
 
   test("confirms the visible page before sending and rejects a different source boundary", async () => {
