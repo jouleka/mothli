@@ -155,10 +155,12 @@ def book_cover(book_id: str, catalog=Depends(get_catalog), settings=Depends(get_
     """The cover picture the book's own EPUB carries, for the shelf. A book with none is a 404 and
     the shelf draws its cloth cover instead. ``book_id`` is the hash of the file, so the picture
     for an id never changes and can be kept by the browser."""
-    if catalog.get_book(book_id) is None:
+    shelved = catalog.get_book(book_id)
+    if shelved is None:
         raise HTTPException(404, "unknown book")
     try:
-        path = source_epub_path(settings.data_dir, book_id)
+        # the path is built from the catalogue's own id for this book, never from the request
+        path = source_epub_path(settings.data_dir, shelved["book_id"])
     except AtomSetMismatch as e:
         raise HTTPException(404, "unknown book") from e
     found = extract_cover(path) if os.path.exists(path) else None
