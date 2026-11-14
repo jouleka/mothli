@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Book, type Classic, type ClassicsCatalog } from "../api";
+import { api, type Book, type ClassicsCatalog } from "../api";
 import { readingStreak, recentDays } from "../journey/journey";
 import { InstallApp } from "../pwa/InstallApp";
 import {
@@ -15,7 +15,6 @@ import { Moth } from "../ui/Moth";
 import { MothliMark } from "../ui/MothliMark";
 import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupportedBookMessage } from "../import/bookFiles";
 import { readLastPassage, sinceLabel } from "../reader/lastPassage";
-import { ClassicsPicker } from "./ClassicsPicker";
 import { ProviderSettings } from "./ProviderSettings";
 import "./shelf-redesign.css";
 
@@ -98,9 +97,12 @@ type Journey = { id: string; done: number; total: number };
 
 export function Shelf({
   onOpen,
+  onBrowse,
   session,
 }: {
   onOpen: (id: string) => void;
+  /** Opens the free library; the tile is not shown without it. */
+  onBrowse?: () => void;
   session?: OfflineSession | null;
 }) {
   const owner = activeOfflineOwner();
@@ -137,12 +139,8 @@ export function Shelf({
   const [layout, setLayout] = useState<"grid" | "list">("grid");
   const [dragging, setDragging] = useState(false);
   const [journey, setJourney] = useState<Journey | null>(null);
-  // Pick a classic: offered only when the server has a catalogue to offer.
+  // The free library: offered only when the server has a catalogue to offer.
   const [classics, setClassics] = useState<ClassicsCatalog | null>(null);
-  const [showClassics, setShowClassics] = useState(false);
-  const [classicBusy, setClassicBusy] = useState<string | null>(null);
-  const [classicError, setClassicError] = useState<string | null>(null);
-  const classicsTrigger = useRef<HTMLElement | null>(null);
   const [recentState, setRecent] = useState(() => ({
     owner,
     ids: readRecent(owner),
@@ -168,7 +166,7 @@ export function Shelf({
   }, []);
   const loadClassics = useCallback(async () => {
     try {
-      const catalog = await Promise.resolve().then(() => api.classics());
+      const catalog = await Promise.resolve().then(() => api.classics({ limit: 1 }));
       if (mounted.current && catalog?.enabled && catalog.books.length) setClassics(catalog);
     } catch {
       /* no catalogue on this server: the shelf simply doesn't offer one */
@@ -274,30 +272,6 @@ export function Shelf({
     } finally {
       importLock.current = false;
       if (mounted.current) setBusy(false);
-    }
-  };
-  const openClassics = () => {
-    classicsTrigger.current = document.activeElement as HTMLElement | null;
-    setClassicError(null);
-    setShowClassics(true);
-  };
-  const closeClassics = useCallback(() => {
-    setShowClassics(false);
-    classicsTrigger.current?.focus();
-  }, []);
-  const addClassic = async (classic: Classic): Promise<string | null> => {
-    if (classicBusy) return null;
-    setClassicBusy(classic.id);
-    setClassicError(null);
-    try {
-      const added = await api.addClassic(classic.id);
-      await Promise.all([refresh(), loadClassics()]);
-      return added?.book_id ?? null;
-    } catch (error) {
-      if (mounted.current) setClassicError(msg(error));
-      return null;
-    } finally {
-      if (mounted.current) setClassicBusy(null);
     }
   };
   const saveOffline = async (book: Book) => {
@@ -605,9 +579,9 @@ export function Shelf({
                   {busy ? "Adding your book…" : "Add a book"}
                 </Button>
                 <p className="ml-progress-where">or drop a book file anywhere</p>
-                {classics && (
-                  <button type="button" className="ml-classics-link" onClick={openClassics}>
-                    Nothing to hand? Pick a classic
+                {classics && onBrowse && (
+                  <button type="button" className="ml-classics-link" onClick={onBrowse}>
+                    Nothing to hand? Browse the free library
                   </button>
                 )}
               </div>
@@ -780,12 +754,12 @@ export function Shelf({
                         </button>
                       </div>
                     )}
-                    {browsingAll && classics && (
+                    {browsingAll && classics && onBrowse && (
                       <div className="ml-book ml-book--add">
-                        <button className="ml-book-add ml-book-classics" onClick={openClassics}>
+                        <button className="ml-book-add ml-book-classics" onClick={onBrowse}>
                           <Moth size={44} />
-                          <span className="ml-book-add-title">Pick a classic</span>
-                          <span className="ml-book-add-hint">{classics.total.toLocaleString("en")} free books, out of copyright</span>
+                          <span className="ml-book-add-title">Browse the library</span>
+                          <span className="ml-book-add-hint">{classics.total.toLocaleString("en")} free books to choose from</span>
                         </button>
                       </div>
                     )}
@@ -827,11 +801,11 @@ export function Shelf({
                         </button>
                       </li>
                     )}
-                    {browsingAll && classics && (
+                    {browsingAll && classics && onBrowse && (
                       <li>
-                        <button className="ml-row-add" onClick={openClassics}>
+                        <button className="ml-row-add" onClick={onBrowse}>
                           <Icon name="book" size={16} />
-                          Pick a classic
+                          Browse the library
                         </button>
                       </li>
                     )}
@@ -853,19 +827,6 @@ export function Shelf({
 
       {showSettings && (
         <ProviderSettings onClose={() => setShowSettings(false)} />
-      )}
-      {showClassics && classics && (
-        <ClassicsPicker
-          catalog={classics}
-          busyId={classicBusy}
-          error={classicError}
-          onAdd={addClassic}
-          onOpen={(id) => {
-            setShowClassics(false);
-            openBook(id);
-          }}
-          onClose={closeClassics}
-        />
       )}
       {offlineStatus && (
         <div className="library-toast ml-toast" aria-live="polite">

@@ -10,6 +10,10 @@ EPUB edition.
 The feed is https://www.gutenberg.org/cache/epub/feeds/rdf-files.tar.bz2 (about 120 MB). The archive
 is only read as a stream: nothing in it is extracted to disk. Output rows are sorted by popularity
 (downloads in the feed's last 30 days) so that the unfiltered list opens on well-loved books.
+
+Each row also carries what a reader browses by: genres (from Project Gutenberg's own "Category"
+bookshelves and subject headings), the size of the plain text (for a reading-time estimate) and the
+opening of Project Gutenberg's summary.
 """
 import gzip
 import io
@@ -29,6 +33,56 @@ NS = {
 }
 RDF_ABOUT = f"{{{NS['rdf']}}}about"
 MAX_RDF_BYTES = 8 * 1024 * 1024
+BLURB_CHARS = 300
+SUMMARY_NOTE = "(This is an automatically generated summary.)"
+
+# genre id -> (bookshelf names, bookshelf prefixes, subject heading parts). Labels live in the app.
+GENRES = (
+    ("classics", {"classics of literature", "harvard classics", "best books ever listings"}, (), set()),
+    ("adventure", {"adventure"}, (), {"adventure stories", "sea stories"}),
+    ("romance", {"romance"}, (), {"love stories"}),
+    ("mystery", {"crime, thrillers and mystery", "detective fiction", "crime fiction"}, (),
+     {"detective and mystery stories"}),
+    ("scifi", {"science-fiction & fantasy", "science fiction", "fantasy"}, (), {"science fiction", "fantasy fiction"}),
+    ("horror", {"horror", "gothic fiction"}, (), {"horror tales", "ghost stories", "gothic fiction", "vampires"}),
+    ("historical", {"historical novels", "historical fiction"}, (), {"historical fiction"}),
+    ("humour", {"humour", "humor"}, (), {"humorous stories"}),
+    ("children", {"children & young adult reading", "children's literature", "children's fiction",
+                  "children's picture books"}, (), {"fairy tales"}),
+    ("stories", {"short stories"}, (), {"short stories"}),
+    ("poetry", {"poetry"}, (), set()),
+    ("plays", {"plays/films/dramas"}, (), set()),
+    ("myths", {"mythology, legends & folklore"}, (), set()),
+    ("philosophy", {"philosophy & ethics"}, (), set()),
+    ("history", set(), ("history - ",), set()),
+    ("biography", {"biographies"}, (), set()),
+    ("travel", {"travel writing"}, (), set()),
+    ("science", {"nature/gardening/animals"}, ("science - ",), set()),
+    ("essays", {"essays, letters & speeches"}, (), set()),
+    ("western", {"western"}, (), {"western stories"}),
+)
+
+
+def genres_of(shelves, subjects):
+    """Genre ids for a book. Magazines and journals get none: they are found by search, not browsed."""
+    if "periodicals" in subjects:
+        return []
+    found = []
+    for genre, names, prefixes, headings in GENRES:
+        if names & shelves or headings & subjects or any(shelf.startswith(prefixes) for shelf in shelves if prefixes):
+            found.append(genre)
+    return found
+
+
+def blurb_of(raw):
+    text = squash((raw or "").replace(SUMMARY_NOTE, ""))
+    if len(text) <= BLURB_CHARS:
+        return text
+    cut = text[:BLURB_CHARS]
+    stop = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    if stop >= 120:
+        return cut[:stop + 1]
+    return cut[:cut.rfind(" ")].rstrip(",;:") + "…"
 
 
 def squash(text):
@@ -77,9 +131,15 @@ def parse(blob):
         return None
     if squash(ebook.findtext("dcterms:type//rdf:value", "Text", NS)) != "Text":
         return None
-    files = [node.get(RDF_ABOUT, "") for node in ebook.findall("dcterms:hasFormat/pgterms:file", NS)]
+    files = {node.get(RDF_ABOUT, ""): node for node in ebook.findall("dcterms:hasFormat/pgterms:file", NS)}
     if not any(".epub" in url for url in files):
         return None
+    text_bytes = max((int(extent) for url, node in files.items() if ".txt" in url
+                      and (extent := squash(node.findtext("dcterms:extent", "", NS))).isdigit()), default=0)
+    shelves = {squash(node.text).lower().removeprefix("category: ")
+               for node in ebook.findall("pgterms:bookshelf//rdf:value", NS)}
+    subjects = {part.strip().lower() for node in ebook.findall("dcterms:subject//rdf:value", NS)
+                for part in re.split(r"\s+--\s+", node.text or "")}
     title = tidy_title(ebook.findtext("dcterms:title", "", NS))
     if not title:
         return None
@@ -98,8 +158,11 @@ def parse(blob):
         "language": language,
         "died": died,
         "downloads": downloads,
+        "kb": min(round(text_bytes / 1024), 99999),
+        "genres": " ".join(genres_of(shelves, subjects)),
         "title": title,
         "author": ", ".join(creators[:3])[:160],
+        "blurb": blurb_of(ebook.findtext("pgterms:marc520", "", NS)),
     }
 
 
@@ -120,9 +183,10 @@ def main(source):
                 rows.append(row)
     rows.sort(key=lambda row: (-row["downloads"], row["pg"]))
     text = io.StringIO()
-    text.write("pg\tlanguage\tdied\tdownloads\ttitle\tauthor\n")
+    columns = ("pg", "language", "died", "downloads", "kb", "genres", "title", "author", "blurb")
+    text.write("\t".join(columns) + "\n")
     for row in rows:
-        text.write(f"{row['pg']}\t{row['language']}\t{row['died']}\t{row['downloads']}\t{row['title']}\t{row['author']}\n")
+        text.write("\t".join(str(row[column]) for column in columns) + "\n")
     with OUT.open("wb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0, compresslevel=9) as out:
         out.write(text.getvalue().encode("utf-8"))
     print(f"{len(rows)} books -> {OUT} ({OUT.stat().st_size / 1e6:.1f} MB)")

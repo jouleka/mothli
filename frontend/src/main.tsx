@@ -12,6 +12,7 @@ import "./styles.css";
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { initializeOfflineSupport, type OfflineSession } from "./pwa/offline";
+import { FreeLibrary } from "./library/FreeLibrary";
 import { ReaderPage } from "./reader/ReaderPage";
 import { Shelf } from "./shelf/Shelf";
 import { Icon } from "./ui/Icon";
@@ -29,14 +30,19 @@ try {
   document.documentElement.dataset.theme = "light";
 }
 
-// Router-less view switch for the shelf and reader.
+// Router-less view switch for the shelf, the free library and the reader.
 const currentBookId = () =>
   new URLSearchParams(window.location.search).get("book");
+const inLibrary = () => new URLSearchParams(window.location.search).has("library");
 
 function App({ session }: { session?: OfflineSession | null }) {
   const [bookId, setBookId] = useState<string | null>(currentBookId);
+  const [browsing, setBrowsing] = useState(inLibrary);
   useEffect(() => {
-    const restoreLocation = () => setBookId(currentBookId());
+    const restoreLocation = () => {
+      setBookId(currentBookId());
+      setBrowsing(inLibrary());
+    };
     window.addEventListener("popstate", restoreLocation);
     return () => window.removeEventListener("popstate", restoreLocation);
   }, []);
@@ -47,13 +53,21 @@ function App({ session }: { session?: OfflineSession | null }) {
   const back = () => {
     history.pushState(null, "", "/");
     setBookId(null);
+    setBrowsing(false);
+  };
+  const browse = () => {
+    history.pushState(null, "", "/?library=1");
+    setBrowsing(true);
+    window.scrollTo(0, 0);
   };
   // key: a book->book transition must fully unmount the old reader (its view/reporter must never
   // route a stale offset into ANOTHER book's permanent bookmark ratchet — pass-2 F4)
   return bookId ? (
     <ReaderPage key={bookId} bookId={bookId} onBack={back} />
+  ) : browsing ? (
+    <FreeLibrary onBack={back} onOpen={open} />
   ) : (
-    <Shelf onOpen={open} session={session} />
+    <Shelf onOpen={open} onBrowse={browse} session={session} />
   );
 }
 

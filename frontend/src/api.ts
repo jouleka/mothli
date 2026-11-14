@@ -27,9 +27,26 @@ export type ClassicsCatalog = {
   total: number;
   matches: number;
   languages: { code: string; count: number }[];
+  genres: { id: string; label: string }[];
+  moods: { id: string; label: string }[];
   books: Classic[];
 };
-export type ClassicsSearch = { q?: string; language?: string; offset?: number };
+export type ClassicsSearch = {
+  q?: string;
+  language?: string;
+  genre?: string;
+  mood?: string;
+  offset?: number;
+  limit?: number;
+};
+/** A row of books on the library's front page: the most read, a mood, or a genre. */
+export type ClassicShelf = { kind: "popular" | "mood" | "genre"; id: string; title: string; books: Classic[] };
+export type ClassicDetail = Classic & {
+  genres: { id: string; label: string }[];
+  minutes: number | null;
+  blurb: string;
+  source_url: string;
+};
 export type AiRuntime = {
   mode: "demo" | "live";
   provider: string;
@@ -303,10 +320,18 @@ export const api = {
     const params = new URLSearchParams();
     if (search.q) params.set("q", search.q);
     if (search.language) params.set("language", search.language);
+    if (search.genre) params.set("genre", search.genre);
+    if (search.mood) params.set("mood", search.mood);
     if (search.offset) params.set("offset", String(search.offset));
+    if (search.limit) params.set("limit", String(search.limit));
     const query = params.toString();
     return fetch(`/api/classics${query ? `?${query}` : ""}`).then((r) => j<ClassicsCatalog>(r));
   },
+  classicsFront: (language = "") =>
+    fetch(`/api/classics/front${language ? `?language=${encodeURIComponent(language)}` : ""}`).then((r) =>
+      j<{ shelves: ClassicShelf[] }>(r),
+    ),
+  classic: (id: string) => fetch(`/api/classics/${encodeURIComponent(id)}`).then((r) => j<ClassicDetail>(r)),
   addClassic: (id: string) =>
     fetch(`/api/classics/${encodeURIComponent(id)}`, { method: "POST", headers: csrfHeaders() }).then(
       (r) => j<{ book_id: string }>(r),
