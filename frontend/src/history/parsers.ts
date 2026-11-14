@@ -5,11 +5,29 @@
  *   StoryGraph   the export CSV                 (Manage Account > Export StoryGraph Library)
  *   Kindle       My Clippings.txt               (the "documents" folder of the device)
  *   Libby        a Reading Journey or Timeline export, as "Data" (JSON)
+ *   Kindle app   the notebook a phone or tablet exports (an HTML file sent by email)
+ *   Readwise     the CSV export of all highlights
+ *   KOReader     its highlight export (JSON)
+ *   Calibre      a CSV catalogue of a library
+ *   anything     a spreadsheet saved as CSV with a title column and an author column
+ *
+ * Kobo's and Apple Books' own database files are read on the reader's server instead (they are
+ * SQLite, not text): see `isDatabase`.
  *
  * Nothing here opens a book or touches copy protection: these files hold titles, dates and the
  * reader's own words and marked passages. */
 
-export type ImportSource = "goodreads" | "storygraph" | "kindle" | "libby";
+export type ImportSource =
+  | "goodreads"
+  | "storygraph"
+  | "kindle"
+  | "libby"
+  | "readwise"
+  | "koreader"
+  | "calibre"
+  | "other"
+  | "kobo"
+  | "apple";
 export type ReadStatus = "read" | "reading" | "want" | "abandoned";
 export type ImportedBook = {
   title: string;
@@ -37,7 +55,19 @@ export const SOURCE_NAMES: Record<ImportSource, string> = {
   storygraph: "StoryGraph",
   kindle: "Kindle",
   libby: "Libby",
+  readwise: "Readwise",
+  koreader: "KOReader",
+  calibre: "Calibre",
+  other: "Spreadsheet",
+  kobo: "Kobo",
+  apple: "Apple Books",
 };
+
+/** A Kobo or Apple Books database file: it starts with SQLite's signature. */
+export function isDatabase(head: Uint8Array): boolean {
+  const magic = "SQLite format 3\u0000";
+  return head.length >= 16 && [...magic].every((ch, index) => head[index] === ch.charCodeAt(0));
+}
 
 /** The file is not one of the exports we read. The message is written for the reader. */
 export class UnknownHistoryFile extends Error {}
@@ -118,7 +148,7 @@ const STORYGRAPH_STATUS: Record<string, ReadStatus> = {
   paused: "reading",
 };
 
-function book(row: Record<string, string>, fields: Partial<ImportedBook>, author: string): ImportedBook | null {
+function book(row: { title?: string }, fields: Partial<ImportedBook>, author: string): ImportedBook | null {
   const title = clip(row.title ?? "", 500);
   if (!title) return null;
   return { title, author: clip(author, 300), ...fields };
@@ -271,6 +301,99 @@ function kindle(text: string): ParsedHistory {
   };
 }
 
+const first = (row: Record<string, string>, ...names: string[]) => {
+  for (const name of names) if (row[name]?.trim()) return row[name];
+  return "";
+};
+
+/** "to-read", "Currently reading", "DNF", "Finished": the words apps and people use for a shelf. */
+function statusWord(text: string): ReadStatus | null {
+  const word = text.trim().toLowerCase();
+  if (!word) return null;
+  if (/to[- ]?read|want|wish|tbr|plan/.test(word)) return "want";
+  if (/dnf|did[- ]not[- ]finish|abandon|dropped|gave up/.test(word)) return "abandoned";
+  if (/current|reading|progress|started|paused/.test(word)) return "reading";
+  if (/read|finish|complete|done/.test(word)) return "read";
+  return null;
+}
+
+/** Any table of books with a title and an author: Calibre's catalogue, a tracker's export, a spreadsheet. */
+function bookTable(content: string, source: ImportSource): ParsedHistory {
+  const books = table(content).flatMap((row) => {
+    const rating = Number.parseFloat(first(row, "my rating", "star rating", "rating", "stars", "score"));
+    const found = book(
+      { title: first(row, "title", "book title", "name", "book") },
+      {
+        isbn: isbn(first(row, "isbn13", "isbn 13", "isbn_13"), first(row, "isbn", "isbn10", "isbn/uid", "isbn_10")),
+        status: statusWord(first(row, "exclusive shelf", "read status", "status", "shelf", "bookshelf", "state")),
+        // calibre and some trackers count to ten
+        rating: Number.isFinite(rating) && rating > 0 ? (rating > 5 ? Math.min(rating / 2, 5) : rating) : null,
+        finished_on: day(first(row, "date read", "last date read", "date finished", "finished", "finished at", "finished_at", "date_read", "read at", "end date")),
+        added_on: day(first(row, "date added", "added", "date_added", "created_at", "timestamp", "start date")),
+        review: blankToNull(first(row, "my review", "review", "notes", "comments").replace(/<[^>]+>/g, " "), 20_000),
+      },
+      first(row, "author", "authors", "author(s)", "book author", "creator", "writer").replace(/\s+&\s+/g, ", "),
+    );
+    return found ? [found] : [];
+  });
+  return { source, books, highlights: [] };
+}
+
+function readwiseCsv(content: string): ParsedHistory {
+  const highlights = table(content).flatMap((row) => {
+    const title = clip(row["book title"] ?? "", 500);
+    const quote = clip(row.highlight ?? "", 8000);
+    const note = blankToNull(row.note, 8000);
+    if (!title || (!quote && !note)) return [];
+    const place = Number.parseInt(row.location ?? "", 10);
+    const kind = /page/i.test(row["location type"] ?? "") ? "Page" : /location/i.test(row["location type"] ?? "") ? "Location" : null;
+    const at = new Date(row["highlighted at"] ?? "");
+    return [
+      {
+        title,
+        author: clip(row["book author"] ?? "", 300),
+        text: quote,
+        note,
+        location: kind && Number.isFinite(place) ? `${kind} ${place}` : null,
+        position: Number.isFinite(place) && place >= 0 ? place : null,
+        made_at: Number.isNaN(at.getTime()) ? null : at.toISOString().slice(0, 19),
+      },
+    ];
+  });
+  return { source: "readwise", books: [], highlights };
+}
+
+/** The notebook a Kindle phone or tablet app exports: headings and passages in reading order. */
+function kindleNotebook(content: string): ParsedHistory {
+  const page = new DOMParser().parseFromString(content, "text/html");
+  const words = (selector: string) => page.querySelector(selector)?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+  const title = clip(words(".bookTitle"), 500);
+  if (!title) throw new UnknownHistoryFile("This Kindle notebook has no book title in it. Export it again from the Kindle app.");
+  const author = clip(byline(words(".authors")), 300);
+  const highlights: ImportedHighlight[] = [];
+  let heading = "";
+  let chapter = "";
+  for (const node of Array.from(page.querySelectorAll(".sectionHeading, .noteHeading, .noteText"))) {
+    const said = node.textContent?.replace(/\s+/g, " ").trim() ?? "";
+    if (node.classList.contains("sectionHeading")) chapter = said;
+    else if (node.classList.contains("noteHeading")) heading = said;
+    else if (said && heading && !/^bookmark/i.test(heading)) {
+      const place = heading.match(/location\s+(\d+)/i) ?? heading.match(/page\s+(\d+)/i);
+      const where = place ? `${/^p/i.test(place[0]) ? "Page" : "Location"} ${place[1]}` : chapter ? clip(chapter, 80) : null;
+      const last = highlights[highlights.length - 1];
+      if (/^note/i.test(heading)) {
+        // a note follows the passage it was written on
+        if (last && !last.note && last.text && last.location === where) last.note = clip(said, 8000);
+        else highlights.push({ title, author, text: "", note: clip(said, 8000), location: where, position: place ? Number(place[1]) : null, made_at: null });
+      } else {
+        highlights.push({ title, author, text: clip(said, 8000), note: null, location: where, position: place ? Number(place[1]) : null, made_at: null });
+      }
+      heading = "";
+    }
+  }
+  return { source: "kindle", books: [{ title, author }], highlights };
+}
+
 type Json = Record<string, unknown>;
 const text = (value: unknown): string =>
   typeof value === "string" ? value : value && typeof value === "object" && typeof (value as Json).text === "string" ? ((value as Json).text as string) : "";
@@ -279,13 +402,47 @@ const stamp = (value: unknown): string | null => {
   return at && !Number.isNaN(at.getTime()) ? at.toISOString().slice(0, 19) : null;
 };
 
-function libby(raw: string): ParsedHistory {
+function koreader(documents: Json[]): ParsedHistory {
+  const books: ImportedBook[] = [];
+  const highlights: ImportedHighlight[] = [];
+  for (const document of documents) {
+    const title = clip(text(document.title), 500);
+    const author = clip(text(document.author), 300);
+    if (!title) continue;
+    books.push({ title, author });
+    for (const entry of Array.isArray(document.entries) ? (document.entries as Json[]) : []) {
+      const quote = clip(text(entry.text), 8000);
+      const note = blankToNull(text(entry.note), 8000);
+      if (!quote && !note) continue;
+      const page = typeof entry.page === "number" ? entry.page : null;
+      const seconds = typeof entry.time === "number" ? entry.time : null;
+      highlights.push({
+        title,
+        author,
+        text: quote,
+        note,
+        location: blankToNull(text(entry.chapter), 80) ?? (page !== null ? `Page ${page}` : null),
+        position: page,
+        made_at: seconds !== null ? stamp(seconds * 1000) : null,
+      });
+    }
+  }
+  return { source: "koreader", books, highlights };
+}
+
+function json(raw: string): ParsedHistory {
   let data: Json;
   try {
     data = JSON.parse(raw) as Json;
   } catch {
     throw new UnknownHistoryFile("This file isn’t a complete export. Try exporting it again.");
   }
+  if (Array.isArray(data.documents)) return koreader(data.documents as Json[]);
+  if (Array.isArray(data.entries) && data.title) return koreader([data]);
+  return libby(data);
+}
+
+function libby(data: Json): ParsedHistory {
   const journey = data.readingJourney as Json | undefined;
   if (journey && typeof journey === "object") {
     const title = clip(text(journey.title), 500);
@@ -330,16 +487,23 @@ function libby(raw: string): ParsedHistory {
 /** Works out which app a file came from by what is in it, and reads it. */
 export function parseHistoryFile(name: string, content: string): ParsedHistory {
   const start = content.replace(/^﻿/, "").trimStart();
-  if (start.startsWith("{")) return libby(content);
+  if (start.startsWith("{")) return json(content);
   if (/^==========\s*$/m.test(content)) return kindle(content);
+  if (/class\s*=\s*["']?(noteHeading|bookTitle)\b/.test(content)) return kindleNotebook(content);
   const header = (start.split(/\r?\n/, 1)[0] ?? "").toLowerCase();
   if (header.includes("exclusive shelf")) return goodreads(content);
   if (header.includes("read status")) return storygraph(content);
+  const columns = (parseCsv(start.split(/\r?\n/, 1)[0] ?? "")[0] ?? []).map((name) => name.trim().toLowerCase());
+  if (columns.includes("highlight") && columns.includes("book title")) return readwiseCsv(content);
+  const named = (...names: string[]) => names.some((name) => columns.includes(name));
+  if (named("title", "book title", "name", "book") && named("author", "authors", "author(s)", "book author", "creator", "writer")) {
+    return bookTable(content, named("title_sort", "author_sort") ? "calibre" : "other");
+  }
   if (/\.(epub|mobi|azw3?|kfx|pdf|fb2)$/i.test(name)) {
     throw new UnknownHistoryFile("That is a book, not a reading history. Add books from your shelf with “Add a book”.");
   }
   throw new UnknownHistoryFile(
-    "We couldn’t tell which app this file is from. We read Goodreads and StoryGraph library exports, Kindle’s “My Clippings.txt” and Libby exports.",
+    "We couldn’t tell which app this file is from. See “How do I get my files?” below for what each app gives you. A spreadsheet works too, if it has a title column and an author column.",
   );
 }
 

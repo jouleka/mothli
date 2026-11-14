@@ -61,11 +61,10 @@ export type HistoryDetail = HistoryEntry & {
   isbn: string | null;
   marks: { id: number; text: string; note: string | null; location: string | null; made_at: string | null; source: string }[];
 };
-export type HistoryBatch = {
-  source: "goodreads" | "storygraph" | "kindle" | "libby";
-  books: object[];
-  highlights: object[];
-};
+export type HistoryBatch = { source: string; books: object[]; highlights: object[] };
+export type HistoryImported = { books_added: number; books_updated: number; highlights_added: number; skipped: number };
+/** What a source read on the server (a Kobo or Apple Books database, Readwise) held. */
+export type HistorySources = HistoryImported & { sources: { source: string; books: number; highlights: number }[] };
 export type ClassicsSearch = {
   q?: string;
   language?: string;
@@ -383,7 +382,22 @@ export const api = {
       method: "POST",
       headers: { "content-type": "application/json", ...csrfHeaders() },
       body: JSON.stringify(batch),
-    }).then((r) => j<{ books_added: number; books_updated: number; highlights_added: number; skipped: number }>(r)),
+    }).then((r) => j<HistoryImported>(r)),
+  /** Kobo's KoboReader.sqlite, or the two Apple Books database files from a Mac. */
+  importHistoryDatabases: (files: File[]) => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file, file.name);
+    return fetch("/api/history/import-databases", { method: "POST", headers: csrfHeaders(), body: form }).then((r) =>
+      j<HistorySources>(r),
+    );
+  },
+  /** Brings a reader's Readwise highlights with the access token they paste; the token is not kept. */
+  importReadwise: (token: string) =>
+    fetch("/api/history/readwise", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...csrfHeaders() },
+      body: JSON.stringify({ token }),
+    }).then((r) => j<HistorySources>(r)),
   forgetHistory: (id?: number) =>
     fetch(id === undefined ? "/api/history" : `/api/history/${id}`, { method: "DELETE", headers: csrfHeaders() }).then((r) => {
       if (!r.ok) throw new Error("Couldn’t remove it.");

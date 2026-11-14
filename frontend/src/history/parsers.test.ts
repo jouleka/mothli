@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseCsv, parseHistoryFile, summarize, UnknownHistoryFile } from "./parsers";
+import { isDatabase, parseCsv, parseHistoryFile, summarize, UnknownHistoryFile } from "./parsers";
 
 const GOODREADS = [
   "Book Id,Title,Author,Author l-f,Additional Authors,ISBN,ISBN13,My Rating,Average Rating,Publisher,Binding,Number of Pages,Year Published,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,Exclusive Shelf,My Review,Spoiler,Private Notes,Read Count,Owned Copies",
@@ -179,6 +179,7 @@ describe("files we do not read", () => {
     ["book.epub", "PK\u0003\u0004binary", /That is a book/],
     ["notes.txt", "just some notes of mine", /couldn’t tell which app/],
     ["data.json", '{"something": "else"}', /isn’t a Libby export/],
+    ["highlights-only.csv", "Highlight,Colour\nsome words,yellow", /couldn’t tell which app/],
     ["cut-off.json", '{"readingJourney": {', /isn’t a complete export/],
     ["random.csv", "a,b,c\n1,2,3", /couldn’t tell which app/],
   ])("%s is refused with a plain explanation", (name, content, message) => {
@@ -197,4 +198,107 @@ test("CSV fields may hold commas, doubled quotes and line breaks", () => {
 test("a set of files is summed up for the reader before anything is imported", () => {
   const files = [parseHistoryFile("g.csv", GOODREADS), parseHistoryFile("My Clippings.txt", CLIPPINGS)];
   expect(summarize(files)).toEqual({ books: 3, highlights: 3, sources: ["goodreads", "kindle"] });
+});
+
+describe("Kindle app notebook export", () => {
+  const html = `<html><body><div class="bodyContainer">
+    <div class="notebookFor">Notebook Export</div>
+    <div class="bookTitle">Piranesi</div><div class="authors">Clarke, Susanna</div><div class="citation">Citation</div>
+    <div class="sectionHeading">Part 1</div>
+    <div class="noteHeading">Highlight (<span class="highlight_yellow">yellow</span>) - Part 1 &gt; Page 5 · Location 62</div>
+    <div class="noteText">The Beauty of the House is immeasurable</div>
+    <div class="noteHeading">Note - Part 1 &gt; Page 5 · Location 62</div>
+    <div class="noteText">The refrain</div>
+    <div class="noteHeading">Bookmark - Part 1 &gt; Page 9 · Location 120</div>
+    <div class="noteText"></div>
+    <div class="sectionHeading">Part 2</div>
+    <div class="noteHeading">Highlight (<span class="highlight_blue">blue</span>) - Part 2 &gt; Page 40</div>
+    <div class="noteText">its Kindness infinite</div>
+  </div></body></html>`;
+
+  test("reads a phone's exported notebook, with each note on its passage", () => {
+    const parsed = parseHistoryFile("Piranesi-Notebook.html", html);
+    expect(parsed.source).toBe("kindle");
+    expect(parsed.books).toEqual([{ title: "Piranesi", author: "Susanna Clarke" }]);
+    expect(parsed.highlights.map((mark) => [mark.text, mark.note, mark.location, mark.position])).toEqual([
+      ["The Beauty of the House is immeasurable", "The refrain", "Location 62", 62],
+      ["its Kindness infinite", null, "Page 40", 40],
+    ]);
+  });
+});
+
+describe("Readwise export", () => {
+  test("reads every highlight with its book, note and place", () => {
+    const csv = [
+      "Highlight,Book Title,Book Author,Amazon Book ID,Note,Color,Tags,Location Type,Location,Highlighted at,Document tags",
+      '"Clarity about what matters","Deep Work","Cal Newport",B00X47ZVXM,"try it",yellow,,location,900,2024-03-04 07:30:00+00:00,',
+      '"A page-numbered passage","Circe","Madeline Miller",,,,,page,12,,',
+      ',"Empty","Nobody",,,,,,,,',
+    ].join("\n");
+    const parsed = parseHistoryFile("readwise-data.csv", csv);
+    expect(parsed.source).toBe("readwise");
+    expect(parsed.highlights).toEqual([
+      { title: "Deep Work", author: "Cal Newport", text: "Clarity about what matters", note: "try it", location: "Location 900", position: 900, made_at: "2024-03-04T07:30:00" },
+      { title: "Circe", author: "Madeline Miller", text: "A page-numbered passage", note: null, location: "Page 12", position: 12, made_at: null },
+    ]);
+  });
+});
+
+describe("KOReader export", () => {
+  test("reads one book or a whole library of highlights", () => {
+    const one = JSON.stringify({ title: "Dune", author: "Frank Herbert", entries: [{ text: "Fear is the mind-killer", note: "", chapter: "Book One", page: 12, time: 1709300000 }] });
+    const single = parseHistoryFile("dune.json", one);
+    expect(single.source).toBe("koreader");
+    expect(single.highlights).toEqual([
+      { title: "Dune", author: "Frank Herbert", text: "Fear is the mind-killer", note: null, location: "Book One", position: 12, made_at: "2024-03-01T13:33:20" },
+    ]);
+    const many = JSON.stringify({ version: "json/1.0.0", documents: [JSON.parse(one), { title: "Emma", author: "Jane Austen", entries: [{ text: "", note: "handsome, clever, and rich", page: 1 }] }] });
+    const all = parseHistoryFile("all-books.json", many);
+    expect(all.books.map((book) => book.title)).toEqual(["Dune", "Emma"]);
+    expect(all.highlights[1]).toMatchObject({ title: "Emma", note: "handsome, clever, and rich", location: "Page 1" });
+  });
+});
+
+describe("spreadsheets and other apps", () => {
+  test("a Calibre catalogue lists the library, with ratings counted to ten", () => {
+    const csv = [
+      "author_sort,authors,comments,id,isbn,rating,tags,timestamp,title,title_sort",
+      '"Austen, Jane","Jane Austen","<p>A <b>classic</b>.</p>",1,9780141439518,8,fiction,2021-04-01T10:00:00+00:00,"Pride and Prejudice","Pride and Prejudice"',
+      '"Gaiman, Neil & Pratchett, Terry","Neil Gaiman & Terry Pratchett",,2,,,,2022-01-01T10:00:00+00:00,"Good Omens","Good Omens"',
+    ].join("\n");
+    const parsed = parseHistoryFile("calibre.csv", csv);
+    expect(parsed.source).toBe("calibre");
+    expect(parsed.books).toEqual([
+      { title: "Pride and Prejudice", author: "Jane Austen", isbn: "9780141439518", status: null, rating: 4, finished_on: null, added_on: "2021-04-01", review: parsed.books[0].review },
+      { title: "Good Omens", author: "Neil Gaiman, Terry Pratchett", isbn: null, status: null, rating: null, finished_on: null, added_on: "2022-01-01", review: null },
+    ]);
+    expect(parsed.books[0].review).toContain("classic");
+    expect(parsed.books[0].review).not.toContain("<");
+  });
+
+  test("any spreadsheet with a title and an author is read, whatever it calls its shelves", () => {
+    const csv = [
+      "Name,Writer,Status,Stars,Finished,ISBN",
+      "Circe,Madeline Miller,Finished,4.5,2023-06-01,9780316556347",
+      "Babel,R.F. Kuang,DNF,,,",
+      "Middlemarch,George Eliot,TBR,,,",
+      "Piranesi,Susanna Clarke,Currently reading,,,",
+      ",Nobody,read,,,",
+    ].join("\n");
+    const parsed = parseHistoryFile("my books.csv", csv);
+    expect(parsed.source).toBe("other");
+    expect(parsed.books.map((book) => [book.title, book.author, book.status, book.rating, book.finished_on])).toEqual([
+      ["Circe", "Madeline Miller", "read", 4.5, "2023-06-01"],
+      ["Babel", "R.F. Kuang", "abandoned", null, null],
+      ["Middlemarch", "George Eliot", "want", null, null],
+      ["Piranesi", "Susanna Clarke", "reading", null, null],
+    ]);
+  });
+});
+
+test("a Kobo or Apple Books database is recognised by how the file begins", () => {
+  const head = new TextEncoder().encode("SQLite format 3\u0000 and then pages");
+  expect(isDatabase(head)).toBe(true);
+  expect(isDatabase(new TextEncoder().encode("Title,Author\nEmma,Austen"))).toBe(false);
+  expect(isDatabase(new Uint8Array(4))).toBe(false);
 });

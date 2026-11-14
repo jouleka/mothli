@@ -33,6 +33,22 @@
 .rh-import > .fl-error { margin-top: 18px; }
 .rh-outcome { display: flex; gap: 10px; margin: 20px 0 0; padding: 14px 16px; border-left: 3px solid var(--m-mothli-ink); background: var(--m-bg); font: 400 16px/1.45 var(--m-ui); }
 .rh-outcome svg { flex: none; margin-top: 3px; color: var(--m-mothli-ink); }
+.rh-readwise { display: grid; gap: 10px; margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--m-line-strong); }
+.rh-readwise label { max-width: 76ch; font: 400 15px/1.5 var(--m-ui); color: var(--m-soft); }
+.rh-readwise label strong { color: var(--m-ink); font-weight: 600; }
+.rh-readwise > div { display: flex; flex-wrap: wrap; gap: 10px; }
+.mothli-library .rh-readwise input {
+  flex: 1 1 260px;
+  min-width: 0;
+  height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--m-line-strong);
+  border-radius: 6px;
+  background: var(--m-bg);
+  color: var(--m-ink);
+  font: 400 16px/1 var(--m-ui);
+}
+.rh-readwise .ui-button { min-height: 48px; padding: 0 20px; }
 .rh-guides { margin-top: 24px; }
 .rh-guides summary { min-height: 44px; display: inline-flex; align-items: center; color: var(--m-accent); font: 500 15px/1.2 var(--m-ui); cursor: pointer; text-decoration: underline; text-underline-offset: 4px; }
 .rh-guides dl { display: grid; gap: 16px; margin: 12px 0 0; }
