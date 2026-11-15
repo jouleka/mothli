@@ -1625,6 +1625,10 @@ Six home messages, the owner's own ("hmmm idk what to read next tBh", "not reall
 - **Not verified:** one conversation. The button was not pressed in the running app. The chat inside a book builds its checks the same way and was not measured against the limit.
 - Spend: $0.006 of Jev for both tries.
 
+### 6ad, afterwards: suggestions only from blurbs read and judged clean
+
+The owner's rule is "for unread books use only a spoiler-free blurb", and the deny list had it the wrong way round: a blurb nobody had read counted as clean. Now a book is suggested only if its number is in `backend/app/classics_reviewed.tsv` with the verdict "clean"; a "no", and every book not in the file, is never suggested. `SPOILING_BLURBS` is gone; its 40 numbers are in the file as "no" with their reasons. 605 blurbs were read one by one (16 November): the first 601 English books in the catalogue's own order after the rules that do not depend on the reader (a blurb and a genre, one edition a work, no single volume of a set), and four further down (two by Louisa May Alcott, two by George Eliot) that the tests of the author rules need. 560 clean, 45 no. A blurb was "no" if it told the ending, a death beyond the opening one, who marries whom, a hidden identity or the answer to a mystery, a late reversal, or how an earlier book came out; any doubt ("tragic", "devastating consequences", "lead to tragedy") was "no". Among the "no": Anna Karenina, Tess, The Time Machine, The Wonderful Wizard of Oz, Madame Bovary, The Monk, Twenty Years After, The Railway Children, The Mill on the Floss, The Gift of the Magi. For the owner's two books the six change in one state only: with both well begun, The Monk gives way to A Farewell to Arms. Not done: no non-English blurb was read, so a shelf in another language gets no suggestions; English books past the first 601 are never suggested until read; the blurbs themselves were not rewritten; the verdicts are one reader's and were not checked by a second.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
