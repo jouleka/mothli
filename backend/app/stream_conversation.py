@@ -37,7 +37,7 @@ from app.eval.spoiler_gate.grounding import STOPWORDS
 from app.known_names import first_mention, names_note, same_person_names, text_same_person
 from app.llm.client import ProviderUnavailable
 from app.llm.jev import JevUnavailable
-from app.llm.jev_budget import budgeted_jev
+from app.llm.jev_budget import budgeted_jev, estimate_jev_input
 from app.read_frontier import requested_snapshot
 from app.read_map import book_record, prefix_map, read_snapshot, skimmed_chapters, visible_turns
 from app.reader_place import (APP_HELP, FRIEND_VOICE, SPEAK_AS_A_FRIEND, content_numbers, note_asked,
@@ -232,6 +232,40 @@ def second_look_prompt(sentence, earlier, passages, *, question, identities=()):
     return json.dumps({"reader_message": question, "earlier_reply_sentences": list(earlier),
                        "same_person_names": [list(group) for group in identities],
                        "sentence": sentence, "passages": passages}, ensure_ascii=False)
+
+
+# The checker refuses an input over this size by the budget's own count (bytes, see
+# ``budgeted_jev``), and a refused check drops its sentence: with every check refused the reader
+# gets no reply at all.
+CHECK_INPUT_LIMIT = 30_000
+
+
+def check_room(question, identities):
+    """How many bytes of passages the largest check of a reply to ``question`` can carry.
+
+    The largest is the last sentence of the longest reply: it carries every earlier sentence.
+    """
+    sentence = "x" * MAX_SENTENCE_CHARS
+    state, questions, *_ = sentence_packet(
+        sentence, tuple(sentence for _ in range(MAX_SENTENCES - 1)), [], question=question,
+        identities=identities)
+    return CHECK_INPUT_LIMIT - estimate_jev_input("", state, questions) - 512
+
+
+def fit_passages(fixed, ranked, *, budget):
+    """``fixed`` in full, then as many of ``ranked`` as fit ``budget`` bytes, best first.
+
+    Fewer passages can only make the checks stricter, never looser. The writer should be given
+    the same passages, or it will write from text its checker does not have.
+    """
+    def size(passage):
+        return len(json.dumps(passage, ensure_ascii=False).encode("utf-8")) + 2
+    kept, used = list(fixed), sum(size(passage) for passage in fixed)
+    for passage in ranked:
+        if used + size(passage) <= budget:
+            kept.append(passage)
+            used += size(passage)
+    return kept
 
 
 def gate_sentences(deltas, check, safe, *, pool):

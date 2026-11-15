@@ -7,7 +7,7 @@
  * the newest exchange in view, and only the latest exchanges are drawn until the reader asks for
  * earlier ones. */
 import { type FormEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { api, ApiError, type HomeTurn, type ReadSkipped } from "../api";
+import { api, ApiError, type HomeTurn, type ReadSkipped, type SuggestedBook } from "../api";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { Moth } from "../ui/Moth";
@@ -31,6 +31,14 @@ type Offer = ReadSkipped & { state: "open" | "saving" | "done" | "failed" };
 const offerLabel = (offer: ReadSkipped) => `I’ve read ${offer.chapters} of ${offer.title}`;
 const offerDone = (offer: ReadSkipped) => `Got it. I’ll count ${offer.chapters} of ${offer.title} as read.`;
 const OFFER_FAILED = "I couldn’t note that just now. Try again in a moment.";
+/** A book Mothli suggested from the free library, with a way to put it on the shelf. Like offers,
+ * these live only on the reply that just arrived. Which books a reply named is decided on the
+ * server from the sentences that were shown. */
+type Suggestion = SuggestedBook & { state: "open" | "saving" | "done" | "failed" };
+
+const addLabel = (book: SuggestedBook) => `Add ${book.title} to my shelf`;
+const addDone = (book: SuggestedBook) => `${book.title} is on your shelf now.`;
+const ADD_FAILED = "I couldn’t add that just now. Try again in a moment.";
 
 function exchangesOf(turns: HomeTurn[]): Exchange[] {
   const out: Exchange[] = [];
@@ -43,7 +51,7 @@ function exchangesOf(turns: HomeTurn[]): Exchange[] {
   return out;
 }
 
-export function HomeChat() {
+export function HomeChat({ onShelfChanged }: { onShelfChanged?: () => void } = {}) {
   const [turns, setTurns] = useState<HomeTurn[] | null>(null); // null until the server says it exists
   const [start, setStart] = useState(0); // first exchange drawn; earlier ones wait behind "Show earlier"
   const [question, setQuestion] = useState("");
@@ -55,6 +63,7 @@ export function HomeChat() {
   const [confirming, setConfirming] = useState(false);
   const [unseen, setUnseen] = useState(false); // something newer arrived below where the reader is
   const [offers, setOffers] = useState<{ exchange: number; items: Offer[] } | null>(null);
+  const [suggested, setSuggested] = useState<{ exchange: number; items: Suggestion[] } | null>(null);
   const titleId = useId();
   const inputId = useId();
   const confirmId = useId();
@@ -167,6 +176,12 @@ export function HomeChat() {
           items: answer.offers.slice(0, 3).map((offer) => ({ ...offer, state: "open" })),
         });
       }
+      if (answer.suggested?.length) {
+        setSuggested({
+          exchange: exchangesOf(next).length - 1,
+          items: answer.suggested.slice(0, 3).map((book) => ({ ...book, state: "open" })),
+        });
+      }
     } catch (reason) {
       setQuestion((current) => current || value);
       setSpoken([]);
@@ -203,9 +218,34 @@ export function HomeChat() {
     }
   };
 
+  const add = async (index: number) => {
+    const book = suggested?.items[index];
+    if (!book || book.state === "saving" || book.state === "done") return;
+    const mark = (state: Suggestion["state"]) =>
+      setSuggested((current) => current && {
+        ...current,
+        items: current.items.map((item, at) => (at === index ? { ...item, state } : item)),
+      });
+    mark("saving");
+    try {
+      await api.addClassic(book.classic_id);
+    } catch (reason) {
+      // 409: it is on the shelf already (added from the library meanwhile), which is what was asked.
+      if (!(reason instanceof ApiError && reason.status === 409)) {
+        mark("failed");
+        setSpoken((current) => [...current, ADD_FAILED]);
+        return;
+      }
+    }
+    mark("done");
+    setSpoken((current) => [...current, addDone(book)]);
+    onShelfChanged?.();
+  };
+
   const clear = async () => {
     setTurns([]);
     setOffers(null);
+    setSuggested(null);
     setStart(0);
     setError(null);
     setConfirming(false);
@@ -334,6 +374,31 @@ export function HomeChat() {
                                 {offerLabel(offer)}
                               </button>
                               {offer.state === "failed" && <p className="ml-hc-offer-failed">{OFFER_FAILED}</p>}
+                            </>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {suggested?.exchange === index && (
+                    <ul className="ml-hc-offers">
+                      {suggested.items.map((book, at) => (
+                        <li key={book.classic_id}>
+                          {book.state === "done" ? (
+                            <p className="ml-hc-offer-done">{addDone(book)}</p>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                className="ml-hc-offer"
+                                disabled={book.state === "saving"}
+                                aria-busy={book.state === "saving" || undefined}
+                                onClick={() => void add(at)}
+                              >
+                                <Icon name="plus" size={15} />
+                                {addLabel(book)}
+                              </button>
+                              {book.state === "failed" && <p className="ml-hc-offer-failed">{ADD_FAILED}</p>}
                             </>
                           )}
                         </li>

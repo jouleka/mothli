@@ -164,11 +164,15 @@ export const ASK_TIMEOUT_MS = 60_000;
 let streamedReplies: boolean | null = null;
 /** Chapters the reader went past without reading them here; Mothli may offer to count them. */
 export type ReadSkipped = { book_id: string; title: string; atoms: number[]; chapters: string };
+/** A book from the free library, not on the shelf, that a sentence of Mothli's reply named. */
+export type SuggestedBook = { classic_id: string; title: string; author: string };
 export type AskAnswer = {
   as_of_chapter: number; insufficient_evidence: boolean; claims: AskClaim[];
   citations: AskCitation[]; cost: AskCost | null;
   /** Present only when the reply said Mothli was not with the reader for some chapters. */
   offers?: ReadSkipped[];
+  /** Home conversation only: books the reply suggested that the reader can add to the shelf. */
+  suggested?: SuggestedBook[];
   answer_type?: "recap" | "conversation";
   // "prose": the claims are the sentences of one spoken reply, shown as a single paragraph.
   style?: "prose";

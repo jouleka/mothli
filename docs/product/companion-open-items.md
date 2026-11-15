@@ -2,7 +2,7 @@
 
 Every step updates this file: tick what it closed, add what it found, and move nothing back into chat logs.
 
-Taken from sections 6m to 6ab of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
+Taken from sections 6m to 6ad of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
 
 ## Now: the voice
 
@@ -27,9 +27,23 @@ Taken from sections 6m to 6ab of `companion-audit-2026-11-14.md`; the section in
 - [ ] A chapter mostly read, with one page turned quickly, is named as gone through quickly, as in the reader app's own question. Mothli is also told "part of chapter N" was read with it. (6aa)
 - [ ] The offer button ("I've read chapters…") never appears under a French reply: "I wasn't there" and the chapter numbers are matched in English only. (6t) The patterns added in 6aa are English only too.
 - [x] The offer button has not been tried with real replies since its fix in 6t; unit tests only. (6t) Seen once with real replies in `voice-samples.md`: samples 10 and 11 carry "I've read chapters 1 to 4" and "I've read chapter 1". One run, English only.
+- [ ] Suggestions have not been tried with real models or in the running app. To look at: whether Mothli suggests at once and stops asking, whether it keeps to a book's line or adds what it knows of a famous book, whether Jev supports a restated blurb and a reason tied to the reader's own book, whether the title sentence survives often enough for the button to appear, and what six more passages add to each check's cost. (6ad)
+- [ ] While a shelf book is unfinished, nothing else by its author is suggested, and nothing whose line names it: a sequel's blurb tells how the earlier book came out. The brief asked to prefer such authors; this is the safe side of it and the owner has not seen it. A reader in the middle of Pride and Prejudice is not offered Emma. (6ad)
+- [ ] Only about 450 of 76,763 blurbs were read. The deny list is the cases found; 110 blurbs say "sequel" and were not all read. A pass over the blurbs themselves (rewrite or drop) is its own step. (6ad)
+- [ ] The catalogue's own order decides between equal candidates and is not fame: Anna Karenina stands behind The Countess of Pembroke's Arcadia. (6ad)
+- [ ] The list is the same for every reply until the shelf or the reading changes, so "something else?" gets the same six. (6ad)
+- [ ] Sequels of a book being read in another app are not kept out; only the book itself is. (6ad)
+- [ ] A suggested title, or any name in a blurb, that is also a name the reader has not met in a shelf book gets its sentence cut by the fixed gate, and the button with it. Safe, and silent. (6ad)
+- [ ] A title on the shelf counts as read text for every book's fixed gate, because it is in the place lines: an unread shelf book called Emma lets the name through for another book. So before 6ad; seen while testing it. (6ad)
+- [ ] The add button matches titles in English letters as the catalogue spells them; a title Mothli shortens or respells gets no button. The book can still be added from the free library. (6ad)
+- [ ] An empty shelf gets no home reply at all, so no suggestions either. (6ad)
+- [ ] The evaluation has no case that asks for something new to read, and its home reference is not given the list of books Mothli may suggest. (6ad)
 
 ## Before going live
 
+- [ ] The chat inside a book builds its sentence checks the way the home chat did before 6ad's fix: ten passages, notes, the place and the app help, with no check on the 30,000 limit. A check over the limit drops its sentence without a word, most likely late in a long recap. Not measured. `fit_passages` and `check_room` are there to use. (6ad)
+- [ ] Suggestions rest on a list of blurbs known to spoil, found by reading about 450 of 76,763. Everything else is taken as clean unread. Turn it round: suggest only books whose blurb has been read and judged clean. (6ad)
+- [ ] Suggestion replies all have one shape ("You might like X by Y. If you fancy a change from…"). (6ad)
 - [ ] Languages other than English: 29 findings in `language-audit-2026-11-15.md` (8 spoiler risks, 15 wrong, 6 missing), with a 20-step order of fixes. The fixed spoiler checks know only English; chapters are lost or miscounted at import for many non-English books; scripts without spaces break page counting and sentence splitting. Nothing fixed yet; the questions that depend on the models need a measured run.
 - [x] Explain why chapter notes cost twice as much in the last run: $0.039 to $0.079 of Jev for the same 34 chapters and about the same sentences kept. (6t) Closed in 6x: the eval wrote them twice, itself and through the app's background writer, which marking chapters read starts. Counted with stand-in models: two writer calls and twice the checks for every chapter, in the script only. The app itself writes and checks a chapter once, however it hears that the chapter is finished. The eval now leaves the notes to the app's writer. The real run was not repeated.
 - [x] The evaluation and the voice samples wrote and checked every chapter's notes again on every run, and the evaluation had no cap on Jev spend. Closed in 6x: notes are kept between runs in `backend/.eval-cache` and used while the chapter's text, the notes version and both models are the same (`--fresh-notes` writes them again); `companion_eval.py --max-usd`, default $0.10, stops the run and the app's notes writer; both scripts print the Jev total and how many chapters came from the cache. Stand-in models only.
@@ -96,8 +110,8 @@ Taken from sections 6m to 6ab of `companion-audit-2026-11-14.md`; the section in
 
 ## Later
 
-- [ ] No suggestions of books that are not on the shelf: that needs a description of each book known to give nothing away. (6o)
-- [ ] A book not started has no description at all, so Mothli can say nothing about it. (6o)
+- [x] No suggestions of books that are not on the shelf: that needs a description of each book known to give nothing away. (6o) Closed in 6ad as far as code goes: up to six books from the free library's catalogue, chosen by fixed rules, each known to Mothli and to the checks by its catalogue line only, with an "Add … to my shelf" button under a reply that names one. The descriptions are the catalogue's blurbs; 40 found to give something away are kept out by number. Stand-in models only.
+- [ ] A book not started has no description at all, so Mothli can say nothing about it. (6o) Still so after 6ad, and now visible: a book added from a suggestion becomes "not started", and Mothli can no longer repeat what it said of it a moment before.
 - [ ] An import with no highlights and no "finished" status gives no offer to place the reader. (6n)
 - [ ] The older, non-streamed reply path does not use the read map. (6n)
 - [ ] Cast and recap can show something from a skimmed page of a chapter otherwise finished; accepted on purpose, to be looked at again. (6n)
