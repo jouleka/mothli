@@ -884,7 +884,10 @@ export function ReaderPage({
           if (d.cfi == null || idx == null) return;
           const atom = d.range ? atomAtRange(m.atoms, bookSections[idx]?.id ?? "", d.range, "start")
             ?? sectionAtom[idx] ?? -1 : sectionAtom[idx] ?? -1;
-          if (atom < 0) return; // front/back matter: report nothing, never guess
+          // Front/back matter, in a file of its own or ahead of chapter one in that chapter's file:
+          // report nothing, never guess. It is not a place in the book, so the reader's place,
+          // the page the book reopens on and "where you stopped" stay with the last chapter page.
+          if (atom < 0) return;
           visibleRangeRef.current = d.range?.cloneRange() ?? null;
           const verdict = admitRelocation(
             atom,
@@ -907,7 +910,8 @@ export function ReaderPage({
             readAnchorRef.current = (edge) => {
               if (positionReportingPausedRef.current || dead) return null;
               const exactAtom = atomAtRange(m.atoms, bookSections[idx]?.id ?? "", readRange, edge);
-              return exactAtom === null ? null : pageAnchor(readRange, exactAtom, cfi, positionEpochRef.current, edge);
+              return exactAtom === null || exactAtom < 0 ? null
+                : pageAnchor(readRange, exactAtom, cfi, positionEpochRef.current, edge);
             };
             const anchor = readAnchorRef.current("start");
             if (anchor) readReporter.schedule(anchor);
