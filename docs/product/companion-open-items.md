@@ -2,7 +2,7 @@
 
 Every step updates this file: tick what it closed, add what it found, and move nothing back into chat logs.
 
-Taken from sections 6m to 6w of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
+Taken from sections 6m to 6x of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
 
 ## Now: the voice
 
@@ -18,7 +18,13 @@ Taken from sections 6m to 6w of `companion-audit-2026-11-14.md`; the section in 
 
 ## Before going live
 
-- [ ] Explain why chapter notes cost twice as much in the last run: $0.039 to $0.079 of Jev for the same 34 chapters and about the same sentences kept. Likely, from reading the code and not confirmed by a run: the eval writes them twice, itself and through the app's background writer, which marking chapters read starts. (6t)
+- [x] Explain why chapter notes cost twice as much in the last run: $0.039 to $0.079 of Jev for the same 34 chapters and about the same sentences kept. (6t) Closed in 6x: the eval wrote them twice, itself and through the app's background writer, which marking chapters read starts. Counted with stand-in models: two writer calls and twice the checks for every chapter, in the script only. The app itself writes and checks a chapter once, however it hears that the chapter is finished. The eval now leaves the notes to the app's writer. The real run was not repeated.
+- [x] The evaluation and the voice samples wrote and checked every chapter's notes again on every run, and the evaluation had no cap on Jev spend. Closed in 6x: notes are kept between runs in `backend/.eval-cache` and used while the chapter's text, the notes version and both models are the same (`--fresh-notes` writes them again); `companion_eval.py --max-usd`, default $0.10, stops the run and the app's notes writer; both scripts print the Jev total and how many chapters came from the cache. Stand-in models only.
+- [ ] After a sentence is dropped, every later sentence of that reply, or of that chapter's notes, is checked by Jev a second time, and a doubted one gets its second look a second time. It is how the gate is written (later sentences are judged against what was actually shown), and it is the one place a sentence costs more than one check and one second look. A reply that arrives all at once pays it for every sentence after the drop, and `codex-local` does not stream. How much of real spend this is has not been measured. (6x)
+- [ ] 6x was not run with real models: no dollar figure in it is measured, and the saving from the notes cache is arithmetic on 6t's figures (a repeat Pride and Prejudice set about $0.015 of Jev instead of $0.094). (6x)
+- [ ] `companion_eval.py --max-usd` counts Jev only. The writer is the paid API unless `--transport codex-local` is given, and `--audit` calls it outside any ledger. (6x)
+- [ ] The notes cache is keyed by the notes version, not by the wording of the notes prompt or of the checks: after changing either without a new version, run with `--fresh-notes`. (6x)
+- [ ] `backend/scripts/benchmark_conversation.py` has no spend cap of its own; every other script that calls Jev has one, listed in 6x. (6x)
 - [x] When Jev cannot be reached, each failed check stays in the book's cost ledger at its full reserved size; about 120 of them use up the book's token ceiling, and its notes are then refused (replies pass through the same ceiling). Seen in the voice-samples step, when TypeSafe had no credits. Closed in 6u for a call TypeSafe refuses outright (any 4xx, "no credits" among them): nothing is charged. A timeout or a server error is still charged at its reserved size, on purpose. Stand-in provider only.
 - [ ] Check 6u against the real provider once it has credits: the shape of TypeSafe's error answer was guessed, so the reason word comes from the status alone and its own message may not be picked up for the log. (6u)
 - [ ] Books already locked by the 15 November outage stay locked: their refused checks are in the ledger as `…-failed-reserved`, which cannot be told apart from timeouts afterwards. Nothing removes them. (6u)

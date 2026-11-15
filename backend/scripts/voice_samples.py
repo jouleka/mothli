@@ -7,9 +7,12 @@ again after changing how Mothli talks to collect the same messages for a before 
 
 Like companion_eval.py it runs REAL providers on a temporary library and touches no reader data.
 The writer goes through the ChatGPT subscription (codex-local) and the checks through Jev, so
-only Jev costs money: expected about $0.05 a run. The run stops once Jev spend passes --max-usd.
+only Jev costs money: $0.024 for the one real run so far, which wrote its chapter notes. The run
+stops once Jev spend passes --max-usd.
 Chapter notes and the read map are left at their defaults (on), as a reader has them, and the
-notes are written by the app's own background writer, not by this script.
+notes are written by the app's own background writer, not by this script. They are kept in
+backend/.eval-cache and used again by later runs while the chapter, the notes version and the
+models are the same; --fresh-notes writes them all again.
 """
 import argparse
 import json
@@ -24,12 +27,12 @@ sys.path.insert(0, str(BACKEND))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from companion_eval import capture_sentences, enter_by_map, karamazov_epub  # noqa: E402
+from companion_eval import (NotesCache, capture_sentences, enter_by_map, karamazov_epub,  # noqa: E402
+                            paid_run, spend_stop, wait_for_notes)
 
 from app.config import Settings  # noqa: E402
 from app.llm.jev import JevUnavailable  # noqa: E402
 from app.main import create_app  # noqa: E402
-from app.read_map import read_snapshot  # noqa: E402
 from app.retrieval_passages import normalize_source  # noqa: E402
 
 # The messages, typed the way a reader types them. "follows" continues the conversation of the
@@ -93,16 +96,6 @@ it, and any sentences Mothli wrote that the checks removed before the reader saw
 """
 
 
-class OverBudget(Exception):
-    pass
-
-
-def jev_spend(catalog, book_ids):
-    """Jev spend as the books' cost ledgers hold it. A refused or failed call stays in the
-    ledger at the price reserved for it, so this can only be too high."""
-    return sum(cost["usd"] for bid in book_ids for cost in catalog.get_costs(bid) if "jev" in cost["model"])
-
-
 def jev_answers(app):
     """One small question to Jev before any writing is paid for. Not in a book's cost ledger."""
     try:
@@ -113,31 +106,6 @@ def jev_answers(app):
     except JevUnavailable:
         return False
     return True
-
-
-def wait_for_notes(app, settings, bid, check_budget):
-    """Wait until the app has written its notes for every chapter read in full.
-
-    Marking chapters read starts the app's background writer, as it does for a reader. It
-    gives up on a failure and is started again here, but only twice without a new chapter of
-    notes: each attempt pays for a writer call and its checks.
-    """
-    catalog = app.state.catalog
-    _point, chapters, *_rest = read_snapshot(bid, catalog, settings, app.state.worker)
-    whole = {chapter["ordinal"] for chapter in chapters if chapter["whole"]}
-    have, restarts = -1, 0
-    while True:
-        noted = {note["atom"] for note in catalog.get_chapter_notes(bid)}
-        if whole <= noted:
-            return
-        check_budget()
-        if len(noted) > have:
-            have, restarts = len(noted), 0
-        if app.state.notes_builder.ensure(bid):     # true when the writer had stopped
-            restarts += 1
-            if restarts > 2:
-                raise SystemExit("the app could not write its chapter notes; stopped here")
-        time.sleep(2)
 
 
 def ask(api, bid, message):
@@ -211,6 +179,8 @@ def main():
     parser.add_argument("--cases", type=Path, default=Path(__file__).with_name("companion_eval_cases.json"))
     parser.add_argument("--jev-model", default="jev-1.14.0")
     parser.add_argument("--max-usd", type=float, default=0.15, help="stop once Jev spend passes this")
+    parser.add_argument("--fresh-notes", action="store_true",
+                        help="write every chapter's notes again instead of taking them from the cache")
     args = parser.parse_args()
     named = {position["name"]: position for position in json.loads(
         args.cases.read_text(encoding="utf-8"))["books"]["karamazov"]["positions"]}
@@ -236,11 +206,7 @@ def main():
             raise SystemExit("streamed replies, chapter notes and the read map must all be on")
         app = create_app(settings)
         books = {}
-
-        def check_budget():
-            spent = jev_spend(catalog, books.values())
-            if spent > args.max_usd:
-                raise OverBudget(f"Jev spend ${spent:.4f} passed ${args.max_usd}")
+        cache = NotesCache(settings, fresh=args.fresh_notes)
 
         def open_book(api, name):
             if name not in books:
@@ -248,6 +214,7 @@ def main():
                 posted = api.post("/api/books", files={"file": (f"{name}.epub", data, "application/epub+zip")})
                 posted.raise_for_status()
                 books[name] = posted.json()["book_id"]
+                cache.load(catalog, books[name], app.state.worker.source_chapters(books[name]))
             return books[name]
 
         def read_to(api, name, position):
@@ -261,15 +228,16 @@ def main():
                 text = normalize_source(next(c["text"] for c in chapters if c["ordinal"] == atom))
                 catalog.set_read_position(bid, incarnation=catalog.get_book(bid)["incarnation"],
                                           atom=atom, offset=len(text))
-            wait_for_notes(app, settings, bid, check_budget)
+            wait_for_notes(app, settings, bid, check_budget, cache)
             return bid
 
         with TestClient(app, raise_server_exceptions=False) as api:
             catalog = app.state.catalog      # made when the app starts
+            check_budget = spend_stop(catalog, settings, args.max_usd)
             if not jev_answers(app):
                 raise SystemExit("Jev did not answer a one-line question (credits? key?). Every reply "
                                  "sentence needs its check, so nothing was collected.")
-            try:
+            with paid_run(catalog):
                 for scene in SCENES:
                     if scene["book"] == "karamazov":
                         bid = read_to(api, "karamazov", named[scene["position"]])
@@ -297,20 +265,7 @@ def main():
                         print(f"{sum(len(c) for _, c in results)}: {time.perf_counter() - started:.1f}s"
                               + (f" ({error})" if error else ""), flush=True)
                         check_budget()
-            except OverBudget as stop:
-                print(f"stopped: {stop}", flush=True)
-            finally:
-                costs = [cost for bid in books.values() for cost in catalog.get_costs(bid)]
-                for model in sorted({cost["model"] for cost in costs}):
-                    mine = [cost for cost in costs if cost["model"] == model]
-                    print(f"{model}: {len(mine)} calls, ${sum(cost['usd'] for cost in mine):.4f}", flush=True)
-                print(f"Jev spend: ${jev_spend(catalog, books.values()):.4f}", flush=True)
-                # The home conversation opens the reading history; close it so the temporary library can go.
-                from app.api import history as history_api
-                with history_api._stores_lock:
-                    for store in history_api._stores.values():
-                        store.close()
-                    history_api._stores.clear()
+    print(cache.summary(), flush=True)
     collected = sum(1 for _, samples in results for sample in samples if not sample["error"])
     print(f"{collected} of {sum(len(scene['samples']) for scene in SCENES)} samples written to {args.out}")
 
