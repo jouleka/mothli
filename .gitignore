@@ -42,6 +42,7 @@ books/
 
 # Local QA artifacts
 output/
+.eval-cache/
 
 # OS / editor
 .DS_Store

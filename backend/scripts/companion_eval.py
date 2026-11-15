@@ -9,6 +9,11 @@ Calls record real spend; the per-book ceiling below bounds it. No original data 
 Terra uses the OpenAI key from the env file (or --transport codex-local); Jev uses TYPESAFE_API_KEY or the Windows credential.
 Scores are mechanical: fact groups are regexes written once in companion_eval_cases.json, and the
 two tone judgments come from Jev. Treat tone as an indicator to compare runs, not a verdict.
+
+The run stops once Jev spend passes --max-usd. With --notes, chapter notes are written by the
+app's own background writer and kept in backend/.eval-cache between runs, so a later run pays
+for them only where a chapter, the notes version or a model has changed; --fresh-notes writes
+them all again. The summary says how many chapters came from the cache.
 """
 import argparse
 import html
@@ -17,9 +22,10 @@ import logging
 import re
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from statistics import median
-from time import perf_counter
+from time import perf_counter, sleep
 
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
@@ -27,7 +33,7 @@ sys.path.insert(0, str(BACKEND / "tests" / "api"))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.chapter_notes import build_missing  # noqa: E402
+from app import chapter_notes  # noqa: E402
 from app.config import Settings  # noqa: E402
 from app.known_names import _runs, name_runs  # noqa: E402
 from app.llm.jev_budget import budgeted_jev  # noqa: E402
@@ -49,6 +55,129 @@ TONE = {
                "It names a concrete person, object, number, phrase or event from the story.",
                "It stays general, or says nothing about the story."),
 }
+NOTES_CACHE = BACKEND / ".eval-cache" / "chapter-notes.json"      # git-ignored
+
+
+class OverBudget(Exception):
+    pass
+
+
+def jev_spend(catalog):
+    """Jev spend as the books' cost ledgers hold it. A failed call stays in the ledger at the
+    price reserved for it, so this can only be too high."""
+    return sum(cost["usd"] for book in catalog.list_books()
+               for cost in catalog.get_costs(book["book_id"]) if "jev" in cost["model"])
+
+
+def spend_stop(catalog, settings, max_usd):
+    """The check to make between paid steps: raises OverBudget once Jev spend has passed ``max_usd``."""
+    def check():
+        spent = jev_spend(catalog)
+        if spent > max_usd:
+            # The app's notes writer may still be at work: every later call of its is refused.
+            settings.cost_max_usd_per_book = 0
+            raise OverBudget(f"Jev spend ${spent:.4f} passed ${max_usd}")
+    return check
+
+
+@contextmanager
+def paid_run(catalog):
+    """Around everything a run pays for. The spend is printed whether it finished or was stopped."""
+    try:
+        yield
+    except OverBudget as stop:
+        print(f"stopped: {stop}", flush=True)
+    finally:
+        costs = [cost for book in catalog.list_books() for cost in catalog.get_costs(book["book_id"])]
+        for model in sorted({cost["model"] for cost in costs}):
+            mine = [cost for cost in costs if cost["model"] == model]
+            print(f"{model}: {len(mine)} calls, ${sum(cost['usd'] for cost in mine):.4f}", flush=True)
+        print(f"Jev spend: ${jev_spend(catalog):.4f}", flush=True)
+        # The home conversation opens the reading history; close it so the temporary library can go.
+        from app.api import history as history_api
+        with history_api._stores_lock:
+            for store in history_api._stores.values():
+                store.close()
+            history_api._stores.clear()
+
+
+class NotesCache:
+    """Chapter notes kept between runs, so a run does not pay to write notes it already has.
+
+    Notes hold for a chapter while its text hashes the same and the notes version matches, which
+    is the app's own rule for using them again. Here they are also kept apart by writer and
+    checker model. ``fresh`` leaves the cache unread, for a run that measures the notes themselves.
+    """
+
+    def __init__(self, settings, *, fresh=False, path=None):
+        self.path, self.fresh, self.settings = path or NOTES_CACHE, fresh, settings
+        self.loaded, self.reused, self.written = set(), set(), set()
+
+    def _key(self, source_hash):
+        return "|".join(map(str, (chapter_notes.VERSION, self.settings.llm_large_model,
+                                  self.settings.jev_model, source_hash)))
+
+    def _held(self):
+        try:
+            return json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def load(self, catalog, bid, chapters):
+        """Put the notes held for a book's chapters into its library, before anything writes them."""
+        held = {} if self.fresh else self._held()
+        for chapter in chapters:
+            digest = chapter_notes.text_hash(chapter["text"])
+            note = held.get(self._key(digest))
+            if note:
+                catalog.set_chapter_notes(bid, chapter["ordinal"], source_hash=digest,
+                                          version=chapter_notes.VERSION, **note)
+                self.loaded.add((bid, chapter["ordinal"]))
+
+    def save(self, catalog, bid, read):
+        """Keep the book's notes, and count which of the chapters ``read`` in full came from here."""
+        held = self._held()
+        for note in catalog.get_chapter_notes(bid):
+            if note["version"] == chapter_notes.VERSION:
+                held[self._key(note["source_hash"])] = {"sentences": note["sentences"], "dropped": note["dropped"]}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(held, ensure_ascii=False, indent=1), encoding="utf-8")
+        for atom in read:
+            (self.reused if (bid, atom) in self.loaded else self.written).add((bid, atom))
+
+    def summary(self):
+        return (f"chapter notes: {len(self.reused)} chapters from the cache, {len(self.written)} written "
+                f"and checked in this run ({self.path}; --fresh-notes writes them all again)")
+
+
+def wait_for_notes(app, settings, bid, check_budget, cache, pause=2):
+    """Wait until the app has written its notes for every chapter read in full, then keep them.
+
+    Marking chapters read starts the app's background writer, as it does for a reader, and it
+    is the only writer: a script that also wrote them itself paid for every chapter twice
+    (audit 6x). It gives up on a failure and is started again here, but only twice without a
+    new chapter of notes: each attempt pays for a writer call and its checks.
+    """
+    from app.read_map import read_snapshot
+    catalog = app.state.catalog
+    _point, chapters, *_rest = read_snapshot(bid, catalog, settings, app.state.worker)
+    whole = {chapter["ordinal"] for chapter in chapters if chapter["whole"]}
+    have, restarts, noted = -1, 0, set()
+    try:
+        while True:
+            noted = {note["atom"] for note in catalog.get_chapter_notes(bid)}
+            if whole <= noted:
+                return
+            check_budget()
+            if len(noted) > have:
+                have, restarts = len(noted), 0
+            if app.state.notes_builder.ensure(bid):     # true when the writer had stopped
+                restarts += 1
+                if restarts > 2:
+                    raise SystemExit("the app could not write its chapter notes; stopped here")
+            sleep(pause)
+    finally:
+        cache.save(catalog, bid, whole & noted)         # a run that is stopped keeps what it paid for
 
 
 def karamazov_epub():
@@ -230,7 +359,7 @@ def capture_reviews(sink):
         wrap(name, label)
 
 
-def run_cross(args, api, app, settings, spec, epubs, rows, gates):
+def run_cross(args, api, app, settings, spec, epubs, rows, gates, cache, check_budget):
     """The home conversation: several books on one shelf, each read to its own place."""
     from _epub import epub_ncx
     from app.api.profile import _history, _with_shelf
@@ -249,10 +378,11 @@ def run_cross(args, api, app, settings, spec, epubs, rows, gates):
         bid = posted.json()["book_id"]
         first = first or bid
         chapters = app.state.worker.source_chapters(bid)
+        if args.notes:
+            cache.load(app.state.catalog, bid, chapters)
         _boundary, read_text, later_text = enter_by_map(api, app, bid, {"name": name, **place}, chapters)
         if args.notes:
-            build_missing(bid, app.state.catalog, app.state.store, settings, app.state.reader_client,
-                          app.state.worker)
+            wait_for_notes(app, settings, bid, check_budget, cache)
         read_words |= set(word_tokens(read_text))
         unread_tokens |= unread_name_tokens(read_text, later_text) | {
             t for n in book.get("later_names", []) for t in word_tokens(n)}
@@ -306,12 +436,7 @@ def run_cross(args, api, app, settings, spec, epubs, rows, gates):
         args.out.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
         print(json.dumps({k: row[k] for k in ("book", "style", "id", "status", "seconds", "facts_hit",
                                                "facts_total", "spoiler", "as_expected")}), flush=True)
-    # The home conversation opens the reading history; close it so the temporary library can go.
-    from app.api import history as history_api
-    with history_api._stores_lock:
-        for store in history_api._stores.values():
-            store.close()
-        history_api._stores.clear()
+        check_budget()
 
 
 def capture_sentences(sink):
@@ -377,6 +502,10 @@ def main():
     parser.add_argument("--transport", choices=["api", "codex-local"], default="api",
                         help="codex-local uses the ChatGPT CLI login: slower, no API key needed")
     parser.add_argument("--max-usd-per-book", type=float, default=0.5)
+    parser.add_argument("--max-usd", type=float, default=0.10, help="stop once Jev spend passes this")
+    parser.add_argument("--fresh-notes", action="store_true",
+                        help="write every chapter's notes again instead of taking them from the cache: "
+                             "for a run that measures the notes themselves")
     parser.add_argument("--only", nargs="+", help="case ids to run")
     parser.add_argument("--positions", nargs="+", help="position names to run")
     parser.add_argument("--scenario", default="tidy", help="which cross-book shelf to run")
@@ -424,9 +553,12 @@ def main():
             classics_enabled=False, cost_max_usd_per_book=args.max_usd_per_book,
             reader_story_notes=args.notes)
         app = create_app(settings)
-        with TestClient(app, raise_server_exceptions=False) as api:
+        cache = NotesCache(settings, fresh=args.fresh_notes)
+        # The catalog is made when the app starts, so it is read after the client has entered.
+        with TestClient(app, raise_server_exceptions=False) as api, paid_run(app.state.catalog):
+            check_budget = spend_stop(app.state.catalog, settings, args.max_usd)
             if args.cross:
-                run_cross(args, api, app, settings, spec, epubs, rows, gates)
+                run_cross(args, api, app, settings, spec, epubs, rows, gates, cache, check_budget)
             for name, book in spec["books"].items():
                 if args.cross or (args.books and name not in args.books):
                     continue
@@ -438,11 +570,18 @@ def main():
                 posted.raise_for_status()
                 bid = posted.json()["book_id"]
                 chapters = app.state.worker.source_chapters(bid)
+                if args.notes:
+                    cache.load(app.state.catalog, bid, chapters)
                 for position in positions(book):
                     if args.positions and position["name"] not in args.positions:
                         continue
                     # Every position runs on the read map, the default since audit 6q.
                     settings.reader_read_map = True
+                    # Entering a position starts the app's notes writer, so its work is counted from here.
+                    before = len(app.state.catalog.get_costs(bid))
+                    started = perf_counter()
+                    gates.clear()
+                    had = {n["atom"] for n in app.state.catalog.get_chapter_notes(bid)}
                     boundary, read_text, later_text = enter_by_map(api, app, bid, position, chapters)
                     missing = [p for p in position.get("must_contain_read", []) if p.lower() not in read_text.lower()]
                     early = [p for p in position.get("must_not_contain_read", []) if p.lower() in read_text.lower()]
@@ -466,18 +605,17 @@ def main():
                         normalize_source(c["text"])[:boundary["offset"] if c["ordinal"] == boundary["atom"] else None]
                         for c in chapters if c["ordinal"] <= boundary["atom"]) if text]
                     if args.notes:
-                        before = len(app.state.catalog.get_costs(bid))
-                        started = perf_counter()
-                        gates.clear()
-                        had = {n["atom"] for n in app.state.catalog.get_chapter_notes(bid)}
-                        built = build_missing(bid, app.state.catalog, app.state.store, settings,
-                                              app.state.reader_client, app.state.worker)
+                        wait_for_notes(app, settings, bid, check_budget, cache)
                         costs = app.state.catalog.get_costs(bid)[before:]
-                        notes.append({"book": name, "position": position["name"], **built,
+                        held = app.state.catalog.get_chapter_notes(bid)
+                        wrote = [n for n in held if n["atom"] not in had]
+                        # "seconds" is the wait for the app's writer, to the nearest two seconds.
+                        notes.append({"book": name, "position": position["name"], "chapters": len(wrote),
+                                      "kept": sum(len(n["sentences"]) for n in wrote),
+                                      "dropped": sum(n["dropped"] for n in wrote),
                                       "seconds": round(perf_counter() - started, 2), "calls": len(costs),
-                                      "usd": round(sum(c["usd"] for c in costs), 6),
-                                      "notes": app.state.catalog.get_chapter_notes(bid)})
-                        new = [n["atom"] for n in notes[-1]["notes"] if n["atom"] not in had]
+                                      "usd": round(sum(c["usd"] for c in costs), 6), "notes": held})
+                        new = [n["atom"] for n in wrote]
                         if args.audit and len(new) == len(gates):
                             # The notes on each chapter, against the book up to the end of that
                             # chapter: a note may use a name the reader met in an earlier chapter.
@@ -490,7 +628,9 @@ def main():
                             json.dumps(notes, ensure_ascii=False, indent=1), encoding="utf-8")
                         print(json.dumps({k: v for k, v in notes[-1].items() if k not in ("notes", "audit")}), flush=True)
                     run_cases(args, api, app, settings, name, bid, position, boundary, chapter,
-                              leak_tokens, traces, reviews, rows, gates, read_chapters)
+                              leak_tokens, traces, reviews, rows, gates, read_chapters, check_budget)
+    if args.notes:
+        print(cache.summary(), flush=True)
     summarise(rows)
 
 
@@ -507,7 +647,7 @@ def seed_turns(app, settings, bid, boundary, messages):
 
 
 def run_cases(args, api, app, settings, name, bid, position, boundary, chapter, leak_tokens,
-              traces, reviews, rows, gates, read_chapters):
+              traces, reviews, rows, gates, read_chapters, check_budget):
     for style in args.styles:
         settings.reader_conversation_prose = style == "prose"
         settings.reader_conversation_stream = style == "stream"
@@ -576,6 +716,7 @@ def run_cases(args, api, app, settings, name, bid, position, boundary, chapter, 
             args.out.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
             print(json.dumps({k: row[k] for k in ("book", "style", "id", "status", "seconds",
                   "facts_hit", "facts_total", "spoiler", "as_expected")}), flush=True)
+            check_budget()
 
 
 def summarise(rows):
