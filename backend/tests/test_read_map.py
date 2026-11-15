@@ -195,6 +195,21 @@ def test_the_profile_follows_the_map(map_env):
     assert (book()["status"], book()["chapters_read"]) == ("finished", 3)
 
 
+def test_the_map_and_notes_follow_streamed_replies_unless_set():
+    jev = dict(_env_file=None, reader_page_context=True, jev_enabled=True, reader_conversation_jev=True)
+    off = Settings(_env_file=None)
+    assert (off.reader_read_map, off.reader_story_notes) == (False, False)
+    on = Settings(**jev)
+    assert (on.reader_read_map, on.reader_story_notes) == (True, True)
+    assert Settings(**jev, reader_read_map=False).reader_read_map is False
+    assert Settings(**jev, reader_story_notes=False).reader_story_notes is False
+    # Streamed replies turned off: the map and notes, which only they use, stay off and the app starts.
+    reviewed = Settings(**jev, reader_conversation_stream=False)
+    assert (reviewed.reader_read_map, reviewed.reader_story_notes) == (False, False)
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, reader_read_map=True)
+
+
 def test_the_map_is_off_unless_enabled(map_env):
     api, bid, _, settings = map_env
     settings.reader_read_map = False

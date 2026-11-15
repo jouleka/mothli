@@ -901,6 +901,14 @@ The home panel was rebuilt by a second agent to match the conversation inside a 
 - **What Mothli knows of the app is one paragraph written by hand.** It covers reading, marking chapters, jumping and reading again. Anything else it is told to say it does not know.
 - One run each; the home panel was checked in a browser by the agent that built it, not on a phone or with a screen reader.
 
+## 6q. Notes, the read map and the home chat on by default (15 November)
+
+`READER_STORY_NOTES` and `READER_READ_MAP` now follow `READER_CONVERSATION_STREAM` when unset, which itself follows `READER_CONVERSATION_JEV`. Wherever streamed replies are on, chapter notes, the read map and the home-screen conversation (which needs the map) are on too. Either can still be set false on its own.
+
+- Following streamed replies rather than `READER_CONVERSATION_JEV` directly: the map is refused without streamed replies, so a server with Jev on and `READER_CONVERSATION_STREAM=false` would otherwise stop starting. There, both stay off.
+- No check changed. What reaches a model is decided by the map and the notes' hash rule, as in 6m and 6n.
+- Notes are written in the background when a chapter is finished, so a server with these defaults now spends on that: in 6n, notes for 34 chapters of Pride and Prejudice took at least one writer call per chapter and $0.038 of Jev.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
