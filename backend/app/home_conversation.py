@@ -22,7 +22,8 @@ from app.cost import CostCeilingExceeded
 from app.llm.client import ProviderUnavailable
 from app.llm.jev import JevUnavailable
 from app.read_map import read_snapshot, written_from_read
-from app.reader_place import APP_HELP, SPEAK_AS_A_FRIEND, content_numbers, offers_for, place_line
+from app.reader_place import (APP_HELP, FRIEND_VOICE, SPEAK_AS_A_FRIEND, content_numbers, offers_for,
+                              place_line)
 from app.retrieval_passages import passage_windows
 from app.stream_conversation import (HISTORY_TURNS, MAX_PASSAGES, conversation_writer, failure_fields,
                                      jev_runner, sentence_checks, write_and_gate)
@@ -43,10 +44,11 @@ HOME_SYSTEM = (
     "know its title and nothing of what is in it.\n"
     + SPEAK_AS_A_FRIEND +
     "WHERE THEY ARE: when asked where they left off, give the book and the chapter they are in, "
-    "and a detail from what you last read together. Never answer with how many chapters are "
-    "'finished'.\n"
-    "HOW TO TALK: answer straight away, the way you would say it out loud. Contractions, plain "
-    "words, some warmth. Two to four short sentences unless the reader asks for more, and never "
+    "and a detail from what you last read together. Put the place in a sentence of its own and "
+    "the detail in the next one: the place is certain, and a detail that turns out shaky must "
+    "not take it down with it. Never answer with how many chapters are 'finished'.\n"
+    + FRIEND_VOICE +
+    "SHAPE: two to four short sentences unless the reader asks for more, and never "
     "more than seven. Name the book whenever you say something from it, and never carry a "
     "person or event from one book into another. No preamble, no lists, headings, markdown or "
     "citation markers.\n"

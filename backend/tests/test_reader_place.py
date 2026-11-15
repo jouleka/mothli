@@ -85,6 +85,8 @@ def test_a_partly_read_chapter_the_reply_calls_read_together_is_not_offered():
 def test_ranges_and_lists_are_read_and_nothing_outside_the_gone_past_chapters_is_counted():
     reader = book("p", "Pride and Prejudice", here=7, part=[7])
     assert offered(["I wasn’t with you for chapters 1 to 3 and 5."], reader) == [("p", [1, 2, 3, 5], "chapters 1 to 3 and 5")]
+    # "1 through 4" is a range like "1 to 4"; read as only chapter 1, the button undercounts.
+    assert offered(["I wasn’t with you for chapters 1 through 4."], reader) == [("p", [1, 2, 3, 4], "chapters 1 to 4")]
     # Chapter 9 is ahead of the reader and chapter 7 is where they are: neither may be counted.
     assert offered(["I wasn’t with you for chapters 6, 7 and 9."], reader) == [("p", [6], "chapter 6")]
 
