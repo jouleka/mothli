@@ -39,9 +39,9 @@ from app.llm.client import ProviderUnavailable
 from app.llm.jev import JevUnavailable
 from app.llm.jev_budget import budgeted_jev
 from app.read_frontier import requested_snapshot
-from app.read_map import book_record, prefix_map, read_snapshot, visible_turns
-from app.reader_place import (APP_HELP, FRIEND_VOICE, SPEAK_AS_A_FRIEND, content_numbers, offers_for,
-                              place_line)
+from app.read_map import book_record, prefix_map, read_snapshot, skimmed_chapters, visible_turns
+from app.reader_place import (APP_HELP, FRIEND_VOICE, SPEAK_AS_A_FRIEND, content_numbers, note_asked,
+                              offers_for, place_line)
 from app.retrieval_passages import passage_windows
 from app.unicode_text import normalize_text, proper_words, word_tokens
 
@@ -51,6 +51,7 @@ MAX_SENTENCE_CHARS = 400
 MAX_PASSAGES = 10
 MAX_SECOND_LOOKS = 6
 HISTORY_TURNS = 8
+ASKED_TURNS = 200           # how far back Mothli's own words are read for what it has already asked
 logger = logging.getLogger("mothli.conversation")
 
 STREAM_SYSTEM = (
@@ -156,6 +157,12 @@ def take_sentences(buffer, *, final=False):
             sentences.append(last)
         rest = ""
     return sentences, rest
+
+
+def said_before(turns):
+    """Mothli's own sentences in these stored turns, oldest first."""
+    return [sentence for turn in turns if turn["role"] == "assistant"
+            for sentence in take_sentences(turn["content"], final=True)[0]]
 
 
 def sentence_packet(sentence, earlier, passages, *, question, identities=()):
@@ -472,8 +479,9 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
     else:
         read_map = prefix_map(point["atom"], point["offset"])
         drew_on = book_record(book_id, book, {ch["ordinal"]: [(0, len(ch["text"]))] for ch in chapters})
+    earlier = visible_turns(book_id, book, read_map, catalog, limit=ASKED_TURNS)
     history = [ConversationMessage(role=turn["role"], content=turn["content"][:2000], as_of_chapter=eff)
-               for turn in visible_turns(book_id, book, read_map, catalog, limit=HISTORY_TURNS)]
+               for turn in earlier[-HISTORY_TURNS:]]
     question = conversation_question(body.question, history, eff)
     query = conversation_retrieval_question(body.question, history, eff)
     timings, calls, lock = {}, [], Lock()
@@ -619,9 +627,12 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
                 prompt += "\n\n" + notes_block(notes)
             if settings.reader_read_map:
                 # Where the reader is, and what they can do here, in a friend's terms: Mothli
-                # repeats the words it is given, and the checker holds it to them.
+                # repeats the words it is given, and the checker holds it to them. Of pages
+                # turned through quickly it is given the chapter numbers and nothing else.
                 place_now.append({"book": book, "chapters": chapters, "point": point,
-                                  "numbers": content_numbers(manifest)})
+                                  "numbers": content_numbers(manifest),
+                                  "skimmed": skimmed_chapters(book_id, book, catalog)})
+                note_asked(place_now, said_before(earlier))
                 place = place_line(place_now[0])
                 prompt += "\n\nWHERE THE READER IS:\n" + place + "\n\nHOW THIS APP WORKS:\n" + APP_HELP
                 passages += ["Where the reader is: " + place, "How this app works: " + APP_HELP]

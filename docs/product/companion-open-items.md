@@ -2,7 +2,7 @@
 
 Every step updates this file: tick what it closed, add what it found, and move nothing back into chat logs.
 
-Taken from sections 6m to 6z of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
+Taken from sections 6m to 6aa of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
 
 ## Now: the voice
 
@@ -16,8 +16,13 @@ Taken from sections 6m to 6z of `companion-audit-2026-11-14.md`; the section in 
 - [ ] The checker drops correct sentences: in one run all seven sentences it removed were right, three of them from one recap. (6m, 6s)
 - [ ] The checker passes a wrong time order: "after Adelaïda ran away and died, Fyodor forgot Mitya" gets through Jev and the second look. (6m)
 - [ ] The length instruction is not reliable: a recap can still run to 12 sentences. (6m)
-- [ ] Mothli is not told about skimmed pages, so it says "I wasn't with you" for chapters the reader went through quickly. (6r)
-- [ ] The offer button ("I've read chapters…") never appears under a French reply: "I wasn't there" and the chapter numbers are matched in English only. (6t)
+- [x] Mothli is not told about skimmed pages, so it says "I wasn't with you" for chapters the reader went through quickly. (6r) Closed in 6aa: the place line names the chapters before the reader's place that were gone through quickly here, by number only, apart from chapters leapt past; the speaking rules have Mothli say the two of them went through those quickly and ask, once, whether the reader read them; the "I've read…" button appears under that wording. Stand-in models only.
+- [ ] How Mothli actually says it has not been seen: 6aa was not run with real models. To look at: whether it asks warmly and once, whether it still says "I wasn't with you" for skimmed chapters, whether Jev lets the new sentences through (place sentences already trip its time check, 6y), and whether real wording gets the button. (6aa)
+- [ ] The reader's "I was just getting here" never reaches the server: the reader app keeps it in the browser (`rc:skipped-declined:{book}`). Mothli is told exactly what it was told before the answer, so it may still ask once in the book's conversation and once in the home one. Telling it needs the answer stored on the server and sent by the reader app. (6aa)
+- [ ] "Already brought up" is read from Mothli's own stored sentences, in one conversation: the book's chat and the home chat each ask once, "Clear" starts over, and it looks at the last 200 stored turns. A sentence the patterns below do not know is not counted, and one that only states it without asking is. (6aa)
+- [ ] The button's patterns for the new wording are guesses at English: the verb must come before the chapters ("Chapters 2 and 3 went by in a blur" gets no button), "turned the pages of chapters 2 and 3 so fast" gets none, and "I think she raced through chapter 3" gets one if chapter 3 was gone past. A missing button costs nothing that Contents cannot do; a stray one is still the reader's own "I've read…". (6aa)
+- [ ] A chapter mostly read, with one page turned quickly, is named as gone through quickly, as in the reader app's own question. Mothli is also told "part of chapter N" was read with it. (6aa)
+- [ ] The offer button ("I've read chapters…") never appears under a French reply: "I wasn't there" and the chapter numbers are matched in English only. (6t) The patterns added in 6aa are English only too.
 - [x] The offer button has not been tried with real replies since its fix in 6t; unit tests only. (6t) Seen once with real replies in `voice-samples.md`: samples 10 and 11 carry "I've read chapters 1 to 4" and "I've read chapter 1". One run, English only.
 
 ## Before going live
@@ -42,7 +47,10 @@ Taken from sections 6m to 6z of `companion-audit-2026-11-14.md`; the section in 
 - [ ] Cast entries that are not names: "his wife", "her divinity student". (6s)
 - [ ] A skimmed page inside the current chapter blocks that chapter's notes until the reader presses "I've read this". (6n, 6r)
 - [ ] A reader who starts mid-book gets no cast or recap until the earlier chapters are read or marked read. (6n)
-- [ ] Newly skipped chapters are not asked about once any earlier chapter was declined. (6p, 6r)
+- [ ] Newly skipped chapters are not asked about once any earlier chapter was declined. (6p, 6r) This is the reader app's question, from the browser's record; Mothli in conversation does not use that record and still raises them. (6aa)
+- [ ] On the Project Gutenberg front-matter page of Pride and Prejudice, `PUT /api/books/{id}/read-page` answers 422, so that page can never be reported as read and the browser console shows an error. Seen in the owner's running app on 15 November; not examined.
+- [ ] The shelf says "In chapter 3 of 61" for a book that opens on that front-matter page under the heading "Chapter I". Seen in the owner's running app on 15 November; not examined.
+- [ ] The evaluation's reference is not given "already brought up" in the place line; no eval case skims pages, so nothing in it differs today. (6aa)
 - [ ] The home chat uses the read text of at most six books, in shelf order, not the six that fit the question. (6o)
 - [x] Earlier home turns are not filtered by what is read now: after "read it fresh" an old turn about that book still reaches the writer as conversation. (6o) Closed in 6v: a home turn is stored with the read map of every book that had anything read, and is said or shown again only while all of that is still read. Stand-in models only.
 - [x] The conversation inside a book has the fault 6v closed for the home chat, in two shapes, both reproduced with stand-in models. Closed in 6w: a turn inside a book is stored with the book's read map and is said or shown again only while all of that is still read; the place rule is gone. Stand-in models only. As found: (a) A turn written while chapters were only marked as read, before any page was reported, is stored at place (0, 0), which always counts as read: after "read it fresh" it is still returned by `GET /api/books/{id}/conversation`, still listed as a reaction in `GET /api/reader/profile`, and is given to the writer again as soon as anything else is read. (b) A turn asked from a place that is still read, about a chapter the reader then marks "I haven't read this", stays shown and stays in the writer's and the checker's input. `visible_turns` looks at where the reader was, not at what the turn drew on. Storing the book's map with each turn, as home turns now do, would close both; turns already stored would then need the same decision as in 6v. (6v)

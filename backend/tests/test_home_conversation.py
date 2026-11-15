@@ -335,3 +335,34 @@ def test_a_reply_being_written_while_its_book_is_read_fresh_is_stored_but_not_sh
     ask(api, "What did Corvus do with lamp 21?")
     assert len(app.state.catalog.get_turns(None, incarnation="home")) == 2
     assert shown(api) == []
+
+
+# --- chapters gone through quickly, on the home screen --------------------------------------------
+def test_the_home_chat_is_told_which_chapters_were_gone_through_quickly_and_nothing_that_is_on_them(
+        shelf, monkeypatch):
+    """Catches: the home chat still saying "not read with you" of a chapter skimmed here; anything
+    of the skimmed pages but the chapter's number reaching a model; no button under the new wording."""
+    from test_skimmed_pages import everything_sent
+    api, app, _ = shelf
+    lamps = book_ids(app)["The Lamp Book"]
+    mark = {"cfi": "epubcfi(/6/2)", "position_epoch": 0, "atom": 1}
+    assert api.put(f"/api/books/{lamps}/read-page", json={
+        "start": {**mark, "quote": lamp(1, 3), "prefix": ""},
+        "end": {**mark, "quote": lamp(1, 9), "prefix": lamp(1, 9)}, "skimmed": True}).status_code == 200
+    reply = "We flipped through chapter 1 of The Lamp Book, so I didn’t take it in. Did you read it?"
+    seen = models(app, monkeypatch, reply=reply)
+    sent = everything_sent(app, monkeypatch)
+    events = ask(api, "Where am I in The Lamp Book, and what did Jonas do with cart 7?")
+    prompt = seen["reply"][-1]
+    told = ("“The Lamp Book” by Ada Writer: the reader is in chapter 2 of 3 now. Read with you: part of "
+            "chapter 2. The two of you went through chapter 1 quickly here, before where the reader is:")
+    assert told in prompt and "Not read with you" not in prompt and "already brought this up" not in prompt
+    assert all(told in " ".join(state["passages"]) for state in seen["checked"]) and seen["checked"]
+    everything = "\n".join(sent)
+    assert lamp(2, 21) in everything and cart(1, 7) in everything       # the models were reached
+    assert "Mara" not in everything and "in part 1" not in everything
+    assert [(o["title"], o["atoms"], o["chapters"]) for o in events[-1]["answer"]["offers"]] == [
+        ("The Lamp Book", [1], "chapter 1")]
+    # Asked once in this conversation: the next prompt says so.
+    ask(api, "And in The Cart Book?")
+    assert "You have already brought this up with the reader in this conversation" in seen["reply"][-1]
