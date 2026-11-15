@@ -2,7 +2,7 @@
 
 Every step updates this file: tick what it closed, add what it found, and move nothing back into chat logs.
 
-Taken from sections 6m to 6aa of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
+Taken from sections 6m to 6ab of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
 
 ## Now: the voice
 
@@ -51,8 +51,17 @@ Taken from sections 6m to 6aa of `companion-audit-2026-11-14.md`; the section in
 - [ ] A skimmed page inside the current chapter blocks that chapter's notes until the reader presses "I've read this". (6n, 6r)
 - [ ] A reader who starts mid-book gets no cast or recap until the earlier chapters are read or marked read. (6n)
 - [ ] Newly skipped chapters are not asked about once any earlier chapter was declined. (6p, 6r) This is the reader app's question, from the browser's record; Mothli in conversation does not use that record and still raises them. (6aa)
-- [ ] On the Project Gutenberg front-matter page of Pride and Prejudice, `PUT /api/books/{id}/read-page` answers 422, so that page can never be reported as read and the browser console shows an error. Seen in the owner's running app on 15 November; not examined.
-- [ ] The shelf says "In chapter 3 of 61" for a book that opens on that front-matter page under the heading "Chapter I". Seen in the owner's running app on 15 November; not examined.
+- [x] On the Project Gutenberg front-matter page of Pride and Prejudice, `PUT /api/books/{id}/read-page` answers 422, so that page can never be reported as read and the browser console shows an error. Seen in the owner's running app on 15 November; not examined. Closed in 6ab: the reader app placed front matter that shares a file with chapter one in chapter one; the server, which holds it in no chapter, rightly refused the page. The app no longer reports such a page. One browser run with stand-in models.
+- [x] The shelf says "In chapter 3 of 61" for a book that opens on that front-matter page under the heading "Chapter I". Seen in the owner's running app on 15 November; not examined. Closed in 6ab, and a fault, not a leftover of testing: the same wrong placing saved the front-matter page as the reader's position, while the shelf line stayed with the last page read. A fresh reader got there by reading into chapter 3, going to the front and closing the book. A page in no chapter is no longer a place: the position, "where you stopped" and the shelf line stay with the last chapter page.
+- [ ] Text that Gutenberg's markers cut out of a chapter's own file (the header in a file that is one whole chapter, the licence after the END marker in the last chapter's file) is still placed in that chapter by the reader app, so such pages are still reported and refused with 422. Read from the code; no such book was opened. (6ab)
+- [ ] A page that begins in front matter and ends in chapter one counts for nothing, so Mothli would not read the opening lines of chapter one. Not seen: in Pride and Prejudice Chapter I starts a page. (6ab)
+- [ ] Front matter is never a saved place: a reader who stops in the middle of a long preface reopens at the last chapter page, or at the cover. True of every book; this one book used to save it by the fault closed in 6ab. Owner's call. (6ab)
+- [ ] "Start again", keeping what Mothli knows, leaves the reader's place: the book opens at the start while the shelf's place and Mothli's "the reader is in chapter 3 now" stay until a page of chapter one counts. Reproduced at the API. Clearing the place also changes the chapter the conversation counts as available. (6ab)
+- [ ] The shelf line is the last page read and "Continue reading" the last chapter page shown: after a quick look back at an earlier chapter they differ until a page there counts. 6p's rule; noted. (6ab)
+- [ ] On front matter the reader's header and footer keep the last chapter and its minutes left; a book never opened shows "Chapter I." from the cover on. (6ab)
+- [ ] The reader app and the server each hold a copy of the test for Gutenberg front matter (`readFrontier.ts`, `chapter_text.py`); a comment on each names the other. (6ab)
+- [ ] The book's own stylesheets are refused by the content security policy (`blob:` under `style-src`): a console error for each, and the book's page-break rules do not apply. Seen in the 6ab browser run; not looked into. (6ab)
+- [ ] 6ab was tried in a browser once, on one book and the Karamazov fixture, with stand-in models; reading into chapter 3 was done at the API only. Not on a phone, in hosted mode, or with the read map off. (6ab)
 - [ ] The evaluation's reference is not given "already brought up" in the place line; no eval case skims pages, so nothing in it differs today. (6aa)
 - [ ] The home chat uses the read text of at most six books, in shelf order, not the six that fit the question. (6o)
 - [x] Earlier home turns are not filtered by what is read now: after "read it fresh" an old turn about that book still reaches the writer as conversation. (6o) Closed in 6v: a home turn is stored with the read map of every book that had anything read, and is said or shown again only while all of that is still read. Stand-in models only.

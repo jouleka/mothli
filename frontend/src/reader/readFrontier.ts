@@ -5,15 +5,25 @@ import { compare } from "../vendor/foliate-js/epubcfi.js";
 
 const normalize = (text: string) => text.replace(/\s+/gu, " ").trim();
 
+/** A page of a chapter's file that is in no chapter. It is not a place in the book: nothing of it
+ * is reported, like a page of a file that holds no chapter at all. */
+export const NO_CHAPTER = -1;
+// A file that opens with Project Gutenberg's header: the server keeps everything ahead of the
+// book's first chapter anchor out of every chapter (chapter_text.py, _anchor_texts, by this test).
+const GUTENBERG_FRONT = /START OF (?:THE|THIS) PROJECT GUTENBERG|Project Gutenberg(?:'s|’s)? (?:e-?book|etext)/i;
+
+/** The chapter (index into ``atoms``) at one edge of a page, NO_CHAPTER, or null when it cannot be told. */
 export function atomAtRange(atoms: Atom[], sectionHref: string, range: Range, edge: "start" | "end"): number | null {
   const candidates = atoms.map((atom, index) => ({atom, index})).filter(
     ({atom}) => normalizeHref(atom.href) === normalizeHref(sectionHref));
-  if (candidates.length === 1) return candidates[0].index;
+  if (!candidates.length) return null;
+  if (candidates.length === 1 && !candidates[0].atom.href.includes("#")) return candidates[0].index;
   const boundary = range.cloneRange();
   boundary.collapse(edge === "start");
   const doc = boundary.startContainer.ownerDocument;
   if (!doc?.body || !doc.body.contains(boundary.startContainer)) return null;
   let selected: number | null = null;
+  let first: Element | null = null;
   for (const {atom, index} of candidates) {
     const fragment = atom.href.includes("#") ? atom.href.slice(atom.href.indexOf("#") + 1) : "";
     let element: Element = doc.body;
@@ -25,13 +35,18 @@ export function atomAtRange(atoms: Atom[], sectionHref: string, range: Range, ed
       if (matches.length !== 1) return null;
       element = matches[0];
     }
+    first ??= element;
     if (boundary.comparePoint(element, 0) <= 0) selected = index;
   }
+  if (selected !== null || !first || !candidates.every(({atom}) => atom.href.includes("#"))) return selected;
   // Text ahead of this file's first chapter anchor is the end of the previous chapter, which
   // began in the preceding file: the server assigns it to that chapter too.
-  if (selected === null && candidates.every(({atom}) => atom.href.includes("#")))
-    return Math.max(0, candidates[0].index - 1);
-  return selected;
+  if (candidates[0].index > 0) return candidates[0].index - 1;
+  // Ahead of the book's first chapter it opens chapter one, unless it is Gutenberg's front matter.
+  const head = doc.createRange();
+  head.setStart(doc.body, 0);
+  head.setEndBefore(first);
+  return GUTENBERG_FRONT.test(head.toString().slice(0, 8000)) ? NO_CHAPTER : 0;
 }
 
 export function pageAnchor(range: Range, atom: number, cfi: string, epoch: number,
