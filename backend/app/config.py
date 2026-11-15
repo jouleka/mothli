@@ -62,8 +62,10 @@ class Settings(BaseSettings):
     # Unset, it follows READER_CONVERSATION_JEV: on wherever that path is on. Set false to keep
     # the reviewed, non-streamed replies.
     reader_conversation_stream: bool | None = None
-    reader_story_notes: bool = False   # give replies Mothli's checked notes on finished chapters
-    reader_read_map: bool = False      # Mothli follows what was actually read, not the furthest point
+    # Both follow streamed replies when unset, the only path that uses them (and so the Jev
+    # conversation setting). Set false to turn either off on its own.
+    reader_story_notes: bool | None = None  # give replies Mothli's checked notes on finished chapters
+    reader_read_map: bool | None = None     # Mothli follows what was actually read, not the furthest point
     reader_conversation_draft_effort: Literal["low", "medium"] = "medium"
     reader_conversation_review_effort: Literal["low", "medium"] = "medium"
     # One model call in a page conversation. The provider default (120 s) is far past the
@@ -157,8 +159,6 @@ class Settings(BaseSettings):
             self.reader_conversation_stream = self.reader_conversation_jev
         if self.reader_conversation_stream and not self.reader_conversation_jev:
             raise ValueError("READER_CONVERSATION_STREAM requires READER_CONVERSATION_JEV")
-        if self.reader_read_map and not (self.reader_page_context and self.reader_conversation_stream):
-            raise ValueError("READER_READ_MAP requires READER_PAGE_CONTEXT and streamed replies")
         if self.reader_conversation_prose and not self.reader_conversation_jev:
             raise ValueError("prose replies require the local conversation Jev pipeline")
         if self.reader_conversation_routing and not self.reader_conversation_jev:
@@ -166,6 +166,13 @@ class Settings(BaseSettings):
         if self.reader_conversation_jev and (self.deployment_mode != "local" or not self.reader_page_context
                                              or not self.jev_enabled):
             raise ValueError("conversation Jev experiment requires local page context and Jev")
+        # After the Jev check, so a server missing page context is told that, not about the map.
+        if self.reader_read_map is None:
+            self.reader_read_map = self.reader_conversation_stream
+        if self.reader_story_notes is None:
+            self.reader_story_notes = self.reader_conversation_stream
+        if self.reader_read_map and not (self.reader_page_context and self.reader_conversation_stream):
+            raise ValueError("READER_READ_MAP requires READER_PAGE_CONTEXT and streamed replies")
         if self.llm_transport == "codex-local" and self.deployment_mode != "local":
             raise ValueError("codex-local is only supported for local testing")
         if self.deployment_mode != "hosted":
