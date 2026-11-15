@@ -533,3 +533,18 @@ test("the shelf links to the reading history brought in from other apps", async 
   await user.click(await screen.findByRole("button", { name: "Reading history" }));
   expect(onHistory).toHaveBeenCalled();
 });
+
+describe("the current book's progress line with the read map", () => {
+  test("a reader in chapter 3 with no chapter finished is told chapter 3, not 'ready to begin'", async () => {
+    const book = { book_id: "b1", title: "Pride and Prejudice", author: "Jane Austen", source: "upload", added_at: "2026-11-15" };
+    mocks.books.mockResolvedValue([book]);
+    const api = (await import("../api")).api as unknown as Record<string, unknown>;
+    api.position = vi.fn().mockResolvedValue({ bookmark: 0, place_chapter: 3, cfi: "epubcfi(/6/8)", position_epoch: 0, atoms: 61 });
+    api.manifest = vi.fn().mockRejectedValue(new Error("not needed"));
+    render(<Shelf onOpen={() => {}} />);
+    expect(await screen.findByText("In chapter 3 of 61")).toBeTruthy();
+    expect(screen.queryByText(/Ready to begin/)).toBeNull();
+    delete api.position;
+    delete api.manifest;
+  });
+});

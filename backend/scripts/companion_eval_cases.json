@@ -2,18 +2,31 @@
   "version": 1,
   "note": "Fixed questions for scripts/companion_eval.py. facts: every group must match (any alternative, case-insensitive regex). forbidden: none may match. expect: answer | empty | plain. positions: further reading positions, run in reading order; a quote puts the position just after that sentence inside the chapter. cross_book: for the homepage chat; not run until that exists.",
   "cross_book": {
-    "shelf": {"karamazov": {"told": [1, 2, 3, 4]}, "pride": {"told": [1, 2, 3, 4, 5, 6]}},
-    "unread": [{"title": "Middlemarch", "author": "George Eliot"}],
-    "cases": [
-      {"id": "x-compare-fathers", "type": "cross", "question": "Which father is worse so far, Mr. Bennet or Fyodor Pavlovitch?", "facts": [["Bennet"], ["Fyodor", "Karamazov"]], "forbidden": ["Smerdyakov", "Wickham", "murder", "killed"]},
-      {"id": "x-which-book", "type": "cross", "question": "Which of my books has the proud man at a ball?", "facts": [["Pride and Prejudice"], ["Darcy"]]},
-      {"id": "x-where", "type": "cross", "question": "Where am I in each of my books?", "facts": [["Karamazov"], ["Pride and Prejudice"], ["Middlemarch"]]},
-      {"id": "x-next", "type": "cross", "question": "What should I pick up tonight?", "facts": [["Karamazov", "Pride and Prejudice", "Middlemarch"]], "forbidden": ["Dorothea", "Casaubon", "Ladislaw", "Lydgate"]},
-      {"id": "x-unread", "type": "cross", "question": "What is Middlemarch about? Should I read it next?", "facts": [["Middlemarch"]], "forbidden": ["Dorothea", "Casaubon", "Ladislaw", "Lydgate", "provincial", "marriage"]},
-      {"id": "x-ahead-other-book", "type": "spoiler", "expect": "empty", "question": "In Pride and Prejudice, who does Lydia run away with?", "forbidden": ["Wickham", "elope", "Brighton"]},
-      {"id": "x-ahead-both", "type": "spoiler", "expect": "empty", "question": "Does either of these two books end with a wedding?", "forbidden": ["\\byes\\b", "marr(y|ies|ied) (Mr\\. )?Darcy", "Bingley marr", "they marry"]},
-      {"id": "x-mix", "type": "spoiler", "expect": "empty", "question": "What does Mr. Darcy think of the elder Zossima?", "forbidden": ["Darcy (thinks|admires|respects|dislikes|considers)"]}
-    ]
+    "tidy": {
+      "shelf": {"karamazov": {"told": [1, 2, 3, 4]}, "pride": {"told": [1, 2, 3, 4, 5, 6]}},
+      "unread": [{"title": "Middlemarch", "author": "George Eliot"}],
+      "cases": [
+        {"id": "x-compare-fathers", "type": "cross", "question": "Which father is worse so far, Mr. Bennet or Fyodor Pavlovitch?", "facts": [["Bennet"], ["Fyodor", "Karamazov"]], "forbidden": ["Smerdyakov", "Wickham", "murder", "killed"]},
+        {"id": "x-which-book", "type": "cross", "question": "Which of my books has the proud man at a ball?", "facts": [["Pride and Prejudice"], ["Darcy"]]},
+        {"id": "x-where", "type": "cross", "question": "Where am I in each of my books?", "facts": [["Karamazov"], ["Pride and Prejudice"], ["Middlemarch"]]},
+        {"id": "x-next", "type": "cross", "question": "What should I pick up tonight?", "facts": [["Karamazov", "Pride and Prejudice", "Middlemarch"]], "forbidden": ["Dorothea", "Casaubon", "Ladislaw", "Lydgate"]},
+        {"id": "x-unread", "type": "cross", "question": "What is Middlemarch about? Should I read it next?", "facts": [["Middlemarch"]], "forbidden": ["Dorothea", "Casaubon", "Ladislaw", "Lydgate", "provincial", "marriage"]},
+        {"id": "x-ahead-other-book", "type": "spoiler", "expect": "empty", "question": "In Pride and Prejudice, who does Lydia run away with?", "forbidden": ["Wickham", "elope", "Brighton"]},
+        {"id": "x-ahead-both", "type": "spoiler", "expect": "empty", "question": "Does either of these two books end with a wedding?", "forbidden": ["\\byes\\b", "marr(y|ies|ied) (Mr\\. )?Darcy", "Bingley marr", "they marry"]},
+        {"id": "x-mix", "type": "spoiler", "expect": "empty", "question": "What does Mr. Darcy think of the elder Zossima?", "forbidden": ["Darcy (thinks|admires|respects|dislikes|considers)"]}
+      ]
+    },
+    "messy": {
+      "shelf": {"karamazov": {"pages": [{"atom": 5, "from": "He came of a family of landowners, had been in the army in early youth, and served in the Caucasus as an officer.", "to": "That was the dream in Alyosha’s heart."}]}},
+      "unread": [{"title": "Middlemarch", "author": "George Eliot"}],
+      "cases": [
+        {"id": "m-where", "type": "cross", "question": "where did i leavve oof", "facts": [["chapter 5", "Chapter V", "fifth chapter"], ["Karamazov"]]},
+        {"id": "m-but-im-in-5", "type": "cross", "question": "u say i haent yet read a chapter ut we on chapter 5", "history": [["where did i leavve oof", "You’re in chapter 5 of The Brothers Karamazov."]], "facts": [["chapter 5", "Chapter V", "fifth chapter"], ["1", "one", "earlier", "first four", "before"]]},
+        {"id": "m-how-to-mark", "type": "cross", "question": "where do i mark them finished", "facts": [["Contents"]], "forbidden": ["not sure where", "don.t know where"]},
+        {"id": "m-skipped-chapter", "type": "spoiler", "expect": "empty", "question": "what happened in chapter 1 again?", "forbidden": ["Adela", "eloped", "ran away", "divinity", "Petersburg"]},
+        {"id": "m-what-counts", "type": "cross", "question": "why dont you know the first chapters, i went through them", "facts": [["quick", "fast", "long enough", "stay", "Contents", "turned"]]}
+      ]
+    }
   },
   "books": {
     "karamazov": {
@@ -73,6 +86,11 @@
           {"id": "s5-so-far", "type": "whole", "question": "Catch me up. What's happened so far?",
            "facts": [["elder", "Zossima"], ["Alyosha"]],
            "forbidden": ["Adela", "Sofya", "Grigory", "Polenov", "Mitya", "Dmitri", "Ivan"]},
+          {"id": "s5-catch-up", "type": "whole", "question": "catch me up",
+           "facts": [["wasn.t (with|there)", "weren.t", "chapters 1 to 4", "earlier chapters", "first four", "didn.t read"], ["elder", "Zossima", "Alyosha"]],
+           "forbidden": ["Adela", "Sofya", "Grigory", "Polenov"]},
+          {"id": "s5-how-to-tell", "type": "interpretive", "question": "but i did read the earlier chapters, how do i tell you",
+           "facts": [["Contents"]]},
           {"id": "s5-skipped-person", "type": "spoiler", "expect": "empty", "question": "Who was Fyodor Pavlovitch's first wife?",
            "forbidden": ["Adela", "Mi.sov", "eloped", "ran away", "divinity"]},
           {"id": "s5-skipped-thread", "type": "spoiler", "expect": "empty", "question": "How did Alyosha end up at the monastery?",

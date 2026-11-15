@@ -109,6 +109,8 @@ export type Manifest = {
 };
 export type Position = {
   bookmark: number; cfi: string | null; ingest_progress?: number; position_epoch: number; atoms?: number;
+  /** With the read map: the chapter the reader is in now (1-based), 0 when nothing is read. */
+  place_chapter?: number;
   completed_chapter?: number; current_offset?: number; high_water_offset?: number;
   position_version?: number; last_opened_at?: string; updated_at?: string; queued?: boolean;
 };
@@ -131,8 +133,10 @@ export type ConversationMessage = { role: "user" | "assistant"; content: string;
 export type ReadMap = { chapters: { atom: number; read: number }[] };
 /** What another reading app recorded about a book, for the reader to accept or not. */
 export type ReadOffer = {
-  kind: "finished" | "progress"; sources: string[]; finished_on: string | null;
+  kind: "finished" | "progress" | "skipped"; sources: string[]; finished_on: string | null;
   chapter: number | null; atoms: number[];
+  /** For "skipped": the chapters in words, e.g. "chapters 1 and 2". */
+  chapters?: string;
 };
 /** One message of the home conversation, which runs across all the reader's books. */
 export type HomeTurn = { role: "user" | "assistant"; content: string; created_at?: string };
@@ -151,9 +155,13 @@ export type AskCost = {
 export const ASK_TIMEOUT_MS = 60_000;
 // null until the server has answered once: whether it offers replies sentence by sentence.
 let streamedReplies: boolean | null = null;
+/** Chapters the reader went past without reading them here; Mothli may offer to count them. */
+export type ReadSkipped = { book_id: string; title: string; atoms: number[]; chapters: string };
 export type AskAnswer = {
   as_of_chapter: number; insufficient_evidence: boolean; claims: AskClaim[];
   citations: AskCitation[]; cost: AskCost | null;
+  /** Present only when the reply said Mothli was not with the reader for some chapters. */
+  offers?: ReadSkipped[];
   answer_type?: "recap" | "conversation";
   // "prose": the claims are the sentences of one spoken reply, shown as a single paragraph.
   style?: "prose";
@@ -651,7 +659,7 @@ export const api = {
   readPage: (id: string, start: ReadAnchor, end: ReadAnchor) => fetch(`/api/books/${id}/read-page`, {
     method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders() },
     body: JSON.stringify({ start, end }),
-  }).then((r) => j<ReadFrontier>(r)),
+  }).then((r) => j<ReadFrontier & { skipped?: { atoms: number[]; chapters: string } | null }>(r)),
   readChapters: (id: string, atoms: number[], read: boolean, source: "told" | "import" = "told") =>
     fetch(`/api/books/${id}/read-chapters`, {
       method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders() },

@@ -10,6 +10,7 @@ import json
 
 from app.content_scope import is_content
 from app.read_frontier import anchor_offset, snapshot, source_state
+from app.reader_place import content_numbers
 from app.retrieval_passages import normalize_source
 
 PAGE_CHARS = 12_000        # the most one page report may add, so a faulty one cannot mark a book read
@@ -84,15 +85,21 @@ def read_snapshot(book_id, catalog, settings, worker):
     return point, permitted, {**state, "read_through": whole, "finished_through": finished}, manifest, book, held
 
 
-def sync_counter(book_id, catalog, settings, worker):
+def sync_counter(book_id, catalog, settings, worker, *, with_place=False):
     """Make the older chapter counter say what the map says, and return the map's point.
+
+    With ``with_place``, also what the reader's place looks like (for asking about chapters
+    they went past): returns (point, place).
 
     The cast, recap, chapter closeout and chapter titles follow that counter. It is the last
     chapter up to which every chapter is finished, so those views never run ahead of the reader.
     """
-    point, _chapters, state, *_ = read_snapshot(book_id, catalog, settings, worker)
+    point, chapters, state, manifest, book, _held = read_snapshot(book_id, catalog, settings, worker)
     if state["bookmark"] != state["finished_through"]:
         catalog.set_bookmark(book_id, state["finished_through"])
+    if with_place:
+        return point, {"book": book, "chapters": chapters, "point": point,
+                       "numbers": content_numbers(manifest)}
     return point
 
 

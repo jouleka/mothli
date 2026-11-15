@@ -38,6 +38,9 @@ from app.unicode_text import normalize_text, word_tokens  # noqa: E402
 BOILERPLATE = re.compile(
     r"the (passage|text|excerpt|source)s? (does|do|states?|says?|establish)|cited|"
     r"insufficient evidence|cannot be (verified|established)|as an ai", re.I)
+JARGON = re.compile(
+    r"\bthe shelf\b|\bpassages?\b|\bsource(s| passages?)\b|\bevidence\b|marked (as )?(finished|read)|"
+    r"pages available|material we have|the app says|\brecords? (show|say)|reading notes", re.I)
 TONE = {
     "spoken": ("Does `state.reply` read like a person talking to a friend about a book they both read?",
                "It is natural spoken prose that answers directly.",
@@ -147,6 +150,7 @@ def score(case, reply, status, answer_status, leak_tokens, spoken_reply=False):
         "facts_hit": sum(hit), "facts_total": len(groups),
         "spoiler": bool(forbidden or leaked), "forbidden": forbidden, "unread_names": leaked,
         "words": len(words), "boilerplate": bool(BOILERPLATE.search(reply)),
+        "jargon": sorted({m.group(0).lower() for m in JARGON.finditer(reply)}),
         "answer_status": answer_status,
     }
 
@@ -213,7 +217,8 @@ def run_cross(args, api, app, settings, spec, epubs, rows, gates):
     from _epub import epub_ncx
     from app.api.profile import _history, _with_shelf
     from app.home_conversation import shelf_books, shelf_lines
-    cross = spec["cross_book"]
+    from app.reader_place import APP_HELP
+    cross = spec["cross_book"][args.scenario]
     settings.reader_read_map = True
     read_words, unread_tokens, read_passages, first = set(), set(), [], None
     for name, place in cross["shelf"].items():
@@ -244,10 +249,15 @@ def run_cross(args, api, app, settings, spec, epubs, rows, gates):
     leak_tokens = unread_tokens - read_words
     _total, entries = _history(settings).list(limit=500)
     elsewhere = [entry for entry in _with_shelf(entries, app.state.catalog, settings) if not entry["book_id"]]
-    shelf = "The reader's shelf: " + " ".join(shelf_lines(
+    shelf = "Where the reader is: " + " ".join(shelf_lines(
         shelf_books(app.state.catalog, settings, app.state.worker), elsewhere))
+    told = [shelf, "How this app works: " + APP_HELP]
+    leak_tokens -= set(word_tokens(" ".join(told)))
     for case in [c for c in cross["cases"] for _ in range(args.repeat) if not args.only or c["id"] in args.only]:
         app.state.catalog.clear_turns(None)
+        for role, text in ((r, t) for q, a in case.get("history", []) for r, t in (("user", q), ("assistant", a))):
+            app.state.catalog.add_turn(None, incarnation="home", position_epoch=0, atom=0, offset=0,
+                                       role=role, content=text)
         before = len(app.state.catalog.get_costs(first))
         gates.clear()
         started = perf_counter()
@@ -270,7 +280,7 @@ def run_cross(args, api, app, settings, spec, epubs, rows, gates):
         if gates:
             row["written"] = gates[-1]["written"]
             if args.audit:
-                row["audit"] = reference_audit(app, settings, first, gates[-1], [shelf, *read_passages],
+                row["audit"] = reference_audit(app, settings, first, gates[-1], [*told, *read_passages],
                                                case["question"])
         rows.append(row)
         args.out.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -349,6 +359,7 @@ def main():
     parser.add_argument("--max-usd-per-book", type=float, default=0.5)
     parser.add_argument("--only", nargs="+", help="case ids to run")
     parser.add_argument("--positions", nargs="+", help="position names to run")
+    parser.add_argument("--scenario", default="tidy", help="which cross-book shelf to run")
     parser.add_argument("--cross", action="store_true",
                         help="run the cross-book cases against the home conversation instead of the per-book ones")
     parser.add_argument("--audit", action="store_true",
@@ -434,7 +445,17 @@ def main():
                     leak_tokens = unread_name_tokens(read_text, later_text) | {
                         t for n in book.get("later_names", []) for t in word_tokens(n)}
                     chapter = boundary["available_chapter"]
-                    read_chapters = [read_text] if settings.reader_read_map else [text for text in (
+                    told = []
+                    if settings.reader_read_map:
+                        from app.read_map import read_snapshot
+                        from app.reader_place import APP_HELP, content_numbers, place_line
+                        point, read_now, _state, manifest, row_book, _held = read_snapshot(
+                            bid, app.state.catalog, settings, app.state.worker)
+                        told = ["Where the reader is: " + place_line({
+                            "book": row_book, "chapters": read_now, "point": point,
+                            "numbers": content_numbers(manifest)}), "How this app works: " + APP_HELP]
+                        leak_tokens -= set(word_tokens(" ".join(told)))
+                    read_chapters = [read_text, *told] if settings.reader_read_map else [text for text in (
                         normalize_source(c["text"])[:boundary["offset"] if c["ordinal"] == boundary["atom"] else None]
                         for c in chapters if c["ordinal"] <= boundary["atom"]) if text]
                     if args.notes:
@@ -542,6 +563,10 @@ def run_cases(args, api, app, settings, name, bid, position, boundary, chapter, 
 
 
 def summarise(rows):
+    talking_shop = [r["id"] for r in rows if r.get("jargon")]
+    if talking_shop:
+        print(f"\nreplies that talk about Mothli's own workings: {len(talking_shop)} of {len(rows)}: "
+              + ", ".join(talking_shop))
     audited = [a for r in rows for a in r.get("audit", [])]
     if audited:
         shown = [a for a in audited if a["shown"]]

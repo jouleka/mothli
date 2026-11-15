@@ -71,7 +71,7 @@ def test_a_home_reply_has_each_books_read_text_under_its_title_and_nothing_unrea
     # Nothing outside what was read: the rest of either book, or any of the one not started.
     assert lamp(2, 19) not in prompt and "Mara" not in prompt and "Petra" not in prompt
     assert "UNREAD_SHELF_CANARY" not in prompt
-    assert "“Middlemarch” by George Eliot: on the shelf, not started" in prompt
+    assert "“Middlemarch” by George Eliot: not started" in prompt
     assert [e["text"] for e in events if e["type"] == "sentence"] == ["Corvus moved lamp 21 in part 2."]
     assert events[-1]["type"] == "done" and events[-1]["answer"]["dropped_sentences"] == 1
     # The checker saw what the writer saw, each passage under its book's name.
@@ -86,9 +86,15 @@ def test_the_shelf_tells_mothli_where_the_reader_is_in_each_book(shelf, monkeypa
     seen = models(app, monkeypatch, reply="You’re one chapter into The Cart Book.")
     ask(api, "Where am I in each of my books?")
     prompt = seen["reply"][-1]
-    assert "“The Cart Book” by Ben Author: reading, 1 of 3 chapters finished" in prompt
-    assert "“The Lamp Book” by Ada Writer: reading, 0 of 3 chapters finished" in prompt
-    assert "“Deep Work” by Cal Newport: read elsewhere, finished 2022-02-01, rated 4" in prompt
+    # In the reader's terms: where they are, and what was not read with Mothli. Never a count
+    # of "finished" chapters, which told a reader in chapter 2 that they had read nothing.
+    assert "“The Cart Book” by Ben Author:" in prompt and "Read with you: chapter 1 in full." in prompt
+    assert ("“The Lamp Book” by Ada Writer: the reader is in chapter 2 of 3 now. Read with you: part of "
+            "chapter 2. Not read with you: chapter 1, which come before where the reader is.") in prompt
+    assert "finished" not in prompt.split("WHAT YOU HAVE READ TOGETHER")[0].split("WHERE THE READER IS")[1].split(
+        "Deep Work")[0]
+    assert "“Deep Work” by Cal Newport: read in another app, finished 2022-02-01, rated 4" in prompt
+    assert "HOW THIS APP WORKS" in prompt and "open Contents" in prompt
     assert any("“The Cart Book” by Ben Author" in " ".join(s["passages"]) for s in seen["checked"])
 
 
@@ -132,3 +138,12 @@ def test_home_chat_needs_the_read_map_and_an_empty_shelf_calls_no_model(shelf, m
         events = ask(other, "What should I read?")
         assert [e["type"] for e in events] == ["done"] and events[0]["answer"]["insufficient_evidence"]
         assert seen["reply"] == []
+
+
+def test_a_home_reply_that_says_mothli_was_not_there_offers_to_count_those_chapters(shelf, monkeypatch):
+    api, app, _ = shelf
+    models(app, monkeypatch, reply="I wasn’t with you for chapter 1 of The Lamp Book.")
+    offers = ask(api, "why dont you know the start of the lamp book")[-1]["answer"]["offers"]
+    assert [(o["title"], o["atoms"], o["chapters"]) for o in offers] == [("The Lamp Book", [1], "chapter 1")]
+    models(app, monkeypatch, reply="Corvus moved lamp 21 in part 2.")
+    assert "offers" not in ask(api, "What did Corvus do?")[-1]["answer"]

@@ -332,3 +332,31 @@ def test_help_with_a_selected_passage_works_wherever_the_reader_is(map_env, monk
     assert "outside the current reading position" not in there.text
     wrong = api.post(f"/api/books/{bid}/selection-action", json={**body, "text": "Not in this chapter at all."})
     assert wrong.status_code == 422
+
+
+def test_the_shelf_can_say_which_chapter_the_reader_is_in_even_when_none_is_finished(map_env):
+    api, bid, _, _ = map_env
+    assert api.get(f"/api/books/{bid}/position").json()["place_chapter"] == 0
+    read_page(api, bid, 3, 10, 12)
+    position = api.get(f"/api/books/{bid}/position").json()
+    assert (position["bookmark"], position["place_chapter"]) == (0, 3)
+
+
+# --- chapters the reader went past: Mothli asks, and offers to count them --------------------------
+def test_settling_into_a_chapter_past_unread_ones_brings_an_offer_to_count_them(map_env):
+    api, bid, _, _ = map_env
+    assert read_page(api, bid, 1, 1, 3)["skipped"] is None                  # reading from the start
+    landed = read_page(api, bid, 3, 10, 12)
+    assert landed["skipped"] == {"atoms": [1, 2], "chapters": "chapters 1 and 2"}
+    api.put(f"/api/books/{bid}/read-chapters", json={"atoms": [1, 2], "read": True})
+    assert read_page(api, bid, 3, 13, 14)["skipped"] is None
+
+
+def test_a_reply_that_says_mothli_was_not_there_carries_the_offer_and_other_replies_do_not(map_env, monkeypatch):
+    api, bid, app, _ = map_env
+    read_page(api, bid, 3, 10, 12)
+    models(app, monkeypatch, reply="I wasn’t with you for chapters 1 and 2. Vex moved lamp 11 in part 3.")
+    assert ask(api, bid, "catch me up")[-1]["answer"]["offers"] == [
+        {"book_id": bid, "title": "The Lamp Book", "atoms": [1, 2], "chapters": "chapters 1 and 2"}]
+    models(app, monkeypatch, reply="Vex moved lamp 11 in part 3.")
+    assert "offers" not in ask(api, bid, "What did Vex do?")[-1]["answer"]

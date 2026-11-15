@@ -269,6 +269,7 @@ export function ReaderPage({
   const readReporterRef = useRef<ReadFrontierReporter | null>(null);
   const pagesReadRef = useRef<PagesRead | null>(null); // which pages Mothli may count as read
   const [mapped, setMapped] = useState(false); // the server keeps a read map for this book
+  const mappedRef = useRef(false); // the same, for the page-turn handler
   const [readShare, setReadShare] = useState<Record<number, number>>({}); // by 0-based chapter index
   const [readOffer, setReadOffer] = useState<ReadOffer | null>(null);
   const refreshReadShare = useCallback(async () => {
@@ -294,8 +295,13 @@ export function ReaderPage({
     if (!offer) return;
     try {
       // Declining is remembered on this device; the offer also ends once anything is read here.
-      if (accept) await api.readChapters?.(bookId, offer.atoms, true, "import");
-      else localStorage.setItem(`rc:read-offer-declined:${bookId}`, "yes");
+      if (accept) await api.readChapters?.(bookId, offer.atoms, true, offer.kind === "skipped" ? "told" : "import");
+      else if (offer.kind === "skipped") {
+        // "I skipped them" is remembered for these chapters, so Mothli does not ask again.
+        const key = `rc:skipped-declined:${bookId}`;
+        const before: number[] = JSON.parse(localStorage.getItem(key) ?? "[]");
+        localStorage.setItem(key, JSON.stringify([...new Set([...before, ...offer.atoms])]));
+      } else localStorage.setItem(`rc:read-offer-declined:${bookId}`, "yes");
     } catch {
       /* Storage or the network failed; the reader can still use "I've read this" in contents. */
     }
@@ -408,7 +414,23 @@ export function ReaderPage({
     const pagesRead = new PagesRead(async (start, end) => {
       if (dead || mapOff || !api.readPage || start.position_epoch !== positionEpochRef.current) return;
       try {
-        await api.readPage(bookId, start, end);
+        const point = await api.readPage(bookId, start, end);
+        // Settled on a page with chapters gone past before it: ask once whether they were read.
+        const skipped = point?.skipped;
+        if (!dead && skipped) {
+          let declined: number[] = [];
+          try {
+            declined = JSON.parse(localStorage.getItem(`rc:skipped-declined:${bookId}`) ?? "[]");
+          } catch {
+            /* no storage: ask */
+          }
+          const open = skipped.atoms.filter((atom) => !declined.includes(atom));
+          if (open.length === skipped.atoms.length) {
+            setReadOffer((current) => current ?? {
+              kind: "skipped", sources: [], finished_on: null, chapter: null,
+              atoms: skipped.atoms, chapters: skipped.chapters });
+          }
+        }
       } catch (error) {
         if (error instanceof ApiError && error.status === 404) mapOff = true;
         else throw error;
@@ -416,9 +438,12 @@ export function ReaderPage({
     });
     pagesReadRef.current = pagesRead;
     setMapped(false);
+    mappedRef.current = false;
     setReadOffer(null);
-    void api.readMap?.(bookId)?.then(async (map) => {
+    // Known before the book opens: with the map, landing where the reader left off is not a leap.
+    const mapProbe = api.readMap?.(bookId)?.then(async (map) => {
       if (dead) return;
+      mappedRef.current = true;
       setMapped(true);
       setReadShare(Object.fromEntries(map.chapters.map((chapter) => [chapter.atom - 1, chapter.read])));
       let declined = false;
@@ -841,6 +866,7 @@ export function ReaderPage({
             lastAtomRef.current,
             maxAtomRef.current,
             allowJumpRef.current,
+            mappedRef.current,
           );
           if (!verdict.admit) return; // a far landing without explicit confirmation never reports
           if (verdict.spendToken) allowJumpRef.current = false;
@@ -929,6 +955,7 @@ export function ReaderPage({
         };
         // Older imports may have a completed-chapter bookmark without a CFI. Resume at the next
         // unread atom only when the whole-spine map validates its file; never guess a spine index.
+        await mapProbe;
         if (saved.cfi) await view.init({ lastLocation: saved.cfi });
         else {
           const atomIndex =
@@ -1762,6 +1789,7 @@ export function ReaderPage({
           bookId={bookId}
           bookmark={readerBookmark}
           prepareReadContext={prepareReadContext}
+          onChaptersRead={() => void refreshReadShare()}
           throughCurrentPage={readFrontier !== null}
           readingPass={readingPass}
           initialAction={initialAction}

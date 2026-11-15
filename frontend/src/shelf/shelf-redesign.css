@@ -486,19 +486,3 @@
 /* the classics tile sits beside "Add a book": solid, so it reads as something to open */
 .ml-book-classics { border-style: solid; border-color: var(--m-line-strong); background: var(--m-surface); }
 .ml-book-classics:hover { border-color: var(--m-ink); }
-
-/* ---------- Mothli on the home screen ---------- */
-.ml-home-chat { display: grid; gap: 14px; margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--m-line); }
-.ml-home-chat-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
-.ml-home-chat-head h2 { margin: 0; font: 500 20px/1.2 var(--m-book); color: var(--m-ink); }
-.ml-home-chat-clear { font-size: 13px; color: var(--m-soft); text-decoration: underline; }
-.ml-home-chat-turns { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.ml-home-chat-turns li { max-width: 62ch; padding: 10px 14px; border-radius: 14px; line-height: 1.5; }
-.ml-home-chat-turns li.is-reader { justify-self: end; background: var(--m-accent); color: var(--m-paper, #fff); }
-.ml-home-chat-turns li.is-mothli { justify-self: start; border: 1px solid var(--m-line); color: var(--m-ink); }
-.ml-home-chat-error { margin: 0; font-size: 14px; color: var(--m-accent); }
-.ml-home-chat-form { display: flex; align-items: end; gap: 10px; }
-.ml-home-chat-form textarea {
-  flex: 1 1 auto; min-height: 52px; padding: 10px 12px; border: 1px solid var(--m-line-strong);
-  border-radius: 12px; background: transparent; color: var(--m-ink); font: inherit; resize: vertical;
-}

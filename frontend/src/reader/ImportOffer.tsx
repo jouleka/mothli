@@ -27,6 +27,23 @@ export function ImportOffer({
   const apps = offer.sources.map(appName).join(" and ") || "Your reading history";
   const finished = offer.kind === "finished";
   const chapters = offer.atoms.length;
+  if (offer.kind === "skipped") {
+    const them = chapters === 1 ? "it" : "them";
+    return (
+      <div className="start-over-note import-offer" role="region" aria-labelledby={titleId}>
+        <div className="confirmation-copy">
+          <strong id={titleId}>Before we go on</strong>
+          <p>
+            I wasn’t with you for {offer.chapters}. Have you read {them}?
+          </p>
+        </div>
+        <div className="confirmation-actions start-over-actions">
+          <Button onClick={onDecline}>no, I skipped {them}</Button>
+          <Button variant="primary" onClick={onAccept}>yes, I’ve read {them}</Button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="start-over-note import-offer" role="region" aria-labelledby={titleId}>
       <div className="confirmation-copy">

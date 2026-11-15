@@ -8,7 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { api, ApiError, type AskAnswer, type AskCitation, type ReadFrontier } from "../api";
+import { api, ApiError, type AskAnswer, type AskCitation, type ReadFrontier, type ReadSkipped } from "../api";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { Moth, type MothMood } from "../ui/Moth";
@@ -16,6 +16,7 @@ import { PeoplePanel, StoryPanel } from "./StoryMemory";
 import { activeOfflineOwner } from "../pwa/offline";
 import { keepTabFocusInside } from "./focusTrap";
 import type { ReaderSelection } from "./ReaderMarksPanel";
+import { CountAsRead } from "./CountAsRead";
 import "./mothli-conversation.css";
 import "./companion.css";
 
@@ -207,6 +208,7 @@ export function AskTheBook({
   onSaveReply,
   initialAction,
   prepareReadContext,
+  onChaptersRead,
   throughCurrentPage = false,
   seed = null,
   chapterLabel: _chapterLabel = "",
@@ -227,6 +229,8 @@ export function AskTheBook({
   onSaveReply?: (reply: SavedCompanionReply) => void;
   initialAction?: "recap" | null;
   prepareReadContext?: () => Promise<ReadFrontier | null>;
+  /** The reader told Mothli, from a reply, that some chapters are read: refresh what shows it. */
+  onChaptersRead?: () => void;
   throughCurrentPage?: boolean;
   seed?: CompanionSeed | null;
   chapterLabel?: string;
@@ -264,6 +268,7 @@ export function AskTheBook({
   closeRef.current = onClose;
   const titleId = useId();
   const [confirmClear, setConfirmClear] = useState(false);
+  const [liveOffer, setLiveOffer] = useState<{ id: string; offers: ReadSkipped[] } | null>(null);
   const [saveError, setSaveError] = useState("");
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [peopleOpen, setPeopleOpen] = useState(false);
@@ -452,13 +457,17 @@ export function AskTheBook({
           );
       }
       if (!isCurrentRequest()) return;
+      // An offer to count skipped chapters belongs to this sitting, not to the saved conversation.
+      const { offers, ...kept } = result;
+      const exchangeId = crypto.randomUUID();
+      setLiveOffer(offers?.length ? { id: exchangeId, offers } : null);
       session.update({
         exchanges: [
           ...session.getSnapshot().exchanges,
           {
-            id: crypto.randomUUID(),
+            id: exchangeId,
             question: value,
-            answer: result,
+            answer: kept,
             passage: !!scopeSelection,
             selectionKey,
           },
@@ -819,6 +828,9 @@ export function AskTheBook({
                 <div className="mothli-reply lp-reply">
                   <div className="lp-reply-body">
                     <p>{readableAnswer(exchange.answer)}</p>
+                    {liveOffer?.id === exchange.id && (
+                      <CountAsRead offers={liveOffer.offers} onCounted={onChaptersRead} />
+                    )}
                     {!exchange.answer.insufficient_evidence && exchange.answer.answer_type !== "conversation" && (
                       <div className="mothli-reply-actions lp-reply-actions">
                         {exchange.answer.citations.length > 0 && (

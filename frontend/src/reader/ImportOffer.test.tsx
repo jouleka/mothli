@@ -28,3 +28,18 @@ describe("ImportOffer", () => {
     expect(screen.getByRole("button", { name: "yes, I’ve read those" })).toBeTruthy();
   });
 });
+
+describe("ImportOffer for chapters the reader went past", () => {
+  test("Mothli asks whether they were read, in its own words", () => {
+    const onAccept = vi.fn();
+    const onDecline = vi.fn();
+    render(<ImportOffer onAccept={onAccept} onDecline={onDecline} offer={{
+      kind: "skipped", sources: [], finished_on: null, chapter: null, atoms: [1, 2], chapters: "chapters 1 and 2" }} />);
+    const note = screen.getByRole("region", { name: /before we go on/i });
+    expect(note.textContent).toMatch(/I wasn’t with you for chapters 1 and 2\. Have you read them\?/);
+    fireEvent.click(screen.getByRole("button", { name: "yes, I’ve read them" }));
+    expect(onAccept).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "no, I skipped them" }));
+    expect(onDecline).toHaveBeenCalledTimes(1);
+  });
+});

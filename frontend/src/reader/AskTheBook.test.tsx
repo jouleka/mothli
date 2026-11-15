@@ -442,3 +442,30 @@ test("shows a reaction clarification and retains it for the next turn without a 
   await screen.findByText(answer.claims[0].text);
   expect(mocks.askBook.mock.calls[1][3][1].content).toBe("Oof. Which part felt unfair to you?");
 });
+
+describe("chapters Mothli was not there for", () => {
+  test("a reply that says so offers to count them, and one press does it", async () => {
+    const readChapters = vi.fn().mockResolvedValue({});
+    (mocks as Record<string, unknown>).readChapters = readChapters;
+    const onChaptersRead = vi.fn();
+    mocks.askBook.mockResolvedValueOnce({
+      ...answer, claims: [{ text: "I wasn’t with you for chapters 1 and 2.", citation_ids: [] }], citations: [],
+      offers: [{ book_id: "b", title: "The Forge", atoms: [1, 2], chapters: "chapters 1 and 2" }] });
+    render(<AskTheBook {...props} onChaptersRead={onChaptersRead} />);
+    submit("catch me up");
+    fireEvent.click(await screen.findByRole("button", { name: "I’ve read chapters 1 and 2" }));
+    await waitFor(() => expect(readChapters).toHaveBeenCalledWith("b", [1, 2], true));
+    expect(await screen.findByText("Got it. I’ll count chapters 1 and 2 as read.")).toBeTruthy();
+    expect(onChaptersRead).toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "I’ve read chapters 1 and 2" })).toBeNull();
+    delete (mocks as Record<string, unknown>).readChapters;
+  });
+
+  test("an ordinary reply offers nothing", async () => {
+    mocks.askBook.mockResolvedValueOnce(answer);
+    render(<AskTheBook {...props} />);
+    submit("Who met at the forge?");
+    await screen.findByText(/Berenice met Aldric at the forge/);
+    expect(screen.queryByRole("button", { name: /I’ve read/ })).toBeNull();
+  });
+});

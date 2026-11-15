@@ -865,6 +865,42 @@ Shelf: Karamazov with chapters 1 to 4 read, Pride and Prejudice with chapters 1 
 - **Earlier home turns are not filtered by what is read now.** After "read it fresh" on a book, an old home turn about it can still be given to the writer as conversation, though not as evidence.
 - One run, two real books. The stand-in for the unopened book tests the model's own knowledge of a famous title, not a real file.
 
+## 6p. First use by the reader: what broke, and the fixes (15 November)
+
+The reader opened Pride and Prejudice, went quickly through two chapters, read part of chapter 3, and talked to Mothli. Four things were wrong, none caught by the cases in 6m to 6o, which used tidy reading states and tidy questions.
+
+| What the reader saw | Cause | Fix |
+|---|---|---|
+| "The shelf says you haven't finished a chapter yet. The passage we've read is in Chapter III" to a reader in chapter 3 | Mothli repeats the terms it is given. It was given "0 of 61 chapters finished" and the labels "shelf" and "passage" | `app/reader_place.py`: Mothli is told "the reader is in chapter 3 of 61 now. Read with you: part of chapter 3. Not read with you: chapters 1 and 2", and is forbidden to speak of how it knows things |
+| "I'm not sure where in the app you mark chapters finished" | Mothli knew nothing about the app | A short account of how the app works is given to the writer and to the checker, in the book's conversation and the home one |
+| "Catch me up" in the book gave one thin sentence and no word about the two chapters skipped | The book's conversation had no notion of chapters the reader went past | The same place line and rules there: say first that it was not with the reader for those chapters, then what was read |
+| Reopening the book showed "Chapter 1" and lost the place | The jump guard seeds from the chapter counter, which since 6n follows the read map and was 0. Landing in chapter 3 was treated as an unconfirmed leap and never tracked | With the read map every landing is followed; only pages read count. The shelf also says "In chapter 3 of 61", not "Ready to begin" |
+
+The home panel was rebuilt by a second agent to match the conversation inside a book: the same handwriting for the reader's words and Mothli's, a bounded window that follows the newest reply, the latest six exchanges with "Show earlier", and a confirm before clearing.
+
+### Measured (real models, one run each)
+
+| Cases | Before | After |
+|---|---|---|
+| The reader's own conversation on the home screen, plus two more (5) | 5 of 5 replies used internal terms; 0 of 1 knew where to mark chapters | 5 of 5 as expected, 6 of 6 facts, 0 internal terms, 12 sentences shown and none rejected by the reference |
+| In the book, after skipping to chapter 5 and after jumping around (12, two new) | not run in this form | 12 of 12 as expected, 10 of 10 facts, 0 internal terms; 28 shown, 1 rejected by the reference |
+
+- The one rejected sentence was "I wasn't with you for chapters 1 to 4, so I can't tell you who Fyodor Pavlovitch's first wife was", which is true of that position.
+- **The eight cross-book cases from 6o, re-run after these changes:** 9 of 9 facts, no spoilers, no internal terms. One case was marked wrong by its own pattern ("We don't know what Mr. Darcy thinks of Zossima" matched "Darcy thinks"); the reply was right. Two shown sentences were rejected by the reference: "You're in chapter 5 of The Brothers Karamazov" and "You're in chapter 7 of Pride and Prejudice", said of books whose chapters were marked as read with no place recorded. Mothli is now told which chapter is next in that case; that change was not re-measured.
+- The eval now counts replies that talk about Mothli's own workings, and no longer treats the book's title or the word "chapter" as an unread name.
+- Reopening in chapter 3 and the shelf line were checked in the running app.
+
+### Still open
+
+- **Built after this was written: Mothli asks about skipped chapters and can count them.**
+  - When the reader settles on a page (a page report is accepted) with chapters before it not read in full, the reader app asks once: "I wasn't with you for chapters 1 to 3. Have you read them?" Yes marks them as told; "I skipped them" is remembered for those chapters on that device.
+  - When a reply says Mothli was not there for some chapters, the answer carries an offer, decided by the server from the reader's place and never by the writer. Both conversations show it as one button under that reply ("I've read chapters 1 and 2"); pressing it marks them and Mothli confirms. The offer is not stored with the conversation.
+  - Checked in the running app: after 30 s on a page of chapter 4 the question appeared, and yes put chapters 1 to 3 in the map and moved the counter to 3. The buttons under replies have unit tests only.
+  - If some of the skipped chapters were declined before and new ones are skipped later, the reader app does not ask about the new ones.
+- **Whether quickly turned pages should count** is a product decision this did not change: a quarter of ordinary reading time is still the rule.
+- **What Mothli knows of the app is one paragraph written by hand.** It covers reading, marking chapters, jumping and reading again. Anything else it is told to say it does not know.
+- One run each; the home panel was checked in a browser by the agent that built it, not on a phone or with a screen reader.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

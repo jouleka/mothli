@@ -40,6 +40,7 @@ from app.llm.jev import JevUnavailable
 from app.llm.jev_budget import budgeted_jev
 from app.read_frontier import requested_snapshot
 from app.read_map import read_snapshot, visible_turns
+from app.reader_place import APP_HELP, SPEAK_AS_A_FRIEND, content_numbers, offers_for, place_line
 from app.retrieval_passages import passage_windows
 from app.unicode_text import normalize_text, proper_words, word_tokens
 
@@ -82,6 +83,9 @@ STREAM_SYSTEM = (
     "plainly that the two of you haven't got there yet. Never confirm, deny, hint or guess, and "
     "never repeat as fact something the reader's message assumes but the passages do not state.\n"
     "If you cannot tell which person or moment they mean, ask.\n"
+    "WHERE THE READER IS and HOW THIS APP WORKS, when given, are facts you may use and tell "
+    "the reader.\n"
+    + SPEAK_AS_A_FRIEND +
     "Output only the words of your reply."
 )
 # A reply in conversation relays no instructions to carry out, so the check on an instruction's
@@ -455,6 +459,7 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
     jev_run = jev_runner(catalog, settings, client, book_id, note)
 
     signals = {}
+    place_now = []          # where the reader is, once known: for offering to count skipped chapters
 
     def payload(sentences, dropped=0, first_ms=None):
         with lock:
@@ -465,6 +470,7 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
         return {"as_of_chapter": eff, "read_frontier": point, "insufficient_evidence": not sentences,
                 "claims": [{"text": s, "citation_ids": []} for s in sentences], "citations": [],
                 **({"status": "ahead"} if not sentences and (signals.get("ahead") or signals.get("unread_name")) else {}),
+                **({"offers": offers} if (offers := offers_for(sentences, place_now)) else {}),
                 "style": "prose", "stream": True, "dropped_sentences": dropped, "cost": cost,
                 "timing": {"request_id": request_id, "first_sentence_ms": first_ms,
                            "total_ms": round((perf_counter() - started) * 1000, 2),
@@ -581,6 +587,14 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
                 prompt += "(none found for this message)"
             if notes:
                 prompt += "\n\n" + notes_block(notes)
+            if settings.reader_read_map:
+                # Where the reader is, and what they can do here, in a friend's terms: Mothli
+                # repeats the words it is given, and the checker holds it to them.
+                place_now.append({"book": book, "chapters": chapters, "point": point,
+                                  "numbers": content_numbers(manifest)})
+                place = place_line(place_now[0])
+                prompt += "\n\nWHERE THE READER IS:\n" + place + "\n\nHOW THIS APP WORKS:\n" + APP_HELP
+                passages += ["Where the reader is: " + place, "How this app works: " + APP_HELP]
             note_names = names_note(identities)
             if note_names:
                 prompt += "\n\n" + note_names

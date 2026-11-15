@@ -14,6 +14,7 @@ from app.ingest.manifest import AtomSetMismatch, assert_matches_store, bounds_of
 from app.reader import frontier
 from app.read_frontier import ReadAnchor, confirm_anchor, current_snapshot
 from app.read_map import chapter_fractions, import_offer, mark_chapters, record_page, sync_counter
+from app.reader_place import skipped_before
 
 router = APIRouter(prefix="/api/books/{book_id}", tags=["reading"])
 
@@ -128,7 +129,10 @@ def put_read_page(book_id: str, body: ReadPage, request: Request, catalog=Depend
     _map_enabled(settings)
     try:
         finished = record_page(book_id, body.start, body.end, catalog, settings, worker)
-        point = sync_counter(book_id, catalog, settings, worker)
+        point, place = sync_counter(book_id, catalog, settings, worker, with_place=True)
+        # The reader has settled on a page here. If chapters before it were gone past, the app
+        # may ask once whether they have been read.
+        point = {**point, "skipped": skipped_before(place)}
     except LookupError as exc:
         raise HTTPException(404, "unknown book") from exc
     except RuntimeError as exc:
@@ -189,8 +193,12 @@ def get_position(book_id: str, catalog=Depends(get_catalog), store=Depends(get_s
     manifest, bounds, durable = _load_checked(book_id, catalog, store, settings)
     st = catalog.get_state(book_id)
     progress = min(st["ingest_progress"], durable)
+    # With the read map: the chapter the reader is in, which can be far past the chapter counter.
+    place = (catalog.get_read_position(book_id, incarnation=catalog.get_book(book_id)["incarnation"])
+             if settings.reader_read_map else None)
     return {"bookmark": st["bookmark"], "cfi": st["cfi"], "ingest_progress": progress,
-            "position_epoch": st["position_epoch"], "atoms": len(manifest["atoms"])}
+            "position_epoch": st["position_epoch"], "atoms": len(manifest["atoms"]),
+            "place_chapter": place[0] if place else 0}
 
 
 @router.put("/position", dependencies=[Depends(book_lifecycle)])

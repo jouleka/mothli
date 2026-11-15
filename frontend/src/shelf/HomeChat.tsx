@@ -1,58 +1,217 @@
-/** Mothli on the home screen: one conversation across the reader's books. Every sentence shown
+/** Mothli on the home screen: one conversation across the reader's books, written the way Mothli
+ * writes in a book's margin (the reader in graphite, Mothli in blue pencil). Every sentence shown
  * has already been checked on the server; this panel only displays what arrives. It is not
- * rendered at all where the server has no home conversation. */
-import { type FormEvent, useEffect, useId, useState } from "react";
-import { api, ApiError, type HomeTurn } from "../api";
+ * rendered at all where the server has no home conversation.
+ *
+ * Long conversations stay on one sheet: the conversation scrolls inside a bounded area that keeps
+ * the newest exchange in view, and only the latest exchanges are drawn until the reader asks for
+ * earlier ones. */
+import { type FormEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { api, ApiError, type HomeTurn, type ReadSkipped } from "../api";
 import { Button } from "../ui/Button";
+import { Icon } from "../ui/Icon";
+import { Moth } from "../ui/Moth";
+import "./home-chat.css";
 
 const NOTHING_SHOWN = "We haven’t got there yet, or I don’t have enough from what we’ve read to say.";
+const STARTERS = ["Where did I leave off?", "What should I read tonight?"];
+/** How many exchanges are drawn at first, and how many more each "Show earlier" adds. */
+const LATEST = 6;
+const EARLIER_STEP = 10;
+/** The writer can take a while before its first sentence; after this long, say so. */
+const SLOW_MS = 6000;
+/** Within this many pixels of the bottom, the reader is "following" the conversation. */
+const FOLLOW_SLACK = 48;
+
+type Exchange = { question: string | null; reply: string | null };
+/** Mothli's offer to count chapters it missed as read. Offers are not saved with the conversation:
+ * they live only on the reply that just arrived, for this visit. */
+type Offer = ReadSkipped & { state: "open" | "saving" | "done" | "failed" };
+
+const offerLabel = (offer: ReadSkipped) => `I’ve read ${offer.chapters} of ${offer.title}`;
+const offerDone = (offer: ReadSkipped) => `Got it. I’ll count ${offer.chapters} of ${offer.title} as read.`;
+const OFFER_FAILED = "I couldn’t note that just now. Try again in a moment.";
+
+function exchangesOf(turns: HomeTurn[]): Exchange[] {
+  const out: Exchange[] = [];
+  for (const turn of turns) {
+    const last = out[out.length - 1];
+    if (turn.role === "user") out.push({ question: turn.content, reply: null });
+    else if (last && last.question !== null && last.reply === null) last.reply = turn.content;
+    else out.push({ question: null, reply: turn.content });
+  }
+  return out;
+}
 
 export function HomeChat() {
   const [turns, setTurns] = useState<HomeTurn[] | null>(null); // null until the server says it exists
+  const [start, setStart] = useState(0); // first exchange drawn; earlier ones wait behind "Show earlier"
   const [question, setQuestion] = useState("");
-  const [arriving, setArriving] = useState<string | null>(null); // sentences of the reply in flight
-  const [asked, setAsked] = useState<string | null>(null);
+  const [asked, setAsked] = useState<string | null>(null); // the question in flight
+  const [sentences, setSentences] = useState<string[]>([]); // the reply in flight, as it arrives
+  const [slow, setSlow] = useState(false);
+  const [spoken, setSpoken] = useState<string[]>([]); // what the screen reader is told, once each
   const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [unseen, setUnseen] = useState(false); // something newer arrived below where the reader is
+  const [offers, setOffers] = useState<{ exchange: number; items: Offer[] } | null>(null);
   const titleId = useId();
   const inputId = useId();
+  const confirmId = useId();
+  const threadRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const clearRef = useRef<HTMLButtonElement>(null);
+  const keepRef = useRef<HTMLButtonElement>(null);
+  const following = useRef(true);
+  const reveal = useRef<{ height: number; focus: number } | null>(null);
+  const placed = useRef(false);
 
   useEffect(() => {
     let dead = false;
     api.homeConversation()
-      .then((saved) => { if (!dead) setTurns(saved.turns); })
+      .then((saved) => {
+        if (dead) return;
+        setTurns(saved.turns);
+        setStart(Math.max(0, exchangesOf(saved.turns).length - LATEST));
+      })
       .catch(() => { /* 404: no home conversation here; the panel stays hidden */ });
     return () => { dead = true; };
   }, []);
 
-  if (turns === null) return null;
   const busy = asked !== null;
+  const waiting = busy && sentences.length === 0;
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const value = question.trim();
+  useEffect(() => {
+    if (!waiting) return;
+    setSlow(false);
+    const timer = window.setTimeout(() => setSlow(true), SLOW_MS);
+    return () => window.clearTimeout(timer);
+  }, [waiting]);
+
+  // Once the reply has been spoken, take it out of the hidden log so a screen reader browsing the
+  // page does not meet it twice.
+  useEffect(() => {
+    if (busy || spoken.length === 0) return;
+    const timer = window.setTimeout(() => setSpoken([]), 5000);
+    return () => window.clearTimeout(timer);
+  }, [busy, spoken.length]);
+
+  // First sight of a saved conversation: open at the top of the latest exchange.
+  useLayoutEffect(() => {
+    const thread = threadRef.current;
+    if (placed.current || !thread) return;
+    placed.current = true;
+    const latest = thread.querySelector<HTMLElement>("[data-latest]");
+    thread.scrollTop = latest ? latest.offsetTop : thread.scrollHeight;
+  }, [turns]);
+
+  // While a reply is written, keep its newest sentence in view, unless the reader scrolled back.
+  useLayoutEffect(() => {
+    const thread = threadRef.current;
+    if (!thread || !placed.current) return;
+    if (following.current) thread.scrollTop = thread.scrollHeight;
+    else if (busy || sentences.length) setUnseen(true);
+  }, [asked, sentences.length, turns?.length]);
+
+  // "Show earlier": keep what the reader was looking at still, then hand focus to the nearest
+  // earlier exchange so reading carries on upwards from there.
+  useLayoutEffect(() => {
+    const thread = threadRef.current;
+    const pending = reveal.current;
+    if (!thread || !pending) return;
+    reveal.current = null;
+    thread.scrollTop += thread.scrollHeight - pending.height;
+    thread.querySelector<HTMLElement>(`[data-exchange="${pending.focus}"]`)?.focus();
+  }, [start]);
+
+  if (turns === null) return null;
+  const exchanges = exchangesOf(turns);
+  const empty = exchanges.length === 0 && !busy;
+
+  const toBottom = () => {
+    const thread = threadRef.current;
+    following.current = true;
+    setUnseen(false);
+    if (!thread) return;
+    thread.scrollTop = thread.scrollHeight;
+    // The button goes away; keyboard focus lands on the newest exchange rather than the page.
+    thread.querySelector<HTMLElement>("[data-latest]")?.focus({ preventScroll: true });
+  };
+
+  const send = async (value: string, fromBox: boolean) => {
     if (value.length < 2 || busy) return;
     setError(null);
+    setConfirming(false);
     setAsked(value);
-    setArriving("");
+    setSentences([]);
+    setSpoken(["Mothli is thinking it over."]);
+    if (fromBox) setQuestion("");
+    following.current = true;
+    setUnseen(false);
+    const streamed: string[] = [];
     try {
-      const answer = await api.askHome(value, (sentence) =>
-        setArriving((current) => [current, sentence].filter(Boolean).join(" ")));
-      const reply = answer.claims.map((claim) => claim.text).join(" ") || NOTHING_SHOWN;
-      setTurns((current) => [...(current ?? []), { role: "user", content: value }, { role: "assistant", content: reply }]);
-      setQuestion("");
+      const answer = await api.askHome(value, (sentence) => {
+        streamed.push(sentence);
+        setSentences((current) => [...current, sentence]);
+        setSpoken((current) => [...current, sentence]);
+      });
+      const claims = answer.claims.map((claim) => claim.text);
+      const reply = claims.join(" ") || NOTHING_SHOWN;
+      const unsaid = claims.length ? claims.filter((text) => !streamed.includes(text)) : [NOTHING_SHOWN];
+      if (unsaid.length) setSpoken((current) => [...current, ...unsaid]);
+      const next: HomeTurn[] = [...turns ?? [], { role: "user", content: value }, { role: "assistant", content: reply }];
+      setTurns(next); // nothing else changes the conversation while a reply is on its way
+      if (answer.offers?.length) {
+        setOffers({
+          exchange: exchangesOf(next).length - 1,
+          items: answer.offers.slice(0, 3).map((offer) => ({ ...offer, state: "open" })),
+        });
+      }
     } catch (reason) {
+      setQuestion((current) => current || value);
+      setSpoken([]);
       setError(reason instanceof ApiError && reason.status === 503
         ? "Mothli can’t check its reply right now, so it said nothing. Try again in a moment."
         : "That didn’t go through. Your question is still here.");
     } finally {
       setAsked(null);
-      setArriving(null);
+      setSentences([]);
+    }
+  };
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void send(question.trim(), true);
+  };
+
+  const accept = async (index: number) => {
+    const offer = offers?.items[index];
+    if (!offer || offer.state === "saving" || offer.state === "done") return;
+    const mark = (state: Offer["state"]) =>
+      setOffers((current) => current && {
+        ...current,
+        items: current.items.map((item, at) => (at === index ? { ...item, state } : item)),
+      });
+    mark("saving");
+    try {
+      await api.readChapters(offer.book_id, offer.atoms, true);
+      mark("done");
+      setSpoken((current) => [...current, offerDone(offer)]);
+    } catch {
+      mark("failed");
+      setSpoken((current) => [...current, OFFER_FAILED]);
     }
   };
 
   const clear = async () => {
     setTurns([]);
+    setOffers(null);
+    setStart(0);
     setError(null);
+    setConfirming(false);
+    setUnseen(false);
+    placed.current = false;
+    inputRef.current?.focus();
     try {
       await api.clearHome();
     } catch {
@@ -60,51 +219,192 @@ export function HomeChat() {
     }
   };
 
+  const showEarlier = () => {
+    const thread = threadRef.current;
+    reveal.current = { height: thread?.scrollHeight ?? 0, focus: start - 1 };
+    setStart(Math.max(0, start - EARLIER_STEP));
+  };
+
   return (
-    <section className="ml-home-chat" aria-labelledby={titleId}>
-      <div className="ml-home-chat-head">
-        <h2 id={titleId}>Talk with Mothli about your books</h2>
-        {turns.length > 0 && (
-          <button type="button" className="plain ml-home-chat-clear" onClick={() => void clear()}>
+    <section className="ml-home-chat" aria-labelledby={titleId} aria-busy={busy || undefined}>
+      <header className="ml-hc-head">
+        <Moth size={46} mood={busy ? "thinking" : "idle"} className="ml-hc-moth" />
+        <div className="ml-hc-title">
+          <h2 id={titleId}>Talk with Mothli about your books</h2>
+          <p>One conversation across your whole shelf.</p>
+        </div>
+        {exchanges.length > 0 && !confirming && (
+          <button
+            ref={clearRef}
+            type="button"
+            className="ml-hc-link ml-hc-clear"
+            disabled={busy}
+            onClick={() => {
+              setConfirming(true);
+              window.setTimeout(() => keepRef.current?.focus());
+            }}
+          >
             Clear conversation
           </button>
         )}
-      </div>
-      {(turns.length > 0 || busy) && (
-        <ol className="ml-home-chat-turns" aria-live="polite">
-          {turns.map((turn, index) => (
-            <li key={index} className={turn.role === "user" ? "is-reader" : "is-mothli"}>
-              <span className="sr-only">{turn.role === "user" ? "You: " : "Mothli: "}</span>
-              {turn.content}
-            </li>
-          ))}
-          {asked !== null && <li className="is-reader"><span className="sr-only">You: </span>{asked}</li>}
-          {asked !== null && (
-            <li className="is-mothli">
-              <span className="sr-only">Mothli: </span>
-              {arriving || "…"}
-            </li>
-          )}
-        </ol>
+      </header>
+
+      {confirming && (
+        <div className="ml-hc-confirm" role="group" aria-labelledby={confirmId}>
+          <span id={confirmId}>Clear the whole conversation? Mothli forgets it too.</span>
+          <button type="button" className="ml-hc-link" onClick={() => void clear()}>Clear it</button>
+          <button
+            ref={keepRef}
+            type="button"
+            className="ml-hc-link ml-hc-keep"
+            onClick={() => {
+              setConfirming(false);
+              window.setTimeout(() => clearRef.current?.focus());
+            }}
+          >
+            Keep it
+          </button>
+        </div>
       )}
-      {error && <p role="alert" className="ml-home-chat-error">{error}</p>}
-      <form className="ml-home-chat-form" onSubmit={(event) => void submit(event)}>
+
+      {empty ? (
+        <div className="ml-hc-hello">
+          <p className="ml-hc-hand">
+            Ask me about any book on your shelf: where you left off, who someone was, what to read next.
+          </p>
+          <div className="ml-hc-starters">
+            {STARTERS.map((starter) => (
+              <button key={starter} type="button" className="ml-hc-starter" onClick={() => void send(starter, false)}>
+                {starter}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div
+          className="ml-hc-thread"
+          ref={threadRef}
+          role="region"
+          aria-label="Conversation with Mothli"
+          tabIndex={0}
+          onScroll={(event) => {
+            const node = event.currentTarget;
+            following.current = node.scrollHeight - node.scrollTop - node.clientHeight < FOLLOW_SLACK;
+            if (following.current) setUnseen(false);
+          }}
+        >
+          {start > 0 && (
+            <button type="button" className="ml-hc-link ml-hc-earlier" onClick={showEarlier}>
+              Show earlier ({start} more)
+            </button>
+          )}
+          <ol className="ml-hc-turns">
+            {exchanges.slice(start).map((exchange, offset) => {
+              const index = start + offset;
+              return (
+                <li
+                  key={index}
+                  className="ml-hc-exchange"
+                  data-exchange={index}
+                  data-latest={(!busy && index === exchanges.length - 1) || undefined}
+                  tabIndex={-1}
+                >
+                  {exchange.question !== null && (
+                    <p className="ml-hc-you"><span className="sr-only">You: </span>{exchange.question}</p>
+                  )}
+                  {exchange.reply !== null && (
+                    <p className="ml-hc-reply"><span className="sr-only">Mothli: </span>{exchange.reply}</p>
+                  )}
+                  {offers?.exchange === index && (
+                    <ul className="ml-hc-offers">
+                      {offers.items.map((offer, at) => (
+                        <li key={`${offer.book_id}-${at}`}>
+                          {offer.state === "done" ? (
+                            <p className="ml-hc-offer-done">{offerDone(offer)}</p>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                className="ml-hc-offer"
+                                disabled={offer.state === "saving"}
+                                aria-busy={offer.state === "saving" || undefined}
+                                onClick={() => void accept(at)}
+                              >
+                                <Icon name="check" size={15} />
+                                {offerLabel(offer)}
+                              </button>
+                              {offer.state === "failed" && <p className="ml-hc-offer-failed">{OFFER_FAILED}</p>}
+                            </>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              );
+            })}
+            {busy && (
+              <li className="ml-hc-exchange" data-latest tabIndex={-1}>
+                <p className="ml-hc-you"><span className="sr-only">You: </span>{asked}</p>
+                {sentences.length > 0 && (
+                  <p className="ml-hc-reply">
+                    <span className="sr-only">Mothli: </span>
+                    {sentences.map((sentence, index) => (
+                      <span key={index} className="ml-hc-sentence">{index > 0 ? " " : ""}{sentence}</span>
+                    ))}
+                  </p>
+                )}
+                <p className="ml-hc-thinking">
+                  <span className="ml-hc-dots" aria-hidden="true"><i /><i /><i /></span>
+                  {waiting && <span>{slow ? "Still thinking. Careful replies take a little while." : "Thinking it over…"}</span>}
+                </p>
+              </li>
+            )}
+          </ol>
+          {unseen && (
+            <button type="button" className="ml-hc-jump" onClick={toBottom}>
+              <Icon name="arrowRight" size={14} />
+              Jump to the newest reply
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="sr-only" role="log" aria-label="Mothli’s reply as it arrives">
+        {spoken.map((line, index) => <p key={index}>{line}</p>)}
+      </div>
+
+      {error && <p role="alert" className="ml-hc-error">{error}</p>}
+
+      <form className="ml-hc-composer" onSubmit={submit}>
         <label className="sr-only" htmlFor={inputId}>Ask Mothli about your books</label>
         <textarea
           id={inputId}
-          rows={2}
+          ref={inputRef}
+          rows={1}
           maxLength={500}
           value={question}
-          placeholder="Where did I leave off? What should I pick up tonight?"
+          placeholder={empty ? "Ask Mothli anything…" : "Ask a follow-up…"}
           onChange={(event) => setQuestion(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) void submit(event);
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) submit(event);
           }}
         />
-        <Button variant="primary" type="submit" disabled={busy || question.trim().length < 2}>
-          Ask
+        <Button
+          variant="primary"
+          type="submit"
+          className="ml-hc-send"
+          aria-label="Ask"
+          title="Ask"
+          disabled={busy || question.trim().length < 2}
+        >
+          <Icon name="arrowRight" size={18} />
         </Button>
       </form>
+      <p className="ml-hc-fine">
+        <Icon name="shield" size={12} />
+        Only the pages you’ve read. No spoilers.
+      </p>
     </section>
   );
 }
