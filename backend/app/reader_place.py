@@ -10,7 +10,8 @@ from app.content_scope import is_content
 # What the reader can do here. Mothli may tell them, and the checker holds it to these words.
 APP_HELP = (
     "A page counts as read with Mothli when the reader stays on it long enough to read it. Pages "
-    "turned quickly, on the way somewhere else, are not counted, so Mothli was not there for them. "
+    "turned quickly, on the way somewhere else, are not counted: they go by too fast for Mothli "
+    "to take in. "
     "To tell Mothli that a chapter has been read, open the book, open Contents, and press the "
     "small label beside the chapter: it says 'not read' or 'part read', and changes to 'read'. "
     "Pressing it again takes it back. Following a link far ahead in a book does not count the "
@@ -56,11 +57,23 @@ SPEAK_AS_A_FRIEND = (
     "'the pages available', 'the material', 'marked', 'recorded' or 'what I was given'. Say "
     "'you're in chapter 3', 'we read that together', 'I wasn't with you for chapters 1 and 2'.\n"
     "CHAPTERS YOU WEREN'T THERE FOR: if chapters before the reader's place were not read with "
-    "you, the reader may well have read them: perhaps quickly, or somewhere else. Say plainly and "
-    "warmly that you weren't with them for those chapters, never that they haven't read them. "
+    "you, the reader may well have read them somewhere else. Say plainly and warmly that you "
+    "weren't with them for those chapters, never that they haven't read them. "
     "When they ask to be caught up, say that first, then tell what the two of you have read. If "
     "they say they have read those chapters, or ask how to tell you, say how from HOW THIS APP "
     "WORKS.\n"
+    "If WHERE THE READER IS says the two of you went through some chapters quickly, that is a "
+    "different thing: you were right there with them, but the pages went by too fast for you to "
+    "take in. Don't say you weren't with them for those. When the reader asks to be caught up, "
+    "asks where they are, or asks about those chapters, say warmly and in your own words that "
+    "the two of you went through them quickly and you didn't take them in, with the chapter "
+    "numbers in that same sentence ('we went through chapters 2 and 3 pretty quickly back "
+    "there'), and ask whether they read them and want you to count them as read: never that "
+    "they haven't read them, and nothing about what is in them, not even a guess. Ask once. If "
+    "you have already asked in this conversation, or WHERE THE READER IS says you have already "
+    "brought it up, don't ask again; if they say they didn't read them, take it lightly and go "
+    "on with what the two of you have read. If they say they did, say how to tell you from HOW "
+    "THIS APP WORKS.\n"
     "THE APP: when the reader is stuck or asks how something works, help them with what HOW THIS "
     "APP WORKS says, in your own plain words. If it does not cover what they ask, say you don't "
     "know rather than guess.\n"
@@ -107,26 +120,83 @@ def named_numbers(phrase):
     return numbers
 
 
-def offers_for(sentences, items):
-    """What a reply may offer to do: count the chapters it has just said it was not there for.
+# Mothli saying the two of them went through chapters too quickly for it to take them in, or
+# asking whether the reader read them: the other moment to offer. Who hurried must be "we", "you"
+# or "I" (or nobody: "Skimmed chapters 2 and 3, didn't we?"), so that "Lydia raced through her
+# story in chapter 3" offers nothing.
+_FEW = r"(?:[\w’']+\s+){0,2}?"
+_WHO = r"(?:\b(?:we|you|i|us|our|your)(?:[’'](?:ve|d|re|ll))?\s+" + _FEW + r"|^\W*)"
+_ON = r"\s+(?:[\w’']+\s+){0,3}?(?:through|past)\b"
+_HURRIED = (r"(?:(?:flipp|flick|leaf|pag|thumb|rac|breez|rush|zipp|whizz|hurr|dash|zoom|whipp|gallop|sprint)\w*"
+            r"|sped|flew|flown|tore|blew)")
+_WENT = r"(?:went|gone|going|go|got|get|moved|moving|passed|turned|turning)"
+WENT_QUICKLY = re.compile(
+    _WHO + r"(?:skim\w*|" + _HURRIED + _ON + r"|(?P<plain>" + _WENT + _ON + r"))"
+    r"|\b(?:didn[’']t|did not|couldn[’']t|could not|haven[’']t|have not|never|barely|hardly)\s+"
+    + _FEW + r"t(?:ake|aken|ook)\s+in\b"
+    r"|\b(?:did|have|had)\s+you\s+" + _FEW + r"read\b", re.I)
+# "Went through" alone may mean read: it counts only in a sentence that also says how fast.
+QUICK = re.compile(r"\b(?:quick\w*|fast\w*|hurr\w+|rush\w*|rapid\w*|swift\w*|speed\w*|pace|clip|blur|flash|blink)\b",
+                   re.I)
+# Between those words and the chapters they are said of: a few words of one clause, and none
+# that puts the chapters somewhere else in the sentence ("raced through her story in chapter 3").
+_SAME_CLAUSE = re.compile(
+    r"(?!.*\b(?:in|at|from|during|until|before|after|when|while|where)\b)[^,;:.!?()—–]{0,40}", re.I)
 
-    Exactly those chapters: the numbers named in the sentence where Mothli says it was not there,
-    and of them only chapters before the reader's place not read in full here. A sentence that
-    names no chapter, or (with several books) no book, offers nothing. Decided here, never by
-    the writer. At most three books.
+
+def _named_in(sentence, *, quickly_only=False):
+    """The chapter numbers one sentence says Mothli was not there for, or went through too quickly."""
+    numbers = set()
+    said = None if quickly_only else NOT_THERE.search(sentence)
+    chapters = NAMED_CHAPTERS.search(sentence, said.end()) if said else None
+    if chapters:
+        numbers |= named_numbers(chapters.group(1))
+    for said in WENT_QUICKLY.finditer(sentence):
+        if said.group("plain") and not QUICK.search(sentence):
+            continue
+        chapters = NAMED_CHAPTERS.search(sentence, said.end())
+        if chapters and _SAME_CLAUSE.fullmatch(sentence, said.end(), chapters.start()):
+            numbers |= named_numbers(chapters.group(1))
+    return numbers
+
+
+def raised_in(sentences, items, *, quickly_only=False):
+    """{book_id: chapter numbers} these sentences of Mothli's raise as gone past.
+
+    The numbers named where Mothli says it was not there, or that the two of them went through
+    quickly, or asks whether the reader read them (with ``quickly_only``, not the first of
+    these). A sentence that names no chapter, or (with several books) no book, raises nothing.
     """
     named = {}
     for sentence in sentences:
-        said = NOT_THERE.search(sentence)
-        if not said:
-            continue
-        chapters = NAMED_CHAPTERS.search(sentence, said.end())
-        if not chapters:
+        numbers = _named_in(sentence, quickly_only=quickly_only)
+        if not numbers:
             continue
         titled = [item for item in items if item["book"]["title"].casefold() in sentence.casefold()]
         meant = titled if titled else items if len(items) == 1 else []
         for item in meant[:1]:
-            named.setdefault(item["book"]["book_id"], set()).update(named_numbers(chapters.group(1)))
+            named.setdefault(item["book"]["book_id"], set()).update(numbers)
+    return named
+
+
+def note_asked(items, sentences):
+    """Mark on each book the chapters Mothli has already said the two of them went through
+    quickly, or asked about, from its own earlier sentences in this conversation, so that the
+    place line can tell it not to ask again. "I wasn't with you for..." is not that question."""
+    raised = raised_in(sentences, items, quickly_only=True)
+    for item in items:
+        item["asked"] = raised.get(item["book"]["book_id"], set())
+
+
+def offers_for(sentences, items):
+    """What a reply may offer to do: count the chapters it has just said it was not there for.
+
+    Exactly those chapters: the numbers named in the sentence where Mothli says it was not there
+    or that the two of them went through them quickly, and of them only chapters before the
+    reader's place not read in full here. A sentence that names no chapter, or (with several
+    books) no book, offers nothing. Decided here, never by the writer. At most three books.
+    """
+    named = raised_in(sentences, items)
     offers = []
     for item in items:
         numbers = named.get(item["book"]["book_id"])
@@ -164,7 +234,10 @@ def place_line(item):
     """Where the reader is in one book.
 
     ``item`` has the book, its chapters with anything read (each marked ``whole`` or not), the
-    chapter number of each ordinal, and the reader's place.
+    chapter number of each ordinal, and the reader's place. With ``skimmed`` (the chapters that
+    have pages turned through quickly here) those before the reader's place are named apart from
+    chapters leapt past, by number only. ``asked`` holds the chapter numbers Mothli has already
+    brought up as gone through quickly in this conversation.
     """
     book, numbers = item["book"], item["numbers"]
     name = f"“{book['title']}” by {book['author'] or 'an unknown author'}"
@@ -183,8 +256,15 @@ def place_line(item):
     upcoming = next((n for n in range(1, total + 1) if n not in seen), None)
     if not here and upcoming:
         line += f" The next chapter not read with you is chapter {upcoming}."
-    before = [n for n in range(1, here or 0) if n not in seen]
+    quick = [numbers[ordinal] for ordinal in (skipped_before(item) or {}).get("skimmed", [])]
+    before = [n for n in range(1, here or 0) if n not in seen and n not in quick]
     if before:
         line += (f" Not read with you: {spans(before)}, which come before where the reader is. The reader "
-                 "may have read them quickly or elsewhere; you were not there for them.")
+                 "may have read them elsewhere; you were not there for them.")
+    if quick:
+        line += (f" The two of you went through {spans(quick)} quickly here, before where the reader is: "
+                 "the pages were turned too fast to be read, so you did not take them in. The reader may "
+                 "have read them all the same; only the reader can say.")
+        if set(quick) <= set(item.get("asked", ())):
+            line += " You have already brought this up with the reader in this conversation: don't ask again."
     return line

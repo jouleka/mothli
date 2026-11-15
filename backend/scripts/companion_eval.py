@@ -593,13 +593,15 @@ def main():
                     chapter = boundary["available_chapter"]
                     told = []
                     if settings.reader_read_map:
-                        from app.read_map import read_snapshot
+                        from app.read_map import read_snapshot, skimmed_chapters
                         from app.reader_place import APP_HELP, content_numbers, place_line
                         point, read_now, _state, manifest, row_book, _held = read_snapshot(
                             bid, app.state.catalog, settings, app.state.worker)
                         told = ["Where the reader is: " + place_line({
                             "book": row_book, "chapters": read_now, "point": point,
-                            "numbers": content_numbers(manifest)}), "How this app works: " + APP_HELP]
+                            "numbers": content_numbers(manifest),
+                            "skimmed": skimmed_chapters(bid, row_book, app.state.catalog)}),
+                            "How this app works: " + APP_HELP]
                         leak_tokens -= set(word_tokens(" ".join(told)))
                     read_chapters = [read_text, *told] if settings.reader_read_map else [text for text in (
                         normalize_source(c["text"])[:boundary["offset"] if c["ordinal"] == boundary["atom"] else None]

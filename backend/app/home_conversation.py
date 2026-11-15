@@ -21,12 +21,13 @@ from app.conversation_pipeline import compact_candidates
 from app.cost import CostCeilingExceeded
 from app.llm.client import ProviderUnavailable
 from app.llm.jev import JevUnavailable
-from app.read_map import read_snapshot, written_from_read
-from app.reader_place import (APP_HELP, FRIEND_VOICE, SPEAK_AS_A_FRIEND, content_numbers, offers_for,
-                              place_line)
+from app.read_map import read_snapshot, skimmed_chapters, written_from_read
+from app.reader_place import (APP_HELP, FRIEND_VOICE, SPEAK_AS_A_FRIEND, content_numbers, note_asked,
+                              offers_for, place_line)
 from app.retrieval_passages import passage_windows
-from app.stream_conversation import (HISTORY_TURNS, MAX_PASSAGES, conversation_writer, failure_fields,
-                                     jev_runner, sentence_checks, write_and_gate)
+from app.stream_conversation import (ASKED_TURNS, HISTORY_TURNS, MAX_PASSAGES, conversation_writer,
+                                     failure_fields, jev_runner, said_before, sentence_checks,
+                                     write_and_gate)
 
 logger = logging.getLogger("mothli.conversation")
 HOME = "home"                 # the conversation that belongs to no single book
@@ -68,7 +69,10 @@ class HomeAsk(BaseModel):
 
 
 def shelf_books(catalog, settings, worker):
-    """Each book with the text the reader has read of it, and where in it they are."""
+    """Each book with the text the reader has read of it, and where in it they are.
+
+    Of pages turned through quickly, only which chapters they are in.
+    """
     books = []
     for book in catalog.list_books():
         try:
@@ -77,7 +81,8 @@ def shelf_books(catalog, settings, worker):
         except (LookupError, OSError, ValueError, RuntimeError):
             continue                              # a book whose source cannot be verified is left out
         books.append({"book": book, "chapters": chapters, "state": state, "manifest": manifest,
-                      "point": point, "numbers": content_numbers(manifest), "held": held})
+                      "point": point, "numbers": content_numbers(manifest), "held": held,
+                      "skimmed": skimmed_chapters(book["book_id"], book, catalog)})
     return books
 
 
@@ -152,8 +157,10 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere):
     drew_on = read_maps(books)
     # Earlier turns are conversation, not evidence, and no check reads them: only those written
     # from text that is still read are passed on.
+    earlier = home_turns(catalog, drew_on, limit=ASKED_TURNS)
     history = [ConversationMessage(role=turn["role"], content=turn["content"][:2000], as_of_chapter=0)
-               for turn in home_turns(catalog, drew_on, limit=HISTORY_TURNS)]
+               for turn in earlier[-HISTORY_TURNS:]]
+    note_asked(books, said_before(earlier))       # what Mothli has already asked about, here
     question = conversation_question(body.question, history, 0)
     query = conversation_retrieval_question(body.question, history, 0)
     writer = conversation_writer(client, settings)

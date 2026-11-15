@@ -1364,6 +1364,73 @@ In a browser, once, against a throwaway backend with stand-in models (the test s
 - Not tried on a phone or with a screen reader, and not in hosted mode.
 - A long conversation: the server returns the last 80 messages, the panel shows the last 40 exchanges.
 
+## 6aa. Mothli knows which chapters were gone through quickly (15 November)
+
+Since 6r the reader app keeps quickly turned pages as skimmed and asks about them once. Mothli itself was told only "not read with you", so in conversation it said "I wasn't with you for chapters 2 and 3" to a reader who had been right here turning pages.
+
+### What changed
+
+| | Before | Now |
+|---|---|---|
+| The place line (`place_line`, both conversations) | Every chapter before the reader's place with nothing read: "Not read with you: … The reader may have read them quickly or elsewhere; you were not there for them." | Chapters gone through quickly here are named apart: "The two of you went through chapters 2 and 3 quickly here, before where the reader is: the pages were turned too fast to be read, so you did not take them in. The reader may have read them all the same; only the reader can say." Chapters leapt past keep the old sentence, now "may have read them elsewhere" |
+| Which chapters those are | | The ones the reader app already asks about (`skipped_before`): before the reader's place, not read in full, with at least one skimmed page. A chapter partly read and partly skimmed is in both lists |
+| What leaves `skimmed_ranges` | Which chapters, for the reader app's question | The same and no more, now also for the place line. `skimmed_chapters` in `read_map.py` is the one reader of that table: it returns the set of chapters and drops where in them the stretches lie |
+| Speaking rules (`SPEAK_AS_A_FRIEND`) | "Say plainly and warmly that you weren't with them for those chapters" | That rule stands for chapters leapt past. For chapters gone through quickly: Mothli was there but the pages went by too fast; when the reader asks to be caught up, where they are, or about those chapters, it says so in its own words with the chapter numbers in the sentence, and asks whether they read them and want them counted; never that they haven't read them, nothing about what is in them; once |
+| `APP_HELP`, one clause | "Pages turned quickly … are not counted, so Mothli was not there for them" | "… are not counted: they go by too fast for Mothli to take in" |
+| The "I've read…" button (`offers_for`) | Under a sentence with "wasn't with you", "wasn't there", "without me" or "open Contents", for the chapters named after it | Also under "we went through chapters 2 and 3 quickly", "we flipped through…", "we skimmed…", "I didn't take in…" and "did you read chapters 2 and 3?". It still counts only the chapters named that are before the reader's place and not read in full |
+| Asking again | | Mothli's own stored sentences in the conversation are read back with the same patterns. Once it has brought those chapters up, the place line ends: "You have already brought this up with the reader in this conversation: don't ask again." An older "I wasn't with you for…" does not count as having asked |
+
+- **The new patterns are narrower than the old one.** Who hurried must be "we", "you" or "I" (or nobody, as in "Skimmed chapters 2 and 3, didn't we?"); the chapters must follow within a few words of the same clause, with no "in", "before" or the like between; and plain "went through" counts only in a sentence that also says how fast. So "Lydia raced through her story in chapter 3" and "We went through chapters 2 and 3 together" offer nothing.
+- **No check was touched,** `FRIEND_VOICE` was not changed, and nothing in the frontend: the reader app's question and the button's label stand as they are.
+- The evaluation's reference is given the same place line, skimmed chapters included.
+
+What the writer is told for a reader who read chapter 1, went quickly through chapters 2 and 3 and settled in chapter 4:
+
+> “Pride and Prejudice” by Jane Austen: the reader is in chapter 4 of 61 now. Read with you: chapter 1 in full, and part of chapter 4. The two of you went through chapters 2 and 3 quickly here, before where the reader is: the pages were turned too fast to be read, so you did not take them in. The reader may have read them all the same; only the reader can say.
+
+### After the reader answers
+
+| The reader | What Mothli is told next |
+|---|---|
+| Presses "I've read chapters 2 and 3", or says yes to the reader app's question | The chapters are read in full, so they are no longer named as gone through quickly and no button is offered for them. Tested |
+| Says "I was just getting here" to the reader app's question | Exactly what it was told before. The answer is kept in the browser only (`rc:skipped-declined:{book}` in `ReaderPage.tsx`); the server never hears it. Not fixed |
+| Tells Mothli in conversation that they did not read them | The exchange is in the conversation the writer is given, and the place line says the matter was already brought up |
+
+So Mothli is no longer told to ask with every reply, whatever the reader answered or did not. After "I was just getting here" it can still ask once in the book's conversation and once in the home one, because nothing on the server says the reader answered.
+
+### Verified, with stand-in models only
+
+Backend suite: 2,120 pass, 83 skipped (12 more passing than main). `ruff check app tests scripts` clean. 12 new tests, all 12 failing when run against main's code.
+
+| Test | The break it catches |
+|---|---|
+| Place line: skimmed chapters apart from leapt ones, and both in one book | Skimmed chapters handed to the writer as "not read with you" |
+| Place line: a chapter since read in full, the reader's own chapter, a chapter ahead | Any of those named as gone through quickly |
+| Place line: a book with a title page and a preface | A section's position in the file given as its chapter number |
+| Place line and `note_asked`: already brought up | The writer told to ask with every reply; an older "I wasn't with you for…" taken for the question |
+| The speaking rules | The rule dropped, or turned into "you haven't read them"; the voice rewritten |
+| The button under ten new wordings, and both wordings in one sentence | No button under a reply that never says "wasn't with you" |
+| The button: chapters 1 to 6 named with only 2 and 3 gone past; chapters ahead; a chapter read in full; no chapter; no "quickly"; a person in the book hurrying; the chapter in another clause; two books and no title | A button that counts chapters Mothli did not ask about or that were never gone past |
+| In a book: skim chapters 1 and 2, settle in 3, ask | Anything of a skimmed page but its chapter number reaching a model. Every word given to the writer, the second look and Jev (instructions, prompt, each state and question) was searched for the skimmed chapters' sentences: none. The writer's place line is compared whole, and the same line is in the checker's passages; the reply is shown and the button counts chapters 1 and 2 |
+| In a book: a leap, then one chapter skimmed | All chapters before the place called gone through quickly, or none |
+| In a book: asked once, then "I've read…" pressed | The writer told to ask again; counted chapters still called gone through quickly |
+| Home chat: chapter 1 of one book skimmed | The same three for the home conversation, with the book named in the sentence |
+
+### Not verified
+
+- **How it reads.** No real model has seen the new place line or the new rule. Not known: whether Mothli asks warmly and once, whether it still says "I wasn't with you" for skimmed chapters, whether it raises the matter in replies that have nothing to do with it, and whether Jev passes the new sentences (in 6y nearly every sentence about the reader's place went to a second look).
+- **The button under real wording.** The patterns were written from guesses at what Mothli will say, not from replies.
+- Not tried in the running app.
+
+### Found, and not fixed
+
+- **"I was just getting here" does not reach the server,** as above. Storing it there (a small table beside `skimmed_ranges`, written by the reader app when it remembers the answer) would let the place line say the reader did not read those chapters, and would also give the reader app's own "do not ask again" to a second device.
+- **"Already brought up" belongs to one conversation.** The book's chat and the home chat each ask once; "Clear" starts over; only the last 200 stored turns are read. A sentence that only states the matter without asking counts as having brought it up; one in words the patterns do not know does not.
+- **The patterns miss and overreach in known ways.** No button: "Chapters 2 and 3 went by in a blur" (the chapters come first), "We turned the pages of chapters 2 and 3 so fast…". A stray button: "I think she raced through chapter 3", if chapter 3 was gone past. English only, like the old pattern (6t).
+- **A chapter read almost to the end with one page turned quickly** is named as gone through quickly, as it is in the reader app's question. The place line also says part of it was read.
+- **The reader app's question is unchanged:** once any chapter was declined it does not ask about chapters skipped later (6p, 6r). Mothli in conversation does not use that record and still raises them.
+- **Seen in the owner's running app on 15 November, not examined:** on the Project Gutenberg front-matter page of Pride and Prejudice, `PUT /api/books/{id}/read-page` answers 422, so that page can never be reported as read and the browser console shows an error; and the shelf says "In chapter 3 of 61" for a book that opens on that page under the heading "Chapter I".
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

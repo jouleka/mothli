@@ -85,6 +85,15 @@ def read_snapshot(book_id, catalog, settings, worker):
     return point, permitted, {**state, "read_through": whole, "finished_through": finished}, manifest, book, held
 
 
+def skimmed_chapters(book_id, book, catalog):
+    """The chapters with pages turned through quickly here.
+
+    Which chapters is all that may leave that table: where in them the skimmed text lies is not
+    passed on, and the text itself is not in the map, so none of it reaches a model.
+    """
+    return set(catalog.get_skimmed(book_id, incarnation=book["incarnation"]))
+
+
 def sync_counter(book_id, catalog, settings, worker, *, with_place=False):
     """Make the older chapter counter say what the map says, and return the map's point.
 
@@ -100,7 +109,7 @@ def sync_counter(book_id, catalog, settings, worker, *, with_place=False):
     if with_place:
         return point, {"book": book, "chapters": chapters, "point": point,
                        "numbers": content_numbers(manifest),
-                       "skimmed": set(catalog.get_skimmed(book_id, incarnation=book["incarnation"]))}
+                       "skimmed": skimmed_chapters(book_id, book, catalog)}
     return point
 
 
