@@ -64,9 +64,14 @@ def _match_tokens(text):
 # modals are a structural tell of a paraphrased FUTURE event the proper-noun check can't see (ADR 0004
 # review HIGH #1). Narrowed to future modals so it does NOT fire on past narration that merely uses
 # "eventually"/"years later" ("Adelaïda eventually ran off" is past + grounded). Deterministic, hard.
+# "Will" is also a noun ("you surrender your will to him"). It is not a hit straight after a word
+# that cannot stand before the future tense. "Her", "own", "free", "good" and "ill" can ("whoever
+# marries her will regret it", "the ill will recover"), so after those it stays a hit.
+_NOUN_WILL = "".join(rf"(?<!\b{word}\s)" for word in (
+    "my", "your", "his", "their", "our", "its", "the", "a", "one['’]s"))
 PROLEPSIS_RE = re.compile(
-    r"\b(will|shall|would (?:later|soon|eventually|one day|come to|be|become)|going to|about to|"
-    r"is (?:destined|going) to|was to (?:be|become)|destined to|fated to|doomed to)\b", re.I)
+    r"\b(" + _NOUN_WILL + r"will|shall|would (?:later|soon|eventually|one day|come to|be|become)|going to|"
+    r"about to|is (?:destined|going) to|was to (?:be|become)|destined to|fated to|doomed to)\b", re.I)
 
 
 def reveal_correctness_eval(db):
