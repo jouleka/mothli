@@ -1171,6 +1171,111 @@ Nine new tests; eight fail on main, the ninth guards against hiding too much. Wh
 - The evaluation itself was not run; only its seeding function, against a stand-in book.
 - The frontend was not touched or run. Nothing in it reads the profile's reactions today.
 
+## 6x. What is paid for twice, and a cap and a notes cache for the paid scripts (15 November)
+
+About $0.78 of Jev went on evaluation runs in two days, against $0.004 for the owner's own use of the app. This step asks whether the app or its scripts pay for anything twice, and stops what it found. **Nothing here was run against a real model and nothing was spent:** every count below comes from stand-in models that count their calls.
+
+### Calls measured
+
+Chapter notes, on a three-chapter book whose notes are three sentences a chapter:
+
+| What happened | Writer calls per chapter | Jev checks per sentence |
+|---|---|---|
+| App: "I've read this" for a chapter | 1 | 1 |
+| App: the last page of a chapter reported | 1 | 1 |
+| App: a reply, which catches up on notes afterwards | no more | no more |
+| App: two "I've read this", a reply and a third, all while the chapter is being written | 1 | 1 |
+| App: "read it fresh" and read again; "I haven't read this" and read again | no more | no more |
+| `companion_eval.py --notes` as on main: the position entered, then its own `build_missing` | **2** | **2** |
+| The whole script as on main, five Karamazov chapters over five positions | 10 for 5 chapters | 10 for 5 sentences |
+| The whole script now | 5 for 5 chapters | 5 for 5 sentences |
+| The whole script now, run a second time | 0 | 0 |
+
+A reply of four sentences (`MAX_SECOND_LOOKS` is 6 sentences a reply):
+
+| What happened | Jev checks, sentence 1 to 4 | Second looks, sentence 1 to 4 |
+|---|---|---|
+| All four pass | 1, 1, 1, 1 | 0, 0, 0, 0 |
+| The second is doubted and its second look passes it | 1, 1, 1, 1 | 0, 1, 0, 0 |
+| The second is doubted and dropped | 1, 1, **2, 2** | 0, 1, 0, 0 |
+| The second is dropped; the third is doubted and passed by its second look | 1, 1, **2, 2** | 0, 1, **2**, 0 |
+| A chapter's notes of three sentences, the first dropped | 1, **2, 2** | 1, 0, 0 |
+
+Every reply also makes one Jev call that is not a sentence check (`stream-intent`), and a "who is…" about a name with no reviewed memory makes one more (`stream-name-link`).
+
+### What this says
+
+- **The app does not write or check a chapter's notes twice.** One writer exists (`NotesBuilder`): it takes one book at a time, refuses a book it is already working on, and each run skips every chapter whose notes are held for the same text and version. Nothing was changed in `app/`.
+- **The evaluation did, and that is the doubling 6t could not explain.** Entering a position marks its chapters read through `PUT /read-chapters`, which starts the app's writer; the script then called `build_missing` itself. Both found no notes, and both wrote and checked every chapter. This began in 6t because that is when positions given by chapter number started to be entered on the read map. The real run of 6t was not repeated; the stand-in run of the whole script shows exactly two of everything, which matches $0.039 becoming $0.079.
+- **A sentence is checked more than once only after an earlier sentence is dropped.** `gate_sentences` judges each later sentence again against the sentences actually shown, and a doubted one then gets its second look again. This is written into the gate and decides what is shown, so it was not touched here. A reply that arrives all at once pays for it on every sentence after the drop, and `codex-local` does not stream, so every evaluation reply and every chapter's notes are in that case.
+- **Both scripts wrote every chapter's notes again on every run,** each on a new temporary library. At about $0.001 a chapter that is most of what a run cost: in 6t's Pride and Prejudice run, $0.079 of $0.094.
+
+### What changed
+
+| | Before | Now |
+|---|---|---|
+| Who writes the evaluation's notes | The app's writer and the script, both | The app's writer only. The script waits for it (`wait_for_notes`, moved out of `voice_samples.py` and shared) |
+| Notes between runs | Written and checked again each run | Kept in `backend/.eval-cache/chapter-notes.json` (git-ignored) under the notes version, the writer model, the Jev model and the hash of the chapter's text. They are put into the temporary library with the catalog's own `set_chapter_notes` as soon as the book is imported, before anything would write them, and saved when a position's notes are complete or the run is stopped. A chapter the reader has not read in full still gives a reply nothing: `usable_notes` decides that as before |
+| A run that measures the notes | Every run | `--fresh-notes` on either script leaves the cache unread and replaces what it holds |
+| What a report says | Nothing | "chapter notes: N chapters from the cache, M written and checked in this run" |
+| A cap on Jev spend | `voice_samples.py` only | `companion_eval.py --max-usd`, default $0.10: the same check (`spend_stop`), made after every question and every two seconds while notes are written |
+| What the cap stops | The script's loop; the app's notes writer went on until the app shut down | The loop, and every later call in that library: the book ceiling is set to zero, so the writer in flight is refused at its next call |
+| The end of a run | The evaluation printed no spend | Both print calls and dollars per model and the Jev total, finished or stopped (`paid_run`) |
+
+By 6t's figures, not by a new run: a repeat of the Pride and Prejudice set should cost about $0.015 of Jev (its questions) instead of $0.094, and a first run about $0.055.
+
+### Other scripts under `backend/scripts/` that call Jev
+
+None was changed. Each already has a ceiling, except the two marked.
+
+| Script | Its ceiling |
+|---|---|
+| `benchmark_cold_reader.py` | $0.25 for the session, writer and Jev together (`SessionBudget`) |
+| `benchmark_scene_review.py` | $0.02 of Jev for the session (`SessionBudget`) |
+| `jev_quality_audit.py`, `jev_reuse_audit.py` | $0.02, counted in the script |
+| `benchmark_selection_review.py` | $0.08, one book's ledger |
+| `benchmark_direct_api.py` | $0.20 a book, two books |
+| `benchmark_jev_conversation.py`, `classic_books_audit.py` | $0.25 a book |
+| `jev_identity_audit.py` | $0.30 a book |
+| `real_book_audit.py` | `--max-new-usd`, default $0.50 |
+| `reader_preparation_audit.py`, `jev_integration_audit.py` | Up to $1 a book |
+| `serve_local_jev.py` | Runs the app itself: $1 a book |
+| `benchmark_conversation.py` | **None of its own.** It runs on a copy of a library with the env file's settings, so Jev is called if that file turns it on, under the app's ceiling of $5 a book |
+
+### Verified, with stand-in models only
+
+9 new tests in `backend/tests/test_spend.py`. Two are guards that pass on main. The other seven cannot run there, because the cache, the cap and the shared notes step do not exist; main's own script, run whole with the same stand-ins, gave the "10 for 5" row above. Whole backend suite: 2,108 passed, 83 skipped; `ruff check app tests scripts` is clean.
+
+| Test | The break it catches |
+|---|---|
+| The app hears of a finished chapter in every way a reader can cause, some of them at once | A second writer for a chapter, or notes already held being written again. Passes on main: it is the guard |
+| Checks and second looks per sentence, for a reply and for a chapter's notes | More checks than the table above. Passes on main: it fixes the counts, including the second check after a drop |
+| The scripts' notes step with a slow writer | The script writing notes beside the app's writer: two of everything |
+| A second library with the first one's cache, read through chapter 2 | Paying again for notes already written; and a cached note on an unread chapter reaching a reply |
+| A changed chapter, another notes version, another Jev model, another writer | Notes written from other text, or by other models, passed off as this run's |
+| `--fresh-notes` | A run that measures notes measuring an earlier run's |
+| A cap passed while chapter 1 of 3 is being checked | No ceiling; and the app's writer paying for the rest of the book after the script has stopped. Fails without the line that refuses later calls: chapter 3 is written |
+| A run inside its cap | A cap that stops too early, or a report with no Jev total |
+| `companion_eval.py` itself, start to end, twice | Any of the above in the real script, and a mistake that would first show part-way through a paid run |
+
+`voice_samples.py` was run start to end the same way, by hand and not as a kept test: 10 chapters written once on the first run (29 writer calls, 45 Jev calls for 19 messages), none on the second (19 and 35).
+
+### Not verified
+
+- Nothing was run with real models, so no dollar figure here is measured. The saving is arithmetic on 6t's figures.
+- 6t's doubled run was not repeated to see $0.039 again.
+- How far past the cap a real run can go. It is checked after each question and every two seconds during notes, so the overshoot is the calls already in flight: by the known prices about one question or one chapter, $0.001 to $0.002.
+- How much of real spend the second check after a drop is. That needs the rate of dropped sentences in real replies and notes.
+
+### Found and not fixed
+
+- **The second check after a drop,** above. It is the one place the core logic spends more than one check and one second look a sentence. Changing it changes which sentences are shown.
+- **The cache does not know about wording.** Its key has the notes version, not the notes prompt or the checks. After changing either without a new version, use `--fresh-notes`.
+- **The evaluation's own Jev call.** Each answered question gets one more Jev call for the two tone scores (`eval-tone`). It is counted by the cap.
+- **The evaluation's writer is not under the cap.** `--max-usd` counts Jev. The writer is the paid API unless `--transport codex-local` is given, and `--audit` calls it outside any ledger.
+- **`benchmark_conversation.py` has no cap of its own,** as listed.
+- From reading, not seen in a run: a chapter marked read while a notes run for that book is under way is picked up at the next page turn or reply, not at once. No spend is involved.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
