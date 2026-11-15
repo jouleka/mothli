@@ -205,3 +205,102 @@ def test_oversized_input_falls_back_before_any_paid_call():
     with pytest.raises(JevUnavailable):
         budgeted_jev(None, Settings(), SimpleNamespace(model="jev-1.13.0"), "book", phase="test",
                      state={"text": "x" * 30000}, questions={"q": {}})
+
+
+NO_CREDITS = "Your organization has no available TypeSafe API credits"
+QUESTION = {"q": {"type": "choice", "criteria": jev_tasks.SUPPORT}}
+
+
+def provider(status=402, message=NO_CREDITS, *, error=None, body=None):
+    """A real JevClient whose provider answers every call with ``status``, or fails with ``error``."""
+    def handler(request):
+        if error is not None:
+            raise error
+        if body is not None:
+            return httpx.Response(status, text=body)
+        return httpx.Response(status, json={"error": {"message": message}})
+    return JevClient(api_key="private-test-key", model="jev-1.14.0",
+                     transport=httpx.MockTransport(handler))
+
+
+def refusal(jev, state=None):
+    try:
+        with pytest.raises(JevUnavailable) as caught:
+            jev.evaluate(state or {}, QUESTION)
+    finally:
+        jev.close()
+    assert "private-test-key" not in str(caught.value) + repr(caught.value) + str(caught.value.detail)
+    return caught.value
+
+
+@pytest.mark.parametrize("status,reason,refused", [
+    (402, "no_credits", True), (401, "unauthorized", True), (403, "unauthorized", True),
+    (429, "rate_limited", True), (400, "refused", True), (404, "refused", True),
+    (422, "refused", True), (500, "unavailable", False), (503, "unavailable", False),
+    (307, "unavailable", False)])
+def test_a_provider_refusal_keeps_what_kind_it_was(status, reason, refused):
+    """The status was thrown away, so "no credits" read the same as a timeout."""
+    failure = refusal(provider(status))
+    assert (failure.reason, failure.refused) == (reason, refused)
+
+
+@pytest.mark.parametrize("error", [httpx.ReadTimeout("slow"), httpx.ConnectError("no route")])
+def test_a_call_that_may_have_run_is_not_called_a_refusal(error):
+    """A timeout or lost connection says nothing about spend: it must never count as refused."""
+    failure = refusal(provider(error=error))
+    assert (failure.reason, failure.refused, failure.detail) == ("unavailable", False, None)
+    # Raised by our own code with no provider answer at all: the same.
+    assert (JevUnavailable("x").reason, JevUnavailable("x").refused) == ("unavailable", False)
+    malformed = refusal(provider(200, body="{}"))
+    assert (malformed.reason, malformed.refused) == ("unavailable", False)
+
+
+def test_the_providers_own_message_is_kept_only_where_it_can_hold_no_secret():
+    """The message is for the owner's log. It must not carry the key or anything we sent."""
+    assert refusal(provider(402)).detail == NO_CREDITS
+    assert refusal(provider(402, body=json.dumps({"message": NO_CREDITS}))).detail == NO_CREDITS
+    assert refusal(provider(402, body=json.dumps({"error": NO_CREDITS}))).detail == NO_CREDITS
+    # A provider that repeats the key back, whole or in part.
+    assert refusal(provider(401, "Incorrect API key provided: private-test-key")).detail is None
+    assert refusal(provider(401, "Incorrect API key provided: privat***-key")).detail is None
+    # A complaint about the request can quote the reader's question or the book: never kept.
+    assert refusal(provider(422, "state.sentence is invalid: Mara put the cobalt key"),
+                   {"sentence": "Mara put the cobalt key"}).detail is None
+    # Anything that is not one short line of text.
+    assert refusal(provider(402, body="<html>" + "x" * 5000 + "</html>")).detail is None
+    assert refusal(provider(402, body=json.dumps({"error": {"message": {"nested": 1}}}))).detail is None
+    long = refusal(provider(429, "Slow down. " * 100)).detail
+    assert long.startswith("Slow down.") and len(long) <= 200 and "\n" not in long
+
+
+def test_a_refused_call_is_not_charged_and_one_whose_spend_is_unknown_still_is(tmp_path):
+    """Each refused call stayed in the ledger at its full reserved size: about 120 of them used
+    up the book's ceiling, and the book stayed locked after the provider recovered."""
+    from app.catalog.catalog import Catalog
+    catalog = Catalog(tmp_path / "catalog.db")
+    catalog.add_book("book", title="A Book")
+    settings = Settings(_env_file=None)
+    # Room for two calls at their reserved size, so a third charged failure hits the ceiling.
+    settings.cost_max_output_tokens_per_book = 2 * settings.cost_max_output_tokens_per_call
+
+    def call(jev):
+        try:
+            return budgeted_jev(catalog, settings, jev, "book", phase="test", state={}, questions=QUESTION)
+        finally:
+            jev.close()
+
+    for status in (402, 401, 429, 400, 402):
+        with pytest.raises(JevUnavailable):
+            call(provider(status))
+    assert catalog.get_costs("book") == [] and catalog.get_cost_reservations("book") == []
+
+    # Spend is unknown when the server errors or the call times out: the estimate stays counted.
+    for jev in (provider(500), provider(error=httpx.ReadTimeout("slow"))):
+        with pytest.raises(JevUnavailable):
+            call(jev)
+    charged = catalog.get_costs("book")
+    assert [c["phase"] for c in charged] == ["test-failed-reserved"] * 2
+    assert all(c["output_tokens"] == settings.cost_max_output_tokens_per_call for c in charged)
+    assert catalog.get_cost_reservations("book") == []
+    with pytest.raises(CostCeilingExceeded):
+        call(provider(402))

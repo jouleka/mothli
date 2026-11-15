@@ -9,7 +9,7 @@ true only when the whole, unchanged chapter has been read.
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from threading import Lock
-from time import perf_counter
+from time import monotonic, perf_counter
 
 from app.cost import budgeted_completion
 from app.cost.limits import completion_input_overhead, split_text_for_prompt
@@ -134,14 +134,24 @@ def chapter_parts(chapter, ceiling):
 
 
 class NotesBuilder:
-    """Writes missing notes off the request path: one book at a time, never one book twice at once."""
+    """Writes missing notes off the request path: one book at a time, never one book twice at once.
 
-    def __init__(self, build):
+    A page turn or a reply starts it again. When the checker's provider has refused the account
+    (no credits, or a key it does not accept), another run would pay the writer and be refused
+    the same way, so no book's notes start again for ``PAUSE_SECONDS``.
+    """
+    PAUSE_SECONDS = 300
+    PAUSE_FOR = frozenset({"no_credits", "unauthorized"})
+
+    def __init__(self, build, *, clock=monotonic):
         self._build, self._queued, self._lock = build, set(), Lock()
+        self._clock, self._resume_at = clock, None
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chapter-notes")
 
     def ensure(self, book_id):
         with self._lock:
+            if self._resume_at is not None and self._clock() < self._resume_at:
+                return False
             if book_id in self._queued:
                 return False
             self._queued.add(book_id)
@@ -152,7 +162,15 @@ class NotesBuilder:
         try:
             self._build(book_id)
         except Exception as exc:      # tried again the next time the reader moves on or asks
-            logger.warning("chapter notes were not written: %s", type(exc).__name__)
+            reason = exc.reason if isinstance(exc, JevUnavailable) else None
+            if reason in self.PAUSE_FOR:
+                with self._lock:
+                    self._resume_at = self._clock() + self.PAUSE_SECONDS
+            logger.warning(
+                "chapter notes were not written: %s%s%s", type(exc).__name__,
+                f" ({reason}{': ' + exc.detail if exc.detail else ''})" if reason else "",
+                f"; not trying again for {self.PAUSE_SECONDS // 60} minutes"
+                if reason in self.PAUSE_FOR else "")
         finally:
             with self._lock:
                 self._queued.discard(book_id)
@@ -213,7 +231,7 @@ def build_missing(book_id, catalog, store, settings, client, worker):
                 *_shown, (_end, part_kept, part_dropped) = gate_sentences(iter([text]), check, safe, pool=pool)
             if outage:
                 # Nothing is stored, so the chapter is tried again later instead of losing its notes.
-                raise JevUnavailable("Jev review unavailable")
+                raise outage.error()
             kept += part_kept
             dropped += part_dropped
         catalog.set_chapter_notes(book_id, chapter["ordinal"], source_hash=digest, version=VERSION,

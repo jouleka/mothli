@@ -2,6 +2,7 @@
 import json
 
 from app.cost.limits import BudgetedResult, CostCeilingExceeded, usd_of
+from app.llm.jev import JevUnavailable
 
 
 def estimate_jev_input(model, state, questions):
@@ -15,7 +16,6 @@ def budgeted_jev(catalog, settings, jev, book_id, *, phase, state, questions, ti
     estimated = estimate_jev_input(jev.model, state, questions)
     # Stay inside the default 32k per-question context; no long-context override.
     if estimated > min(settings.cost_max_input_tokens_per_call, 30000):
-        from app.llm.jev import JevUnavailable
         raise JevUnavailable("Jev input requires the existing generative review")
     reserved = {"in": estimated, "out": settings.cost_max_output_tokens_per_call}
     try:
@@ -32,8 +32,14 @@ def budgeted_jev(catalog, settings, jev, book_id, *, phase, state, questions, ti
     try:
         options = {"timeout_seconds": timeout_seconds} if timeout_seconds is not None else {}
         answers, usage = jev.evaluate(state, questions, **options)
-    except Exception:
-        catalog.settle_cost(book_id, reservation, phase=f"{phase}-failed-reserved")
+    except Exception as exc:
+        if isinstance(exc, JevUnavailable) and exc.refused:
+            # The provider turned the call away (4xx) before doing any work: spend is known to
+            # be nothing, so the reservation is released. Every other failure leaves spend
+            # unknown and keeps the estimate counted, as below.
+            catalog.discard_cost_reservation(book_id, reservation)
+        else:
+            catalog.settle_cost(book_id, reservation, phase=f"{phase}-failed-reserved")
         raise
     cost = usd_of(jev.model, usage)
     catalog.note_reservation_actual(book_id, reservation, input_tokens=usage["in"],

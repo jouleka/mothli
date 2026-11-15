@@ -2,7 +2,7 @@
 
 Every step updates this file: tick what it closed, add what it found, and move nothing back into chat logs.
 
-Taken from sections 6m to 6t of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
+Taken from sections 6m to 6u of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
 
 ## Now: the voice
 
@@ -19,7 +19,12 @@ Taken from sections 6m to 6t of `companion-audit-2026-11-14.md`; the section in 
 ## Before going live
 
 - [ ] Explain why chapter notes cost twice as much in the last run: $0.039 to $0.079 of Jev for the same 34 chapters and about the same sentences kept. Likely, from reading the code and not confirmed by a run: the eval writes them twice, itself and through the app's background writer, which marking chapters read starts. (6t)
-- [ ] When Jev cannot be reached, each failed check stays in the book's cost ledger at its full reserved size; about 120 of them use up the book's token ceiling, and its notes are then refused (replies pass through the same ceiling). Seen in the voice-samples step, when TypeSafe had no credits.
+- [x] When Jev cannot be reached, each failed check stays in the book's cost ledger at its full reserved size; about 120 of them use up the book's token ceiling, and its notes are then refused (replies pass through the same ceiling). Seen in the voice-samples step, when TypeSafe had no credits. Closed in 6u for a call TypeSafe refuses outright (any 4xx, "no credits" among them): nothing is charged. A timeout or a server error is still charged at its reserved size, on purpose. Stand-in provider only.
+- [ ] Check 6u against the real provider once it has credits: the shape of TypeSafe's error answer was guessed, so the reason word comes from the status alone and its own message may not be picked up for the log. (6u)
+- [ ] Books already locked by the 15 November outage stay locked: their refused checks are in the ledger as `…-failed-reserved`, which cannot be told apart from timeouts afterwards. Nothing removes them. (6u)
+- [ ] A long run of timeouts or server errors can still use up a book's ceiling, about 120 failed checks as before. Unknown spend stays counted by design; there is no limit on how much of a ceiling failures may take. (6u)
+- [ ] While TypeSafe refuses, each reply and each notes run still pays the writer first and is then thrown away. Notes wait five minutes after "no credits" or a refused key; replies do not wait at all. (6u)
+- [ ] The older, non-streamed reply path does not log the reason, and neither does anything else that calls Jev (extraction screen, cast, recap review); their refused calls are no longer charged. (6u)
 - [ ] Accounts and server-side storage: chapter notes, the read map, the stored conversations and the home chat exist in local mode only; hosted mode has no tables or endpoints for them. (6m)
 - [ ] The chat panel inside a book still shows the browser's copy of the conversation; loading it from the server is what a second device needs. (6m)
 - [ ] Phones: checked only at phone width in a desktop browser, never on a phone. (6p, 6s)

@@ -149,6 +149,57 @@ def test_one_book_is_never_noted_twice_at_once_and_a_failure_does_not_stop_later
         builder.close()
 
 
+def test_notes_stopped_by_a_refusal_carry_the_reason_store_nothing_and_charge_no_check(page_env, monkeypatch):
+    """Refused checks filled the book's ledger until its notes were refused for cost instead."""
+    import pytest
+    from app.llm.jev import JevUnavailable
+    from test_jev import provider
+    api, bid, app, settings = page_env
+    finish_chapter_one(api, app, bid)
+    models(app, monkeypatch, notes=NOTE + " Jonas waited beside the forge.")
+    app.state.client.jev = provider(402)
+    with pytest.raises(JevUnavailable) as caught:
+        build(app, bid, settings)
+    assert caught.value.reason == "no_credits"
+    catalog = app.state.catalog
+    assert catalog.get_chapter_notes(bid) == []                 # nothing unchecked is kept
+    assert not [c for c in catalog.get_costs(bid) if c["model"].startswith("jev")]
+    assert catalog.get_cost_reservations(bid) == []
+
+
+def test_notes_wait_a_few_minutes_after_the_provider_refuses_the_account(caplog):
+    """Every page turn and reply restarted the notes, paying the writer and calling a provider
+    that had already said the account has no credits."""
+    from app.chapter_notes import NotesBuilder
+    from app.llm.jev import JevUnavailable
+    now, runs = [1000.0], []
+    reasons = ["no_credits", "unavailable", "unauthorized"]
+
+    def work(book_id):
+        runs.append(book_id)
+        raise JevUnavailable("Jev review unavailable", reason=reasons[len(runs) - 1],
+                             detail="No credits" if len(runs) == 1 else None)
+
+    builder = NotesBuilder(work, clock=lambda: now[0])
+    try:
+        with caplog.at_level("WARNING", logger="mothli.notes"):
+            assert builder.ensure("b") is True and wait_for(lambda: "(no_credits" in caplog.text)
+            # One line for the owner: the reason, and the provider's own words.
+            [line] = [r.getMessage() for r in caplog.records if r.name == "mothli.notes"]
+            assert "JevUnavailable" in line and "no_credits" in line and "No credits" in line
+            # No book's notes start while the provider is known to refuse the account.
+            assert builder.ensure("b") is False and builder.ensure("other") is False
+            now[0] += 299
+            assert builder.ensure("b") is False and runs == ["b"]
+            now[0] += 2
+            assert wait_for(lambda: builder.ensure("b")) and wait_for(lambda: "(unavailable" in caplog.text)
+            # A failure that may pass on its own (a timeout, a server error) is tried again at once.
+            assert wait_for(lambda: builder.ensure("b")) and wait_for(lambda: "(unauthorized" in caplog.text)
+            assert builder.ensure("b") is False and len(runs) == 3
+    finally:
+        builder.close()
+
+
 def test_finishing_a_chapter_gets_its_notes_written_in_the_background(page_env, monkeypatch):
     api, bid, app, settings = page_env
     settings.reader_conversation_jev = settings.reader_story_notes = True

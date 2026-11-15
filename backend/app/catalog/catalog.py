@@ -677,7 +677,8 @@ class Catalog:
                 raise
 
     def discard_cost_reservation(self, book_id, reservation_id):
-        """Delete a proven-zero reservation (used only when the provider reports zero usage)."""
+        """Delete a proven-zero reservation: the provider reported zero usage, or refused the call
+        outright (a 4xx) before doing any work. Never for a failure whose spend is unknown."""
         with self._lock:
             cur = self._conn.execute(
                 "DELETE FROM cost_reservations WHERE reservation_id=? AND book_id=?",

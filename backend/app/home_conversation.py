@@ -24,8 +24,8 @@ from app.llm.jev import JevUnavailable
 from app.read_map import read_snapshot
 from app.reader_place import APP_HELP, SPEAK_AS_A_FRIEND, content_numbers, offers_for, place_line
 from app.retrieval_passages import passage_windows
-from app.stream_conversation import (HISTORY_TURNS, MAX_PASSAGES, conversation_writer, jev_runner,
-                                     sentence_checks, write_and_gate)
+from app.stream_conversation import (HISTORY_TURNS, MAX_PASSAGES, conversation_writer, failure_fields,
+                                     jev_runner, sentence_checks, write_and_gate)
 
 logger = logging.getLogger("mothli.conversation")
 HOME = "home"                 # the conversation that belongs to no single book
@@ -194,7 +194,7 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere):
                 else:
                     _, kept, dropped = event
                     if not kept and outage:
-                        raise JevUnavailable("Jev review unavailable")
+                        raise outage.error()
                     finished = kept
                     yield {"type": "done", "answer": answer(kept, dropped)}
         except CostCeilingExceeded as exc:
@@ -207,7 +207,7 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere):
             yield {"type": "error", "status": 413, "message": "read text exceeds the bounded search budget"}
         except JevUnavailable as exc:
             failure = exc
-            yield {"type": "error", "status": 503,
+            yield {"type": "error", "status": 503, "reason": exc.reason,
                    "message": "Jev review unavailable; no unchecked reply was published"}
         except ProviderUnavailable as exc:
             failure = exc
@@ -228,6 +228,6 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere):
             logger.log(logging.WARNING if failure else logging.INFO, json.dumps({
                 "event": "conversation-home", "request_id": request_id, "sentences": shown,
                 "elapsed_ms": round((perf_counter() - started) * 1000, 2), "books": len(books),
-                "failure": type(failure).__name__ if failure else None, "calls": calls}))
+                **failure_fields(failure), "calls": calls}))
 
     return events()
