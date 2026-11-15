@@ -184,6 +184,11 @@ def _offer(min_years_since_death, today):
     return _eligible(max(int(min_years_since_death), 0), (today or datetime.now(UTC)).year)
 
 
+def rows_on_offer(min_years_since_death=0, year=None):
+    """Every catalogue row on offer under the public-domain rule, most read first."""
+    return _eligible(max(int(min_years_since_death), 0), year or datetime.now(UTC).year)[0]
+
+
 def _entry(row):
     return {"id": str(row.pg), "pg": row.pg, "title": row.title,
             "author": row.author or "Unknown author", "language": row.language,

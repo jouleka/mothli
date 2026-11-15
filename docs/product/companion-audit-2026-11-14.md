@@ -1482,6 +1482,93 @@ The owner agreed to narrow the fixed foreshadowing pattern. This is a change to 
 - 22 new tests (`tests/eval/test_prolepsis_will.py`): 10 noun sentences that must not be hits, all failing on the old pattern, and 12 future-tense sentences that must stay hits, passing before and after. Of the five true sentences this check removed in 6ac's runs, three now pass it; "your own will" and the reported dream do not.
 - Not run with real models: the pattern involves none. What it changes in real replies will show in the next samples.
 
+## 6ad. Mothli suggests books that are not on the shelf (16 November)
+
+The owner asked the home chat for something new to read. Mothli asked twice whether he wanted ideas, then said it had no titles to suggest. That was the design: it could only point at books on the shelf.
+
+### What changed
+
+- For every home reply a list of up to six books is chosen from the free library's catalogue by fixed rules, with no model (`backend/app/home_suggestions.py`).
+- The writer gets the list as its own block, `BOOKS YOU CAN SUGGEST`. Each line is the catalogue's own: title, author, genres, blurb. The checks get the same lines, one passage a book. A sentence may say of such a book what its line says and nothing else. With the free library switched off, or nothing left to suggest, both are told "none".
+- The lines are not counted as read text. The fixed gate treats a name in them like any other name the reader has not met.
+- `HOME_SYSTEM`: when the reader wants something new, suggest one or two from the list straight away, each named by title and author in a sentence of its own, with the reason tied to what the two have read in another and what the book is in a third; only the line's own content, nothing from outside however famous the book; never "will" or "going to"; never ask twice whether they want ideas; say plainly when the list is empty.
+- Under a reply that names a listed book there is a button, "Add <title> to my shelf", which uses the existing add-classic call. Which books a reply named is decided in code from the sentences shown (`suggested_in`), as the `suggested` field of the answer. A title of one word counts only when the author's surname is in the reply too.
+- No check was changed.
+
+### How the books are chosen
+
+Left out:
+
+- a book in a language none of the shelf's books is in (English when no book says its language);
+- a book on the shelf, by its catalogue number or by title and author;
+- a book the reading history says was read, is being read or was set aside elsewhere. One only wanted may be suggested;
+- every book by the author of a shelf book the reader has not finished with Mothli, and every book whose title or blurb names such a book;
+- all but the most read edition of a work, any one volume of a set, and any book without a blurb or a genre;
+- the 40 catalogue numbers on `SPOILING_BLURBS`.
+
+Order: books by an author of a finished book, then the number of genres shared with books finished or well begun, then the catalogue's own order. At most two by one author. "Well begun" is a quarter of the chapters read in full with Mothli, or ten of them. An author is the same surname, give or take a spelling, and the same first initial.
+
+The rule about unfinished books was not in the brief and narrows it: the brief asked to prefer authors of books the reader is well into. It is there because preferring the author is what put sequels first. For a reader halfway through Little Women the first suggestion was Little Men, whose catalogue line is 'This sequel to "Little Women" follows Jo Bhaer and her husband'. For a reader of The Three Musketeers the second was Twenty Years After ("D'Artagnan, still a lowly lieutenant after two decades"). The Grand Inquisitor, by the author of The Brothers Karamazov, has a line that says what is in a chapter far into that book, and could be listed. Each would take the reader past their place in a book on the shelf. The cost: while Pride and Prejudice is unfinished, no other Austen is suggested. A narrower rule (keep out only books whose line shares a name with the unfinished book) would let Emma through for that reader; it was not built because it rests on guessing which words are names.
+
+### The blurbs
+
+About 450 of the 76,763 blurbs were read: 130 of the best-known novels and plays, the most read in nine other languages, every hit of a word search (dies, killed, marries, ultimately, sequel and the like) over the 4,000 most read, and every edition of each doubtful title. All blurbs are in English whatever the book's language, and read as written by a model from the first lines of a public description.
+
+Kept out (40 numbers):
+
+- Romeo and Juliet, two editions: the secret marriage.
+- Macbeth, five: whom he murders.
+- Hamlet, ten: who killed his father.
+- The String of Pearls: what the barber does with his customers.
+- The Rime of the Ancient Mariner: the crew.
+- White Fang, and Black Beauty in two editions: how each ends. No clean edition of either.
+- Three short stories (Borrowed Feathers, A Municipal Feud, The Man Who Saved New York): how each ends.
+- Mathias Sandorf in Dutch, three parts: who is executed and who survives.
+- Mrs. Warren's Profession: what she turns out to be.
+- The New Life: her death.
+- The Blue Lagoon: a death.
+- The Reign of Greed: who the jeweller is.
+- Sequels that tell how an earlier book came out: The Return of Tarzan, Little Men (two), The Return of Sherlock Holmes (two), Anne's House of Dreams, The Warlord of Mars, The Further Adventures of Robinson Crusoe.
+
+For Romeo and Juliet, Macbeth and Hamlet another edition with a clean blurb stands in.
+
+Doubtful, left in: Anna Karenina ("forces them to flee to Italy"), The Wonderful Wizard of Oz ("she must destroy the Wicked Witch"), The Time Machine (the two species), Tess ("lead to tragedy"), The Monk ("lust, murder, and demonic pacts"), Manon Lescaut, Carmen and La dame aux camélias ("tragic"), Twenty Years After and Vingt ans après, Thuvia, Rilla of Ingleside and The Son of Tarzan (a child of the earlier books' hero), Nobody's Girl and Just David (a parent's death at the start), Madame Bovary, Lady Audley's Secret and The Princess of Cleves (a marriage the book opens with).
+
+Other faults, none fixed: blurbs cut off in the middle ("his old friend Dr.", "delivers their corpses to Mrs."); 950 rows with no blurb; about 200 of the 3,000 most read titles carry a cataloguer's mark (`Peter Pan : $b [Peter and Wendy]`), which the list strips for Mothli but the library page still shows; 110 blurbs in the pool say "sequel" and about 1,400 mention a series, a continuation or a final part.
+
+The list is the cases found. It says nothing about the 76,000 blurbs not read.
+
+### The "Emma" question
+
+A suggested title that is also the name of a person the reader has not met in a shelf book is cut. Tried with Emma on the list and a person called Emma entering a shelf book one part after the reader's place: "You might like Emma by Jane Austen." is removed by the fixed gate, the next sentence stays, and there is no button, because the button comes from shown sentences. With the lines counted as read text the same test fails, which is how it was confirmed that they are not. The same holds for any name in a blurb, a place name included. The reader loses a suggestion and is told nothing they should not know.
+
+### Verified, with stand-in models only
+
+- 24 backend tests in `tests/test_home_suggestions.py`: language; not on the shelf (own copy, another spelling of the author, another title from the library); not read elsewhere; the order; an author is a person and not a surname; the unfinished-book rule both ways; a book just opened says nothing of taste; free library off; the deny list and the clean edition standing in; one line a work and no single volumes; the list in the writer's prompt and in the checker's passages, line for line from the catalogue, and nothing of the unread shelf book but its title in anything sent to any model; the button for exactly the book named and none otherwise; no button for a sentence that was cut; "none" when the library is off; the Emma case; pressing the button adds the book and it is not suggested again.
+- The two rules about unfinished books and the read-text rule were each removed in turn to see their tests fail.
+- 4 frontend tests in `HomeChat.test.tsx`: the button under its own reply, the add call with the book's number, a second press ignored, the shelf told to reload, a failed add, a book already on the shelf, no button without a named book.
+- Backend suite, ruff, `tsc -b` and the frontend suite pass.
+- Time, measured: the first list after the server starts takes about 1.1 seconds to prepare the catalogue; later ones about 0.03 to 0.08 seconds.
+
+### Not verified
+
+- Nothing was run with real models. Not seen: whether Mothli now suggests at once, whether it stops asking, whether it keeps to the line or adds what it knows of a famous book, whether Jev supports a sentence that restates a blurb and one that ties a reason to the reader's own book, and how often the title sentence survives.
+- The button has not been seen in the running app. Adding downloads the book from Project Gutenberg; the tests replace the download.
+- Each sentence check now carries up to six more short passages. What that adds to Jev spend was not measured.
+
+### Found, and not fixed
+
+- The catalogue's own order is not fame: Anna Karenina is at place 279, behind The Countess of Pembroke's Arcadia, so two of the six for a reader of Pride and Prejudice are books few people look for.
+- The list is the same for every reply until the shelf or the reading changes. "Something else?" gets the same six.
+- The rule about unfinished books covers the shelf only. A book being read in another app is kept out itself, but its sequels are not.
+- An empty shelf still gets no reply at all, so no suggestions either.
+- A book added from a suggestion becomes "not started", and Mothli then knows its title only: it can no longer repeat what it said of it a moment before.
+- A title that is on the shelf is counted as read text for every book's gate (it is in the place lines). An unread shelf book called Emma would let the name through for another book. This was so before this step.
+- Other adaptations and sequels by another hand that do not name the original in their line get through ("The Wife of Monte-Cristo").
+- "Volume" is recognised by pattern; a set numbered another way gets through.
+- The evaluation's reference for the home chat (`companion_eval.py`, cross-book cases) is not given the list. No case asks for a suggestion today; one that did would have its suggestion marked against it.
+- The blurbs themselves need a pass of their own: rewriting or dropping the sequel lines would let the deny list go.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
