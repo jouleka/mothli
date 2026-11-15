@@ -375,3 +375,16 @@ def test_a_reply_that_says_mothli_was_not_there_carries_the_offer_and_other_repl
         {"book_id": bid, "title": "The Lamp Book", "atoms": [1, 2], "chapters": "chapters 1 and 2"}]
     models(app, monkeypatch, reply="Vex moved lamp 11 in part 3.")
     assert "offers" not in ask(api, bid, "What did Vex do?")[-1]["answer"]
+
+
+def test_saying_chapters_were_read_starts_their_extraction_at_once(map_env, monkeypatch):
+    api, bid, app, settings = map_env
+    queued = []
+    monkeypatch.setattr(app.state.worker, "enqueue", lambda book_id, through: queued.append((book_id, through)))
+    api.put(f"/api/books/{bid}/read-chapters", json={"atoms": [1, 2], "read": True}).raise_for_status()
+    assert queued == [(bid, 2)]                       # no page turn needed for the cast to catch up
+    api.put(f"/api/books/{bid}/read-chapters", json={"atoms": [2], "read": False}).raise_for_status()
+    assert queued == [(bid, 2)]                       # taking a chapter back extracts nothing new
+    settings.reader_memory_ingest = False
+    api.put(f"/api/books/{bid}/read-chapters", json={"atoms": [2], "read": True}).raise_for_status()
+    assert queued == [(bid, 2)]

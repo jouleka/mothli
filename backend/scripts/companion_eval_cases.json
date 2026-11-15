@@ -227,10 +227,10 @@
     },
     "verne-fr": {
       "source": "epub",
-      "note": "Not English. Jules Verne, Le tour du monde en quatre-vingts jours, in French, Project Gutenberg 800. The app imports 30 of its 37 chapters: atom 1 is chapter V (see audit 6s).",
+      "note": "Not English. Jules Verne, Le tour du monde en quatre-vingts jours, in French, Project Gutenberg 800. Its own contents list has no chapter XII, which the app keeps inside XI, so XI is atom 11 and XIII atom 12 (see audit 6s, 6t).",
       "later_names": ["Aouda", "Kiouni", "Proctor", "Mudge"],
       "positions": [
-        {"name": "told-6", "told": [1, 2, 3, 4, 5, 6], "must_contain_read": ["La nouvelle du pari", "pagode de Malebar-Hill"], "must_not_contain_read": ["Un éléphant qui appartient"],
+        {"name": "through-10", "told": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], "must_contain_read": ["La nouvelle du pari", "pagode de Malebar-Hill"], "must_not_contain_read": ["Un éléphant qui appartient"],
          "cases": [
           {"id": "v-fix", "type": "interpretive", "question": "Qui est Fix, et pourquoi suit-il Phileas Fogg ?", "facts": [["détective", "agent", "police", "inspecteur"], ["vol", "Banque", "voleur"], ["\b(est|il|pour|qui)\b"]]},
           {"id": "v-pagode", "type": "recent", "question": "Qu'est-il arrivé à Passepartout à Bombay ?", "facts": [["pagode", "temple"], ["chaussure", "soulier", "pieds nus", "pied"]]},
@@ -240,7 +240,7 @@
           {"id": "v-ahead-fix", "type": "spoiler", "expect": "empty", "question": "Fix finit-il par arrêter Fogg ?", "forbidden": ["Liverpool", "arrêt(e|é) Fogg", "\boui\b", "prison"]},
           {"id": "v-ahead-win", "type": "spoiler", "expect": "empty", "question": "Fogg gagne-t-il son pari ?", "forbidden": ["gagne son pari", "a gagné", "jour (de plus|gagné)", "\boui\b"]}
          ]},
-        {"name": "inside-7", "told": [1, 2, 3, 4, 5, 6], "pages": [{"atom": 7, "from": "Le train était parti à l'heure réglementaire.", "to": "Passepartout occupait le même compartiment que son maître."}], "must_contain_read": ["Passepartout occupait le même compartiment"], "must_not_contain_read": ["Un éléphant qui appartient"],
+        {"name": "inside-11", "told": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], "pages": [{"atom": 11, "from": "Le train était parti à l'heure réglementaire.", "to": "Passepartout occupait le même compartiment que son maître."}], "must_contain_read": ["Passepartout occupait le même compartiment"], "must_not_contain_read": ["Un éléphant qui appartient"],
          "cases": [
           {"id": "v7-train", "type": "recent", "question": "Qui voyage dans le train avec Fogg ?", "facts": [["Passepartout"]]},
           {"id": "v7-ahead-elephant", "type": "spoiler", "expect": "empty", "question": "Comment Fogg traverse-t-il l'Inde quand la voie ferrée s'arrête ?", "forbidden": ["éléphant", "Kiouni", "elephant"]}

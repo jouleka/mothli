@@ -29,6 +29,7 @@ import "./simple-reader.css";
 import { admitRelocation, arrowPagingBlocked, jumpsAhead } from "./guard";
 import { JumpNote } from "./JumpNote";
 import { PagesRead } from "./pagesRead";
+import { watchMemory } from "./memoryCatchUp";
 import { ImportOffer } from "./ImportOffer";
 import {
   buildSectionAtomMap,
@@ -272,6 +273,10 @@ export function ReaderPage({
   const mappedRef = useRef(false); // the same, for the page-turn handler
   const [readShare, setReadShare] = useState<Record<number, number>>({}); // by 0-based chapter index
   const [readOffer, setReadOffer] = useState<ReadOffer | null>(null);
+  // Bumped as extraction catches up with chapters marked read, so the cast and recap refresh.
+  const [memoryRefresh, setMemoryRefresh] = useState(0);
+  const stopMemoryWatch = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopMemoryWatch.current?.(), [bookId]);
   const refreshReadShare = useCallback(async () => {
     try {
       const map = await api.readMap?.(bookId);
@@ -280,6 +285,19 @@ export function ReaderPage({
       setManifest(await api.manifest(bookId));
     } catch {
       /* The contents list simply shows no read marks. */
+    }
+    try {
+      // Saying chapters were read moves the chapter counter without a page turn: take the new
+      // counter now, and refresh the cast and recap as those chapters are extracted.
+      const fresh = await api.position(bookId);
+      if (fresh.position_epoch === positionEpochRef.current) {
+        setPos((current) => (current ? { ...current, bookmark: fresh.bookmark,
+                                          ingest_progress: fresh.ingest_progress } : current));
+        stopMemoryWatch.current?.();
+        stopMemoryWatch.current = watchMemory(bookId, fresh.bookmark, () => setMemoryRefresh((n) => n + 1));
+      }
+    } catch {
+      /* The views catch up at the next page turn. */
     }
   }, [bookId]);
   const markRead = useCallback(async (atom: number, read: boolean) => {
@@ -1122,6 +1140,7 @@ export function ReaderPage({
       /* The jump still happens; Mothli simply does not learn the earlier chapters. */
     }
     await followJump();
+    if (before.length) void refreshReadShare();
   };
 
   const followJump = async () => {
@@ -1482,7 +1501,7 @@ export function ReaderPage({
     return () => {
       live = false;
     };
-  }, [bookId, readerBookmark]);
+  }, [bookId, readerBookmark, memoryRefresh]);
   useEffect(() => {
     castRef.current = cast;
     nameMatcherRef.current = buildNameMatcher(nameTapsOn ? cast : []);
@@ -1793,6 +1812,7 @@ export function ReaderPage({
           bookmark={readerBookmark}
           prepareReadContext={prepareReadContext}
           onChaptersRead={() => void refreshReadShare()}
+          memoryRefresh={memoryRefresh}
           throughCurrentPage={readFrontier !== null}
           readingPass={readingPass}
           initialAction={initialAction}

@@ -461,7 +461,7 @@ def _segment(zf, book_id):
         if not fr:
             label_for_file.setdefault(f, lab)
     cls, words, chars, head = {}, {}, {}, {}
-    trailing_lic = []
+    trailing_lic, boilerplate = [], set()
     for f in order:
         txt, h = _doctext(zf, f)
         words[f], chars[f], head[f] = len(txt.split()), len(txt), h
@@ -469,14 +469,26 @@ def _segment(zf, book_id):
                             _doc_epubtype(zf, f))
         if cls[f] == 'body' and S.LICENSE_RE.search(txt):
             trailing_lic.append(posixpath.basename(f))
+        if S.START_RE.search(txt[:8000]) or S.LICENSE_RE.search(txt):
+            boilerplate.add(f)
+
+    def names_chapters(f):
+        return any(ff == f and fr and leaf and S.is_chapter_leaf(lab, f in boilerplate)
+                   for ff, fr, lab, leaf in toc)
     # A whole-file class cannot describe a file that holds BOTH front matter and chapters. Project
     # Gutenberg splits a book into arbitrary files, so its first file carries the PG header, the
     # title page AND the opening chapters; classifying that file 'front' silently dropped them.
     # A front file whose ToC leaves name chapters is body. Its leaves before the first chapter
     # leaf stay front (dropped in _anchor_atoms), as does its text before the first kept anchor.
-    promoted = [f for f in order if cls[f] == 'front' and f != navh and any(
-        ff == f and fr and leaf and S._has_chapter_evidence(lab, '') for ff, fr, lab, leaf in toc)]
+    promoted = [f for f in order if cls[f] == 'front' and f != navh and names_chapters(f)]
     for f in promoted:
+        cls[f] = 'body'
+    # The same holds at the other end: the last file can carry the closing chapters AND the licence.
+    # It is body only when the licence is fenced off by Gutenberg's END marker, which is where
+    # chapter text is cut (chapter_text._clean), so none of the licence can reach a chapter.
+    closing = [f for f in order if cls[f] == 'back' and f != navh and f in boilerplate
+               and S.END_MARK.search(_doctext(zf, f)[0]) and names_chapters(f)]
+    for f in closing:
         cls[f] = 'body'
     body_idx = [k for k, f in enumerate(order) if cls[f] == 'body']
     if not body_idx:
@@ -494,7 +506,8 @@ def _segment(zf, book_id):
     # Chapters that begin inside a front-matter file can only be separated at their anchors.
     if promoted or len(toc_leaves) > max(1, len(body_files)) * 1.3:
         mode = 'anchor-driven'
-        atoms, flags = _anchor_atoms(book_id, toc_leaves, chars, body_files, set(promoted), words)
+        atoms, flags = _anchor_atoms(book_id, toc_leaves, chars, body_files, set(promoted), words,
+                                     boilerplate)
     else:
         mode = 'file-driven'
         atoms, flags = _file_atoms(book_id, body_files, label_for_file, head, words, chars)
@@ -595,7 +608,8 @@ def _file_atoms(book_id, body_files, label_for_file, head, words, chars):
 TRIVIAL_DOC_WORDS = 20
 
 
-def _anchor_atoms(book_id, toc_leaves, chars, body_files=(), promoted=frozenset(), words=None):
+def _anchor_atoms(book_id, toc_leaves, chars, body_files=(), promoted=frozenset(), words=None,
+                  boilerplate=frozenset()):
     """Anchor-driven (many chapters per file: one atom per leaf ToC navPoint). char_len is an even-split
     approximation per file (the real reader, LIT-13, supplies exact CFI ranges). The D-A8 divider-merge
     is file-driven only; anchor-driven divider handling is a routed follow-up.
@@ -611,7 +625,7 @@ def _anchor_atoms(book_id, toc_leaves, chars, body_files=(), promoted=frozenset(
             continue
         seen.add((f, fr))
         if f in promoted and f not in chapter_started:
-            if not S._has_chapter_evidence(lab, ''):
+            if not S.is_chapter_leaf(lab, f in boilerplate):
                 front_leaves.append(lab or '(untitled)')   # title page / preface ahead of chapter one
                 continue
             chapter_started.add(f)

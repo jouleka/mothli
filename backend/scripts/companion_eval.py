@@ -96,6 +96,24 @@ def enter_by_map(api, app, bid, position, chapters):
     epoch = app.state.catalog.get_state(bid)["position_epoch"]
     api.post(f"/api/books/{bid}/position/reset", json={"position_epoch": epoch, "fresh": True}).raise_for_status()
     mark = {"cfi": "epubcfi(/6/2)", "position_epoch": epoch + 1}
+    if not (position.get("told") or position.get("pages")):
+        # A position given by chapter number: everything before it read, as the reader app would
+        # have recorded it page by page. "Through N" is chapters 1 to N; inside chapter N after a
+        # quote is chapters 1 to N-1 and chapter N from its start to just after the quote, with
+        # the reader's place there. The stretch is written straight into the map because the page
+        # route needs both ends as quotes; its end is the offset the older position check used.
+        atom, quote = position["atom"], position.get("quote")
+        position = {**position, "told": list(range(1, atom if quote else atom + 1))}
+        if quote:
+            catalog, book = app.state.catalog, app.state.catalog.get_book(bid)
+            text = normalize_source(next(c["text"] for c in chapters if c["ordinal"] == atom))
+            start = text.find(quote)
+            if start < 0 or text.find(quote, start + 1) >= 0:
+                raise SystemExit(f"{position['name']}: the quote is missing or ambiguous in chapter {atom}")
+            catalog.add_read_range(bid, incarnation=book["incarnation"], atom=atom, start=0,
+                                   end=start + len(quote), source="read")
+            catalog.set_read_position(bid, incarnation=book["incarnation"], atom=atom,
+                                      offset=start + len(quote))
     if position.get("told"):
         api.put(f"/api/books/{bid}/read-chapters", json={"atoms": position["told"], "read": True}).raise_for_status()
     for page in position.get("pages", []):
@@ -421,22 +439,9 @@ def main():
                 for position in positions(book):
                     if args.positions and position["name"] not in args.positions:
                         continue
-                    mid = position.get("quote")
-                    settings.reader_read_map = bool(position.get("pages") or position.get("told"))
-                    if settings.reader_read_map:
-                        boundary, read_text, later_text = enter_by_map(api, app, bid, position, chapters)
-                    else:
-                        app.state.catalog.set_position(bid, "epubcfi(/6/2)", position["atom"] - (1 if mid else 0))
-                        if mid:
-                            confirmed = api.put(f"/api/books/{bid}/read-frontier", json={
-                                "atom": position["atom"], "quote": mid, "prefix": mid,
-                                "cfi": "epubcfi(/6/2)", "position_epoch": 0})
-                            if confirmed.status_code != 200:
-                                raise SystemExit(f"{name}/{position['name']}: position not accepted: {confirmed.text}")
-                        boundary = api.get(f"/api/books/{bid}/read-frontier").json()
-                        if boundary["atom"] != position["atom"]:
-                            raise SystemExit(f"{name}/{position['name']}: position is {boundary}")
-                        read_text, later_text = read_and_unread(chapters, boundary)
+                    # Every position runs on the read map, the default since audit 6q.
+                    settings.reader_read_map = True
+                    boundary, read_text, later_text = enter_by_map(api, app, bid, position, chapters)
                     missing = [p for p in position.get("must_contain_read", []) if p.lower() not in read_text.lower()]
                     early = [p for p in position.get("must_not_contain_read", []) if p.lower() in read_text.lower()]
                     if missing or early:

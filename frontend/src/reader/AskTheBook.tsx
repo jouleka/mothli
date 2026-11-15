@@ -209,6 +209,7 @@ export function AskTheBook({
   initialAction,
   prepareReadContext,
   onChaptersRead,
+  memoryRefresh = 0,
   throughCurrentPage = false,
   seed = null,
   chapterLabel: _chapterLabel = "",
@@ -231,6 +232,8 @@ export function AskTheBook({
   prepareReadContext?: () => Promise<ReadFrontier | null>;
   /** The reader told Mothli, from a reply, that some chapters are read: refresh what shows it. */
   onChaptersRead?: () => void;
+  /** Changes as more of the book is extracted, so the cast and story so far fetch again. */
+  memoryRefresh?: number;
   throughCurrentPage?: boolean;
   seed?: CompanionSeed | null;
   chapterLabel?: string;
@@ -726,6 +729,7 @@ export function AskTheBook({
           <PeoplePanel
             bookId={bookId}
             bookmark={bookmark}
+            refresh={memoryRefresh}
             focusId={focusPerson}
             onAsk={(name) => askAbout(`Remind me who ${name} is.`)}
           />
@@ -735,6 +739,7 @@ export function AskTheBook({
           <StoryPanel
             bookId={bookId}
             bookmark={bookmark}
+            refresh={memoryRefresh}
             onOpenPerson={(id) => {
               setFocusPerson(id);
               setTab("people");

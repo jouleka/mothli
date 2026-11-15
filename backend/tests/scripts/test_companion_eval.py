@@ -39,3 +39,34 @@ def test_text_is_split_by_the_read_map_wherever_the_read_stretches_are():
     read, unread = ev.read_and_unread_by_map(chapters, {1: [(18, 31)]})
     assert read == "Jonas waited."
     assert "Mara hid the key." in unread and "Corvus arrived." in unread and "Jonas" not in unread
+
+
+def test_a_position_given_by_chapter_number_is_entered_on_the_read_map(tmp_path):
+    """Through chapter N, and inside chapter N after a quote, become what the reader app would
+    have recorded: whole chapters before, and the stretch up to the quote with the place there."""
+    import sys
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+    sys.path.insert(0, str(Path(__file__).parents[1] / "api"))
+    from _epub import epub_ncx
+    from test_ingest import InlineExecutor
+    settings = Settings(_env_file=None, allow_stub=True, reader_page_context=True,
+                        reader_conversation_pipeline=True, data_dir=str(tmp_path / "data"))
+    app = create_app(settings, ingest_executor=InlineExecutor())
+    settings.reader_conversation_jev = settings.reader_conversation_stream = settings.reader_read_map = True
+    lines = {n: " ".join(f"Line {i} of part {n}." for i in range(1, 41)) for n in (1, 2, 3)}
+    with TestClient(app) as api:
+        epub = epub_ncx([(f"c{n}.xhtml", f"Part {n}", f"Part {n}", lines[n]) for n in (1, 2, 3)])
+        bid = api.post("/api/books", files={"file": ("b.epub", epub, "application/epub+zip")}).json()["book_id"]
+        chapters = app.state.worker.source_chapters(bid)
+        point, read, unread = ev.enter_by_map(api, app, bid, {"name": "through-2", "atom": 2}, chapters)
+        assert "Line 40 of part 2." in read and "part 3" not in read
+        point, read, unread = ev.enter_by_map(
+            api, app, bid, {"name": "inside-3", "atom": 3, "quote": "Line 7 of part 3."}, chapters)
+        assert "Line 40 of part 2." in read and "Line 7 of part 3." in read and "Line 8 of part 3." not in read
+        assert (point["atom"], point["available_chapter"]) == (3, 3)
+        assert "Line 8 of part 3." in unread

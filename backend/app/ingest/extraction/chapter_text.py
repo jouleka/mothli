@@ -48,6 +48,7 @@ from app.ingest.segmentation.epub_segmenter import _ln, _parse, _read
 # ``_clean``.  We trim by match indexes below instead.
 START_RE = re.compile(r"START OF (?:THE|THIS) PROJECT GUTENBERG[^\n]*\n", re.I)
 END_RE = re.compile(r"\*\*\* END OF (?:THE|THIS) PROJECT GUTENBERG", re.I)
+_PG_END_LINE = re.compile(r"End of (?:the )?Project Gutenberg(?:'s|’s)?[^\n]{0,200}\s*$", re.I)
 
 
 def content_hash_of(text):
@@ -197,6 +198,10 @@ def _clean(text):
     end = END_RE.search(text)
     if end:
         text = text[:end.start()]                  # drop the license tail
+        # and the "End of Project Gutenberg's <title>" line that stands just before the marker
+        last = _PG_END_LINE.search(text)
+        if last:
+            text = text[:last.start()]
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
     return text.strip()

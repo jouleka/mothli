@@ -167,6 +167,11 @@ def put_read_chapters(book_id: str, body: ReadChapters, request: Request, catalo
         raise HTTPException(422, "chapters could not be verified against the source") from exc
     if body.read and settings.reader_story_notes and settings.reader_conversation_jev:
         request.app.state.notes_builder.ensure(book_id)
+    bookmark = catalog.get_state(book_id)["bookmark"]
+    if body.read and bookmark > 0 and settings.reader_memory_ingest:
+        # The cast and recap follow the counter just moved; extract those chapters now rather
+        # than at the next page turn, as PUT /position would.
+        worker.enqueue(book_id, bookmark)
     return point
 
 
