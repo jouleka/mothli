@@ -642,16 +642,61 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
             # exact neighbouring context the existing completion step adds within that limit.
             # No model chooses among them here, so the next few in retrieval order are kept
             # too: a follow-up's passage is often just outside the first six.
-            sources = complete_ask_context(query, pool_sources[:6], pool_sources,
-                                           known_names=known_names, allow_named_fallback=True
-                                           ) if pool_sources else []
-            chosen = {s["id"] for s in sources}
-            sources = sources + [s for s in pool_sources if s["id"] not in chosen][:MAX_PASSAGES - len(sources)]
+            core = complete_ask_context(query, pool_sources[:6], pool_sources,
+                                        known_names=known_names, allow_named_fallback=True
+                                        ) if pool_sources else []
+            chosen = {s["id"] for s in core}
+            extra = [s for s in pool_sources if s["id"] not in chosen][:MAX_PASSAGES - len(core)]
             note("retrieval", retrieval_started)
-            passages = [" ".join(s["text"].split()) for s in sources]
             notes = (select_notes(usable_notes(book_id, chapters, catalog), query)
                      if settings.reader_story_notes else [])
-            passages += note_passages(notes)
+            fixed = []
+            place = None
+            if settings.reader_read_map:
+                # Where the reader is, and what they can do here, in a friend's terms: Mothli
+                # repeats the words it is given, and the checker holds it to them. Of pages
+                # turned through quickly it is given the chapter numbers and nothing else.
+                place_now.append({"book": book, "chapters": chapters, "point": point,
+                                  "numbers": content_numbers(manifest),
+                                  "skimmed": skimmed_chapters(book_id, book, catalog)})
+                note_asked(place_now, said_before(earlier))
+                place = place_line(place_now[0])
+                fixed += ["Where the reader is: " + place, "How this app works: " + APP_HELP]
+            # What the reader has told Mothli before, within a fixed budget whatever is stored.
+            # A note tied to a book is given only while what was read when the reader said it
+            # is still read, by the rule earlier turns follow. The checker gets the same lines,
+            # so a true "you told me chapter 5 wrecked you" is supported; they are the reader's
+            # word about themselves and are labelled as no evidence of anything in a book.
+            remembered = []
+            if settings.reader_recollections:
+                try:
+                    remembered = recall(catalog, read=book_record(book_id, book, read_map), book_id=book_id,
+                                        query=body.question, other_books=settings.reader_read_map)
+                except Exception:       # a reply without them is better than no reply
+                    logger.exception("recollections could not be read")
+            if remembered:
+                fixed.append(recollection_passage(remembered))
+            # A check over the size the checker accepts is refused and its sentence dropped. So
+            # the place, the app help and what the reader has said are always kept, and read text
+            # takes the room the largest check of this reply has left: retrieval's first passages,
+            # then the chapter notes, then the further passages, best first while they fit.
+            # Fewer passages can only make a check stricter, never looser. The writer is given
+            # exactly the passages its checker is given, or it would write sentences that are cut.
+            ranked = ([(s, " ".join(s["text"].split())) for s in core]
+                      + list(zip(notes, note_passages(notes), strict=True))
+                      + [(s, " ".join(s["text"].split())) for s in extra])
+            fitted = iter(fit_passages(fixed, [text for _, text in ranked],
+                                       budget=check_room(question, identities))[len(fixed):])
+            # ``fit_passages`` keeps ``ranked`` in order and skips a passage only when it is too
+            # large for what is left, so its kept passages are found by walking the two in step.
+            kept, following = set(), next(fitted, None)
+            for item, text in ranked:
+                if text == following:
+                    kept.add(id(item))
+                    following = next(fitted, None)
+            sources = [s for s in core + extra if id(s) in kept]
+            notes = [n for n in notes if id(n) in kept]
+            passages = [" ".join(s["text"].split()) for s in sources] + note_passages(notes) + fixed
             check, safe, outage = sentence_checks(
                 book_id=book_id, catalog=catalog, store=store, settings=settings, writer=writer,
                 jev_run=jev_run, note=note, passages_for=lambda sentence: passages, question=question,
@@ -665,38 +710,10 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
                 prompt += "(none found for this message)"
             if notes:
                 prompt += "\n\n" + notes_block(notes)
-            if settings.reader_read_map:
-                # Where the reader is, and what they can do here, in a friend's terms: Mothli
-                # repeats the words it is given, and the checker holds it to them. Of pages
-                # turned through quickly it is given the chapter numbers and nothing else.
-                place_now.append({"book": book, "chapters": chapters, "point": point,
-                                  "numbers": content_numbers(manifest),
-                                  "skimmed": skimmed_chapters(book_id, book, catalog)})
-                note_asked(place_now, said_before(earlier))
-                place = place_line(place_now[0])
+            if place is not None:
                 prompt += "\n\nWHERE THE READER IS:\n" + place + "\n\nHOW THIS APP WORKS:\n" + APP_HELP
-                passages += ["Where the reader is: " + place, "How this app works: " + APP_HELP]
-            # What the reader has told Mothli before, within a fixed budget whatever is stored.
-            # A note tied to a book is given only while what was read when the reader said it
-            # is still read, by the rule earlier turns follow. The checker gets the same lines,
-            # so a true "you told me chapter 5 wrecked you" is supported; they are the reader's
-            # word about themselves and are labelled as no evidence of anything in a book.
-            remembered = []
-            if settings.reader_recollections:
-                try:
-                    remembered = recall(catalog, read=book_record(book_id, book, read_map), book_id=book_id,
-                                        query=body.question, other_books=settings.reader_read_map)
-                except Exception:       # a reply without them is better than no reply
-                    logger.exception("recollections could not be read")
-            if remembered and len(fit_passages(passages, [recollection_passage(remembered)],
-                                               budget=check_room(question, identities))) == len(passages):
-                # The largest check of this reply has no room left for them, and a check over
-                # the size the checker accepts is refused and its sentence dropped. They are
-                # left out for the writer too: it is never given what its checker is not.
-                remembered = []
             if remembered:
                 prompt += "\n\n" + recollection_block(remembered)
-                passages += [recollection_passage(remembered)]
             note_names = names_note(identities)
             if note_names:
                 prompt += "\n\n" + note_names
