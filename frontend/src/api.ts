@@ -144,6 +144,17 @@ export type ReadOffer = {
 export type SkippedChapters = { atoms: number[]; chapters: string; skimmed?: number[] };
 /** One message of the home conversation, which runs across all the reader's books. */
 export type HomeTurn = { role: "user" | "assistant"; content: string; created_at?: string };
+/** One thing Mothli remembers about the reader, from something the reader said. ``book`` is set
+ * when it is about one book; ``message`` is the reader's own words, when the server may show them. */
+export type Recollection = {
+  id: number;
+  kind: "about" | "taste" | "plan" | "feeling";
+  text: string;
+  said_at: string;
+  book: { book_id: string; title: string } | null;
+  message: string | null;
+};
+export type RecollectionList = { recollections: Recollection[]; hidden: number };
 /** One message of the conversation inside a book that the server may show now. `atom` is the
  * chapter the reader was in when it was written. */
 export type BookTurn = { role: "user" | "assistant"; content: string; atom: number; reaction?: boolean; created_at?: string };
@@ -682,6 +693,18 @@ export const api = {
   homeConversation: () => fetch("/api/reader/conversation").then((r) => j<{ turns: HomeTurn[] }>(r)),
   clearHome: () =>
     fetch("/api/reader/conversation", { method: "DELETE", headers: csrfHeaders() }).then(() => undefined),
+  /** What Mothli remembers about the reader, newest first, and how many more are held back until
+   * their pages are read again. 404 where the server does not keep any. */
+  recollections: () =>
+    fetch("/api/reader/recollections", { cache: "no-store" }).then((r) => j<RecollectionList>(r)),
+  forgetRecollection: (id: number) =>
+    fetch(`/api/reader/recollections/${id}`, { method: "DELETE", headers: csrfHeaders() }).then((r) => {
+      if (!r.ok && r.status !== 404) throw new ApiError("Couldn’t forget that.", r.status);
+    }),
+  forgetRecollections: () =>
+    fetch("/api/reader/recollections", { method: "DELETE", headers: csrfHeaders() }).then((r) => {
+      if (!r.ok) throw new ApiError("Couldn’t forget them.", r.status);
+    }),
   askHome: async (question: string, onSentence: (text: string) => void): Promise<AskAnswer> => {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);

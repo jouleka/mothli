@@ -51,6 +51,7 @@
 .ml-hc-link:hover { color: var(--m-accent-hover); }
 .ml-hc-link:disabled { color: var(--m-faint); cursor: default; }
 .ml-hc-clear { color: var(--m-soft); }
+.ml-hc-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 16px; }
 
 .ml-hc-confirm {
   display: flex;
@@ -285,6 +286,7 @@
   }
   .ml-hc-title h2 { font-size: 32px; }
   .ml-hc-clear { min-height: 32px; padding: 0; }
+  .ml-hc-actions { flex-direction: column; align-items: flex-start; }
   .ml-hc-thread { margin-right: 0; padding-right: 20px; }
 }
 
@@ -295,7 +297,8 @@
   .ml-hc-moth { width: 36px; height: auto; margin-top: 4px; }
   .ml-hc-title h2 { font-size: 25px; }
   .ml-hc-title p { font-size: 13px; }
-  .ml-hc-clear { grid-column: 1 / -1; justify-self: start; min-height: 32px; padding: 0; }
+  .ml-hc-clear { min-height: 32px; padding: 0; }
+  .ml-hc-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .ml-hc-hand,
   .ml-hc-reply,
   .ml-hc-you,
@@ -305,6 +308,38 @@
   /* styles.css pins phone textareas to 16px !important so iOS won't zoom; anything at 16px or
    * more avoids the zoom, so the handwriting keeps its size here. */
   .ml-hc-composer textarea { font-size: 23px !important; }
+}
+
+/* ---------- what Mothli remembers: a sheet over the page (fl-scrim / fl-sheet), one column ---------- */
+.fl-sheet.ml-mem { grid-template-columns: minmax(0, 1fr); width: min(680px, 100%); }
+.ml-mem-body { display: grid; gap: 16px; min-width: 0; }
+.ml-mem-body h2 { margin: 0 44px 0 0; font: italic 600 34px/1.1 var(--m-display); color: var(--m-ink); }
+.ml-mem-body h2:focus { outline: 0; }
+.ml-mem-body h2:focus-visible { outline: 2px solid var(--m-accent); outline-offset: 4px; }
+.ml-mem-intro,
+.ml-mem-quiet { margin: 0; font: 400 15px/1.45 var(--m-ui); color: var(--m-soft); }
+.ml-mem-empty { margin: 0; font: 500 24px/1.2 var(--m-hand); color: var(--m-mothli-ink); }
+.ml-mem-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.ml-mem-item { display: grid; gap: 6px; padding: 16px 0; }
+.ml-mem-item + .ml-mem-item { border-top: 1px dashed var(--m-line); }
+.ml-mem-book { margin: 0; font: 600 12px/1.4 var(--m-ui); letter-spacing: 0.08em; text-transform: uppercase; color: var(--m-soft); }
+.ml-mem-text { margin: 0; font: 500 24px/1.2 var(--m-hand); color: var(--m-mothli-ink); overflow-wrap: anywhere; }
+.ml-mem-said {
+  margin: 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--m-line-strong);
+  font: italic 400 15px/1.4 var(--m-book);
+  color: var(--m-soft);
+  overflow-wrap: anywhere;
+}
+.ml-mem-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 16px; }
+.ml-mem-when { font: 400 13px/1.4 var(--m-ui); color: var(--m-soft); }
+.ml-mem-all { padding-top: 8px; border-top: 1px solid var(--m-line); }
+.ml-mem-all .ml-hc-confirm .ui-button { margin: 4px 0; }
+
+@media (max-width: 720px) {
+  .ml-mem-body h2 { font-size: 28px; }
+  .ml-mem-text { font-size: 22px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
