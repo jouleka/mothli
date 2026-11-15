@@ -862,7 +862,7 @@ Shelf: Karamazov with chapters 1 to 4 read, Pride and Prejudice with chapters 1 
 - **A book not started has no description at all**, for the same reason. This is stricter than the plan, which allowed a spoiler-free blurb.
 - **Spend is recorded against one book**, the first on the shelf with anything read, because the cost ledger has no place for a conversation that belongs to none.
 - **At most six books' read text per reply**, in shelf order. No choice is made by relevance yet, so a seventh book is known only by its shelf line.
-- **Earlier home turns are not filtered by what is read now.** After "read it fresh" on a book, an old home turn about it can still be given to the writer as conversation, though not as evidence.
+- **Earlier home turns are not filtered by what is read now.** After "read it fresh" on a book, an old home turn about it can still be given to the writer as conversation, though not as evidence. (Closed in 6v.)
 - One run, two real books. The stand-in for the unopened book tests the model's own knowledge of a famous title, not a real file.
 
 ## 6p. First use by the reader: what broke, and the fixes (15 November)
@@ -1070,6 +1070,54 @@ TypeSafe had no credits, so nothing here was run against it. The tests put a rea
 - **The writer is still paid during an outage.** A reply or a notes run writes first and learns that the checker refuses afterwards. Notes now wait five minutes after `no_credits` or `unauthorized`; replies do not wait, and `rate_limited` does not pause anything.
 - **A call our own code refuses after reserving** (more than 24 questions in one batch) is still charged at its reserved size though it never left the machine. Left as it was.
 - The older, non-streamed reply path logs no reason. The frontend was not touched: the reader sees the same line for every outage.
+
+## 6v. Earlier home turns follow what is read now (15 November)
+
+The home chat kept its turns with no book and passed the last few to the writer as conversation, whatever had happened to the books since. After "read it fresh" an old turn about that book still reached the writer, reached the checker inside the reader's message, and was returned by `GET /api/reader/conversation`. The conversation inside a book hides such turns (`visible_turns`); the home chat had nothing like it.
+
+### What changed
+
+| | Before | Now |
+|---|---|---|
+| What a home turn is stored with | Nothing about any book | `conversation_turns.drew_on`: for every book that had anything read, its shelf lifetime and its whole read map, taken from the same snapshot the prompt was built from (`read_maps` in `home_conversation.py`) |
+| Which earlier turns the writer gets, and which the screen shows | The latest stored turns | `home_turns`: a turn only while every book it was stored with is on the shelf, in the same shelf lifetime, with every stretch read then still read (`still_read` in `read_map.py`). One function serves `stream_home` and `GET /api/reader/conversation` |
+| A turn stored before this change | Passed on and shown | Never passed on and never shown. Nothing records what it drew on or how far each book was read then, and "I haven't read this" leaves no trace to look for afterwards, so "hide after a reset" could not be decided either. The rows stay until the reader clears the conversation |
+| An existing catalog | | Gains the column when opened; old rows have none |
+
+- **What it does:** "read it fresh", "I haven't read this" on a chapter, and removing a book each hide the home turns written from that text. Reading it again brings them back, as inside a book. Reading further, marking more chapters, and "read again" (which keeps what was read) hide nothing.
+- **No check was touched.** How a sentence is checked, how replies are worded and what counts as read are as they were. The change is in which stored turns are read back.
+- **The per-book position could not be reused.** A turn inside a book is stored with one place in one book, and is shown while that place is read. A home turn has several books and no place, and a place says nothing about a chapter read elsewhere in the book (see the last finding below).
+- **"Drew on" is every book with anything read**, not the books a reply mentions: each reply is written with the text of all of them, and nothing says which sentence came from which.
+- `backend/scripts/companion_eval.py` stores a case's earlier home turns with the shelf's maps, or they would no longer be passed on.
+
+### Verified, with stand-in models only
+
+Nine new tests; eight fail on main, the ninth guards against hiding too much. Whole backend suite: 2,076 passed, 83 skipped.
+
+| Test | The break it catches |
+|---|---|
+| A home turn, its book read fresh, a new question | The old turn in the writer's prompt, in what the checker is given, or in `GET /api/reader/conversation` |
+| The same, with one of the two books the turn drew on read fresh | A turn kept because its other book is still read |
+| More pages, another chapter, "read again" | Hiding a turn whose books were only read further |
+| A turn written when nothing was read, then a book read and read fresh | A turn that drew on no book taken for one whose books are unknown |
+| A turn stored with no record | Trusting turns stored before this change |
+| "I haven't read this" on one chapter, then read again | A rule that only looks for a reset; the turn not coming back |
+| The book removed, the same file added again and read | A turn left behind by removal, said about the new copy |
+| The book read fresh while the reply is being written | The record taken when the turn is stored, not when its prompt was built |
+| An older catalog opened | The column missing, or old turns reading as turns that drew on no book |
+
+### Found while trying to break it, and not fixed
+
+- **The conversation inside a book has the same fault, in two shapes.** Both reproduced with stand-in models, then the probe removed. A turn written while chapters were only marked as read, before any page was reported, is stored at place (0, 0), which `covers` always counts as read: after "read it fresh" the book's own conversation still returned it, the reader profile still listed it as a reaction, and once another chapter was read it was in the writer's prompt again. And a turn asked from a place that is still read, about a chapter then marked "I haven't read this", stayed shown and stayed in the writer's and the checker's input. Not changed here: it is the per-book path, and turns already stored would need the same decision as above.
+- **One reset hides most of the home chat.** Because a turn counts as drawing on every read book, a greeting or a question about the app written while any book had read text is hidden with the rest. Only a turn written when nothing was read outlives every reset.
+- **Size and time were not measured.** Each turn carries every read book's map, and every stored home turn is loaded and compared on each home visit and each question.
+- **An open home screen is not told.** It loads the conversation when the shelf is opened; a reset made in another tab leaves its copy on screen until then.
+
+### Not verified
+
+- Nothing was run with real models or in the running app: the checker's provider had no credits.
+- A catalog from before this change was imitated by dropping the column in a test, not taken from a real installation.
+- The frontend was not touched or run.
 
 ## 7. Proposed target
 

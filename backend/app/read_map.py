@@ -202,3 +202,9 @@ def visible_turns(book_id, book, held, catalog, *, limit, reactions=False):
                               reactions=reactions)
     seen = [turn for turn in turns if covers(held.get(turn["atom"], []), turn["source_offset"])]
     return seen[-limit:]
+
+
+def still_read(then, held):
+    """Whether every stretch of the stored map ``then`` (chapters as JSON keys) is inside ``held``."""
+    return all(any(a <= start and end <= b for a, b in held.get(int(atom), []))
+               for atom, stretches in then.items() for start, end in stretches)

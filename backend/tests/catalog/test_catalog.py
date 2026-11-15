@@ -551,6 +551,27 @@ def test_removing_a_book_removes_its_notes_and_turns(tmp_path):
     assert cat.get_turns("b", incarnation=incarnation, atom=9, offset=0) == []
 
 
+def test_an_existing_catalog_gains_the_books_of_a_turn_and_old_turns_have_none(tmp_path):
+    """Catches: a catalog made before home turns recorded their books failing to open, or its old
+    turns reading as turns that drew on no book (an empty record) rather than on unknown ones."""
+    path = tmp_path / "catalog.db"
+    cat = Catalog(str(path))
+    where = dict(incarnation="home", position_epoch=0, atom=0, offset=0)
+    cat.add_turn(None, role="user", content="old", **where)
+    cat.close()
+    connection = sqlite3.connect(path)
+    connection.execute("ALTER TABLE conversation_turns DROP COLUMN drew_on")
+    connection.commit()
+    connection.close()
+
+    migrated = Catalog(str(path))
+    migrated.add_turn(None, role="user", content="none", drew_on={}, **where)
+    migrated.add_turn(None, role="user", content="one", drew_on={"b": ["inc", {2: [(0, 40)]}]}, **where)
+    assert [(t["content"], t["drew_on"]) for t in migrated.get_turns(None, incarnation="home", atom=0, offset=0)] == [
+        ("old", None), ("none", {}), ("one", {"b": ["inc", {"2": [[0, 40]]}]})]
+    migrated.close()
+
+
 # --- the read map ---------------------------------------------------------------------------------
 def test_read_ranges_merge_when_they_touch_or_overlap_and_stay_apart_across_a_gap(tmp_path):
     cat = _shelved(tmp_path)

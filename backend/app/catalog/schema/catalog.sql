@@ -95,7 +95,10 @@ CREATE TABLE IF NOT EXISTS chapter_notes (
 );
 
 -- One row per message, stamped with the exact position it was written at. Read only at or
--- before the asking position. book_id NULL is reserved for a conversation across books.
+-- before the asking position. book_id NULL is a conversation across books: it has no one
+-- position, so drew_on keeps the read map of every book that had anything read when the turn was
+-- written, as JSON {book_id: [incarnation, {atom: [[start, end]]}]}. drew_on is NULL on a turn
+-- inside a book, and on a turn across books stored before it was kept.
 CREATE TABLE IF NOT EXISTS conversation_turns (
   turn_id        INTEGER PRIMARY KEY,
   book_id        TEXT REFERENCES books(book_id) ON DELETE CASCADE,
@@ -107,7 +110,8 @@ CREATE TABLE IF NOT EXISTS conversation_turns (
   content        TEXT NOT NULL,          -- the reader's words, or only the sentences shown
   reaction       INTEGER NOT NULL DEFAULT 0,  -- a reader turn judged a reaction to the book
   request_id     TEXT,
-  created_at     TEXT NOT NULL
+  created_at     TEXT NOT NULL,
+  drew_on        TEXT
 );
 
 CREATE INDEX IF NOT EXISTS ix_turns_book ON conversation_turns(book_id, atom, source_offset, turn_id);

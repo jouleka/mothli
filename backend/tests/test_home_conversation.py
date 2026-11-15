@@ -171,3 +171,167 @@ def test_a_home_reply_that_says_mothli_was_not_there_offers_to_count_those_chapt
     assert [(o["title"], o["atoms"], o["chapters"]) for o in offers] == [("The Lamp Book", [1], "chapter 1")]
     models(app, monkeypatch, reply="Corvus moved lamp 21 in part 2.")
     assert "offers" not in ask(api, "What did Corvus do?")[-1]["answer"]
+
+
+# --- earlier home turns, after what is read of a book shrinks ------------------------------------
+OLD = ("What did Corvus and Jonas each do?", "Corvus moved lamp 21 in part 2. Jonas pushed cart 7 in section 1.")
+
+
+def book_ids(app):
+    return {item["title"]: item["book_id"] for item in app.state.catalog.list_books()}
+
+
+def read_fresh(api, bid, epoch=0):
+    response = api.post(f"/api/books/{bid}/position/reset", json={"position_epoch": epoch, "fresh": True})
+    assert response.status_code == 200, response.text
+
+
+def shown(api):
+    return [turn["content"] for turn in api.get("/api/reader/conversation").json()["turns"]]
+
+
+def said_before(app, monkeypatch, api):
+    """One home exchange that draws on both books with read text."""
+    models(app, monkeypatch, reply=OLD[1])
+    ask(api, OLD[0])
+    assert shown(api) == list(OLD)
+
+
+def test_a_home_turn_is_not_said_or_shown_again_once_its_book_is_read_fresh(shelf, monkeypatch):
+    """Catches: after "read it fresh", an old home turn about that book still handed to the writer
+    as conversation, to the checker as the reader's message, and to the screen."""
+    api, app, _ = shelf
+    said_before(app, monkeypatch, api)
+    read_fresh(api, book_ids(app)["The Lamp Book"])
+    assert shown(api) == []
+    seen = models(app, monkeypatch, reply="Jonas pushed cart 9 in section 1.")
+    ask(api, "And then?")
+    prompt = seen["reply"][-1]
+    assert "Corvus" not in prompt and OLD[0] not in prompt and "lamp 21" not in prompt
+    assert "Corvus" not in json.dumps(seen["checked"])
+    assert "“The Lamp Book” by Ada Writer: not started" in prompt
+    assert shown(api) == ["And then?", "Jonas pushed cart 9 in section 1."]
+
+
+def test_a_home_turn_goes_when_only_one_of_the_books_it_drew_on_is_read_fresh(shelf, monkeypatch):
+    """Catches: a turn kept because one of its books is still read, or because the check looked
+    at one book only. The lamp book is untouched; the turn also holds the cart book."""
+    api, app, _ = shelf
+    said_before(app, monkeypatch, api)
+    read_fresh(api, book_ids(app)["The Cart Book"])
+    assert shown(api) == []
+    seen = models(app, monkeypatch, reply="Corvus moved lamp 22 in part 2.")
+    ask(api, "And then?")
+    assert "Jonas" not in seen["reply"][-1] and OLD[0] not in seen["reply"][-1]
+    assert "Jonas" not in json.dumps(seen["checked"])
+
+
+def test_a_home_turn_stays_while_its_books_are_only_read_further_or_read_again(shelf, monkeypatch):
+    """Catches: hiding too much. More pages, another chapter, and "read again" (which keeps what
+    was read) all leave every book read at least as far as when the turn was written."""
+    api, app, _ = shelf
+    said_before(app, monkeypatch, api)
+    ids = book_ids(app)
+    mark = {"cfi": "epubcfi(/6/2)", "position_epoch": 0, "atom": 2}
+    assert api.put(f"/api/books/{ids['The Lamp Book']}/read-page", json={
+        "start": {**mark, "quote": lamp(2, 30), "prefix": ""},
+        "end": {**mark, "quote": lamp(2, 33), "prefix": lamp(2, 33)}}).status_code == 200
+    assert api.put(f"/api/books/{ids['The Cart Book']}/read-chapters",
+                   json={"atoms": [2], "read": True}).status_code == 200
+    again = api.post(f"/api/books/{ids['The Cart Book']}/position/reset", json={"position_epoch": 0})
+    assert again.status_code == 200, again.text
+    assert shown(api) == list(OLD)
+    seen = models(app, monkeypatch, reply="Petra pushed cart 3 in section 2.")
+    ask(api, "And then?")
+    assert OLD[0] in seen["reply"][-1]
+    assert shown(api) == [*OLD, "And then?", "Petra pushed cart 3 in section 2."]
+
+
+def test_a_home_turn_written_when_nothing_was_read_outlives_a_reset(tmp_path, monkeypatch):
+    """Catches: a turn that drew on no book (the app, a greeting) being taken for one whose books
+    cannot be known, and hidden with those. It holds nothing of any book, so no reset touches it."""
+    settings = Settings(_env_file=None, allow_stub=True, reader_page_context=True,
+                        reader_conversation_pipeline=True, data_dir=str(tmp_path / "data"))
+    app = create_app(settings, ingest_executor=InlineExecutor())
+    settings.reader_conversation_jev = settings.reader_conversation_stream = settings.reader_read_map = True
+    hello = ("How do I tell you I have read a chapter?", "Open Contents and press the label beside the chapter.")
+    with TestClient(app) as api:
+        lamps = book(api, "The Lamp Book", "Ada Writer", lamp)
+        api.get(f"/api/books/{lamps}/read-frontier")
+        models(app, monkeypatch, reply=hello[1])
+        ask(api, hello[0])
+        assert api.put(f"/api/books/{lamps}/read-chapters", json={"atoms": [1], "read": True}).status_code == 200
+        models(app, monkeypatch, reply="Mara moved lamp 4 in part 1.")
+        ask(api, "What did Mara do with lamp 4?")
+        assert shown(api) == [*hello, "What did Mara do with lamp 4?", "Mara moved lamp 4 in part 1."]
+        read_fresh(api, lamps)
+        assert shown(api) == list(hello)
+        seen = models(app, monkeypatch, reply="Press it again to take it back.")
+        ask(api, "And to undo it?")
+        assert hello[0] in seen["reply"][-1] and "Mara" not in seen["reply"][-1]
+
+
+def test_a_home_turn_stored_without_its_books_is_never_said_or_shown(shelf, monkeypatch):
+    """Catches: trusting a turn stored before turns recorded their books. Nothing says what it
+    drew on or how far each book was read then, so it cannot be shown safe, reset or no reset."""
+    api, app, _ = shelf
+    for role, content in (("user", "Why did Vex leave in part 3?"), ("assistant", "Vex moved lamp 40 in part 3.")):
+        app.state.catalog.add_turn(None, incarnation="home", position_epoch=0, atom=0, offset=0,
+                                   role=role, content=content)
+    assert shown(api) == []
+    seen = models(app, monkeypatch, reply="Corvus moved lamp 21 in part 2.")
+    ask(api, "And then?")
+    assert "Vex" not in seen["reply"][-1] and "Vex" not in json.dumps(seen["checked"])
+    assert shown(api) == ["And then?", "Corvus moved lamp 21 in part 2."]
+    assert api.delete("/api/reader/conversation").status_code == 204          # clearing removes those too
+    assert app.state.catalog.get_turns(None, incarnation="home", atom=0, offset=0) == []
+
+
+# --- further ways an old turn could outlive the text it was written from -------------------------
+def test_unmarking_one_chapter_hides_the_turn_and_reading_it_again_brings_it_back(shelf, monkeypatch):
+    """Catches: a rule that looks only for a reset. "I haven't read this" on one chapter shrinks
+    the map with no reset at all; marking it read again restores exactly what the turn drew on."""
+    api, app, _ = shelf
+    said_before(app, monkeypatch, api)
+    carts = book_ids(app)["The Cart Book"]
+    assert api.put(f"/api/books/{carts}/read-chapters", json={"atoms": [1], "read": False}).status_code == 200
+    assert shown(api) == []
+    seen = models(app, monkeypatch, reply="Corvus moved lamp 22 in part 2.")
+    ask(api, "And then?")
+    assert "Jonas" not in seen["reply"][-1] and OLD[0] not in seen["reply"][-1]
+    assert api.put(f"/api/books/{carts}/read-chapters", json={"atoms": [1], "read": True}).status_code == 200
+    assert shown(api)[:2] == list(OLD)
+
+
+def test_a_turn_about_a_book_taken_off_the_shelf_is_gone_and_a_new_copy_does_not_bring_it_back(shelf, monkeypatch):
+    """Catches: home turns have no book of their own, so removing a book left them behind, to be
+    said about a new, unread copy of the same book."""
+    api, app, _ = shelf
+    said_before(app, monkeypatch, api)
+    assert api.delete(f"/api/books/{book_ids(app)['The Cart Book']}").status_code in (200, 204)
+    assert shown(api) == []
+    again = book(api, "The Cart Book", "Ben Author", cart)
+    api.get(f"/api/books/{again}/read-frontier")
+    assert api.put(f"/api/books/{again}/read-chapters", json={"atoms": [1], "read": True}).status_code == 200
+    assert shown(api) == []
+    seen = models(app, monkeypatch, reply="Corvus moved lamp 22 in part 2.")
+    ask(api, "And then?")
+    assert OLD[0] not in seen["reply"][-1]
+
+
+def test_a_reply_being_written_while_its_book_is_read_fresh_is_stored_but_not_shown_again(shelf, monkeypatch):
+    """Catches: recording the books when the turn is stored rather than when its prompt was built.
+    The reply below was written from the lamp book's text; by the time it is stored that text is
+    forgotten, and a record taken then would say the turn drew on nothing of it."""
+    api, app, _ = shelf
+    models(app, monkeypatch, reply="Corvus moved lamp 21 in part 2.")
+    write = app.state.client.complete
+
+    def forget_then_write(system, user, tier="cheap", schema=None):
+        if schema is None:
+            app.state.catalog.clear_read_map(book_ids(app)["The Lamp Book"])
+        return write(system, user, tier=tier, schema=schema)
+    monkeypatch.setattr(app.state.client, "complete", forget_then_write)
+    ask(api, "What did Corvus do with lamp 21?")
+    assert len(app.state.catalog.get_turns(None, incarnation="home", atom=0, offset=0)) == 2
+    assert shown(api) == []

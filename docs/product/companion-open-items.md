@@ -2,7 +2,7 @@
 
 Every step updates this file: tick what it closed, add what it found, and move nothing back into chat logs.
 
-Taken from sections 6m to 6u of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
+Taken from sections 6m to 6v of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
 
 ## Now: the voice
 
@@ -34,7 +34,13 @@ Taken from sections 6m to 6u of `companion-audit-2026-11-14.md`; the section in 
 - [ ] A reader who starts mid-book gets no cast or recap until the earlier chapters are read or marked read. (6n)
 - [ ] Newly skipped chapters are not asked about once any earlier chapter was declined. (6p, 6r)
 - [ ] The home chat uses the read text of at most six books, in shelf order, not the six that fit the question. (6o)
-- [ ] Earlier home turns are not filtered by what is read now: after "read it fresh" an old turn about that book still reaches the writer as conversation. (6o)
+- [x] Earlier home turns are not filtered by what is read now: after "read it fresh" an old turn about that book still reaches the writer as conversation. (6o) Closed in 6v: a home turn is stored with the read map of every book that had anything read, and is said or shown again only while all of that is still read. Stand-in models only.
+- [ ] The conversation inside a book has the fault 6v closed for the home chat, in two shapes, both reproduced with stand-in models. (a) A turn written while chapters were only marked as read, before any page was reported, is stored at place (0, 0), which always counts as read: after "read it fresh" it is still returned by `GET /api/books/{id}/conversation`, still listed as a reaction in `GET /api/reader/profile`, and is given to the writer again as soon as anything else is read. (b) A turn asked from a place that is still read, about a chapter the reader then marks "I haven't read this", stays shown and stays in the writer's and the checker's input. `visible_turns` looks at where the reader was, not at what the turn drew on. Storing the book's map with each turn, as home turns now do, would close both; turns already stored would then need the same decision as in 6v. (6v)
+- [ ] One reset hides more of the home chat than it needs to: every reply is written with the text of every book that has anything read, so a turn counts as drawing on all of them, a greeting or a question about the app included. "Read it fresh" or "I haven't read this" on one book hides every home turn written since that text was first read, until it is read again. Telling a turn that holds nothing of a book from one that does would mean trusting a judgment about each sentence and about the reader's own message; no check gives that today. (6v)
+- [ ] Home turns stored before 6v are never said or shown again, and neither are turns about a book later removed from the shelf. Their rows stay in the catalog until the reader clears the home conversation. (6v)
+- [ ] Each home turn carries the whole read map of every read book, and every stored home turn is loaded and compared on each visit to the home screen and each home question. Not measured on a long conversation or a large shelf. (6v)
+- [ ] A home screen already open keeps showing the turns it loaded: it asks the server again only when the shelf is opened anew. A reset made in another tab does not clear them from that screen. (6v)
+- [ ] 6v has not been tried in the running app or with real models; stand-in models only. (6v)
 - [ ] Home chat spend is recorded against the first book on the shelf, because the cost ledger has no place for a conversation that belongs to no book. (6o)
 - [ ] The event-binding check does nothing on streamed replies: an invented killing or marriage produces no hit. (6m)
 - [ ] Reply times on the production path have not been measured; every timing so far is through `codex-local`. (6m)
