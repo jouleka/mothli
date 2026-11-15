@@ -144,6 +144,9 @@ export type ReadOffer = {
 export type SkippedChapters = { atoms: number[]; chapters: string; skimmed?: number[] };
 /** One message of the home conversation, which runs across all the reader's books. */
 export type HomeTurn = { role: "user" | "assistant"; content: string; created_at?: string };
+/** One message of the conversation inside a book that the server may show now. `atom` is the
+ * chapter the reader was in when it was written. */
+export type BookTurn = { role: "user" | "assistant"; content: string; atom: number; reaction?: boolean; created_at?: string };
 export type ReadFrontier = { id: string; atom: number; offset: number; position_epoch: number; available_chapter: number };
 export type ReadAnchor = { atom: number; quote: string; prefix: string; cfi: string; position_epoch: number };
 export type AskClaim = { text: string; citation_ids: number[] };
@@ -714,10 +717,17 @@ export const api = {
       window.clearTimeout(timeout);
     }
   },
+  /** The conversation inside a book, as the server may show it now: only turns written from
+   * text that is still read. The chat panel shows this and keeps no copy of its own. */
+  bookConversation: (id: string) =>
+    fetch(`/api/books/${id}/conversation`).then((r) => j<{ read_frontier?: ReadFrontier; turns: BookTurn[] }>(r)),
   clearConversation: (id: string) =>
-    fetch(`/api/books/${id}/conversation`, { method: "DELETE", headers: csrfHeaders() }).then(() => undefined),
+    fetch(`/api/books/${id}/conversation`, { method: "DELETE", headers: csrfHeaders() }).then((r) => {
+      if (!r.ok) throw new ApiError("The conversation could not be cleared.", r.status);
+    }),
+  // No earlier conversation is sent: the server keeps its own record and reads nothing else.
   askBookStream: async (
-    id: string, question: string, bookmark: number, history: ConversationMessage[],
+    id: string, question: string, bookmark: number,
     readFrontier: ReadFrontier, onSentence: (text: string) => void,
   ): Promise<AskAnswer | null> => {
     if (streamedReplies === false) return null;
@@ -727,7 +737,7 @@ export const api = {
       const response = await fetch(`/api/books/${id}/ask/stream`, {
         method: "POST",
         headers: { "content-type": "application/json", ...csrfHeaders() },
-        body: JSON.stringify({ question, bookmark, ...(history.length ? { history } : {}), read_frontier: readFrontier }),
+        body: JSON.stringify({ question, bookmark, read_frontier: readFrontier }),
         signal: controller.signal,
       });
       if (response.status === 404 || response.status === 405) {

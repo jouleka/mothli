@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   search: vi.fn(),
   clearSearch: vi.fn(),
   onSearch: null as null | ((query: string) => Promise<Array<{ cfi: string }>>),
+  onMarkRead: null as null | undefined | ((atom: number, read: boolean) => void),
 }));
 
 vi.mock("../api", () => ({
@@ -44,8 +45,9 @@ vi.mock("../api", () => ({
 vi.mock("../vendor/foliate-js/view.js", () => ({ makeBook: mocks.makeBook }));
 vi.mock("./ReaderTTS", () => ({ ReaderTTS: () => null }));
 vi.mock("./BookNavigation", () => ({
-  ReaderNavigation: ({ onSearch }: { onSearch: typeof mocks.onSearch }) => {
+  ReaderNavigation: ({ onSearch, onMarkRead }: { onSearch: typeof mocks.onSearch; onMarkRead?: typeof mocks.onMarkRead }) => {
     mocks.onSearch = onSearch;
+    mocks.onMarkRead = onMarkRead;
     return null;
   },
 }));
@@ -126,6 +128,7 @@ beforeEach(() => {
     yield { cfi: "2:future", excerpt: { pre: "", match: "answer", post: "" } };
   });
   mocks.onSearch = null;
+  mocks.onMarkRead = null;
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => new Response(new Blob(["epub"]), { status: 200 })),
@@ -168,6 +171,44 @@ describe("reader startup and search boundaries", () => {
     await waitFor(() => expect(mocks.askBook).toHaveBeenCalled());
     expect(mocks.readFrontier.mock.calls.some((args) => args[1])).toBe(true);
     unmount();
+  });
+  // Catches: "I haven't read this" in Contents leaving the chat's earlier turns on screen. The
+  // reading pass does not change, so only ReaderPage knows: it must take the conversation off
+  // the screen at once and have the panel ask the server again once the change is saved.
+  test("marking a chapter not read hides the conversation and asks the server for it again", async () => {
+    const extra = mocks as Record<string, unknown>;
+    const turn = (role: string, content: string) =>
+      ({ role, content, atom: 1, reaction: false, created_at: "2020-01-01T10:00:00+00:00" });
+    const bookConversation = vi.fn()
+      .mockResolvedValueOnce({ turns: [turn("user", "Who is Mitya?"), turn("assistant", "Fyodor’s eldest son.")] })
+      .mockResolvedValue({ turns: [] });
+    let saveUnread!: () => void;
+    const readChapters = vi.fn(() => new Promise<void>((resolve) => { saveUnread = resolve; }));
+    extra.bookConversation = bookConversation;
+    extra.readChapters = readChapters;
+    extra.readMap = vi.fn().mockResolvedValue({ chapters: [{ atom: 1, read: 1 }] });
+    try {
+      const { unmount } = render(<ReaderPage bookId="b" onBack={() => {}} />);
+      await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+      await waitFor(() => expect(mocks.onMarkRead).toBeTruthy());
+      fireEvent.click(screen.getByRole("button", { name: "Talk to Mothli" }));
+      await screen.findByText("Fyodor’s eldest son.");
+      act(() => mocks.onMarkRead!(0, false));
+      // Gone before the server has even taken the change, and not asked for until it has.
+      expect(screen.queryByText("Fyodor’s eldest son.")).toBeNull();
+      expect(readChapters).toHaveBeenCalledWith("b", [1], false);
+      expect(bookConversation).toHaveBeenCalledTimes(1);
+      await act(async () => { saveUnread(); });
+      await waitFor(() => expect(bookConversation).toHaveBeenCalledTimes(2));
+      await act(async () => {});
+      expect(screen.queryByText("Who is Mitya?")).toBeNull();
+      expect(screen.queryByText("Fyodor’s eldest son.")).toBeNull();
+      unmount();
+    } finally {
+      delete extra.bookConversation;
+      delete extra.readChapters;
+      delete extra.readMap;
+    }
   });
   test.each([
     { bookmark: 1, target: "c2.html" },

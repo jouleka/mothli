@@ -4,6 +4,7 @@ import { axeAA } from "../test-a11y";
 const mocks = vi.hoisted(() => ({
   askBook: vi.fn(),
   askBookStream: vi.fn(),
+  bookConversation: vi.fn(),
   clearConversation: vi.fn(),
   selectionAction: vi.fn(),
   catchMeUp: vi.fn(),
@@ -41,6 +42,19 @@ const props = {
   onNavigate: vi.fn(),
   onClose: vi.fn(),
 };
+const point = { id: "a".repeat(64), atom: 2, offset: 120, position_epoch: 0, available_chapter: 2 };
+/** What `GET /api/books/b/conversation` answers: each pair is a question and the reply kept for it. */
+function stored(...pairs: [string, string | null][]) {
+  return {
+    read_frontier: point,
+    turns: pairs.flatMap(([question, reply], index) => [
+      { role: "user" as const, content: question, atom: 2, reaction: false, created_at: `2020-01-01T10:0${index}:00+00:00` },
+      ...(reply === null ? [] : [
+        { role: "assistant" as const, content: reply, atom: 2, reaction: false, created_at: `2020-01-01T10:0${index}:01+00:00` },
+      ]),
+    ]),
+  };
+}
 function submit(value: string) {
   fireEvent.change(screen.getByLabelText("Message Mothli"), { target: { value } });
   fireEvent.submit(screen.getByLabelText("Message Mothli").closest("form")!);
@@ -50,6 +64,8 @@ beforeEach(() => {
   localStorage.clear();
   mocks.owner.mockReturnValue("local");
   mocks.askBook.mockResolvedValue(answer);
+  mocks.bookConversation.mockReset().mockResolvedValue(stored());
+  mocks.clearConversation.mockReset().mockResolvedValue(undefined);
   mocks.catchMeUp.mockResolvedValue({
     as_of_chapter: 2,
     cast: [{ name: "Aldric", entity_id: 1 }],
@@ -142,7 +158,7 @@ describe("Mothli conversation", () => {
     let finish!: (value: typeof streamed) => void;
     let say!: (text: string) => void;
     mocks.askBookStream.mockImplementationOnce((...args: unknown[]) => {
-      say = args[5] as (text: string) => void;
+      say = args[4] as (text: string) => void;
       return new Promise((resolve) => { finish = resolve; });
     });
     render(<AskTheBook {...props} prepareReadContext={async () => point} />);
@@ -155,6 +171,8 @@ describe("Mothli conversation", () => {
     await screen.findByText("Darcy called her tolerable. Ouch.");
     expect(screen.queryByText("Cancel")).toBeNull();
     expect(mocks.askBook).not.toHaveBeenCalled();
+    // The server keeps the conversation and ignores any the browser sends: none is sent.
+    expect(mocks.askBookStream).toHaveBeenCalledWith("b", "What did he say?", 2, point, expect.any(Function));
   });
 
   test("asks the ordinary way when the server does not offer streamed replies", async () => {
@@ -186,15 +204,21 @@ describe("Mothli conversation", () => {
     await screen.findByText("I couldn’t get a reply. Try again?");
     expect(screen.getAllByText(answer.claims[0].text)).toHaveLength(1);
   });
-  test("persists conversation and draft per book, owner and reading pass; advancing retains useful context", async () => {
-    const first = render(<AskTheBook {...props} />);
+  test("keeps this sitting's conversation while the book is open, and only the unsent draft in the browser", async () => {
+    const sessionRef = { current: null as AskSession | null };
+    const first = render(<AskTheBook {...props} sessionRef={sessionRef} />);
     submit("Where did they meet?");
     await screen.findByText(answer.claims[0].text);
     fireEvent.change(screen.getByLabelText("Message Mothli"), {
       target: { value: "And why?" },
     });
     first.unmount();
-    const second = render(<AskTheBook {...props} bookmark={3} />);
+    // Nothing of the conversation is written to the browser's storage: only the draft.
+    const kept = Object.keys(localStorage).map((key) => localStorage.getItem(key)).join("\n");
+    expect(kept).toContain("And why?");
+    expect(kept).not.toContain("Where did they meet?");
+    expect(kept).not.toContain(answer.claims[0].text);
+    const second = render(<AskTheBook {...props} bookmark={3} sessionRef={sessionRef} />);
     expect(
       (screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value,
     ).toBe("And why?");
@@ -205,11 +229,17 @@ describe("Mothli conversation", () => {
       { role: "user", content: "Where did they meet?", as_of_chapter: 2 },
       { role: "assistant", content: answer.claims[0].text, as_of_chapter: 2 },
     ]);
-    second.rerender(<AskTheBook {...props} readingPass={1} />);
+    second.rerender(<AskTheBook {...props} sessionRef={sessionRef} readingPass={1} />);
     expect(screen.queryByText("Where did they meet?")).toBeNull();
     mocks.owner.mockReturnValue("other");
-    second.rerender(<AskTheBook {...props} />);
+    second.rerender(<AskTheBook {...props} sessionRef={sessionRef} />);
     expect(screen.queryByText(answer.claims[0].text)).toBeNull();
+    second.unmount();
+    // A draft typed before the page was reloaded is still there; the conversation is not.
+    mocks.owner.mockReturnValue("local");
+    localStorage.setItem("litlet.pip.conversation:local:b:0", JSON.stringify({ question: "Half a thought" }));
+    render(<AskTheBook {...props} />);
+    expect((screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value).toBe("Half a thought");
   });
 
   test("reattaches to one pending request and discards late results after a reset", async () => {
@@ -467,5 +497,241 @@ describe("chapters Mothli was not there for", () => {
     submit("Who met at the forge?");
     await screen.findByText(/Berenice met Aldric at the forge/);
     expect(screen.queryByRole("button", { name: /I’ve read/ })).toBeNull();
+  });
+});
+
+// The conversation inside a book is the server's record. The server hides a turn once the text
+// it was written from is no longer read; this panel must never show one from a copy of its own.
+describe("the server's conversation", () => {
+  const UNREACHABLE = "I can’t reach our earlier conversation right now, so I’m not showing it.";
+  const streamedReply = (...sentences: string[]) => ({
+    ...answer, style: "prose" as const, citations: [], read_frontier: point,
+    claims: sentences.map((text) => ({ text, citation_ids: [] })),
+  });
+
+  // Catches: the panel showing what the browser kept instead of what the server returns.
+  test("shows the server's turns on open and nothing from an old browser copy", async () => {
+    const key = "litlet.pip.conversation:local:b:0";
+    localStorage.setItem(key, JSON.stringify({
+      question: "",
+      exchanges: [{ id: "old", question: "A question from the old copy",
+        answer: { ...answer, claims: [{ text: "A reply from the old copy.", citation_ids: [] }], citations: [] } }],
+    }));
+    mocks.bookConversation.mockResolvedValue(stored(["Who is Mitya?", "Fyodor’s eldest son."], ["And Ivan?", "The second son."]));
+    render(<AskTheBook {...props} />);
+    await screen.findByText("Fyodor’s eldest son.");
+    expect(mocks.bookConversation).toHaveBeenCalledWith("b");
+    expect(screen.getByText("Who is Mitya?")).toBeTruthy();
+    expect(screen.getByText("And Ivan?")).toBeTruthy();
+    expect(screen.getByText("The second son.")).toBeTruthy();
+    expect(screen.queryByText("A question from the old copy")).toBeNull();
+    expect(screen.queryByText("A reply from the old copy.")).toBeNull();
+    // The old copy is deleted from the browser, not just ignored.
+    expect(localStorage.getItem(key) ?? "").not.toContain("old copy");
+  });
+
+  // Catches: a question whose reply was not kept being shown bare, or with a made-up reply.
+  // The server's copy does not say which fixed line the reader saw at the time.
+  test("a stored question with no stored reply says plainly that there was no answer", async () => {
+    mocks.bookConversation.mockResolvedValue(stored(["Who dies in the end?", null]));
+    render(<AskTheBook {...props} onSaveReply={vi.fn()} />);
+    await screen.findByText("Who dies in the end?");
+    expect(screen.getByText("I didn’t have an answer for that from what you’d read.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save reply to Notebook" })).toBeNull();
+  });
+
+  // Catches: turns surviving "read it fresh" from the panel's own memory. A new reading pass
+  // shows only what the server returns for it.
+  test("after a reset the earlier turns are gone from the screen", async () => {
+    const sessionRef = { current: null as AskSession | null };
+    mocks.bookConversation.mockResolvedValueOnce(stored(["Who is Mitya?", "Fyodor’s eldest son."]));
+    const view = render(<AskTheBook {...props} sessionRef={sessionRef} />);
+    await screen.findByText("Fyodor’s eldest son.");
+    // ReaderPage after "read it fresh": the session is dropped and the pass number changes.
+    mocks.bookConversation.mockResolvedValue(stored());
+    sessionRef.current = null;
+    view.rerender(<AskTheBook {...props} sessionRef={sessionRef} bookmark={0} readingPass={1} />);
+    expect(screen.queryByText("Fyodor’s eldest son.")).toBeNull();
+    await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalledTimes(2));
+    await screen.findByText(/Hi! I’m Mothli/);
+    expect(screen.queryByText("Who is Mitya?")).toBeNull();
+    expect(screen.queryByText("Fyodor’s eldest son.")).toBeNull();
+  });
+
+  // Catches: the fault 6w left open. "I haven't read this" keeps the reading pass, so nothing
+  // used to remove the turns; they leave at once and come back only if the server returns them.
+  test("“I haven’t read this” takes every turn off the screen until the server answers again", async () => {
+    const sessionRef = { current: null as AskSession | null };
+    const selection = { text: "He left the key.", anchor: { atom: 2, cfi: "epubcfi(/6/4)", href: "c2.xhtml", title: "Key" } };
+    mocks.selectionAction.mockResolvedValue({ action: "explain", as_of_chapter: 2, insufficient_evidence: false,
+      text: "He gives her a choice.", citation: { ...answer.citations[0], cfi: selection.anchor.cfi }, cost: null });
+    mocks.bookConversation.mockResolvedValueOnce(stored(["About chapter one?", "Reply one."], ["About chapter two?", "Reply two."]));
+    const view = render(<AskTheBook {...props} sessionRef={sessionRef} selection={selection} readVersion={0} />);
+    await screen.findByText("Reply two.");
+    submit("Why the key?");
+    await screen.findByText("He gives her a choice."); // a reply the server does not keep
+    let answerLoad!: (value: unknown) => void;
+    mocks.bookConversation.mockImplementationOnce(() => new Promise((resolve) => { answerLoad = resolve; }));
+    act(() => sessionRef.current!.hide()); // ReaderPage, the moment the chapter is marked not read
+    expect(screen.queryByText("Reply one.")).toBeNull();
+    expect(screen.queryByText("Reply two.")).toBeNull();
+    expect(screen.queryByText("He gives her a choice.")).toBeNull();
+    view.rerender(<AskTheBook {...props} sessionRef={sessionRef} selection={selection} readVersion={1} />);
+    await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("Reply one.")).toBeNull(); // still nothing while the server is asked
+    await act(async () => answerLoad(stored(["About chapter one?", "Reply one."])));
+    expect(screen.getByText("Reply one.")).toBeTruthy();
+    expect(screen.queryByText("Reply two.")).toBeNull();
+    expect(screen.queryByText("He gives her a choice.")).toBeNull();
+  });
+
+  // Catches: a reply still being written when the chapter is marked not read landing afterwards.
+  test("a reply in flight when the turns are hidden is not shown when it lands", async () => {
+    const sessionRef = { current: null as AskSession | null };
+    let finish!: (value: unknown) => void;
+    mocks.askBookStream.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    render(<AskTheBook {...props} sessionRef={sessionRef} prepareReadContext={async () => point} />);
+    submit("What did he say?");
+    await waitFor(() => expect(mocks.askBookStream).toHaveBeenCalled());
+    act(() => sessionRef.current!.hide());
+    await act(async () => finish(streamedReply("Darcy called her tolerable.")));
+    expect(screen.queryByText("Darcy called her tolerable.")).toBeNull();
+    expect((screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value).toBe("What did he say?");
+  });
+
+  // Catches: the reply shown twice (the panel's copy and the server's), or drawn again, when
+  // the server's conversation is loaded after it arrived.
+  test("a streamed reply appears once and is not duplicated or redrawn by the reload", async () => {
+    mocks.bookConversation.mockResolvedValueOnce(stored(["Who is Mitya?", "Fyodor’s eldest son."]));
+    let say!: (text: string) => void;
+    let finish!: (value: unknown) => void;
+    mocks.askBookStream.mockImplementationOnce((...args: unknown[]) => {
+      say = args[4] as (text: string) => void;
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    const view = render(<AskTheBook {...props} prepareReadContext={async () => point} readVersion={0} />);
+    await screen.findByText("Fyodor’s eldest son.");
+    submit("What did he say?");
+    await waitFor(() => expect(mocks.askBookStream).toHaveBeenCalled());
+    act(() => say("Darcy called her tolerable."));
+    await screen.findByText("Darcy called her tolerable.");
+    await act(async () => finish(streamedReply("Darcy called her tolerable.", "Ouch.")));
+    const shown = await screen.findByText("Darcy called her tolerable. Ouch.");
+    // The server now has it too.
+    mocks.bookConversation.mockResolvedValueOnce(stored(
+      ["Who is Mitya?", "Fyodor’s eldest son."], ["What did he say?", "Darcy called her tolerable. Ouch."]));
+    view.rerender(<AskTheBook {...props} prepareReadContext={async () => point} readVersion={1} />);
+    await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    expect(screen.getAllByText("Darcy called her tolerable. Ouch.")).toHaveLength(1);
+    expect(screen.getAllByText("What did he say?")).toHaveLength(1);
+    expect(screen.getAllByText("Fyodor’s eldest son.")).toHaveLength(1);
+    expect(screen.getByText("Darcy called her tolerable. Ouch.")).toBe(shown); // the same element: not drawn again
+    const order = screen.getAllByRole("region")
+      .filter((node) => /^Question/.test(node.getAttribute("aria-label") ?? ""))
+      .map((node) => node.textContent ?? "");
+    expect(order).toHaveLength(2);
+    expect(order[0]).toContain("Who is Mitya?");
+    expect(order[1]).toContain("What did he say?");
+  });
+
+  // Catches: the reply the reader has just watched arrive vanishing because the server's copy
+  // was asked for before the server had stored it (it stores a turn after its last sentence);
+  // and the opposite, the panel's copy outliving the server's word for good.
+  test("a reply that has just arrived stays until the server has had time to store it, and no longer", async () => {
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(1_000_000);
+      mocks.askBookStream.mockResolvedValueOnce(streamedReply("Darcy called her tolerable."));
+      const view = render(<AskTheBook {...props} prepareReadContext={async () => point} readVersion={0} />);
+      await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalledTimes(1));
+      submit("What did he say?");
+      await screen.findByText("Darcy called her tolerable.");
+      now.mockReturnValue(1_001_000); // a second later the server's copy does not have it yet
+      view.rerender(<AskTheBook {...props} prepareReadContext={async () => point} readVersion={1} />);
+      await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalledTimes(2));
+      await act(async () => {});
+      expect(screen.getByText("Darcy called her tolerable.")).toBeTruthy();
+      now.mockReturnValue(1_060_000); // a minute later it is still not there: the server's word stands
+      view.rerender(<AskTheBook {...props} prepareReadContext={async () => point} readVersion={2} />);
+      await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalledTimes(3));
+      await waitFor(() => expect(screen.queryByText("Darcy called her tolerable.")).toBeNull());
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  // Catches: a turn the server stopped returning (hidden or cleared from another tab) staying
+  // on a panel that is already open.
+  test("a turn the server no longer returns leaves the screen at the next load", async () => {
+    mocks.bookConversation.mockResolvedValueOnce(stored(["About chapter one?", "Reply one."], ["About chapter two?", "Reply two."]));
+    const view = render(<AskTheBook {...props} readVersion={0} />);
+    await screen.findByText("Reply two.");
+    mocks.bookConversation.mockResolvedValueOnce(stored(["About chapter one?", "Reply one."]));
+    view.rerender(<AskTheBook {...props} readVersion={1} />);
+    await waitFor(() => expect(screen.queryByText("Reply two.")).toBeNull());
+    expect(screen.getByText("Reply one.")).toBeTruthy();
+  });
+
+  // Catches: an old copy left on screen because the server could not be asked.
+  test("a failed load shows no earlier turns, says so, and offers to try again", async () => {
+    const sessionRef = { current: null as AskSession | null };
+    mocks.bookConversation.mockResolvedValueOnce(stored(["Who is Mitya?", "Fyodor’s eldest son."]));
+    const first = render(<AskTheBook {...props} sessionRef={sessionRef} />);
+    await screen.findByText("Fyodor’s eldest son.");
+    first.unmount();
+    // The panel is opened again and the server cannot be reached.
+    mocks.bookConversation.mockRejectedValueOnce(new Error("network"));
+    render(<AskTheBook {...props} sessionRef={sessionRef} />);
+    await screen.findByText(UNREACHABLE);
+    expect(screen.queryByText("Who is Mitya?")).toBeNull();
+    expect(screen.queryByText("Fyodor’s eldest son.")).toBeNull();
+    mocks.bookConversation.mockResolvedValueOnce(stored(["Who is Mitya?", "Fyodor’s eldest son."]));
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByText("Fyodor’s eldest son.");
+    expect(screen.queryByText(UNREACHABLE)).toBeNull();
+  });
+
+  // Catches: a failed first load falling back to anything the browser has.
+  test("a failed first load shows nothing from the browser either", async () => {
+    localStorage.setItem("litlet.pip.conversation:local:b:0", JSON.stringify({
+      question: "",
+      exchanges: [{ id: "old", question: "A question from the old copy", answer: { ...answer, citations: [] } }],
+    }));
+    mocks.bookConversation.mockRejectedValue(new ApiError("reading context changed; refresh before continuing", 409));
+    render(<AskTheBook {...props} />);
+    await screen.findByText(UNREACHABLE);
+    expect(screen.queryByText("A question from the old copy")).toBeNull();
+    expect(screen.queryByText(answer.claims[0].text)).toBeNull();
+  });
+
+  // Catches: a server with no stored conversation (hosted mode has none) treated as a failure.
+  test("a server that keeps no conversation for books gives an empty conversation, not an error", async () => {
+    mocks.bookConversation.mockRejectedValue(new ApiError("Not Found", 404));
+    render(<AskTheBook {...props} />);
+    await screen.findByText(/Hi! I’ve been reading along with you/);
+    expect(screen.queryByText(UNREACHABLE)).toBeNull();
+  });
+
+  // Catches: "Clear" only emptying the screen. The server is asked again afterwards, and if it
+  // still has the turns (the clear did not get through) the reader sees them and is told.
+  test("clearing asks the server again, and a clear that did not get through is not hidden", async () => {
+    mocks.bookConversation.mockResolvedValue(stored(["Who is Mitya?", "Fyodor’s eldest son."]));
+    render(<AskTheBook {...props} />);
+    await screen.findByText("Fyodor’s eldest son.");
+    mocks.bookConversation.mockResolvedValueOnce(stored());
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.queryByText("Fyodor’s eldest son.")).toBeNull();
+    await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalledTimes(2));
+    expect(mocks.clearConversation).toHaveBeenCalledWith("b");
+    await act(async () => {});
+    expect(screen.queryByText("Fyodor’s eldest son.")).toBeNull();
+    // Now a clear the server never received.
+    mocks.clearConversation.mockRejectedValueOnce(new Error("network"));
+    fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await screen.findByText("I couldn’t clear our conversation just now, so it is still here.");
+    expect(screen.getByText("Fyodor’s eldest son.")).toBeTruthy();
   });
 });

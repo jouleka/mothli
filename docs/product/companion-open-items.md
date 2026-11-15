@@ -2,7 +2,7 @@
 
 Every step updates this file: tick what it closed, add what it found, and move nothing back into chat logs.
 
-Taken from sections 6m to 6x of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
+Taken from sections 6m to 6z of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
 
 ## Now: the voice
 
@@ -36,7 +36,7 @@ Taken from sections 6m to 6x of `companion-audit-2026-11-14.md`; the section in 
 - [ ] While TypeSafe refuses, each reply and each notes run still pays the writer first and is then thrown away. Notes wait five minutes after "no credits" or a refused key; replies do not wait at all. (6u)
 - [ ] The older, non-streamed reply path does not log the reason, and neither does anything else that calls Jev (extraction screen, cast, recap review); their refused calls are no longer charged. (6u)
 - [ ] Accounts and server-side storage: chapter notes, the read map, the stored conversations and the home chat exist in local mode only; hosted mode has no tables or endpoints for them. (6m)
-- [ ] The chat panel inside a book still shows the browser's copy of the conversation; loading it from the server is what a second device needs. (6m)
+- [x] The chat panel inside a book still shows the browser's copy of the conversation; loading it from the server is what a second device needs. (6m) Closed in 6z: the panel shows `GET /api/books/{id}/conversation` and keeps only the unsent draft in the browser. Local mode only; hosted mode has no stored conversation to load.
 - [ ] Phones: checked only at phone width in a desktop browser, never on a phone. (6p, 6s)
 - [ ] Screen readers: neither chat panel has been tried with one. (6p, 6s)
 - [ ] Cast entries that are not names: "his wife", "her divinity student". (6s)
@@ -51,8 +51,16 @@ Taken from sections 6m to 6x of `companion-audit-2026-11-14.md`; the section in 
 - [ ] Each home turn carries the whole read map of every read book, and every stored home turn is loaded and compared on each visit to the home screen and each home question. Not measured on a long conversation or a large shelf. (6v)
 - [ ] A home screen already open keeps showing the turns it loaded: it asks the server again only when the shelf is opened anew. A reset made in another tab does not clear them from that screen. (6v)
 - [ ] 6v has not been tried in the running app or with real models; stand-in models only. (6v)
-- [ ] The chat panel inside a book never asks the server for its conversation (the reader app only clears it), so a turn the server hides after "read it fresh" or "I haven't read this" stays on that panel from the browser's copy. The writer and the checker no longer get it. Needs the frontend change listed above from 6m. (6w)
-- [ ] The older, non-streamed reply path takes its earlier conversation from the browser's request, not from stored turns, so nothing filters it by what is read now. (6w)
+- [x] The chat panel inside a book never asks the server for its conversation (the reader app only clears it), so a turn the server hides after "read it fresh" or "I haven't read this" stays on that panel from the browser's copy. The writer and the checker no longer get it. Needs the frontend change listed above from 6m. (6w) Closed in 6z: the panel loads the server's conversation on open, on a new reading pass, after a chapter is marked read or not read, after an "I've read…" offer and after "Clear"; "I haven't read this" empties it at once; an unreachable server shows no earlier turn. Frontend tests with the API mocked, and one browser run with stand-in models.
+- [ ] The older, non-streamed reply path takes its earlier conversation from the browser's request, not from stored turns, so nothing filters it by what is read now. (6w) Since 6z the panel sends it only what is on the panel in this sitting, and reaches it only where streamed replies are off (the setting's own default, and hosted mode). Follow-up questions about a selected passage send their earlier exchanges the same way. (6z)
+- [ ] Saved replies are a second browser copy: "Save" files a reply in the Notebook in the browser's storage, and nothing hides it when its chapter is marked not read. (6z)
+- [ ] A reply the reader cancelled, or one the panel refused when it arrived, is still stored by the server, goes to the writer as conversation, and now shows at the next load. Stopping the request on Cancel would keep it from being stored. (6z)
+- [ ] Replies the server does not store last only while the book is open: about a selected passage, a chapter closeout, a welcome-back recap, and every reply where streamed replies are off. They were in the browser's copy before 6z. (6z)
+- [ ] A chat panel already open hears of a change made in another tab or on another device only when it is opened again or something read is changed in this tab. (6z)
+- [ ] For five seconds after a reply arrives the panel keeps it even if a load of the server's conversation does not hold it, because the server stores a turn after its last sentence. Storing the turn before the last event is sent would remove the wait. (6z)
+- [ ] An older turn on the panel has no "I've read…" button, and a question whose reply was wholly held back shows one fixed line, not the one the reader saw at the time: the server's copy carries neither. (6z)
+- [ ] Marking a chapter not read redraws the chat panel twice in a few hundredths of a second. (6z)
+- [ ] 6z has not been tried with real models, on a phone, with a screen reader or in hosted mode; the browser check was one run on one small book with stand-in models. (6z)
 - [ ] One "I haven't read this" hides more of a book's conversation than it needs to: a turn is stored with the whole read map, so every turn written while that chapter was read is hidden until it is read again, whatever the turn was about. (6w)
 - [ ] Turns inside a book stored before 6w are never said or shown again. Their rows stay in the catalog until the reader clears that book's conversation. (6w)
 - [ ] Each turn inside a book carries the book's whole read map, and every stored turn of a book is loaded and compared on each question, each load of its conversation and each load of the profile. Not measured on a long conversation or a long book. (6w)

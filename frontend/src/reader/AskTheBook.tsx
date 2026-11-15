@@ -8,7 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { api, ApiError, type AskAnswer, type AskCitation, type ReadFrontier, type ReadSkipped } from "../api";
+import { api, ApiError, type AskAnswer, type AskCitation, type BookTurn, type ReadFrontier, type ReadSkipped } from "../api";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { Moth, type MothMood } from "../ui/Moth";
@@ -35,6 +35,15 @@ type AskExchange = {
   selectionKey?: string;
   /** Mothli spoke first (a welcome-back recap or a chapter closeout): no reader bubble. */
   fromMothli?: boolean;
+  /** The server keeps this exchange. It is on screen only while the server still returns it.
+   * The others (a reply about a selected passage, a recap or closeout Mothli opened with, a
+   * reply from the older non-streamed path) are kept nowhere and last for this sitting. */
+  stored?: boolean;
+  /** For a reply that arrived here and that no load has yet found on the server: when it
+   * arrived, in ms. The server stores a turn just after sending its last sentence. */
+  arrived?: number;
+  /** Where it sits in the conversation, in ms since the epoch. */
+  at: number;
 };
 /** A moment where Mothli speaks first. `recap` is already in hand; `closeout` is fetched on open. */
 export type CompanionSeed =
@@ -51,6 +60,9 @@ type AskSnapshot = {
   busy: boolean;
   error: string;
   requestToken: number;
+  /** The server's copy of the conversation: not known yet, on screen, or could not be loaded.
+   * Until it is known nothing the server keeps is shown. */
+  history: "unknown" | "ready" | "failed";
 };
 export type AskSession = {
   readonly bookId: string;
@@ -58,18 +70,111 @@ export type AskSession = {
   readonly owner: string;
   readonly readingPass: string;
   scrollTop: number | null;
+  /** Counts loads of the server's conversation, so a late answer to an earlier one is ignored. */
+  loadToken: number;
   getSnapshot: () => AskSnapshot;
   subscribe: (listener: () => void) => () => void;
   update: (changes: Partial<AskSnapshot>) => void;
+  /** Something the reader had read no longer counts as read ("I haven't read this"): take the
+   * whole conversation off the screen now, and drop a reply still on its way. What may be shown
+   * comes back from the server at the next load. */
+  hide: () => void;
 };
 const BOOK_USAGE_LIMIT_MESSAGE =
   "Mothli is paused for this book: its usage limit has been reached.";
 const REQUEST_TOO_LARGE_MESSAGE = "That’s a lot of pages at once. Pick a passage and we can start there.";
-// Legacy storage namespace preserves existing conversations after the Mothli rename.
+const HISTORY_UNREACHABLE = "I can’t reach our earlier conversation right now, so I’m not showing it.";
+const CLEAR_FAILED = "I couldn’t clear our conversation just now, so it is still here.";
+/** For a stored question with no stored reply: every sentence of that reply was held back, and
+ * the server's copy does not say which fixed line the reader saw then. */
+const NO_REPLY_KEPT = "I didn’t have an answer for that from what you’d read.";
+/** How long a reply that has just arrived is trusted before the server's copy must contain it. */
+const STORE_GRACE_MS = 5000;
+// The reader's unsent draft is the only thing kept in the browser, under the name that used to
+// hold the whole conversation. The conversation itself is the server's: see `loadHistory`.
 const STORAGE_PREFIX = "litlet.pip.conversation:";
 const spokenSeeds = new Set<string>();
 function storageKey(bookId: string, owner: string, pass: string) {
   return `${STORAGE_PREFIX}${encodeURIComponent(owner)}:${encodeURIComponent(bookId)}:${encodeURIComponent(pass)}`;
+}
+function storedDraft(key: string): string {
+  try {
+    const stored = JSON.parse(localStorage.getItem(key) ?? "null");
+    return stored && typeof stored.question === "string" ? stored.question.slice(0, 500) : "";
+  } catch {
+    return "";
+  }
+}
+function storeDraft(key: string, question: string) {
+  try {
+    if (question) localStorage.setItem(key, JSON.stringify({ question }));
+    else localStorage.removeItem(key);
+  } catch {
+    /* Keep reading when storage is unavailable. */
+  }
+}
+/** Earlier versions kept every book's conversation in the browser, where the server could not
+ * hide a turn. Delete those copies, for every book and reading pass, keeping any draft. */
+function dropStoredConversations() {
+  try {
+    const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index));
+    for (const key of keys) if (key?.startsWith(STORAGE_PREFIX)) storeDraft(key, storedDraft(key));
+  } catch {
+    /* Storage is optional. */
+  }
+}
+/** The reply the server keeps for an exchange, as one line; empty when it kept none. */
+function keptReply(answer: AskAnswer): string {
+  return answer.insufficient_evidence ? "" : answer.claims.map((claim) => claim.text).join(" ");
+}
+const sameWords = (left: string, right: string) =>
+  left.replace(/\s+/g, " ").trim() === right.replace(/\s+/g, " ").trim();
+/** The server's turns as exchanges: a question with the reply that follows it. */
+function storedExchanges(turns: BookTurn[], availableChapter: number | undefined): AskExchange[] {
+  const pairs: { question: string | null; reply: string | null; first: BookTurn }[] = [];
+  for (const turn of turns) {
+    const last = pairs[pairs.length - 1];
+    if (turn.role === "user") pairs.push({ question: turn.content, reply: null, first: turn });
+    else if (last && last.question !== null && last.reply === null) last.reply = turn.content;
+    else pairs.push({ question: null, reply: turn.content, first: turn }); // its question fell outside what was sent
+  }
+  return pairs.map(({ question, reply, first }) => {
+    const whole = Number.isInteger(first.atom) ? first.atom : 0;
+    const asOf = Math.max(0, Math.min(whole, availableChapter ?? whole));
+    return {
+      id: crypto.randomUUID(),
+      question: question ?? "",
+      stored: true,
+      at: Date.parse(first.created_at ?? "") || 0,
+      answer: reply === null
+        ? { as_of_chapter: asOf, insufficient_evidence: true, answer_type: "conversation" as const,
+            message: NO_REPLY_KEPT, claims: [], citations: [], cost: null }
+        : { as_of_chapter: asOf, insufficient_evidence: false, style: "prose" as const,
+            claims: [{ text: reply, citation_ids: [] }], citations: [], cost: null },
+    };
+  });
+}
+/** What the panel shows once the server has answered: the server's exchanges, and nothing else
+ * that the server keeps. An exchange already on screen keeps its place and identity, so a reply
+ * that streamed in here is neither drawn twice nor drawn again. */
+function mergeWithServer(server: AskExchange[], shown: AskExchange[], loadStarted: number): AskExchange[] {
+  const mine = shown.filter((exchange) => exchange.stored);
+  const used = new Set<AskExchange>();
+  const kept = server.map((incoming) => {
+    const match = mine.find((exchange) =>
+      !used.has(exchange) &&
+      sameWords(exchange.question, incoming.question) &&
+      sameWords(keptReply(exchange.answer), keptReply(incoming.answer)));
+    if (!match) return incoming;
+    used.add(match);
+    return match.arrived === undefined ? match : { ...match, arrived: undefined };
+  });
+  // The one exception: a reply that arrived here moments ago, which the server may not have
+  // stored when it answered this load. After that the server's word stands.
+  const justArrived = mine.filter((exchange) =>
+    !used.has(exchange) && exchange.arrived !== undefined && exchange.arrived >= loadStarted - STORE_GRACE_MS);
+  const sitting = shown.filter((exchange) => !exchange.stored);
+  return [...kept, ...justArrived, ...sitting].sort((left, right) => left.at - right.at).slice(-40);
 }
 function readableAnswer(answer: AskAnswer): string {
   return [answer.calculation, readableBookAnswer(answer)].filter(Boolean).join("\n\n");
@@ -99,74 +204,32 @@ function readableBookAnswer(answer: AskAnswer): string {
       : answer.claims.map((claim) => claim.text).join("\n\n");
   return [answer.acknowledgment, body].filter(Boolean).join("\n\n");
 }
-function isStoredExchange(value: unknown): value is AskExchange {
-  if (!value || typeof value !== "object") return false;
-  const item = value as AskExchange;
-  return (
-    typeof item.id === "string" &&
-    typeof item.question === "string" &&
-    !!item.answer &&
-    Number.isInteger(item.answer.as_of_chapter) &&
-    typeof item.answer.insufficient_evidence === "boolean" &&
-    Array.isArray(item.answer.claims) &&
-    item.answer.claims.every(
-      (claim) =>
-        typeof claim.text === "string" && Array.isArray(claim.citation_ids),
-    ) &&
-    Array.isArray(item.answer.citations) &&
-    item.answer.citations.every(
-      (citation) =>
-        typeof citation.id === "number" &&
-        typeof citation.ordinal === "number" &&
-        typeof citation.href === "string" &&
-        typeof citation.excerpt === "string",
-    )
-  );
-}
 function createAskSession(
   bookId: string,
   bookmark: number,
   owner: string,
   readingPass: string,
 ): AskSession {
+  dropStoredConversations();
+  const key = storageKey(bookId, owner, readingPass);
   let snapshot: AskSnapshot = {
-    question: "",
+    question: storedDraft(key),
     exchanges: [],
     pendingQuestion: null,
     streaming: "",
     busy: false,
     error: "",
     requestToken: 0,
+    history: "unknown",
   };
-  const key = storageKey(bookId, owner, readingPass);
-  try {
-    const stored = JSON.parse(localStorage.getItem(key) ?? "null");
-    if (
-      stored &&
-      typeof stored.question === "string" &&
-      Array.isArray(stored.exchanges)
-    )
-      snapshot = {
-        ...snapshot,
-        question: stored.question.slice(0, 500),
-        exchanges: stored.exchanges
-          .filter(isStoredExchange)
-          .filter(
-            (exchange: AskExchange) =>
-              exchange.answer.as_of_chapter <= bookmark || exchange.passage,
-          )
-          .slice(-40),
-      };
-  } catch {
-    /* Storage is optional; the mounted session remains usable. */
-  }
   const listeners = new Set<() => void>();
-  return {
+  const session: AskSession = {
     bookId,
     bookmark,
     owner,
     readingPass,
     scrollTop: null,
+    loadToken: 0,
     getSnapshot: () => snapshot,
     subscribe: (listener) => {
       listeners.add(listener);
@@ -176,22 +239,24 @@ function createAskSession(
     },
     update: (changes) => {
       snapshot = { ...snapshot, ...changes };
-      if (owner === activeOfflineOwner()) {
-        try {
-          localStorage.setItem(
-            key,
-            JSON.stringify({
-              question: snapshot.question,
-              exchanges: snapshot.exchanges.slice(-40),
-            }),
-          );
-        } catch {
-          /* Keep reading when storage is unavailable. */
-        }
-      }
+      if ("question" in changes && owner === activeOfflineOwner()) storeDraft(key, snapshot.question);
       listeners.forEach((listener) => listener());
     },
+    hide: () => {
+      session.loadToken += 1;
+      session.scrollTop = null;
+      session.update({
+        exchanges: [],
+        pendingQuestion: null,
+        streaming: "",
+        busy: false,
+        error: "",
+        requestToken: snapshot.requestToken + 1,
+        history: "unknown",
+      });
+    },
   };
+  return session;
 }
 
 export function AskTheBook({
@@ -210,6 +275,7 @@ export function AskTheBook({
   prepareReadContext,
   onChaptersRead,
   memoryRefresh = 0,
+  readVersion = 0,
   throughCurrentPage = false,
   seed = null,
   chapterLabel: _chapterLabel = "",
@@ -234,6 +300,9 @@ export function AskTheBook({
   onChaptersRead?: () => void;
   /** Changes as more of the book is extracted, so the cast and story so far fetch again. */
   memoryRefresh?: number;
+  /** Changes whenever the reader changes what counts as read other than by turning pages (a
+   * chapter marked read or not read, an "I've read…" offer): the conversation is asked for again. */
+  readVersion?: number;
   throughCurrentPage?: boolean;
   seed?: CompanionSeed | null;
   chapterLabel?: string;
@@ -245,7 +314,8 @@ export function AskTheBook({
   const owner = activeOfflineOwner();
   const pass = String(readingPass);
   // Advancing the read boundary never discards the discussion. Rewinding or resetting
-  // creates a new in-memory session so late results cannot reveal a later boundary.
+  // creates a new in-memory session so late results cannot reveal a later boundary; the new
+  // session shows nothing until the server's conversation has been loaded for it.
   if (
     !retainedSession.current ||
     retainedSession.current.bookId !== bookId ||
@@ -257,7 +327,7 @@ export function AskTheBook({
   }
   const session = retainedSession.current;
   session.bookmark = bookmark;
-  const { question, exchanges, pendingQuestion, streaming, busy, error } =
+  const { question, exchanges, pendingQuestion, streaming, busy, error, history } =
     useSyncExternalStore(
       session.subscribe,
       session.getSnapshot,
@@ -299,6 +369,44 @@ export function AskTheBook({
   const modal = !embedded || compact;
   const isCurrent = () =>
     retainedSession.current === session && activeOfflineOwner() === owner;
+
+  // The conversation shown is the server's: it hides a turn once the text it was written from
+  // is no longer read, so no copy kept here may stand in for it. Returns whether it loaded.
+  const loadHistory = async (): Promise<boolean> => {
+    if (!isCurrent()) return false;
+    const token = ++session.loadToken;
+    const current = () => isCurrent() && session.loadToken === token;
+    const started = Date.now();
+    let answer: { read_frontier?: ReadFrontier; turns: BookTurn[] } = { turns: [] };
+    try {
+      if (api.bookConversation) answer = await api.bookConversation(bookId);
+    } catch (reason) {
+      if (!current()) return false;
+      // 404: this server keeps no conversation for a book (hosted mode), so there is none to show.
+      if (!(reason instanceof ApiError && reason.status === 404)) {
+        // Not reachable: show none of it, even what was on screen a moment ago.
+        session.update({
+          history: "failed",
+          exchanges: session.getSnapshot().exchanges.filter((exchange) => !exchange.stored),
+        });
+        return false;
+      }
+    }
+    if (!current()) return false;
+    session.update({
+      history: "ready",
+      exchanges: mergeWithServer(
+        storedExchanges(answer.turns ?? [], answer.read_frontier?.available_chapter),
+        session.getSnapshot().exchanges,
+        started,
+      ),
+    });
+    return true;
+  };
+  // On open, for a new reading pass, and whenever what counts as read was changed by hand.
+  useEffect(() => {
+    void loadHistory();
+  }, [session, readVersion]);
 
   useEffect(() => {
     inputRef.current?.focus({ preventScroll: true });
@@ -367,6 +475,7 @@ export function AskTheBook({
       : undefined;
     try {
       let result: AskAnswer;
+      let kept = false; // whether the server stores this exchange: only a streamed reply is
       if (scopeSelection) {
         const selected = await api.selectionAction(bookId, {
           action: "explain",
@@ -418,11 +527,24 @@ export function AskTheBook({
         const readPoint = prepareReadContext ? await prepareReadContext() : null;
         if (!isCurrentRequest()) return;
         const requestBookmark = Math.max(bookmark, readPoint?.available_chapter ?? 0);
-        const history = session
+        // Sentence by sentence when the server offers it; each one arrives already checked.
+        // The server writes from its own record of the conversation, so none is sent.
+        const streamed = readPoint && api.askBookStream
+          ? await api.askBookStream(bookId, value, requestBookmark, readPoint, (sentence) => {
+              if (isCurrentRequest())
+                session.update({ streaming: [session.getSnapshot().streaming, sentence].filter(Boolean).join(" ") });
+            })
+          : null;
+        if (!isCurrentRequest()) return;
+        kept = streamed !== null;
+        // The older, non-streamed path keeps nothing on the server and still reads the earlier
+        // conversation from the request: it is sent what is on this panel now.
+        const earlier = () => session
           .getSnapshot()
           .exchanges.filter(
             (exchange) =>
               !exchange.passage &&
+              !!exchange.question &&
               exchange.answer.as_of_chapter <= requestBookmark &&
               !exchange.answer.insufficient_evidence,
           )
@@ -439,17 +561,9 @@ export function AskTheBook({
             },
           ])
           .slice(-8);
-        // Sentence by sentence when the server offers it; each one arrives already checked.
-        const streamed = readPoint && api.askBookStream
-          ? await api.askBookStream(bookId, value, requestBookmark, history, readPoint, (sentence) => {
-              if (isCurrentRequest())
-                session.update({ streaming: [session.getSnapshot().streaming, sentence].filter(Boolean).join(" ") });
-            })
-          : null;
-        if (!isCurrentRequest()) return;
         result = streamed ?? (readPoint
-          ? await api.askBook(bookId, value, requestBookmark, history, readPoint)
-          : await api.askBook(bookId, value, requestBookmark, history));
+          ? await api.askBook(bookId, value, requestBookmark, earlier(), readPoint)
+          : await api.askBook(bookId, value, requestBookmark, earlier()));
         if (
           result.as_of_chapter > requestBookmark ||
           result.citations.some((citation) => citation.ordinal > requestBookmark) ||
@@ -461,8 +575,9 @@ export function AskTheBook({
       }
       if (!isCurrentRequest()) return;
       // An offer to count skipped chapters belongs to this sitting, not to the saved conversation.
-      const { offers, ...kept } = result;
+      const { offers, ...shown } = result;
       const exchangeId = crypto.randomUUID();
+      const now = Date.now();
       setLiveOffer(offers?.length ? { id: exchangeId, offers } : null);
       session.update({
         exchanges: [
@@ -470,9 +585,11 @@ export function AskTheBook({
           {
             id: exchangeId,
             question: value,
-            answer: kept,
+            answer: shown,
             passage: !!scopeSelection,
             selectionKey,
+            at: now,
+            ...(kept ? { stored: true, arrived: now } : {}),
           },
         ].slice(-40),
         question: "",
@@ -582,6 +699,7 @@ export function AskTheBook({
             id: seed.id,
             question: seed.label,
             fromMothli: true,
+            at: Date.now(),
             answer: {
               as_of_chapter: Math.min(seed.asOfChapter, bookmark),
               insufficient_evidence: false,
@@ -609,7 +727,7 @@ export function AskTheBook({
         session.update({
           exchanges: [
             ...session.getSnapshot().exchanges,
-            { id: crypto.randomUUID(), question: seed.label, answer: result, fromMothli: true },
+            { id: crypto.randomUUID(), question: seed.label, answer: result, fromMothli: true, at: Date.now() },
           ].slice(-40),
         });
       })
@@ -652,8 +770,10 @@ export function AskTheBook({
     inputRef.current?.focus({ preventScroll: true });
   };
 
+  // Which stored turns may be shown is the server's decision, made from what is read now. The
+  // replies kept only here are still held to the chapter the reader has reached.
   const visibleExchanges = exchanges.filter(
-    (exchange) => exchange.passage || exchange.answer.as_of_chapter <= bookmark,
+    (exchange) => exchange.stored || exchange.passage || exchange.answer.as_of_chapter <= bookmark,
   );
   const mood: MothMood = busy ? "thinking" : error ? "sleepy" : !visibleExchanges.length ? "curious" : "idle";
   const starters = selection
@@ -764,6 +884,7 @@ export function AskTheBook({
                 <Button
                   variant="ghost"
                   onClick={() => {
+                    session.loadToken += 1; // a load already on its way must not bring it back
                     session.update({
                       question: "",
                       exchanges: [],
@@ -772,10 +893,22 @@ export function AskTheBook({
                       busy: false,
                       error: "",
                       requestToken: session.getSnapshot().requestToken + 1,
+                      history: "ready",
                     });
                     session.scrollTop = null;
-                    // Mothli's own record of this conversation lives on the server.
-                    void api.clearConversation?.(bookId)?.catch(() => undefined);
+                    // The conversation is the server's record: clear it there, then show what
+                    // the server has. If the clear did not get through, that is the turns again.
+                    void (async () => {
+                      let cleared = true;
+                      try {
+                        await api.clearConversation?.(bookId);
+                      } catch {
+                        cleared = false;
+                      }
+                      if (!isCurrent()) return;
+                      const loaded = await loadHistory();
+                      if (!cleared && loaded && isCurrent()) session.update({ error: CLEAR_FAILED });
+                    })();
                     setConfirmClear(false);
                     setPeopleOpen(false);
                     inputRef.current?.focus();
@@ -788,7 +921,15 @@ export function AskTheBook({
                 </Button>
               </div>
             )}
-            {!visibleExchanges.length && !busy && (
+            {history === "failed" && (
+              <div className="mothli-clear lp-clear" role="group" aria-label="Earlier conversation">
+                <span>{HISTORY_UNREACHABLE}</span>
+                <Button variant="ghost" onClick={() => void loadHistory()}>
+                  Try again
+                </Button>
+              </div>
+            )}
+            {!visibleExchanges.length && !busy && history === "ready" && (
               <div className="lp-hello">
                 <p className="lp-voice lp-hello-line">
                   {selection
@@ -821,14 +962,14 @@ export function AskTheBook({
             {visibleExchanges.map((exchange, index) => (
               <section
                 className={`mothli-exchange lp-exchange${exchange.fromMothli ? " lp-exchange--mothli-first" : ""}`}
-                aria-label={exchange.fromMothli ? exchange.question : `Question ${index + 1}`}
+                aria-label={exchange.fromMothli ? exchange.question : exchange.question ? `Question ${index + 1}` : "Earlier reply"}
                 data-latest-exchange={index === visibleExchanges.length - 1 || undefined}
                 key={exchange.id}
               >
                 {exchange.fromMothli ? (
                   <p className="lp-moment-label">{exchange.question}</p>
                 ) : (
-                  <p className="mothli-question lp-you">{exchange.question}</p>
+                  exchange.question && <p className="mothli-question lp-you">{exchange.question}</p>
                 )}
                 <div className="mothli-reply lp-reply">
                   <div className="lp-reply-body">
@@ -1014,7 +1155,7 @@ export function AskTheBook({
                   error && (
                     <>
                       <span>{error}</span>
-                      {error !== BOOK_USAGE_LIMIT_MESSAGE && error !== REQUEST_TOO_LARGE_MESSAGE && (
+                      {error !== BOOK_USAGE_LIMIT_MESSAGE && error !== REQUEST_TOO_LARGE_MESSAGE && error !== CLEAR_FAILED && (
                         <button type="button" onClick={() => void send()}>
                           Retry
                         </button>

@@ -277,7 +277,11 @@ export function ReaderPage({
   const [memoryRefresh, setMemoryRefresh] = useState(0);
   const stopMemoryWatch = useRef<(() => void) | null>(null);
   useEffect(() => () => stopMemoryWatch.current?.(), [bookId]);
+  // Bumped whenever the reader changes what counts as read by hand. The server shows or hides
+  // earlier turns of the conversation by what is read, so the chat panel asks for it again.
+  const [readVersion, setReadVersion] = useState(0);
   const refreshReadShare = useCallback(async () => {
+    setReadVersion((version) => version + 1);
     try {
       const map = await api.readMap?.(bookId);
       if (map) setReadShare(Object.fromEntries(map.chapters.map((chapter) => [chapter.atom - 1, chapter.read])));
@@ -301,6 +305,9 @@ export function ReaderPage({
     }
   }, [bookId]);
   const markRead = useCallback(async (atom: number, read: boolean) => {
+    // "I haven't read this": the conversation leaves the screen now, whether or not the chat
+    // panel is open, and comes back from the server with only the turns it still shows.
+    if (!read) askSessionRef.current?.hide();
     try {
       await api.readChapters?.(bookId, [atom + 1], read);
     } finally {
@@ -1813,6 +1820,7 @@ export function ReaderPage({
           prepareReadContext={prepareReadContext}
           onChaptersRead={() => void refreshReadShare()}
           memoryRefresh={memoryRefresh}
+          readVersion={readVersion}
           throughCurrentPage={readFrontier !== null}
           readingPass={readingPass}
           initialAction={initialAction}

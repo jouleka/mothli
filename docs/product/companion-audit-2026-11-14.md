@@ -1308,6 +1308,62 @@ The owner read the first 19 samples (`voice-samples.md`) and gave a direction in
 - Whether more play survives the checks is not known, because the writer produced almost none.
 - Spend for this section: $0.068 of Jev in all (two sample runs, two probes).
 
+## 6z. The chat panel inside a book shows the server's conversation (15 November)
+
+6w made the server hide a turn once the text it was written from is no longer read. The chat panel inside a book never asked the server: it kept every exchange in the browser's storage and showed that. After "I haven't read this" on a chapter the old turns stayed on screen, replies about that chapter included. ("Read it fresh" was already covered in the same browser, by accident: the copy was filed under the reading pass, and a reset starts a new one.)
+
+### What changed
+
+| | Before | Now |
+|---|---|---|
+| Where the panel's turns come from | The browser's storage (`litlet.pip.conversation:…`), written on every change | `GET /api/books/{id}/conversation`, asked when the panel opens, for every new reading pass, after a chapter is marked read or not read, after any "I've read…" offer, and after "Clear" |
+| "I haven't read this" in Contents | Nothing happened to the panel | The whole conversation leaves the screen at that moment, a reply still being written is dropped, and what the server still returns comes back once the change is saved |
+| The server cannot be reached | The browser's copy was shown | No earlier turn is shown, even one that was on screen a moment before. The reader sees "I can't reach our earlier conversation right now, so I'm not showing it." and a "Try again" button |
+| What the browser keeps | The whole conversation and the unsent draft | The unsent draft only. Old copies are deleted, for every book, the first time a panel opens |
+| What is sent with a streamed question | The browser's last eight messages, which the server ignored | Nothing but the question and the reading position |
+| "Clear" | Emptied the screen; a failed clear on the server went unnoticed | Clears on the server, then asks again. If the server still has the turns the reader sees them and is told the clear did not get through |
+
+- **A streamed reply is shown from the stream, then matched to the server's copy.** The server stores a turn just after it sends the last sentence, so the panel does not ask again after each reply. When it next loads, a turn with the same question and reply as one on screen keeps that one's place and identity: nothing is drawn twice or drawn again. A reply that arrived less than five seconds before a load may stay although the server's answer does not hold it yet; after that the server's word stands. "I haven't read this" and a failed load do not wait for anything.
+- **Some replies are stored nowhere and last for the sitting:** a reply about a selected passage, a chapter closeout, a welcome-back recap, and any reply from the older non-streamed path. They used to be in the browser's copy. They now live in memory while the book is open, are still held to the chapter reached, and go with "I haven't read this", a reset and a rewind.
+- **What the server's copy does not carry.** An older turn has no "I've read…" button (those belong to the reply that just arrived, as before) and no page links (streamed replies have none). A stored question with no stored reply means every sentence was held back; the server does not record which fixed line the reader saw, so the panel says "I didn't have an answer for that from what you'd read." No backend change was needed.
+- **No check was touched,** and nothing on the server. Which stored turns may be shown is the server's decision alone; the panel's own rule (nothing from a later chapter than the one reached) still applies to the replies it holds itself.
+
+### Verified
+
+Frontend tests, API mocked: 374 pass (360 before), type check and build clean. 14 new, 13 of them failing on main (the 14th guards against calling a server with no stored conversation a failure); two existing ones changed, one for the conversation no longer being in the browser's storage, one for the streamed request.
+
+| Test | The break it catches |
+|---|---|
+| The server's turns on open, an old browser copy present | Showing the browser's copy; leaving it on disk |
+| A new reading pass | Turns surviving a reset from the panel's memory |
+| "I haven't read this" (panel alone, and through the reader page) | The fault above: turns, a passage reply and a reply in flight staying on screen; asking the server before the change is saved |
+| A streamed reply, then a load that holds it | The reply shown twice or drawn again |
+| A load one second and one minute after a reply the server does not hold | The reply vanishing before the server stored it; the panel's copy outliving the server's word |
+| A turn missing from a later load | A turn hidden from another tab staying on an open panel |
+| A failed load, with and without an old browser copy | Any stale turn shown when the server cannot be asked |
+| A server with no stored conversation (404) | Treating hosted mode as a failure |
+| "Clear", and a clear that fails | Emptying the screen only |
+| A stored question with no reply | A bare question, or an invented reply |
+| The request bodies | The browser's conversation still sent with a streamed question; a refused clear taken for done |
+
+In a browser, once, against a throwaway backend with stand-in models (the test suite's writer and Jev, a three-chapter book, a temporary library): a streamed reply appeared once and was in the server's copy with nothing in the browser's storage; marking chapter 2 read reloaded in place; a second reply written with chapter 2 read left the screen when chapter 2 was marked not read, and the first stayed; after reloading the page the panel showed the server's turn; after "read it fresh" it showed none; with the backend stopped it showed the line above and no turn, and "Try again" brought the turns back once it was running.
+
+### Found, and not fixed
+
+- **Saved replies are a second browser copy.** "Save" puts a reply in the Notebook, in the browser's storage (`rc:pip-keeps:…`), filed under the reading pass. Nothing hides it when its chapter is marked not read.
+- **A reply the reader cancelled, or one the panel refused on arrival,** is still stored by the server (the request is not stopped), is given to the writer as conversation, and now appears at the next load.
+- **Follow-up questions about a selected passage** still send the earlier exchanges about that passage from the panel; the server reads them. The older non-streamed path does too, as in 6w. The panel reaches that path only where streamed replies are off, which is what `config.py` gives when nothing is set, and always in hosted mode.
+- **Without streamed replies there is no stored conversation,** so the panel's conversation is gone when the page is reloaded. It used to survive in the browser.
+- **A panel already open hears of a change made in another tab only when it is opened again** or when something read is changed in this tab.
+- **Marking a chapter not read redraws the panel twice** within a few hundredths of a second: once for the change, once because the chapter counter moved back. Seen in the browser check.
+- After "read it fresh", a turn comes back as soon as the pages it was written from are read again. That is 6w's rule, and it is now visible on the panel.
+
+### Not verified
+
+- Nothing was run with real models. The browser check was one run on one small book.
+- Not tried on a phone or with a screen reader, and not in hosted mode.
+- A long conversation: the server returns the last 80 messages, the panel shows the last 40 exchanges.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

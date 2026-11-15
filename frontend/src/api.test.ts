@@ -292,6 +292,36 @@ describe("Hosted writes", () => {
     );
   });
 
+  // Catches: the browser sending a conversation of its own with a question (the server keeps the
+  // record and reads no other), and a clear the server refused being taken for done.
+  test("a book's conversation is read from the server, never sent to it, and a refused clear is an error", async () => {
+    vi.spyOn(document, "cookie", "get").mockReturnValue("__Host-litlet-csrf=csrf-token");
+    const point = { id: "a".repeat(64), atom: 2, offset: 120, position_epoch: 0, available_chapter: 2 };
+    const answer = { as_of_chapter: 2, insufficient_evidence: false, claims: [{ text: "Ouch.", citation_ids: [] }], citations: [], cost: null };
+    const stored = { read_frontier: point, turns: [{ role: "user", content: "Who?", atom: 2, reaction: false, created_at: "2020-01-01T10:00:00+00:00" }] };
+    const fetch = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify(stored), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(
+        `data: ${JSON.stringify({ type: "sentence", text: "Ouch." })}\n\ndata: ${JSON.stringify({ type: "done", answer })}\n\n`,
+        { status: 200, headers: { "content-type": "text/event-stream" } }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "unknown book" }), { status: 404 }));
+    expect(await api.bookConversation("book")).toEqual(stored);
+    expect(fetch).toHaveBeenNthCalledWith(1, "/api/books/book/conversation");
+    const heard: string[] = [];
+    expect(await api.askBookStream("book", "What did he say?", 2, point, (sentence) => heard.push(sentence))).toEqual(answer);
+    expect(heard).toEqual(["Ouch."]);
+    expect(fetch).toHaveBeenNthCalledWith(2, "/api/books/book/ask/stream", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ question: "What did he say?", bookmark: 2, read_frontier: point }),
+    }));
+    await expect(api.clearConversation("book")).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenNthCalledWith(3, "/api/books/book/conversation", expect.objectContaining({
+      method: "DELETE", headers: expect.objectContaining({ "X-CSRF-Token": "csrf-token" }),
+    }));
+    await expect(api.clearConversation("book")).rejects.toMatchObject({ status: 404 });
+  });
+
   test("posts an exact-frontier memory correction with CSRF", async () => {
     vi.spyOn(document, "cookie", "get").mockReturnValue("__Host-litlet-csrf=csrf-token");
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
