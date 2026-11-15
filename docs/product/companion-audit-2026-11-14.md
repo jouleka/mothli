@@ -1472,6 +1472,16 @@ The owner accepted 6y's voice as "not perfect, but not bad" and asked to keep po
 - The owner has not read the last set.
 - Spend for this section: $0.029 of Jev (two sample runs). Running total since the cap was set: $0.099 of $0.25.
 
+### 6ac, afterwards: the tripwire narrowed for the noun "will"
+
+The owner agreed to narrow the fixed foreshadowing pattern. This is a change to a spoiler check, the only one in sections 6u to 6ac.
+
+- `PROLEPSIS_RE` no longer counts "will" straight after `my`, `your`, `his`, `their`, `our`, `its`, `the`, `a` or `one's`. After those words it can only be the noun.
+- It still counts "will" everywhere else, including after `her`, `own`, `free`, `good` and `ill`, which can also stand before the future tense ("whoever marries her will regret it", "the brothers left on their own will tear each other apart", "the ill will recover"). So "giving up your own will" is still cut. Every other future form in the pattern is untouched.
+- Every user of the pattern gets the change: streamed replies, chapter notes, recaps, the older reply paths.
+- 22 new tests (`tests/eval/test_prolepsis_will.py`): 10 noun sentences that must not be hits, all failing on the old pattern, and 12 future-tense sentences that must stay hits, passing before and after. Of the five true sentences this check removed in 6ac's runs, three now pass it; "your own will" and the reported dream do not.
+- Not run with real models: the pattern involves none. What it changes in real replies will show in the next samples.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
