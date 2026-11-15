@@ -2,7 +2,7 @@
 nothing on them reaches a model; used only to ask the reader, once they settle, whether they
 read those chapters or were just getting here."""
 from test_chapter_notes import models
-from test_read_map import anchor, ask, line, map_env, read_page  # noqa: F401  (map_env is a fixture)
+from test_read_map import map_env as map_env, anchor, ask, line, read_page
 
 
 def skim(api, bid, chapter, first, last, *, to_chapter=None, expect=200):
