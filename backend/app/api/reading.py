@@ -77,6 +77,8 @@ class ReadPage(BaseModel):
     model_config = ConfigDict(extra="forbid")
     start: ReadAnchor
     end: ReadAnchor
+    # Turned quickly on the way somewhere: remembered as seen, never as read.
+    skimmed: bool = False
 
 
 class ReadChapters(BaseModel):
@@ -125,10 +127,16 @@ def get_read_offer(book_id: str, catalog=Depends(get_catalog), settings=Depends(
 @router.put("/read-page", dependencies=[Depends(book_lifecycle)])
 def put_read_page(book_id: str, body: ReadPage, request: Request, catalog=Depends(get_catalog),
                   settings=Depends(get_settings), worker=Depends(get_worker)):
-    """The reader has read one page: both ends are checked against the source before it counts."""
+    """The reader has read one page: both ends are checked against the source before it counts.
+
+    A skimmed page is checked the same way and only remembered; it asks nothing.
+    """
     _map_enabled(settings)
     try:
-        finished = record_page(book_id, body.start, body.end, catalog, settings, worker)
+        finished = record_page(book_id, body.start, body.end, catalog, settings, worker,
+                               skimmed=body.skimmed)
+        if body.skimmed:
+            return sync_counter(book_id, catalog, settings, worker)
         point, place = sync_counter(book_id, catalog, settings, worker, with_place=True)
         # The reader has settled on a page here. If chapters before it were gone past, the app
         # may ask once whether they have been read.

@@ -189,6 +189,7 @@ class Catalog:
             self._conn.execute("DELETE FROM chapter_notes WHERE book_id=?", (book_id,))
             self._conn.execute("DELETE FROM conversation_turns WHERE book_id=?", (book_id,))
             self._conn.execute("DELETE FROM read_ranges WHERE book_id=?", (book_id,))
+            self._conn.execute("DELETE FROM skimmed_ranges WHERE book_id=?", (book_id,))
             self._conn.execute("DELETE FROM read_position WHERE book_id=?", (book_id,))
             self._conn.execute("DELETE FROM reading_state WHERE book_id=?", (book_id,))
             self._conn.execute("DELETE FROM books WHERE book_id=?", (book_id,))
@@ -362,11 +363,42 @@ class Catalog:
             by_atom.setdefault(row["atom"], []).append((row["start_offset"], row["end_offset"]))
         return {atom: self._merged(ranges) for atom, ranges in sorted(by_atom.items())}
 
-    def clear_read_map(self, book_id, *, atom=None):
+    def add_skimmed_range(self, book_id, *, incarnation, atom, start, end):
+        """Add [start, end) of one chapter as skimmed: seen in passing, not read."""
+        for value in (atom, start, end):
+            self._check_int(value, "source position")
+        if end <= start:
+            return
+        key = (book_id, incarnation, atom)
         with self._lock:
+            held = [(row["start_offset"], row["end_offset"]) for row in self._conn.execute(
+                "SELECT start_offset,end_offset FROM skimmed_ranges "
+                "WHERE book_id=? AND incarnation=? AND atom=?", key)]
             self._conn.execute(
-                "DELETE FROM read_ranges WHERE book_id=?" + (" AND atom=?" if atom is not None else ""),
-                (book_id, *([atom] if atom is not None else [])))
+                "DELETE FROM skimmed_ranges WHERE book_id=? AND incarnation=? AND atom=?", key)
+            self._conn.executemany(
+                "INSERT INTO skimmed_ranges VALUES (?,?,?,?,?,?)",
+                [(book_id, incarnation, atom, a, b, _now()) for a, b in self._merged([*held, (start, end)])])
+            self._conn.commit()
+
+    def get_skimmed(self, book_id, *, incarnation):
+        """{chapter: [(start, end), ...]} of skimmed text. Never part of the read map."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT atom,start_offset,end_offset FROM skimmed_ranges "
+                "WHERE book_id=? AND incarnation=?", (book_id, incarnation)).fetchall()
+        by_atom = {}
+        for row in rows:
+            by_atom.setdefault(row["atom"], []).append((row["start_offset"], row["end_offset"]))
+        return {atom: self._merged(ranges) for atom, ranges in sorted(by_atom.items())}
+
+    def clear_read_map(self, book_id, *, atom=None):
+        """Forget what was read, and skimmed, of one chapter or of the whole book."""
+        with self._lock:
+            for table in ("read_ranges", "skimmed_ranges"):
+                self._conn.execute(
+                    f"DELETE FROM {table} WHERE book_id=?" + (" AND atom=?" if atom is not None else ""),
+                    (book_id, *([atom] if atom is not None else [])))
             if atom is None:
                 # The row stays: it marks the map as begun, so it is never seeded a second time.
                 self._conn.execute(

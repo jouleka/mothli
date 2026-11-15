@@ -126,6 +126,19 @@ CREATE TABLE IF NOT EXISTS read_ranges (
 
 CREATE INDEX IF NOT EXISTS ix_read_ranges_book ON read_ranges(book_id, incarnation, atom);
 
+-- Pages turned quickly, one after another: seen, not read. Kept apart from read_ranges so that
+-- nothing on them can reach a model; used only to ask the reader whether they read those chapters.
+CREATE TABLE IF NOT EXISTS skimmed_ranges (
+  book_id      TEXT NOT NULL REFERENCES books(book_id) ON DELETE CASCADE,
+  incarnation  TEXT NOT NULL,
+  atom         INTEGER NOT NULL,
+  start_offset INTEGER NOT NULL,
+  end_offset   INTEGER NOT NULL,          -- exclusive
+  updated_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_skimmed_ranges_book ON skimmed_ranges(book_id, incarnation, atom);
+
 -- Where the reader is now. Unlike the read map it may move backward.
 CREATE TABLE IF NOT EXISTS read_position (
   book_id       TEXT PRIMARY KEY REFERENCES books(book_id) ON DELETE CASCADE,

@@ -362,7 +362,7 @@ def test_settling_into_a_chapter_past_unread_ones_brings_an_offer_to_count_them(
     api, bid, _, _ = map_env
     assert read_page(api, bid, 1, 1, 3)["skipped"] is None                  # reading from the start
     landed = read_page(api, bid, 3, 10, 12)
-    assert landed["skipped"] == {"atoms": [1, 2], "chapters": "chapters 1 and 2"}
+    assert landed["skipped"] == {"atoms": [1, 2], "chapters": "chapters 1 and 2", "skimmed": []}
     api.put(f"/api/books/{bid}/read-chapters", json={"atoms": [1, 2], "read": True})
     assert read_page(api, bid, 3, 13, 14)["skipped"] is None
 

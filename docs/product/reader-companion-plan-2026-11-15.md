@@ -1,6 +1,6 @@
 # Mothli as a reader-level companion: plan and data model
 
-15 November 2026. Starts from PR #46. Stages 0 to 3 are built; what was built and measured is in section 6m of `companion-audit-2026-11-14.md`. Two things differ from the plan below: a reply uses a chapter's notes when its read prefix of that chapter hashes to the text the notes were written from (no position comparison), and notes sit behind `READER_STORY_NOTES`, off by default.
+15 November 2026. Starts from PR #46. Stages 0 to 3 are built; what was built and measured is in section 6m of `companion-audit-2026-11-14.md`. Two things differ from the plan below: a reply uses a chapter's notes when its read prefix of that chapter hashes to the text the notes were written from (no position comparison), and notes sit behind `READER_STORY_NOTES`, which follows streamed replies when unset and so is on wherever they are (audit section 6q).
 
 ## What the code does today (read, not run)
 
@@ -152,4 +152,4 @@ CREATE TABLE IF NOT EXISTS read_position (       -- where the reader is now; may
 - A chapter's notes are usable when the map covers the whole chapter; the hash rule already gives this.
 - A stored turn is visible when the place it was written at is inside the map.
 - The older chapter counter stays for the views that need one number (cast, recap, chapter closeout, chapter titles), and it now comes from the map: the last chapter up to which every chapter is finished, where finished means at least 80% read with the ending reached. A leap no longer moves it.
-- Behind `READER_READ_MAP`, off by default, until measured.
+- Behind `READER_READ_MAP`, which follows streamed replies when unset and so is on wherever they are (audit section 6q).

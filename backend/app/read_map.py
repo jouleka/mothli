@@ -99,14 +99,18 @@ def sync_counter(book_id, catalog, settings, worker, *, with_place=False):
         catalog.set_bookmark(book_id, state["finished_through"])
     if with_place:
         return point, {"book": book, "chapters": chapters, "point": point,
-                       "numbers": content_numbers(manifest)}
+                       "numbers": content_numbers(manifest),
+                       "skimmed": set(catalog.get_skimmed(book_id, incarnation=book["incarnation"]))}
     return point
 
 
-def record_page(book_id, start, end, catalog, settings, worker):
+def record_page(book_id, start, end, catalog, settings, worker, *, skimmed=False):
     """Add the page between two verified anchors to the map and move the reader's place to its end.
 
     Returns whether a chapter the page touches is now read from start to finish.
+
+    With ``skimmed`` the page was turned quickly on the way somewhere: it is checked the same way
+    but kept out of the map, so it never reaches a model, and the reader's place does not move.
     """
     state, book, manifest, chapters = source_state(book_id, catalog, settings, worker)
     if not (start.position_epoch == end.position_epoch == state["position_epoch"]):
@@ -121,6 +125,10 @@ def record_page(book_id, start, end, catalog, settings, worker):
                  else [(start.atom, begin, length), (end.atom, 0, finish)])
     if any(b < a for _, a, b in stretches) or sum(b - a for _, a, b in stretches) > PAGE_CHARS:
         raise ValueError("page anchors do not bound one page")
+    if skimmed:
+        for atom, a, b in stretches:
+            catalog.add_skimmed_range(book_id, incarnation=book["incarnation"], atom=atom, start=a, end=b)
+        return False
     for atom, a, b in stretches:
         catalog.add_read_range(book_id, incarnation=book["incarnation"], atom=atom, start=a, end=b,
                                source="read")
