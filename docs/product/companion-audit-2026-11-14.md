@@ -1615,6 +1615,16 @@ A suggested title that is also the name of a person the reader has not met in a 
 - The evaluation's reference for the home chat (`companion_eval.py`, cross-book cases) is not given the list. No case asks for a suggestion today; one that did would have its suggestion marked against it.
 - The blurbs themselves need a pass of their own: rewriting or dropping the sequel lines would let the deny list go.
 
+### 6ad, tried with real models: a size limit that refused the whole reply
+
+Six home messages, the owner's own ("hmmm idk what to read next tBh", "not really just give me some suggestions", "something else?"…), Terra through `codex-local`, Jev 1.14.0, the free library on.
+
+- **First try: 2 of 6 answered.** The other four ended "Jev review unavailable", with Jev itself answering. The cause was ours: `budgeted_jev` refuses an input over 30,000 by its own count (bytes), a sentence check carries about 5,100 bytes of questions before any passage, and the home chat already sent ten passages of read text, notes, the place and the app help. Six suggestion lines put every check over. A refused check drops its sentence, and with all refused there is no reply. Stand-in models do not go through that limit, so no test saw it.
+- **The fix:** `check_room` works out how many bytes of passages the largest check of a reply can carry (its last sentence, with every earlier one), and `fit_passages` keeps the fixed passages (place, app help, suggestions) and fills the rest with read text, each book's best passage first. The writer is given the same passages as its checker. Fewer passages can only make the checks stricter. Four tests (`tests/test_check_size.py`), one of them built from text that is two bytes a letter.
+- **Second try: 6 of 6 answered** ($0.005 of Jev). Each asked-for suggestion came at once, by title and author, with a reason tied to a shelf book and the catalogue's own line, and carried its "Add … to my shelf" button; "something else?" brought a different book; "does she end up with Rochester" was refused. No sentence was removed. The replies share one shape ("You might like X by Y. If you fancy a change from…").
+- **Not verified:** one conversation. The button was not pressed in the running app. The chat inside a book builds its checks the same way and was not measured against the limit.
+- Spend: $0.006 of Jev for both tries.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

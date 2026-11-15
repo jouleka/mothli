@@ -9,6 +9,7 @@ Mothli may also suggest books that are not on the shelf: a short list from the f
 catalogue, chosen by fixed rules (``home_suggestions``). Of each it has the catalogue's own line
 and nothing else, and the checker is given the same line. None of it counts as read text.
 """
+from itertools import zip_longest
 import json
 import logging
 from threading import Lock
@@ -30,7 +31,8 @@ from app.read_map import read_snapshot, skimmed_chapters, written_from_read
 from app.reader_place import (APP_HELP, FRIEND_VOICE, SPEAK_AS_A_FRIEND, content_numbers, note_asked,
                               offers_for, place_line)
 from app.retrieval_passages import passage_windows
-from app.stream_conversation import (ASKED_TURNS, HISTORY_TURNS, MAX_PASSAGES, conversation_writer,
+from app.stream_conversation import (ASKED_TURNS, HISTORY_TURNS, MAX_PASSAGES, check_room,
+                                     conversation_writer, fit_passages,
                                      failure_fields, jev_runner, said_before, sentence_checks,
                                      write_and_gate)
 
@@ -219,18 +221,23 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere):
                 return
             read = [item for item in books if item["chapters"]][:MAX_BOOKS]
             lines = shelf_lines(books, elsewhere)
-            evidence = [passage for item in read for passage in book_evidence(
+            found = [book_evidence(
                 item, query, settings, catalog, limit=max(2, MAX_PASSAGES // max(1, len(read))),
-                notes_budget=NOTES_BUDGET // max(1, len(read)))]
+                notes_budget=NOTES_BUDGET // max(1, len(read))) for item in read]
             # Books that are not on the shelf, each with the catalogue's line and nothing else. The
             # checker gets the same lines, so a sentence may say of such a book what its line
             # says and no more. They are no part of ``read_text`` below: the fixed gate treats a
             # name in them like any other name the reader has not met.
             new.extend(suggestions(books, elsewhere, settings))
             new_lines = [suggestion_line(candidate) for candidate in new]
-            passages = ["Where the reader is: " + " ".join(lines), "How this app works: " + APP_HELP,
-                        *(SUGGESTABLE + line for line in new_lines), *([] if new else [NOTHING_NEW]),
-                        *evidence]
+            fixed = ["Where the reader is: " + " ".join(lines), "How this app works: " + APP_HELP,
+                     *(SUGGESTABLE + line for line in new_lines), *([] if new else [NOTHING_NEW])]
+            # Read text takes the room the largest check has left, each book's best passage first,
+            # and the writer is given the same passages as its checker.
+            passages = fit_passages(
+                fixed, [passage for turn in zip_longest(*found) for passage in turn if passage],
+                budget=check_room(question, identities=()))
+            evidence = passages[len(fixed):]
             # Spend is recorded against one book: the first with read text, else the first on the shelf.
             home = (read or books)[0]["book"]["book_id"]
             jev_run = jev_runner(catalog, settings, client, home, note)
