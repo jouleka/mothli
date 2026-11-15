@@ -19,9 +19,11 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> Fyodor Pavlovitch is a spectacularly neglectful father: he abandoned his eldest son Mitya, then later abandoned his sons Ivan and Alexey after their mother died. Mitya has since returned to sort out his inheritance, only to be told he’s already received its full value. Ivan’s an educated young man whose article on church courts caused a stir, while Alexey, known as Alyosha, has entered the local monastery as a novice. Alyosha remembers his mother praying for him before a holy image, and he’s been drawn to the elder Zossima. An elder asks for complete obedience, with the aim of eventually freeing a person from their own self. It’s a striking idea, but even the narrator admits it could be a “two-edged weapon,” leading to pride rather than freedom.
+> Alyosha has entered a monastery as a novice, where he’s met the elder Zossima. Back home, his brother Dmitri has returned to settle property matters with their father, Fyodor Pavlovitch. Ivan has been staying with their father and seems to be mediating between them. Meanwhile, Zossima is gravely weak, and the monastery has no one to replace him.
 
-**Removed by the checks:** nothing.
+**Written by Mothli, removed by the checks:**
+
+- I find the idea of an elder striking: you surrender your will to him in the hope of eventually becoming free of yourself.
 
 - [ ] Sounds wrong, because:
 
@@ -33,7 +35,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> Alyosha is Fyodor Pavlovitch Karamazov’s youngest son, and Ivan and Dmitri are his older brothers. He’s a novice at the monastery, where he’s become deeply attached to the elder Zossima. The narrator calls him an “early lover of humanity,” which feels like a lovely way into understanding him.
+> Alyosha is Alexey, Fyodor Pavlovitch’s youngest son and Ivan and Dmitri’s younger brother. He’s a novice at the monastery and is deeply attached to the elder Zossima. I like the glimpse of his gentleness when he tells his father, quite seriously, that there are no hooks in hell.
 
 **Removed by the checks:** nothing.
 
@@ -47,9 +49,11 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> Oof, yes. The image of that monk, heartbroken at being told to leave Athos, is hard to shake. I find it unsettling that even the Patriarch says only the elder can release him from obedience. What hit you hardest?
+> Oof, I can see why. Zossima is almost dying, and the monastery has no one to take his place. What hit you hardest?
 
-**Removed by the checks:** nothing.
+**Written by Mothli, removed by the checks:**
+
+- I find the idea of giving up your will in the hope of finding freedom both moving and unsettling.
 
 - [ ] Sounds wrong, because:
 
@@ -61,7 +65,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> Right?! Adelaida ran off with a destitute divinity student, leaving three-year-old Mitya with Fyodor. Fyodor then forgot about Mitya, and Grigory cared for him for almost a year. What a mess for that little boy.
+> Right?! Adelaida ran off with a destitute divinity student, leaving three-year-old Mitya with Fyodor. Fyodor then forgot Mitya, and Grigory cared for him for almost a year. What a pair of parents.
 
 **Removed by the checks:** nothing.
 
@@ -75,7 +79,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> It’s hard to say why Adelaida left Mitya behind. We know she left Fyodor with a destitute divinity student, but we don’t know what she was thinking about her three-year-old son.
+> We don’t really know why Adelaida left Mitya behind. She left Fyodor for a destitute divinity student, but that doesn’t tell us what she was thinking about her three-year-old son.
 
 **Removed by the checks:** nothing.
 
@@ -89,7 +93,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> Grigory, the family’s servant, looked after Mitya for almost a year. Then Pyotr Miüsov became a joint guardian and left him with a cousin in Moscow. After she died, one of her married daughters took Mitya in.
+> Grigory looked after Mitya for almost a year after Fyodor forgot him. Later, Pyotr Miüsov became Mitya’s joint guardian and left him in the care of a cousin in Moscow.
 
 **Removed by the checks:** nothing.
 
@@ -103,7 +107,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> You’re welcome! I’m glad that helped.
+> You’re welcome!
 
 **Removed by the checks:** nothing.
 
@@ -117,7 +121,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> We haven’t got there yet, so I can’t tell you who, if anyone, kills Fyodor. So far, Mitya suspects his father cheated him over his inheritance, and the narrator hints at a “catastrophe” arising from that dispute.
+> We haven’t got there yet, so I can’t tell you who does it.
 
 **Removed by the checks:** nothing.
 
@@ -131,7 +135,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> Open the book, then open Contents and tap the small “not read” or “part read” label beside a chapter. It’ll change to “read”; tap it again to undo that.
+> Open the book and go to Contents, then press the small “not read” or “part read” label beside a chapter. It’ll change to “read”; press it again to change it back.
 
 **Removed by the checks:** nothing.
 
@@ -147,11 +151,13 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> I wasn’t with you for chapters 1 through 4, so I can only catch you up on the bit of chapter 5 we’ve read together. Alyosha lives with the elder Father Zossima, whom he loves and believes in completely, though he’s free to come and go as he pleases. Crowds come to Zossima for advice, blessings and healing, and Alyosha notices that people often leave him happier than they arrived. Zossima is growing weak, but Alyosha’s hopes are enormous: he dreams that the elder holds the secret to a world where people love one another and there’s no rich or poor.
+> I wasn’t with you for chapters 1–4, but here’s where we are in chapter 5. Alyosha is living in the cell of the elder Zossima, who’s grown so ill that pilgrims sometimes wait days to see him. What struck me is that Zossima isn’t stern at all: Alyosha finds him almost always cheerful.
 
-**Button under the reply:** I’ve read chapter 1
+**Button under the reply:** I’ve read chapters 1 to 4
 
-**Removed by the checks:** nothing.
+**Written by Mothli, removed by the checks:**
+
+- Alyosha believes completely in Zossima’s spiritual power, and dreams that the elder holds the secret to a world where everyone will love one another.
 
 - [ ] Sounds wrong, because:
 
@@ -163,7 +169,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> I wasn’t with you for chapter 1, so I can’t remind you what happened there. We’ve read part of chapter 5 together, where Alyosha lives in Elder Zossima’s cell and has deep faith in him.
+> I wasn’t with you for chapter 1, so I can’t recap it yet. If you’ve read it, you can open Contents and tap the label beside chapter 1 to tell me.
 
 **Button under the reply:** I’ve read chapter 1
 
@@ -179,7 +185,9 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> Oh, absolutely—I didn’t mean you hadn’t read them! I just wasn’t with you for those chapters. To let me know you’ve read them, open Contents and tap the small “not read” or “part read” label beside each chapter until it says “read.”
+> Got it! I wasn’t with you for chapters 1 to 4, but you can tell me you’ve read them: open Contents and press the “not read” label beside each chapter so it changes to “read.”
+
+**Button under the reply:** I’ve read chapters 1 to 4
 
 **Removed by the checks:** nothing.
 
@@ -195,7 +203,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> Lizzy is Elizabeth Bennet, the second Bennet daughter and Jane’s sister. Her father says she has more quickness than her sisters, and she’s the one who overheard Darcy say she wasn’t handsome enough to tempt him to dance.
+> Lizzy is Elizabeth Bennet, the second Bennet daughter and Jane’s sister. Her father says she has more quickness than her sisters, and she’s the one who overheard Darcy say she wasn’t handsome enough to tempt him to dance. By chapter 6, Darcy is admiring her dark eyes. Quite a change of tune!
 
 **Removed by the checks:** nothing.
 
@@ -209,7 +217,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> Honestly, yes! He tells Sir William that “every savage can dance,” which is quite a way to respond to a friendly conversation. And then he starts admiring Elizabeth’s eyes after deciding she wasn’t handsome enough to dance with. I love that she turns him down when he finally asks.
+> Right?! He said Elizabeth wasn’t handsome enough to tempt him to dance, and now he’s admiring her fine eyes. I love that she turns him down when he finally asks her to dance. His timing could use some work.
 
 **Removed by the checks:** nothing.
 
@@ -223,7 +231,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> Charlotte thinks happiness in marriage is “entirely a matter of chance.” She reckons knowing someone well beforehand won’t prevent vexation, and that it’s better to know as little as possible about a future spouse’s defects. Honestly, that’s a bracing view of romance! Elizabeth laughs and tells her it isn’t sound.
+> Charlotte thinks happiness in marriage is entirely a matter of chance. She tells Elizabeth that Jane would have as good a chance of happiness marrying Bingley tomorrow as after studying his character for a year. She even thinks it’s better to know as little as possible about a future spouse’s faults. Not exactly a glowing advertisement for courtship!
 
 **Removed by the checks:** nothing.
 
@@ -239,11 +247,9 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> You’re also in chapter 6 of Pride and Prejudice, where Elizabeth turned down a dance with Mr. Darcy.
+> You’re in chapter 5 of The Brothers Karamazov. In chapter 4, Alyosha asked his father’s consent to enter the monastery as a novice. You’re in chapter 6 of Pride and Prejudice. Charlotte has been advising Elizabeth that Jane should show Bingley more affection.
 
-**Written by Mothli, removed by the checks:**
-
-- You’re in chapter 5 of The Brothers Karamazov; we last read about Alyosha’s wish to enter the monastery.
+**Removed by the checks:** nothing.
 
 - [ ] Sounds wrong, because:
 
@@ -255,11 +261,9 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> Darcy has started admiring Elizabeth’s eyes after declaring she wasn’t handsome enough to tempt him to dance—honestly, sir. You’re in chapter 6, so you can carry on from there.
+> I’d pick up Pride and Prejudice tonight. Elizabeth has just refused to dance with Darcy, even as he’s begun admiring her eyes. A little awkwardness makes excellent evening company.
 
-**Written by Mothli, removed by the checks:**
-
-- I’d pick up Pride and Prejudice tonight.
+**Removed by the checks:** nothing.
 
 - [ ] Sounds wrong, because:
 
@@ -271,7 +275,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> Fyodor Pavlovitch, easily—though Mr. Bennet can be a real tease. In The Brothers Karamazov, Fyodor abandoned his sons and left other people to raise them. In Pride and Prejudice, Mr. Bennet makes jokes at his family’s expense, but he does at least visit Bingley for his daughters’ sake.
+> Fyodor Pavlovitch, easily, so far. In The Brothers Karamazov, he abandoned his sons and left other people to bring them up. In Pride and Prejudice, Mr. Bennet teases his daughters, but he does make the visit to Bingley. The bar is practically underground.
 
 **Removed by the checks:** nothing.
 
@@ -285,7 +289,7 @@ Collected 2026-11-15. Writer: gpt-6.1-terra through the ChatGPT subscription. Ch
 
 **Mothli:**
 
-> We haven’t reached the end of either The Brothers Karamazov or Pride and Prejudice together yet, so I can’t say whether either ends with a wedding. We’ll have to read on and see!
+> We haven’t reached the end of either The Brothers Karamazov or Pride and Prejudice together, so I can’t say whether either ends with a wedding.
 
 **Removed by the checks:** nothing.
 
