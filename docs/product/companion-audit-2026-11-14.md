@@ -1276,6 +1276,38 @@ None was changed. Each already has a ceiling, except the two marked.
 - **`benchmark_conversation.py` has no cap of its own,** as listed.
 - From reading, not seen in a run: a chapter marked read while a notes run for that book is under way is picked up at the next page turn or reply, not at once. No spend is involved.
 
+## 6y. The voice: a friend who reacts, teaches and plays (15 November)
+
+The owner read the first 19 samples (`voice-samples.md`) and gave a direction instead of marks: Mothli should sound like a friend, helpful but playful, with jokes, comparisons and old sayings where they fit, and never question in, answer out.
+
+### What changed
+
+- One shared voice instruction, `FRIEND_VOICE` in `reader_place.py`, used by the chat inside a book and the home chat: react to the reader's feeling first, then help; answer a plain question at once and add what makes it worth knowing; be playful when the moment allows, one light touch a reply, none when the moment is grave; retell like a friend. Play may rest only on what has been read: no added fact, no motive the book leaves open, no hint of what is coming, no comparison with a book or film not read together.
+- "Don't claim a life or feelings of your own" became: no life outside this reading, but what Mothli feels about the pages read is welcome.
+- The home chat is told to give the reader's place in a sentence of its own, apart from the remembered detail.
+- The offer button reads "chapters 1 through 4" as a range; it had offered only chapter 1.
+- **No check was changed.**
+
+### Measured, real models (Terra through `codex-local`, Jev 1.14.0), one run each
+
+| | Before | After |
+|---|---|---|
+| Samples answered | 19 of 19 | 19 of 19 |
+| Replies that gave away something unread | 0 | 0 |
+| Sentences removed by the checks | 2 | 2 |
+| Replies left broken by a removed opening sentence | 0 | 2 (both home chat) |
+| Jev spend | $0.024 | $0.025 |
+
+- Reactions are warmer ("Oof, yes.", "Right?!", "Honestly, yes!"). Plain questions read the same. There is no joke, comparison or saying in the 19. "Catch me up" went from five sentences to six long ones.
+- The two broken home replies were looked at with the checks logged (6 replies, $0.013): Jev doubted 20 sentences and blocked none, mostly on its time check (.56 to .68 against a limit of .45), so the second look decided each. It twice dropped "You're also in chapter 5…; we last read about Alyosha entering the monastery", a sentence that joins a certain place to a wrong detail. With the place in its own sentence, 4 of 4 replies to "where did I leave off?" kept both books' places ($0.005); one lost a detail and still read whole.
+- The notes cache of 6x was seen working with real models in that last run: 10 chapters from the cache, none written.
+
+### Not verified
+
+- One run each; replies vary from run to run. The owner judged by reading: "not perfect, but not bad either".
+- Whether more play survives the checks is not known, because the writer produced almost none.
+- Spend for this section: $0.068 of Jev in all (two sample runs, two probes).
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

@@ -7,7 +7,11 @@ Taken from sections 6m to 6x of `companion-audit-2026-11-14.md`; the section in 
 ## Now: the voice
 
 - [x] Collect the voice samples: done on 15 November once TypeSafe had credits again. 19 of 19 in `voice-samples.md`, one run, $0.024 of Jev (146 checks), stopped-at cap $0.08 not reached.
-- [ ] The owner reads `voice-samples.md` and marks the replies that sound wrong; the next step changes how Mothli talks and collects the same messages again with the same script.
+- [x] The owner reads `voice-samples.md` and marks the replies that sound wrong. Done on 15 November as a direction, not marks: a friend who reacts, teaches and plays, never question in and answer out. The voice instruction was rewritten to it (6y) and the same 19 messages collected again in `voice-samples-after.md`. The owner: "not perfect, but not bad either"; go with it, tweak later.
+- [ ] Voice, still short of the direction: no real jokes, comparisons or sayings in 19 replies, and "catch me up" got longer (six long sentences) and still reads as a report. (6y)
+- [ ] When the checks drop a sentence, a later one that leans on it reads broken ("You're also in…" with nothing before it). Seen twice in 19 replies. (6y)
+- [ ] In the home chat nearly every sentence about where the reader is trips Jev's time check and goes to a second look: 20 doubted sentences in 6 replies, none blocked. Slow, and a paid writer would pay for each look. (6y)
+- [ ] Asked who kills Fyodor, Mothli refuses but volunteers that the narrator hints at a "catastrophe" from the inheritance dispute. The word is in the read pages, so it is inside the rule; the owner may not want it offered. (6y)
 - [ ] Mothli knows the app from one hand-written paragraph (`APP_HELP` in `reader_place.py`); for anything else it is told to say it does not know. (6p)
 - [ ] The checker drops correct sentences: in one run all seven sentences it removed were right, three of them from one recap. (6m, 6s)
 - [ ] The checker passes a wrong time order: "after Adelaïda ran away and died, Fyodor forgot Mitya" gets through Jev and the second look. (6m)

@@ -44,8 +44,9 @@ HOME_SYSTEM = (
     "know its title and nothing of what is in it.\n"
     + SPEAK_AS_A_FRIEND +
     "WHERE THEY ARE: when asked where they left off, give the book and the chapter they are in, "
-    "and a detail from what you last read together. Never answer with how many chapters are "
-    "'finished'.\n"
+    "and a detail from what you last read together. Put the place in a sentence of its own and "
+    "the detail in the next one: the place is certain, and a detail that turns out shaky must "
+    "not take it down with it. Never answer with how many chapters are 'finished'.\n"
     + FRIEND_VOICE +
     "SHAPE: two to four short sentences unless the reader asks for more, and never "
     "more than seven. Name the book whenever you say something from it, and never carry a "
