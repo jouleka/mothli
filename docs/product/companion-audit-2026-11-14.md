@@ -1653,7 +1653,7 @@ The owner asked for long-term memory that does not fill up and get worse. Until 
 
 ### Verified, with stand-in models only
 
-`backend/tests/test_recollections.py`, 38 tests, each naming the break it catches. Fifteen of the guards were then removed one at a time and the file run again: each removal failed a test. Whole backend suite, with main (6ad) merged in: 2,210 pass, 83 skipped; `ruff check app tests scripts` clean. No frontend file changed, and the frontend tests were not run.
+`backend/tests/test_recollections.py`, 38 tests, each naming the break it catches. Fifteen of the guards were then removed one at a time and the file run again: each removal failed a test. Whole backend suite, with main merged in (6ad and its afterword): 2,226 pass, 83 skipped; `ruff check app tests scripts` clean. No frontend file changed, and the frontend tests were not run.
 
 | Asked for | What the test shows |
 |---|---|
