@@ -14,7 +14,10 @@ Which books (``suggestions``):
     and her husband"), and an excerpt's or an adaptation's blurb tells what is in the book
     itself: either would take the reader past their place in a book on the shelf;
   - one line a work, never one volume of a set, and only a book with a blurb and a genre;
-  - never a book whose blurb is on ``SPOILING_BLURBS``.
+  - only a book whose blurb has been read by hand and judged clean: its number is in
+    ``classics_reviewed.tsv`` with the verdict "clean". A book judged "no", and every book whose
+    blurb nobody has read, is never suggested. The owner's rule: for unread books use only a
+    spoiler-free blurb.
 In which order: books by an author of a book the reader has finished come first, then books
 sharing more genres with the books the reader has finished or is well into, then the catalogue's
 own order (most read first). At most two by one author. "Well into" is a quarter of a book's
@@ -25,6 +28,7 @@ from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from functools import lru_cache
 from math import ceil
+from pathlib import Path
 
 from app.classics import GENRES, author_key, find_classic, fold, match_title, rows_on_offer, title_key
 
@@ -32,33 +36,11 @@ LIMIT = 6                 # books in one reply's list
 PER_AUTHOR = 2
 WELL_INTO = 10            # chapters read in full that count as well into a book, however long it is
 SAME_SURNAME = 0.84       # as the reading history matches a title to the shelf: Dostoevsky, Dostoyevsky
-# Catalogue numbers whose blurb gives away an ending, a death, a marriage or a twist, of its own
-# book or of the book it follows. Found by reading blurbs on 2026-11-15 (see
-# docs/product/companion-audit-2026-11-14.md, section 6ad); the blurbs themselves are not edited
-# here. Another edition of the same work with a clean blurb stands in. This is a list of the
-# cases found, not a promise about the other 76,000 blurbs.
-SPOILING_BLURBS = frozenset({
-    1513, 1777,                                              # Romeo and Juliet: the secret marriage
-    1533, 2264, 13868, 6975, 16893,                          # Macbeth: who he murders
-    27761, 2265, 1122, 1787, 10606, 56454, 15032, 25667, 7276, 15632,  # Hamlet: who killed his father
-    59828,                                                   # The String of Pearls: what the barber does
-    151,                                                     # The Rime of the Ancient Mariner: the crew
-    910,                                                     # White Fang: how it ends
-    271, 11860,                                              # Black Beauty: how it ends
-    78051, 78086, 76899,                                     # three short stories: how each ends
-    76280, 22908, 69576,                                     # Mathias Sandorf: who is executed, who survives
-    1097,                                                    # Mrs. Warren's Profession: what she turns out to be
-    41085,                                                   # The New Life: her death
-    393,                                                     # The Blue Lagoon: a death
-    10676,                                                   # The Reign of Greed: who the jeweller is
-    # Sequels whose blurb tells how an earlier book came out.
-    81,                                                      # The Return of Tarzan
-    2788, 52900,                                             # Little Men: a marriage in Little Women
-    108, 221,                                                # The Return of Sherlock Holmes: a death
-    544,                                                     # Anne's House of Dreams: a marriage
-    68,                                                      # The Warlord of Mars: a marriage
-    561,                                                     # The Further Adventures of Robinson Crusoe: the ending
-})
+# The blurbs read by hand, one line a book: number, "clean" or "no", and for "no" why. The file's
+# own head says what the rule was and what was read. Another edition of a work whose blurb is
+# clean stands in for one whose blurb is not.
+REVIEWED_PATH = Path(__file__).with_name("classics_reviewed.tsv")
+_VERDICTS = ("clean", "no")
 _ASIDE = re.compile(r"\([^)]*\)|\[[^\]]*\]")
 _SUBTITLE = re.compile(r"\s*[:;]\s+|\s+[-–—]\s+|,\s+complete$", re.I)
 _NOT_WORD = re.compile(r"[^\w]+", re.UNICODE)
@@ -87,11 +69,32 @@ def _words(text):
 
 
 @lru_cache(maxsize=4)
+def reviewed(path=None):
+    """{catalogue number: (verdict, why)} from the reviewed file. A line that is not a number, a
+    known verdict and, for "no", a reason, or a number given twice, is an error, not a guess."""
+    found = {}
+    for line in Path(path or REVIEWED_PATH).read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        number, verdict, *why = line.split("\t")
+        why = why[0].strip() if why else ""
+        if not number.isdigit() or verdict not in _VERDICTS or (verdict == "no" and not why) or int(number) in found:
+            raise ValueError(f"reviewed blurbs: bad or repeated line {line!r}")
+        found[int(number)] = (verdict, why)
+    return found
+
+
+def _clean():
+    """The catalogue numbers whose blurb was read and judged clean: the only books to suggest."""
+    return frozenset(number for number, (verdict, _why) in reviewed(REVIEWED_PATH).items() if verdict == "clean")
+
+
+@lru_cache(maxsize=4)
 def _pool(rule, year):
     """{language: [(place in the catalogue, row, work, author's surname)]}, one entry a work."""
-    found, seen = {}, set()
+    found, seen, clean = {}, set(), _clean()
     for place, row in enumerate(rows_on_offer(rule, year)):
-        if not (row.blurb and row.genres) or row.pg in SPOILING_BLURBS or _ONE_OF_A_SET.search(row.title):
+        if not (row.blurb and row.genres) or row.pg not in clean or _ONE_OF_A_SET.search(row.title):
             continue
         work = (_work(row.title), author_key(row.author), row.language)
         if not work[0] or work in seen:

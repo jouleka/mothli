@@ -1,0 +1,660 @@
+# Catalogue numbers whose blurb has been read by hand, and the verdict. Mothli suggests a book that
+# is not on the shelf only when its number is here as "clean"; anything not listed is never suggested.
+# The rule (the owner's): for unread books use only a spoiler-free blurb. A blurb is "no" if it tells
+# how the book ends; who dies, is killed or executed (beyond a death the book opens with); who marries
+# or ends up with whom; who a hidden person is or the answer to the mystery; a betrayal or reversal
+# kept for late; or, for a sequel, how an earlier book came out. Doubt ("leads to tragedy", "with
+# devastating consequences") is "no". Setting, premise, characters at the start, kind and themes are
+# "clean". Reasons say what kind of thing is given away, never the thing itself.
+# Read on 16 November 2026: 605 blurbs read, 560 clean, 45 no. They are the first
+# 601 English books in the catalogue's own order (most read first) after one edition a work, no
+# single volumes of a set, a blurb and a genre; and 4 further down (two by Louisa May
+# Alcott, two by George Eliot), read for the tests of the author rules. Then the 40 numbers of the
+# earlier deny list (15 November 2026, section 6ad of docs/product/companion-audit-2026-11-14.md),
+# all no. Non-English books have not been reviewed; every book not listed is never suggested.
+# Columns: catalogue number, verdict (clean or no), why (for no).
+1342	clean
+84	clean
+2701	clean
+11	clean
+1661	clean
+345	clean
+100	clean
+43	clean
+145	clean
+67979	clean
+2554	clean
+1260	clean
+37106	clean
+2680	clean
+1184	clean
+2641	clean
+174	clean
+98	clean
+64317	clean
+65238	clean
+2600	clean
+1952	clean
+1259	no	sequel: tells where the hero stands after the first book
+1727	clean
+1232	clean
+2160	clean
+16389	clean
+74	clean
+3207	clean
+23	clean
+25344	clean
+6593	clean
+6761	clean
+55	no	tells a task the book sets her only midway
+1400	clean
+4085	clean
+4300	clean
+2591	clean
+1080	clean
+161	clean
+16328	clean
+244	clean
+76	clean
+768	clean
+3296	clean
+28054	clean
+205	clean
+8492	clean
+2542	clean
+7370	clean
+41	clean
+844	clean
+120	clean
+45	clean
+69087	clean
+4363	clean
+68283	clean
+408	clean
+61262	clean
+58866	clean
+209	clean
+61168	clean
+46	clean
+1998	clean
+57669	clean
+35	no	names what the traveller finds humanity has become
+2465	no	"tragic downfall": doubt about the ending
+58820	clean
+3300	clean
+1497	clean
+59892	clean
+63469	clean
+20203	clean
+1695	clean
+16	clean
+2852	clean
+204	clean
+34901	clean
+863	clean
+78120	clean
+78029	clean
+78011	no	tells the plot well past the opening
+78039	no	names who is executed
+10	clean
+27827	clean
+78028	clean
+78040	clean
+78126	clean
+78083	clean
+78103	clean
+78106	clean
+78094	clean
+78024	clean
+78010	clean
+78060	no	tells that disaster is averted and how it ends
+78043	clean
+36164	clean
+78073	clean
+78088	clean
+78055	clean
+78116	clean
+78072	no	tells the story's turn
+158	clean
+78057	clean
+175	clean
+1063	clean
+70175	clean
+78035	clean
+70652	clean
+10007	clean
+57342	clean
+834	clean
+8800	clean
+219	clean
+69700	clean
+564	clean
+601	no	tells his fall: murder and pacts
+223	clean
+67173	clean
+70854	clean
+66446	clean
+67160	clean
+2814	clean
+70114	clean
+831	clean
+851	clean
+583	clean
+1228	clean
+155	clean
+2097	no	hints who is behind the murder
+57641	clean
+730	clean
+75201	clean
+245	clean
+36034	clean
+70008	clean
+1155	clean
+132	clean
+996	clean
+103	clean
+113	clean
+26184	clean
+72824	clean
+589	clean
+215	clean
+468	no	"tragic love story": doubt about the ending
+558	clean
+60316	clean
+76639	clean
+60979	clean
+135	clean
+15399	clean
+389	no	"devastating consequences": doubt about the outcome
+3600	clean
+75288	clean
+1399	no	tells the affair's course well into the book
+829	clean
+105	clean
+57763	clean
+974	clean
+45109	clean
+8438	clean
+4280	clean
+236	clean
+2527	clean
+69566	clean
+76178	clean
+36	clean
+560	clean
+537	clean
+1656	clean
+72	no	sequel: tells whom the earlier books' hero had a child by
+921	clean
+173	clean
+5827	clean
+6130	clean
+2848	clean
+67098	clean
+1514	clean
+766	clean
+521	clean
+14838	clean
+1023	clean
+160	clean
+224	clean
+58585	clean
+12	clean
+2002	clean
+2350	clean
+19942	clean
+164	clean
+2638	clean
+4507	clean
+1934	clean
+1212	clean
+1685	clean
+7256	no	points straight at the story's twist
+1112	clean
+1600	clean
+147	clean
+1523	clean
+2038	clean
+76668	no	hints at a betrayal
+7142	clean
+3800	clean
+1510	clean
+16643	clean
+52319	clean
+203	clean
+1608	no	"tragic romance": doubt about the ending
+1257	clean
+15877	clean
+61	clean
+1686	clean
+34413	clean
+1931	clean
+49513	clean
+2376	clean
+1849	clean
+121	clean
+2383	clean
+2944	clean
+18269	clean
+25717	clean
+1322	clean
+26	clean
+24869	clean
+29433	clean
+5000	clean
+57724	clean
+1719	clean
+21	clean
+4217	clean
+86	clean
+27673	clean
+71865	clean
+11339	clean
+9662	clean
+11224	clean
+1636	clean
+46976	no	tells how the account ends: his death
+1837	clean
+2397	clean
+1658	clean
+21765	clean
+779	clean
+1974	clean
+524	clean
+2162	clean
+52263	clean
+228	no	tells where the hero's journey ends
+5682	clean
+58031	clean
+1597	clean
+1250	clean
+52190	clean
+62	clean
+12242	clean
+37499	clean
+1001	clean
+5230	no	names the stranger the book keeps hidden for a while
+10661	clean
+500	clean
+6133	clean
+1874	no	tells what the children learn only midway about their father
+43453	clean
+674	clean
+3825	clean
+1170	clean
+1946	clean
+63754	clean
+289	clean
+1524	clean
+70377	clean
+3330	clean
+11030	clean
+14328	clean
+202	clean
+18857	clean
+17450	clean
+2500	clean
+59931	no	"loss and self-sacrifice": doubt about the outcome
+26659	clean
+48438	clean
+3420	clean
+39260	clean
+10623	clean
+40284	clean
+348	clean
+46333	clean
+57333	clean
+73	no	tells what he does midway through the book
+3177	clean
+15272	no	tells the knight's fall midway through the book
+64836	clean
+785	clean
+45502	clean
+902	clean
+940	clean
+21700	clean
+6087	clean
+37423	clean
+11231	clean
+50954	clean
+59	clean
+421	clean
+1041	clean
+36462	clean
+580	clean
+852	clean
+110	no	"lead to tragedy": doubt about the ending
+4705	clean
+599	clean
+1268	clean
+139	clean
+67804	clean
+35899	clean
+1079	clean
+51356	clean
+2040	clean
+47476	clean
+22381	clean
+13415	clean
+1747	clean
+76576	clean
+45315	clean
+2413	no	hints at the course her escape takes
+38813	clean
+3090	clean
+7452	clean
+141	clean
+14522	clean
+1	clean
+22298	clean
+7700	clean
+216	clean
+2850	clean
+1672	clean
+2130	clean
+77092	clean
+6762	clean
+696	clean
+2895	clean
+52958	clean
+16351	clean
+1404	clean
+308	clean
+12116	no	"disastrous consequences": doubt about how the tales end
+2781	clean
+4367	clean
+55201	clean
+5131	clean
+31591	clean
+24518	clean
+74878	clean
+1164	clean
+3268	no	names a death that comes several chapters in
+45631	clean
+53419	clean
+19322	clean
+42389	clean
+14209	clean
+7213	clean
+5116	clean
+2776	clean
+64	no	sequel: tells how the first book left the hero
+18947	clean
+57336	clean
+932	clean
+146	clean
+2610	no	"tragic story": doubt about the ending
+1200	clean
+60976	clean
+3176	clean
+38311	clean
+36223	clean
+19994	clean
+4200	clean
+45634	clean
+33823	clean
+75643	clean
+27200	clean
+50922	clean
+27279	clean
+159	clean
+35548	clean
+5314	clean
+36725	clean
+2388	clean
+10741	clean
+41537	clean
+23700	clean
+68348	clean
+38177	clean
+50133	clean
+621	clean
+375	clean
+76553	clean
+3011	clean
+21300	clean
+2009	clean
+6400	clean
+76728	clean
+2853	clean
+83	clean
+2274	clean
+53416	clean
+37734	clean
+6737	clean
+51143	clean
+25282	clean
+23042	clean
+42681	clean
+19725	clean
+2017	clean
+46276	clean
+71	clean
+1642	clean
+57426	clean
+36965	clean
+131	clean
+551	clean
+51428	clean
+1153	no	sequel: tells whom the earlier books' hero had a child by
+541	clean
+1653	clean
+1564	clean
+3189	clean
+5427	clean
+43098	clean
+994	no	"hopeless struggle": doubt about the ending
+24238	clean
+12082	clean
+5199	clean
+16287	clean
+1429	clean
+1279	clean
+8578	clean
+55179	clean
+76411	clean
+1680	no	says who marries
+149	clean
+75948	clean
+48296	clean
+7439	clean
+9105	clean
+65903	clean
+6081	clean
+53874	clean
+16713	clean
+32759	clean
+8117	no	tells where the plot leads and who is behind it
+53154	clean
+48433	clean
+49987	clean
+13529	clean
+7986	clean
+76391	clean
+972	clean
+27083	clean
+38983	clean
+512	clean
+64488	clean
+4093	clean
+52881	clean
+1754	clean
+49322	clean
+30	clean
+60	clean
+14314	clean
+58529	clean
+38326	clean
+32	clean
+10800	clean
+1353	clean
+57009	clean
+42486	clean
+44608	clean
+7164	clean
+31	clean
+20476	clean
+967	clean
+1064	clean
+40361	clean
+38145	clean
+3289	clean
+11757	clean
+14568	clean
+50290	clean
+3623	clean
+76503	clean
+9622	clean
+28500	clean
+10827	clean
+34856	clean
+23634	clean
+75011	clean
+398	clean
+30155	clean
+76049	clean
+553	no	sequel: tells what happened in the earlier book
+14975	clean
+14474	clean
+33504	clean
+43855	clean
+76352	clean
+33118	clean
+67691	clean
+47	no	sequel: tells how the first book ends for her
+82	clean
+503	clean
+10897	clean
+29728	clean
+22373	clean
+54219	clean
+17393	clean
+76261	clean
+20848	clean
+76084	clean
+76358	clean
+23684	clean
+45988	clean
+76521	clean
+10148	clean
+50742	clean
+76339	clean
+29904	clean
+2232	no	"devastating chain of events": doubt about the ending
+61963	clean
+3913	clean
+47001	clean
+24022	clean
+76418	clean
+50603	clean
+39423	clean
+75790	clean
+2811	clean
+76131	no	hints at the story's secret
+76116	clean
+76222	clean
+76059	clean
+6157	clean
+55317	clean
+25609	clean
+76871	clean
+42243	clean
+201	clean
+59112	clean
+75967	clean
+76857	no	tells the story's turn
+5683	clean
+76812	clean
+75998	clean
+14988	clean
+48991	clean
+66583	clean
+76072	clean
+75896	clean
+76082	clean
+17695	clean
+27942	clean
+76435	no	tells where the story ends
+76539	clean
+76247	clean
+33644	clean
+75840	no	"personal downfall": doubt about the ending
+67138	clean
+6688	no	names a reversal from the middle of the book
+76462	clean
+575	clean
+75922	clean
+26654	clean
+76257	clean
+21279	clean
+5669	clean
+76995	clean
+4018	clean
+75909	clean
+51	no	sequel: tells how the book before it came out
+76200	clean
+8486	clean
+76533	clean
+75949	clean
+76603	clean
+75858	clean
+42474	clean
+76541	clean
+76493	clean
+76914	clean
+76413	clean
+35451	no	tells who is murdered and how it ends
+8419	clean
+76476	clean
+67799	clean
+76442	clean
+76689	clean
+76212	clean
+42259	no	tells a turn of the plot
+76168	clean
+17157	clean
+76409	clean
+38049	clean
+2787	clean
+507	clean
+28289	clean
+1513	no	tells of the secret marriage
+1777	no	tells of the secret marriage
+1533	no	tells whom he murders
+2264	no	tells whom he murders
+13868	no	tells whom he murders
+6975	no	tells whom he murders
+16893	no	tells whom he murders
+27761	no	tells who killed his father
+2265	no	tells who killed his father
+1122	no	tells who killed his father
+1787	no	tells who killed his father
+10606	no	tells who killed his father
+56454	no	tells who killed his father
+15032	no	tells who killed his father
+25667	no	tells who killed his father
+7276	no	tells who killed his father
+15632	no	tells who killed his father
+59828	no	tells what the barber does with his customers
+151	no	tells what becomes of the crew
+910	no	tells how it ends
+271	no	tells how it ends
+11860	no	tells how it ends
+78051	no	tells how the story ends
+78086	no	tells how the story ends
+76899	no	tells how the story ends
+76280	no	tells who is executed and who survives
+22908	no	tells who is executed and who survives
+69576	no	tells who is executed and who survives
+1097	no	tells what she turns out to be
+41085	no	tells of her death
+393	no	tells of a death
+10676	no	tells who the jeweller is
+81	no	sequel: tells how the earlier book came out
+2788	no	sequel: tells of a marriage in Little Women
+52900	no	sequel: tells of a marriage in Little Women
+108	no	sequel: tells of a death in the earlier book
+221	no	sequel: tells of a death in the earlier book
+544	no	sequel: tells of a marriage in the earlier book
+68	no	sequel: tells of a marriage in the earlier book
+561	no	sequel: tells how the earlier book ended

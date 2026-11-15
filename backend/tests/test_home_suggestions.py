@@ -19,8 +19,8 @@ from app import home_conversation, home_suggestions  # noqa: E402
 from app.api import classics as classics_api  # noqa: E402
 from app.classics import find_classic, title_key  # noqa: E402
 from app.config import Settings  # noqa: E402
-from app.home_suggestions import (LIMIT, SPOILING_BLURBS, short_title, suggested_in,  # noqa: E402
-                                  suggestion_line, suggestions)
+from app.classics import rows_on_offer  # noqa: E402
+from app.home_suggestions import LIMIT, short_title, suggested_in, suggestion_line, suggestions  # noqa: E402
 
 ON = Settings(_env_file=None, allow_stub=True)
 OFF = Settings(_env_file=None, allow_stub=True, classics_enabled=False)
@@ -45,12 +45,46 @@ def titles(found):
 OWNER = [on_shelf("Pride and Prejudice", "Jane Austen", read=61, of=61),
          on_shelf("The Brothers Karamazov", "Fyodor Dostoevsky", read=30, of=96)]
 FINISHED = [OWNER[0], on_shelf("The Brothers Karamazov", "Fyodor Dostoevsky", read=96, of=96)]
+REVIEWED = Path(home_suggestions.__file__).with_name("classics_reviewed.tsv")
+
+
+def _forget():
+    for cached in ("_pool", "_surnames", "_spellings", "reviewed"):
+        if hasattr(getattr(home_suggestions, cached, None), "cache_clear"):
+            getattr(home_suggestions, cached).cache_clear()
+
+
+@pytest.fixture
+def fresh():
+    """The candidate pool built again for this test, and again after it."""
+    _forget()
+    yield
+    _forget()
+
+
+@pytest.fixture
+def every_blurb_allowed(monkeypatch, fresh):
+    """Every catalogue blurb counted as read and clean, for a test of a rule that has nothing to do
+    with the review: the books it needs (a French novel, another hand's sequel) are far down the
+    catalogue, where nothing has been read, and so would never be candidates at all."""
+    monkeypatch.setattr(home_suggestions, "_clean", lambda: frozenset(row.pg for row in rows_on_offer()))
+
+
+def the_file():
+    """The reviewed file as written: [(number, verdict, why)], comments left out."""
+    rows = []
+    for line in REVIEWED.read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.startswith("#"):
+            number, verdict, *why = line.split("\t")
+            rows.append((int(number), verdict, why[0] if why else ""))
+    return rows
 
 
 # --- which books -----------------------------------------------------------------------------------
-def test_a_suggestion_is_in_a_language_of_the_readers_own_books():
+def test_a_suggestion_is_in_a_language_of_the_readers_own_books(every_blurb_allowed):
     """Catches: an English novel offered to someone whose shelf is French; the catalogue's most
-    read being offered whatever the reader reads."""
+    read being offered whatever the reader reads. (No French blurb has been read, so with the real
+    file a French shelf gets nothing; here every blurb is let through to test the language rule.)"""
     french = suggestions([on_shelf("Germinal", "Émile Zola", language="fr-FR")], [], ON)
     assert len(french) == LIMIT and {find_classic(book["classic_id"])["language"] for book in french} == {"fr"}
     both = suggestions([on_shelf("Germinal", "Émile Zola", language="fr"), on_shelf("Emma", "Jane Austen", language="en")],
@@ -139,10 +173,11 @@ def test_nothing_by_the_author_of_a_book_the_reader_has_not_finished():
     assert not [book for book in suggestions(mixed, [], ON, limit=400) if "Austen" in book["author"]]
 
 
-def test_nothing_whose_line_names_a_book_the_reader_has_not_finished():
+def test_nothing_whose_line_names_a_book_the_reader_has_not_finished(every_blurb_allowed):
     """Catches: another hand's sequel or adaptation, which the author rule cannot see. "Edmond
     Dantès" by Edmund Flagg is 'a sequel to the famous "The Count of Monte-Cristo"'; there is a
-    play "founded on Jane Austen's novel" that carries the novel's own title."""
+    play "founded on Jane Austen's novel" that carries the novel's own title. (Those books' blurbs
+    have not been read; every blurb is let through here so that this rule is still tried.)"""
     monte = [on_shelf("The Count of Monte Cristo", "Alexandre Dumas", read=60, of=117)]
     found = suggestions(monte, [], ON, limit=5000)
     assert len(found) > 3000 and not {"Edmond Dantès", "The Son of Monte-Cristo", "Monte-Cristo's Daughter"} & set(
@@ -172,17 +207,94 @@ def test_with_the_free_library_switched_off_there_is_nothing_to_suggest():
     assert suggestions(OWNER, [], OFF) == []
 
 
-def test_a_blurb_that_gives_something_away_keeps_its_book_out_and_a_clean_edition_stands_in(monkeypatch):
-    """Catches: a deny-listed blurb reaching Mothli, which repeats what it is given; and the
-    work being lost when another edition's blurb is clean."""
+# --- only blurbs read and judged clean -------------------------------------------------------------
+# The 40 numbers of the deny list this file replaced (SPOILING_BLURBS, 15 November 2026).
+OLD_DENY_LIST = frozenset({
+    1513, 1777, 1533, 2264, 13868, 6975, 16893, 27761, 2265, 1122, 1787, 10606, 56454, 15032, 25667, 7276,
+    15632, 59828, 151, 910, 271, 11860, 78051, 78086, 76899, 76280, 22908, 69576, 1097, 41085, 393, 10676,
+    81, 2788, 52900, 108, 221, 544, 68, 561})
+ANYONE = [on_shelf("The Lamp Book", "Ada Writer")]
+
+
+def test_a_book_whose_blurb_was_never_read_is_never_suggested_however_popular():
+    """Catches: the old way round, where a blurb counted as safe unless someone had found it
+    spoiling, so 76,000 blurbs nobody had read went to Mothli. Villette is the most read English
+    book whose blurb was not read; it was a candidate before."""
+    clean = {number for number, verdict, _why in the_file() if verdict == "clean"}
+    found = suggestions(ANYONE, [], ON, limit=100_000)
+    assert found and {int(book["classic_id"]) for book in found} <= clean
+    assert 9182 not in {number for number, _verdict, _why in the_file()}
+    assert "9182" not in {book["classic_id"] for book in found}
+    # In French nothing has been read, so a French shelf is offered nothing at all.
+    assert suggestions([on_shelf("Germinal", "Émile Zola", language="fr")], [], ON, limit=100_000) == []
+
+
+def test_a_book_whose_blurb_was_read_and_judged_not_clean_is_never_suggested():
+    """Catches: a "no" in the file being ignored or read as "clean". The Monk ("a dark tale of
+    lust, murder, and demonic pacts") was fourth of six for the owner with Pride and Prejudice
+    finished and The Brothers Karamazov well begun; Anna Karenina's line tells the affair's course."""
+    refused = {number for number, verdict, _why in the_file() if verdict == "no"}
+    found = suggestions(ANYONE, [], ON, limit=100_000)
+    assert not refused & {int(book["classic_id"]) for book in found}
+    assert "The Monk" not in titles(suggestions(OWNER, [], ON))
+    assert "Anna Karenina" not in titles(suggestions(OWNER, [], ON, limit=100_000))
+
+
+def test_a_book_judged_clean_can_be_suggested_and_the_file_is_the_only_list(monkeypatch, tmp_path, fresh):
+    """Catches: the file not being what decides; a second list in the code still keeping a book
+    out. With a file of three lines, the one clean book is the only candidate, even a number the
+    old deny list in the code held."""
+    own = tmp_path / "reviewed.tsv"
+    own.write_text("# a test file\n1342\tclean\n84\tno\tbecause\n1513\tclean\n", encoding="utf-8")
+    monkeypatch.setattr(home_suggestions, "REVIEWED_PATH", own)
+    assert sorted(book["classic_id"] for book in suggestions(ANYONE, [], ON, limit=100)) == ["1342", "1513"]
+    assert not hasattr(home_suggestions, "SPOILING_BLURBS")
+
+
+def test_the_reviewed_file_is_whole_and_says_what_it_is():
+    """Catches: a typo'd verdict silently keeping a book out or letting it in; a number twice with
+    two verdicts; a number that is no book; a "no" with no reason anyone can check."""
+    rows = the_file()
+    numbers = [number for number, _verdict, _why in rows]
+    assert len(numbers) == len(set(numbers)) >= 640
+    assert all(find_classic(str(number)) for number in numbers)
+    assert {verdict for _number, verdict, _why in rows} == {"clean", "no"}
+    assert all(why.strip() for _number, verdict, why in rows if verdict == "no")
+    loaded = home_suggestions.reviewed()
+    assert {number: verdict for number, (verdict, _why) in loaded.items()} == {
+        number: verdict for number, verdict, _why in rows}
+    head = " ".join(" ".join(line.lstrip("# ") for line in REVIEWED.read_text(encoding="utf-8").splitlines()
+                             if line.startswith("#")).split())
+    assert "spoiler-free blurb" in head and "16 November 2026" in head
+    read = [verdict for number, verdict, _why in rows if number not in OLD_DENY_LIST]
+    assert f"{len(read)} blurbs read, {read.count('clean')} clean, {read.count('no')} no" in head
+
+
+def test_the_file_refuses_a_bad_line(tmp_path):
+    """Catches: a loader that would let a duplicate or an unknown verdict through."""
+    for text in ("1342\tclean\n1342\tno\twhy\n", "1342\tmaybe\n", "84\tno\n"):
+        bad = tmp_path / "bad.tsv"
+        bad.write_text(text, encoding="utf-8")
+        with pytest.raises(ValueError):
+            home_suggestions.reviewed(bad)
+
+
+def test_every_book_of_the_old_deny_list_is_in_the_file_as_no():
+    """Catches: the deny list lost when it was moved into the file."""
+    verdicts = {number: verdict for number, verdict, _why in the_file()}
+    assert {number: verdicts.get(number) for number in OLD_DENY_LIST} == dict.fromkeys(OLD_DENY_LIST, "no")
+
+
+def test_a_blurb_that_gives_something_away_keeps_its_book_out_and_a_clean_edition_stands_in(monkeypatch, fresh):
+    """Catches: a refused blurb reaching Mothli, which repeats what it is given; and the work
+    being lost when another edition's blurb is clean."""
     monkeypatch.setattr(home_suggestions, "PER_AUTHOR", 1000)      # so that every play of Shakespeare's is in reach
-    found = suggestions([on_shelf("The Lamp Book", "Ada Writer")], [], ON, limit=1000)
-    assert len(found) == 1000 and not SPOILING_BLURBS & {int(book["classic_id"]) for book in found}
+    found = suggestions(ANYONE, [], ON, limit=1000)
+    assert not OLD_DENY_LIST & {int(book["classic_id"]) for book in found}
     by_title = {book["title"]: book for book in found}
     assert by_title["Romeo and Juliet"]["classic_id"] == "1112" and "marry" not in by_title["Romeo and Juliet"]["blurb"]
     assert "murdered" not in by_title["Hamlet"]["blurb"]
     assert "White Fang" not in by_title and "Mrs. Warren's Profession" not in by_title     # no clean edition
-    assert all(find_classic(str(number)) for number in SPOILING_BLURBS)      # every number is a real book
 
 
 def test_one_line_a_work_never_one_volume_of_a_set_and_always_something_to_say():
@@ -193,11 +305,16 @@ def test_one_line_a_work_never_one_volume_of_a_set_and_always_something_to_say()
     assert len(keys) == len(set(keys)) == 300
     whole = [find_classic(book["classic_id"])["title"] for book in found]
     assert not [title for title in whole if re.search(r"\bVol(?:ume)?\b\.? ?\d|\bTome [IVX\d]|\(of \d+\)", title)]
+    assert all(book["blurb"] and book["genres"] for book in found)
+    assert suggestions(OWNER, [], ON) == suggestions(list(OWNER), [], ON)   # the same list every time
+
+
+def test_no_single_volume_of_a_french_set_either(every_blurb_allowed):
+    """Catches: "Tome I" or "(2/3)" offered as a book. No French blurb has been read, so every
+    blurb is let through here to try the pattern on the sets the catalogue numbers in French."""
     plain = [find_classic(book["classic_id"])["title"] for book in suggestions(
         [on_shelf("Les Misérables", "Victor Hugo", language="fr", read=20)], [], ON, limit=40)]
     assert plain and not [title for title in plain if "Tome" in title or "/3)" in title]
-    assert all(book["blurb"] and book["genres"] for book in found)
-    assert suggestions(OWNER, [], ON) == suggestions(list(OWNER), [], ON)   # the same list every time
 
 
 def test_the_title_mothli_is_given_is_the_one_a_person_would_say():
@@ -367,7 +484,8 @@ def test_mothli_is_told_to_suggest_at_once_from_the_list_and_only_its_line():
 
 
 @pytest.mark.parametrize("language", ["en", "en-GB", "fr"])
-def test_the_language_of_a_shelf_book_is_its_main_tag(language):
-    """Catches: "en-GB" matching no catalogue language, so a British file gets nothing."""
+def test_the_language_of_a_shelf_book_is_its_main_tag(language, every_blurb_allowed):
+    """Catches: "en-GB" matching no catalogue language, so a British file gets nothing. (Every
+    blurb let through, so that "fr" has something to find.)"""
     found = suggestions([on_shelf("The Lamp Book", "Ada Writer", language=language)], [], ON)
     assert {find_classic(book["classic_id"])["language"] for book in found} == {language.split("-")[0]}
