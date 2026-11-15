@@ -121,6 +121,26 @@ def test_a_page_report_that_is_too_large_or_cannot_be_placed_adds_nothing(map_en
     assert all("lamp" not in prompt for prompt in seen["reply"])
 
 
+def test_a_page_with_letters_written_as_named_codes_counts_as_read(tmp_path):
+    """The book file writes "café" as ``caf&eacute;`` and a non-breaking space as ``&nbsp;``. The
+    reader app quotes the page as the browser shows it, with the space collapsed like any other
+    (readFrontier.ts ``normalize``); the server's text must hold the same words (language audit W3)."""
+    sentences = " ".join(f"Mara moved lamp {n} in part 1." for n in range(1, 21))
+    body = (f"{sentences} L&eacute;a but un caf&eacute; na&iuml;f &agrave;&nbsp;midi. "
+            f"Elle r&eacute;pondit&nbsp;: &laquo;&nbsp;Non&nbsp;&raquo; &mdash; puis partit&hellip; {sentences}")
+    epub = epub_ncx([("c1.xhtml", "Part 1", "Part 1", body),
+                     ("c2.xhtml", "Part 2", "Part 2", "Corvus moved lamp 1 in part 2.")])
+    for api, bid, _app, _settings in _opened(tmp_path, epub):
+        mark = {"atom": 1, "cfi": "epubcfi(/6/2)", "position_epoch": 0}
+        first, last = "Léa but un café naïf à midi.", "« Non » — puis partit…"
+        response = api.put(f"/api/books/{bid}/read-page", json={
+            "start": {**mark, "quote": first, "prefix": ""}, "end": {**mark, "quote": last, "prefix": last}})
+        assert response.status_code == 200, response.text
+        assert response.json()["atom"] == 1
+        [one, two] = api.get(f"/api/books/{bid}/read-map").json()["chapters"]
+        assert one["read"] > 0 and two["read"] == 0
+
+
 def test_front_matter_in_chapter_ones_file_is_never_read_text_and_never_the_readers_place(gutenberg_env, monkeypatch):
     """A guard: it passes without the reader app's change (6ab), which stops these reports being sent.
 
