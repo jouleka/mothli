@@ -218,5 +218,23 @@ def test_a_long_recap_gets_six_second_looks_and_a_seventh_doubted_sentence_is_dr
     looked = stream_models(app, monkeypatch, reply, unsupported=["careful"], second={"careful": True})
     events = events_of(api.post(f"/api/books/{bid}/ask/stream",
                                 json={"question": "What did Mara do?", "read_frontier": point}))
-    assert len(looked) == 6 and len([e for e in events if e["type"] == "sentence"]) == 6
+    # Which of the seven goes without a look depends on timing. Whichever it is, six sentences
+    # get one, those six are shown, and the ones after a dropped sentence are looked at again.
+    assert len(set(looked)) == 6 and len([e for e in events if e["type"] == "sentence"]) == 6
+    assert events[-1]["answer"]["dropped_sentences"] == 1
+
+
+def test_a_dropped_sentence_does_not_cost_the_ones_after_it_their_second_look(page_env, monkeypatch):
+    """Sentences after a dropped one are judged again without it. That second judgment used to
+    count against the reply's allowance, so one drop early in a recap cut everything after it."""
+    api, bid, app, settings = page_env
+    point = confirm(api, bid)
+    settings.reader_conversation_jev = settings.reader_conversation_stream = True
+    reply = "Mara sold it abroad. " + " ".join(f"Mara seems careful with tin {i}." for i in range(5))
+    stream_models(app, monkeypatch, reply, unsupported=["careful", "abroad"],
+                  second={"careful": True, "abroad": False})
+    events = events_of(api.post(f"/api/books/{bid}/ask/stream",
+                                json={"question": "What did Mara do?", "read_frontier": point}))
+    assert [e["text"] for e in events if e["type"] == "sentence"] == [
+        f"Mara seems careful with tin {i}." for i in range(5)]
     assert events[-1]["answer"]["dropped_sentences"] == 1

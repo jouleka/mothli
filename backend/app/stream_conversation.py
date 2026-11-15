@@ -326,10 +326,13 @@ def sentence_checks(*, book_id, catalog, store, settings, writer, jev_run, note,
         # sentence that goes too far. So a doubted sentence gets one careful review
         # instead of being dropped; that review alone decides, and failing it, any
         # error, or running past the per-reply allowance all drop the sentence.
+        # The allowance counts sentences, not looks: a sentence judged again because one before
+        # it was dropped keeps its place. Otherwise one early drop cuts everything after it.
         with lock:
-            if len(looks) >= MAX_SECOND_LOOKS:
-                return False
-            looks.append(sentence)
+            if sentence not in looks:
+                if len(looks) >= MAX_SECOND_LOOKS:
+                    return False
+                looks.append(sentence)
         started_call = perf_counter()
         try:
             result = budgeted_completion(
