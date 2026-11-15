@@ -16,6 +16,7 @@ import { MothliMark } from "../ui/MothliMark";
 import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupportedBookMessage } from "../import/bookFiles";
 import { readLastPassage, sinceLabel } from "../reader/lastPassage";
 import { ProviderSettings } from "./ProviderSettings";
+import { HomeChat } from "./HomeChat";
 import "./shelf-redesign.css";
 
 const recentKey = (owner: string) => `litlet.library-recent:${owner}`;
@@ -110,7 +111,7 @@ function StreakStrip() {
   );
 }
 
-type Journey = { id: string; done: number; total: number };
+type Journey = { id: string; done: number; total: number; place?: number };
 
 export function Shelf({
   onOpen,
@@ -265,7 +266,8 @@ export function Shelf({
         const total = manifest?.atoms?.length || position.atoms || 0;
         if (dead || !total) return;
         const done = Math.min(total, Math.max(0, Math.floor(Number(position.bookmark) || 0)));
-        setJourney({ id: spotlightId, done, total });
+        const place = Math.min(total, Math.max(0, Math.floor(Number(position.place_chapter) || 0)));
+        setJourney({ id: spotlightId, done, total, place });
       })
       .catch(() => {});
     return () => {
@@ -356,7 +358,7 @@ export function Shelf({
   const browsingAll = filter === "all" && !query;
   const libraryEmpty = books !== null && books.length === 0;
   const spotJourney = journey && journey.id === spotlightId ? journey : null;
-  const resuming = !!featured || (spotJourney?.done ?? 0) > 0;
+  const resuming = !!featured || (spotJourney?.done ?? 0) > 0 || (spotJourney?.place ?? 0) > 0;
   const addLabel = busy ? "adding a book" : "add a book";
 
   const offlineButton = (book: Book) => (
@@ -396,7 +398,9 @@ export function Shelf({
     ? spotJourney.done >= spotJourney.total
       ? `Finished, all ${spotJourney.total} chapters`
       : spotJourney.done === 0
-        ? `Ready to begin, ${spotJourney.total} chapters ahead`
+        ? spotJourney.place
+          ? `In chapter ${spotJourney.place} of ${spotJourney.total}`
+          : `Ready to begin, ${spotJourney.total} chapters ahead`
         : `Chapter ${spotJourney.done + 1} of ${spotJourney.total}`
     : null;
 
@@ -623,6 +627,8 @@ export function Shelf({
             </div>
           </section>
         )}
+
+        {"homeConversation" in api && <HomeChat />}
 
         <section className="ml-collection" aria-labelledby="collection-title">
           <div className="ml-collection-head">

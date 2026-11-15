@@ -149,3 +149,17 @@ describe("StartOverNote", () => {
     expect(await axeAA(container)).toHaveNoViolations();
   });
 });
+
+describe("StartOverNote with the read map", () => {
+  test("reading again keeps what Mothli knows; reading fresh is a separate, explicit choice", () => {
+    const onConfirm = vi.fn();
+    const onFresh = vi.fn();
+    render(<StartOverNote busy={false} error={null} onConfirm={onConfirm} onFresh={onFresh} onCancel={() => {}} />);
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.textContent).toMatch(/keeps what you.ve read and said/i);
+    fireEvent.click(screen.getByRole("button", { name: "read again" }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "read it fresh" }));
+    expect(onFresh).toHaveBeenCalledTimes(1);
+  });
+});

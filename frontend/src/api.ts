@@ -109,6 +109,8 @@ export type Manifest = {
 };
 export type Position = {
   bookmark: number; cfi: string | null; ingest_progress?: number; position_epoch: number; atoms?: number;
+  /** With the read map: the chapter the reader is in now (1-based), 0 when nothing is read. */
+  place_chapter?: number;
   completed_chapter?: number; current_offset?: number; high_water_offset?: number;
   position_version?: number; last_opened_at?: string; updated_at?: string; queued?: boolean;
 };
@@ -127,6 +129,17 @@ export type CatchMeUp = {
   cast_size: number; open_threads: number; cast: CastMember[]; cached: boolean;
 };
 export type ConversationMessage = { role: "user" | "assistant"; content: string; as_of_chapter: number };
+/** How much of each chapter the reader has read, 0 to 1. */
+export type ReadMap = { chapters: { atom: number; read: number }[] };
+/** What another reading app recorded about a book, for the reader to accept or not. */
+export type ReadOffer = {
+  kind: "finished" | "progress" | "skipped"; sources: string[]; finished_on: string | null;
+  chapter: number | null; atoms: number[];
+  /** For "skipped": the chapters in words, e.g. "chapters 1 and 2". */
+  chapters?: string;
+};
+/** One message of the home conversation, which runs across all the reader's books. */
+export type HomeTurn = { role: "user" | "assistant"; content: string; created_at?: string };
 export type ReadFrontier = { id: string; atom: number; offset: number; position_epoch: number; available_chapter: number };
 export type ReadAnchor = { atom: number; quote: string; prefix: string; cfi: string; position_epoch: number };
 export type AskClaim = { text: string; citation_ids: number[] };
@@ -142,9 +155,13 @@ export type AskCost = {
 export const ASK_TIMEOUT_MS = 60_000;
 // null until the server has answered once: whether it offers replies sentence by sentence.
 let streamedReplies: boolean | null = null;
+/** Chapters the reader went past without reading them here; Mothli may offer to count them. */
+export type ReadSkipped = { book_id: string; title: string; atoms: number[]; chapters: string };
 export type AskAnswer = {
   as_of_chapter: number; insufficient_evidence: boolean; claims: AskClaim[];
   citations: AskCitation[]; cost: AskCost | null;
+  /** Present only when the reply said Mothli was not with the reader for some chapters. */
+  offers?: ReadSkipped[];
   answer_type?: "recap" | "conversation";
   // "prose": the claims are the sentences of one spoken reply, shown as a single paragraph.
   style?: "prose";
@@ -596,12 +613,12 @@ export const api = {
       });
     });
   },
-  resetPosition: (id: string, positionEpoch: number) => {
+  resetPosition: (id: string, positionEpoch: number, fresh = false) => {
     const owner = activeOfflineOwner();
     return fetch(`/api/books/${id}/position/reset`, {
       method: "POST",
       headers: { "content-type": "application/json", ...csrfHeaders() },
-      body: JSON.stringify({ position_epoch: positionEpoch }),
+      body: JSON.stringify({ position_epoch: positionEpoch, ...(fresh ? { fresh: true } : {}) }),
     }).then((r) => j<Position>(r)).then((saved) => {
       discardPositionBeforeEpoch(id, saved.position_epoch, owner);
       return saved;
@@ -637,6 +654,63 @@ export const api = {
    * the complete answer, or with null when this server does not offer streamed replies (the
    * caller then asks the ordinary way).
    */
+  /** The read map: what the reader has read of this book. 404 while the map is off. */
+  readMap: (id: string) => fetch(`/api/books/${id}/read-map`).then((r) => j<ReadMap>(r)),
+  readPage: (id: string, start: ReadAnchor, end: ReadAnchor) => fetch(`/api/books/${id}/read-page`, {
+    method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify({ start, end }),
+  }).then((r) => j<ReadFrontier & { skipped?: { atoms: number[]; chapters: string } | null }>(r)),
+  readChapters: (id: string, atoms: number[], read: boolean, source: "told" | "import" = "told") =>
+    fetch(`/api/books/${id}/read-chapters`, {
+      method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders() },
+      body: JSON.stringify({ atoms, read, ...(source === "import" ? { source } : {}) }),
+    }).then((r) => j<ReadFrontier>(r)),
+  readOffer: (id: string) => fetch(`/api/books/${id}/read-offer`).then((r) => j<{ offer: ReadOffer | null }>(r)),
+  /** The home conversation. 404 where the server does not have it switched on. */
+  homeConversation: () => fetch("/api/reader/conversation").then((r) => j<{ turns: HomeTurn[] }>(r)),
+  clearHome: () =>
+    fetch("/api/reader/conversation", { method: "DELETE", headers: csrfHeaders() }).then(() => undefined),
+  askHome: async (question: string, onSentence: (text: string) => void): Promise<AskAnswer> => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
+    try {
+      const response = await fetch("/api/reader/ask/stream", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...csrfHeaders() },
+        body: JSON.stringify({ question }),
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) return await j<AskAnswer>(response);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        for (let end = buffer.indexOf("\n\n"); end >= 0; end = buffer.indexOf("\n\n")) {
+          const line = buffer.slice(0, end);
+          buffer = buffer.slice(end + 2);
+          if (!line.startsWith("data: ")) continue;
+          const event = JSON.parse(line.slice(6)) as
+            | { type: "sentence"; text: string }
+            | { type: "done"; answer: AskAnswer }
+            | { type: "error"; status: number; message: string };
+          if (event.type === "sentence") onSentence(event.text);
+          else if (event.type === "done") return event.answer;
+          else throw new ApiError(event.message, event.status);
+        }
+      }
+      throw new ApiError("The reply ended early.", 502);
+    } catch (error) {
+      if (controller.signal.aborted) throw new ApiError("The reply is taking longer than expected.", 504, "ask_timeout");
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  },
+  clearConversation: (id: string) =>
+    fetch(`/api/books/${id}/conversation`, { method: "DELETE", headers: csrfHeaders() }).then(() => undefined),
   askBookStream: async (
     id: string, question: string, bookmark: number, history: ConversationMessage[],
     readFrontier: ReadFrontier, onSentence: (text: string) => void,

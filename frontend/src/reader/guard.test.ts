@@ -106,3 +106,16 @@ describe("arrowPagingBlocked (the global arrow-key guard)", () => {
     dlg.remove();
   });
 });
+
+describe("the jump guard with the read map", () => {
+  test("coming back to a place far past the chapter counter is followed, not refused", () => {
+    // Reopening a book in chapter 3 when no chapter counts as finished: the counter says 0.
+    expect(admitRelocation(2, 0, 0, false)).toEqual({ admit: false, spendToken: false });
+    expect(admitRelocation(2, 0, 0, false, true)).toEqual({ admit: true, spendToken: false });
+  });
+
+  test("a confirmed leap still spends its confirmation", () => {
+    expect(admitRelocation(14, 2, 2, true, true)).toEqual({ admit: true, spendToken: true });
+    expect(admitRelocation(3, 2, 2, true, true)).toEqual({ admit: true, spendToken: false });
+  });
+});

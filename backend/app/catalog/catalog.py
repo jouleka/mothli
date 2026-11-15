@@ -14,6 +14,7 @@ D-A10 "high-water CFI". The future LIT-12/13 frontier layer that derives an inte
 `max(cfi_to_bookmark(cfi), stored_bookmark)` (never lower the stored high-water) — exactly D-A10's rule.
 """
 import math
+import json
 import os
 import sqlite3
 import threading
@@ -185,6 +186,10 @@ class Catalog:
         with self._lock:
             self._conn.execute("DELETE FROM cost_reservations WHERE book_id=?", (book_id,))
             self._conn.execute("DELETE FROM cost_ledger WHERE book_id=?", (book_id,))
+            self._conn.execute("DELETE FROM chapter_notes WHERE book_id=?", (book_id,))
+            self._conn.execute("DELETE FROM conversation_turns WHERE book_id=?", (book_id,))
+            self._conn.execute("DELETE FROM read_ranges WHERE book_id=?", (book_id,))
+            self._conn.execute("DELETE FROM read_position WHERE book_id=?", (book_id,))
             self._conn.execute("DELETE FROM reading_state WHERE book_id=?", (book_id,))
             self._conn.execute("DELETE FROM books WHERE book_id=?", (book_id,))
             self._conn.commit()
@@ -225,6 +230,18 @@ class Catalog:
             self._conn.commit()
         return dict(row)
 
+    def set_bookmark(self, book_id, bookmark):
+        """Set the chapter counter exactly, lowering it if need be.
+
+        Only the read map calls this: there the counter is derived from what was read, so
+        "I haven't read this" can take a chapter back. Lowering never reveals anything.
+        """
+        self._check_int(bookmark)
+        with self._lock:
+            self._conn.execute("UPDATE reading_state SET bookmark=?, updated_at=? WHERE book_id=?",
+                               (bookmark, _now(), book_id))
+            self._conn.commit()
+
     def get_conversation_frontier(self, book_id):
         with self._lock:
             row = self._conn.execute(
@@ -258,6 +275,124 @@ class Catalog:
                 "WHERE book_id=?", (book_id,)).fetchone()
             self._conn.commit()
         return dict(row)
+
+    # ---- companion memory ---------------------------------------------------
+    def set_chapter_notes(self, book_id, atom, *, source_hash, version, sentences, dropped):
+        self._check_int(atom, "chapter")
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO chapter_notes VALUES (?,?,?,?,?,?,?)",
+                (book_id, atom, source_hash, version, json.dumps(list(sentences), ensure_ascii=False),
+                 dropped, _now()))
+            self._conn.commit()
+
+    def get_chapter_notes(self, book_id):
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT atom,source_hash,version,sentences,dropped FROM chapter_notes "
+                "WHERE book_id=? ORDER BY atom", (book_id,)).fetchall()
+        return [{**dict(row), "sentences": json.loads(row["sentences"])} for row in rows]
+
+    def add_turn(self, book_id, *, incarnation, position_epoch, atom, offset, role, content,
+                 reaction=False, request_id=None):
+        for value in (position_epoch, atom, offset):
+            self._check_int(value, "source position")
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO conversation_turns(book_id,incarnation,position_epoch,atom,source_offset,"
+                "role,content,reaction,request_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (book_id, incarnation, position_epoch, atom, offset, role, content, int(bool(reaction)),
+                 request_id, _now()))
+            self._conn.commit()
+        return cur.lastrowid
+
+    def get_turns(self, book_id, *, incarnation, atom, offset, limit=None, reactions=False):
+        """Turns written at or before (atom, offset), oldest first; ``limit`` keeps the latest."""
+        for value in (atom, offset):
+            self._check_int(value, "source position")
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT turn_id,position_epoch,atom,source_offset,role,content,reaction,created_at "
+                "FROM conversation_turns WHERE book_id IS ? AND incarnation=? "
+                "AND (atom<? OR (atom=? AND source_offset<=?))" + (" AND reaction=1" if reactions else "")
+                + " ORDER BY turn_id DESC" + (" LIMIT ?" if limit is not None else ""),
+                (book_id, incarnation, atom, atom, offset, *([limit] if limit is not None else []))
+            ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+    # ---- the read map --------------------------------------------------------
+    @staticmethod
+    def _merged(ranges):
+        merged = []
+        for start, end in sorted(ranges):
+            # One character apart is the single space between the end of a page and the next.
+            if merged and start <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    def add_read_range(self, book_id, *, incarnation, atom, start, end, source):
+        """Add [start, end) of one chapter; ranges from the same source that touch become one."""
+        for value in (atom, start, end):
+            self._check_int(value, "source position")
+        if end <= start:
+            return
+        key = (book_id, incarnation, atom, source)
+        with self._lock:
+            held = [(row["start_offset"], row["end_offset"]) for row in self._conn.execute(
+                "SELECT start_offset,end_offset FROM read_ranges "
+                "WHERE book_id=? AND incarnation=? AND atom=? AND source=?", key)]
+            self._conn.execute(
+                "DELETE FROM read_ranges WHERE book_id=? AND incarnation=? AND atom=? AND source=?", key)
+            self._conn.executemany(
+                "INSERT INTO read_ranges VALUES (?,?,?,?,?,?,?)",
+                [(book_id, incarnation, atom, a, b, source, _now())
+                 for a, b in self._merged([*held, (start, end)])])
+            self._conn.commit()
+
+    def get_read_map(self, book_id, *, incarnation):
+        """{chapter: [(start, end), ...]} over every source, merged and in order."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT atom,start_offset,end_offset FROM read_ranges "
+                "WHERE book_id=? AND incarnation=?", (book_id, incarnation)).fetchall()
+        by_atom = {}
+        for row in rows:
+            by_atom.setdefault(row["atom"], []).append((row["start_offset"], row["end_offset"]))
+        return {atom: self._merged(ranges) for atom, ranges in sorted(by_atom.items())}
+
+    def clear_read_map(self, book_id, *, atom=None):
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM read_ranges WHERE book_id=?" + (" AND atom=?" if atom is not None else ""),
+                (book_id, *([atom] if atom is not None else [])))
+            if atom is None:
+                # The row stays: it marks the map as begun, so it is never seeded a second time.
+                self._conn.execute(
+                    "UPDATE read_position SET atom=0, source_offset=0, updated_at=? WHERE book_id=?",
+                    (_now(), book_id))
+            self._conn.commit()
+
+    def set_read_position(self, book_id, *, incarnation, atom, offset):
+        for value in (atom, offset):
+            self._check_int(value, "source position")
+        with self._lock:
+            self._conn.execute("INSERT OR REPLACE INTO read_position VALUES (?,?,?,?,?)",
+                               (book_id, incarnation, atom, offset, _now()))
+            self._conn.commit()
+
+    def get_read_position(self, book_id, *, incarnation):
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT atom,source_offset FROM read_position WHERE book_id=? AND incarnation=?",
+                (book_id, incarnation)).fetchone()
+        return (row["atom"], row["source_offset"]) if row else None
+
+    def clear_turns(self, book_id):
+        with self._lock:
+            self._conn.execute("DELETE FROM conversation_turns WHERE book_id IS ?", (book_id,))
+            self._conn.commit()
 
     def reset_position(self, book_id, *, expected_epoch):
         """Start a new reading pass without deleting memory or ingest receipts.

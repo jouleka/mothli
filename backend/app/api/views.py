@@ -262,7 +262,11 @@ def people(book_id: str, body: ReadBoundary, catalog=Depends(get_catalog),
     if not settings.reader_page_context:
         raise HTTPException(422,"confirmed page context is required")
     try:
-        point,chapters,*_ = requested_snapshot(book_id,body,catalog,settings,worker)
+        if settings.reader_read_map:
+            from app.read_map import read_snapshot
+            point,chapters,*_ = read_snapshot(book_id,catalog,settings,worker)
+        else:
+            point,chapters,*_ = requested_snapshot(book_id,body,catalog,settings,worker)
         def run(state,questions):
             return budgeted_jev(catalog,settings,client.jev,book_id,phase="people-jev",
                 state=state,questions=questions).value
@@ -571,6 +575,7 @@ def _complete_citation_evidence(value, sources, *, catalog, settings, client, bo
 def ask_the_book_stream(
     book_id: str,
     body: AskRequest,
+    request: Request,
     catalog=Depends(get_catalog),
     store=Depends(get_store),
     settings=Depends(get_settings),
@@ -585,11 +590,47 @@ def ask_the_book_stream(
     import json
     from fastapi.responses import StreamingResponse
     from app.stream_conversation import stream_read_prefix
-    events = stream_read_prefix(book_id, body, catalog, store, settings, client, worker)
+    events = stream_read_prefix(book_id, body, catalog, store, settings, client, worker,
+                                notes_builder=request.app.state.notes_builder)
     return StreamingResponse(
         ("data: " + json.dumps(event, ensure_ascii=False) + "\n\n" for event in events),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@router.get("/conversation")
+def stored_conversation(
+    book_id: str,
+    catalog=Depends(get_catalog),
+    settings=Depends(get_settings),
+    worker=Depends(get_worker),
+):
+    """What was said and shown in this book, up to the current read position, oldest first."""
+    from app.read_frontier import current_snapshot
+    from app.read_map import read_snapshot, visible_turns
+    try:
+        if settings.reader_read_map:
+            point, _chapters, _state, _manifest, book, read_map = read_snapshot(
+                book_id, catalog, settings, worker)
+            turns = visible_turns(book_id, book, read_map, catalog, limit=80)
+        else:
+            point = current_snapshot(book_id, catalog, settings, worker)[0]
+            turns = catalog.get_turns(book_id, incarnation=catalog.get_book(book_id)["incarnation"],
+                                      atom=point["atom"], offset=point["offset"], limit=80)
+    except LookupError as exc:
+        raise HTTPException(404, "unknown book") from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(409, "reading context changed; refresh before continuing") from exc
+    return {"read_frontier": point, "turns": [
+        {"role": turn["role"], "content": turn["content"], "atom": turn["atom"],
+         "reaction": bool(turn["reaction"]), "created_at": turn["created_at"]} for turn in turns]}
+
+
+@router.delete("/conversation", status_code=204)
+def clear_conversation(book_id: str, catalog=Depends(get_catalog)):
+    if catalog.get_book(book_id) is None:
+        raise HTTPException(404, "unknown book")
+    catalog.clear_turns(book_id)
 
 
 @router.post("/ask")
@@ -1017,13 +1058,23 @@ def selection_action(
         from app.read_frontier import current_snapshot
         from app.retrieval_passages import normalize_source
         try:
-            point,_,_state,manifest = current_snapshot(book_id,catalog,settings,worker)
+            if settings.reader_read_map:
+                from app.read_map import read_snapshot
+                point,_,_state,manifest,*_ = read_snapshot(book_id,catalog,settings,worker)
+            else:
+                point,_,_state,manifest = current_snapshot(book_id,catalog,settings,worker)
         except LookupError as exc:
             raise HTTPException(404,"unknown book") from exc
         except (ValueError,RuntimeError) as exc:
             raise HTTPException(409,"read boundary could not be verified against the source") from exc
         eff=point["available_chapter"]
-        if body.atom>min(len(manifest["atoms"]),max(point["atom"],_state["bookmark"])+1):
+        if settings.reader_read_map:
+            # The reader selected this on their screen, wherever in the book they are. It is
+            # still matched against its chapter below, and only the selection itself is used.
+            if not 1 <= body.atom <= len(manifest["atoms"]):
+                raise HTTPException(422,"selection is outside the book")
+            eff=max(eff,body.atom-1)
+        elif body.atom>min(len(manifest["atoms"]),max(point["atom"],_state["bookmark"])+1):
             raise HTTPException(422,"selection is outside the current reading position")
         original=worker.source_chapters(book_id)[body.atom-1]["text"]
         if normalize_source(body.text) not in normalize_source(original):

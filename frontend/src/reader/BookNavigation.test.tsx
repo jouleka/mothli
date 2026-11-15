@@ -91,3 +91,26 @@ describe("ReaderNavigation", () => {
     expect(contents.getAttribute("aria-selected")).toBe("true");
   });
 });
+
+describe("ReaderNavigation with the read map", () => {
+  test("each chapter says whether Mothli counts it as read, and the reader can change that", () => {
+    const onMarkRead = vi.fn();
+    render(<ReaderNavigation {...props} readShare={{ 0: 1, 1: 0.4 }} onMarkRead={onMarkRead} />);
+    fireEvent.click(screen.getByRole("button", { name: /^contents$/i }));
+    const first = screen.getByRole("button", { name: "I’ve read Chapter I" });
+    const second = screen.getByRole("button", { name: "I’ve read Chapter 2" });
+    expect(first.getAttribute("aria-pressed")).toBe("true");
+    expect(second.getAttribute("aria-pressed")).toBe("false");
+    expect(second.textContent).toMatch(/part read/i);
+    fireEvent.click(second);
+    expect(onMarkRead).toHaveBeenLastCalledWith(1, true);
+    fireEvent.click(first);
+    expect(onMarkRead).toHaveBeenLastCalledWith(0, false);
+  });
+
+  test("without a read map the contents list has no such controls", () => {
+    render(<ReaderNavigation {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: /^contents$/i }));
+    expect(screen.queryByRole("button", { name: /I’ve read/ })).toBeNull();
+  });
+});

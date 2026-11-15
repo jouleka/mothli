@@ -17,11 +17,15 @@ function TocBranch({
   atoms,
   currentAtom,
   onNavigate,
+  readShare,
+  onMarkRead,
 }: {
   items: ReaderTocItem[];
   atoms: Atom[];
   currentAtom: number;
   onNavigate: (item: ReaderTocItem) => void;
+  readShare?: Record<number, number>;
+  onMarkRead?: (atom: number, read: boolean) => void;
 }) {
   return (
     <ul>
@@ -30,6 +34,9 @@ function TocBranch({
         const containsCurrent = !current && tocContainsAtom(item, currentAtom);
         // The server only releases titles up to the chapter being read; later ones arrive blank.
         const unreached = item.atom != null && atoms[item.atom] != null && !atoms[item.atom].title && item.atom > currentAtom;
+        // With the read map: what Mothli counts as read is the reader's to see and to correct.
+        const share = item.atom != null ? readShare?.[item.atom] ?? 0 : 0;
+        const read = share >= 0.999;
         return (
           <li key={item.id} data-current-branch={containsCurrent || undefined}>
             {item.href ? (
@@ -44,12 +51,25 @@ function TocBranch({
             ) : (
               <span className="toc-group">{safeTocLabel(item, atoms)}</span>
             )}
+            {item.href && item.atom != null && onMarkRead && (
+              <button
+                type="button"
+                className="plain toc-read"
+                aria-pressed={read}
+                aria-label={`I’ve read ${safeTocLabel(item, atoms)}`}
+                onClick={() => onMarkRead(item.atom as number, !read)}
+              >
+                {read ? "read" : share > 0 ? "part read" : "not read"}
+              </button>
+            )}
             {item.children.length > 0 && (
               <TocBranch
                 items={item.children}
                 atoms={atoms}
                 currentAtom={currentAtom}
                 onNavigate={onNavigate}
+                readShare={readShare}
+                onMarkRead={onMarkRead}
               />
             )}
           </li>
@@ -71,7 +91,12 @@ export function ReaderNavigation({
   onNavigate,
   onSearch,
   onSearchNavigate,
+  readShare,
+  onMarkRead,
 }: {
+  /** With the read map: the share of each chapter read (by 0-based chapter index). */
+  readShare?: Record<number, number>;
+  onMarkRead?: (atom: number, read: boolean) => void;
   toc: ReaderTocItem[];
   atoms: Atom[];
   currentAtom: number;
@@ -285,6 +310,8 @@ export function ReaderNavigation({
                   onNavigate(item);
                   close();
                 }}
+                readShare={readShare}
+                onMarkRead={onMarkRead}
               />
             ) : (
               <p className="quiet">This book has no table of contents.</p>

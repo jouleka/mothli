@@ -501,3 +501,99 @@ def test_schema_idempotent_on_reopen(tmp_path):
     assert c2.get_book("b")["title"] == "B"
     assert c2.get_state("b")["bookmark"] == 5
     assert c2.total_cost("b") == pytest.approx(0.01)
+
+
+# --- companion memory: chapter notes and conversation turns ---------------------------------------
+def _shelved(tmp_path):
+    cat = _cat(tmp_path)
+    cat.add_book("b", title="B", db_path="books/b/memory.db")
+    return cat
+
+
+def test_chapter_notes_are_kept_per_chapter_and_a_rebuild_replaces_them(tmp_path):
+    cat = _shelved(tmp_path)
+    cat.set_chapter_notes("b", 2, source_hash="h2", version="v1", sentences=["Mara hid the key."], dropped=1)
+    cat.set_chapter_notes("b", 1, source_hash="h1", version="v1", sentences=[], dropped=0)
+    cat.set_chapter_notes("b", 2, source_hash="h2b", version="v1", sentences=["Jonas waited."], dropped=0)
+    assert [(n["atom"], n["source_hash"], n["sentences"], n["dropped"]) for n in cat.get_chapter_notes("b")] == [
+        (1, "h1", [], 0), (2, "h2b", ["Jonas waited."], 0)]
+
+
+def test_turns_come_back_oldest_first_and_only_up_to_the_asked_position(tmp_path):
+    cat = _shelved(tmp_path)
+    incarnation = cat.get_book("b")["incarnation"]
+    def add(role, content, atom, offset, **more):
+        return cat.add_turn("b", incarnation=incarnation, position_epoch=0, atom=atom, offset=offset,
+                            role=role, content=content, **more)
+    add("user", "Poor Mara.", 2, 40, reaction=True)
+    add("assistant", "It's the red tin that gets me.", 2, 40)
+    add("user", "Who is Corvus?", 3, 10)
+    add("user", "Later in two.", 2, 900)
+    at = lambda atom, offset, **more: [  # noqa: E731
+        t["content"] for t in cat.get_turns("b", incarnation=incarnation, atom=atom, offset=offset, **more)]
+    assert at(2, 40) == ["Poor Mara.", "It's the red tin that gets me."]
+    assert at(2, 39) == []
+    assert at(3, 10) == ["Poor Mara.", "It's the red tin that gets me.", "Who is Corvus?", "Later in two."]
+    assert at(3, 10, limit=2) == ["Who is Corvus?", "Later in two."]
+    assert at(9, 0, reactions=True) == ["Poor Mara."]
+    # Another shelf lifetime of the same book id does not inherit them.
+    assert cat.get_turns("b", incarnation="other", atom=9, offset=0) == []
+
+
+def test_removing_a_book_removes_its_notes_and_turns(tmp_path):
+    cat = _shelved(tmp_path)
+    incarnation = cat.get_book("b")["incarnation"]
+    cat.set_chapter_notes("b", 1, source_hash="h", version="v1", sentences=["x"], dropped=0)
+    cat.add_turn("b", incarnation=incarnation, position_epoch=0, atom=1, offset=1, role="user", content="hi")
+    cat.remove_book("b")
+    cat.add_book("b", title="B", db_path="books/b/memory.db")
+    assert cat.get_chapter_notes("b") == []
+    assert cat.get_turns("b", incarnation=incarnation, atom=9, offset=0) == []
+
+
+# --- the read map ---------------------------------------------------------------------------------
+def test_read_ranges_merge_when_they_touch_or_overlap_and_stay_apart_across_a_gap(tmp_path):
+    cat = _shelved(tmp_path)
+    inc = cat.get_book("b")["incarnation"]
+    add = lambda atom, start, end, source="read": cat.add_read_range(  # noqa: E731
+        "b", incarnation=inc, atom=atom, start=start, end=end, source=source)
+    add(3, 100, 200)
+    add(3, 200, 260)            # the next page
+    add(3, 150, 180)            # a page read again
+    add(3, 900, 950)            # after a jump
+    add(1, 0, 40, source="told")
+    add(3, 240, 300, source="told")
+    add(3, 301, 310)            # the next page, past the one space between two sentences
+    assert cat.get_read_map("b", incarnation=inc) == {1: [(0, 40)], 3: [(100, 310), (900, 950)]}
+    assert cat.get_read_map("b", incarnation="another shelf lifetime") == {}
+
+
+def test_a_chapter_can_be_taken_out_of_the_read_map_and_the_whole_map_cleared(tmp_path):
+    cat = _shelved(tmp_path)
+    inc = cat.get_book("b")["incarnation"]
+    for atom in (1, 2):
+        cat.add_read_range("b", incarnation=inc, atom=atom, start=0, end=50, source="read")
+    cat.clear_read_map("b", atom=2)
+    assert cat.get_read_map("b", incarnation=inc) == {1: [(0, 50)]}
+    cat.clear_read_map("b")
+    assert cat.get_read_map("b", incarnation=inc) == {}
+
+
+def test_the_place_the_reader_is_now_can_move_backward(tmp_path):
+    cat = _shelved(tmp_path)
+    inc = cat.get_book("b")["incarnation"]
+    assert cat.get_read_position("b", incarnation=inc) is None
+    cat.set_read_position("b", incarnation=inc, atom=9, offset=400)
+    cat.set_read_position("b", incarnation=inc, atom=2, offset=30)
+    assert cat.get_read_position("b", incarnation=inc) == (2, 30)
+    assert cat.get_read_position("b", incarnation="another shelf lifetime") is None
+
+
+def test_removing_a_book_removes_its_read_map(tmp_path):
+    cat = _shelved(tmp_path)
+    inc = cat.get_book("b")["incarnation"]
+    cat.add_read_range("b", incarnation=inc, atom=1, start=0, end=9, source="read")
+    cat.set_read_position("b", incarnation=inc, atom=1, offset=9)
+    cat.remove_book("b")
+    cat.add_book("b", title="B", db_path="books/b/memory.db")
+    assert cat.get_read_map("b", incarnation=inc) == {} and cat.get_read_position("b", incarnation=inc) is None

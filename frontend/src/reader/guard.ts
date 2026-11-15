@@ -29,8 +29,12 @@ export function admitRelocation(
   lastAtom: number,
   maxAtom: number,
   allowJump: boolean,
+  /** With the read map, reaching a page claims nothing about what was read, so every landing is
+   * followed: the place is tracked for coming back to, and only pages actually read count. */
+  readMap = false,
 ): { admit: boolean; spendToken: boolean } {
   const far = jumpsAhead(target, lastAtom, maxAtom);
   if (!far) return { admit: true, spendToken: false };
+  if (readMap) return { admit: true, spendToken: allowJump };
   return allowJump ? { admit: true, spendToken: true } : { admit: false, spendToken: false };
 }

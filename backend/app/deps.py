@@ -116,7 +116,7 @@ async def book_lifecycle(book_id: str, request: Request):
     try:
         path = getattr(getattr(request, "url", None), "path", "")
         method = getattr(request, "method", "")
-        position_write = method == "PUT" and path.endswith(("/position", "/read-frontier"))
+        position_write = method == "PUT" and path.endswith(("/position", "/read-frontier", "/read-page", "/read-chapters"))
         shared_read = (getattr(request, "recap_preparation", False)
                        or method == "GET"
                        or (method == "POST" and path.endswith(("/ask", "/ask/stream", "/chapter-closeout", "/selection-action", "/people", "/ingest/retry")))
