@@ -153,3 +153,91 @@ CREATE TABLE IF NOT EXISTS read_position (       -- where the reader is now; may
 - A stored turn is visible when the place it was written at is inside the map.
 - The older chapter counter stays for the views that need one number (cast, recap, chapter closeout, chapter titles), and it now comes from the map: the last chapter up to which every chapter is finished, where finished means at least 80% read with the ending reached. A leap no longer moves it.
 - Behind `READER_READ_MAP`, which follows streamed replies when unset and so is on wherever they are (audit section 6q).
+
+## What Mothli remembers about the reader (part one, 16 November)
+
+As built in audit section 6ae. Part one: the store, the distilling, the reader's API, and use in the chat inside a book. The home chat and the reader's screen are part two.
+
+**Name.** In the code these notes are *recollections* (`app/recollections.py`, tables `recollections` and `recollection_cursors`, setting `READER_RECOLLECTIONS`, `/api/reader/recollections`). "Memory" already means the per-book store behind `store.book(...)` and `READER_MEMORY_INGEST`; "notes" already means Mothli's notes on finished chapters. A recollection is neither: it is about the reader, not about a book.
+
+**Rule.** A recollection is one short sentence about the reader, in the third person, of one kind. Mothli is still given the last 8 messages of a conversation and nothing older; recollections are what stands in for the rest. What the reader has read and where they are is never stored as a recollection: the read map and the place line know it exactly.
+
+| Kind | What it holds | Example |
+|---|---|---|
+| `about` | Something lasting about the reader, or how they like Mothli to be | The reader reads at night. |
+| `taste` | What they like and dislike in books | The reader loves dry humour. |
+| `plan` | What they want to read or do next | The reader wants something lighter after this book. |
+| `feeling` | What they felt at a moment in a book | Chapter 5 wrecked the reader: the monk sent away from Athos. |
+
+**Written by distilling.** When 6 of the reader's own messages in a conversation have not been looked at, one writer call off the request path (`Recollector`, built on `NotesBuilder`: one at a time, started by each reply, paused five minutes after the checker's provider refuses the account) reads them with the notes already kept and returns at most 4 changes: add a note, or replace one it says again or contradicts. It is told that most batches deserve none. A cursor per conversation (the last message looked at) keeps any message from being read twice, so a deleted note is not written again.
+
+- Input is the reader's messages only. Mothli's line before a message is added, marked as context, only when the message is a short answer (8 words or fewer: "yes", "that one please"), and then only the last two sentences of it. Book text is never an input.
+- Clearing a conversation first takes the messages not yet looked at, however few, and distils them off the request; the conversation is gone when the request returns.
+
+**Nothing invented.** A proposed note is stored only if it passes, in this order:
+
+| Check | Kind | What it drops |
+|---|---|---|
+| Shape | fixed | An unknown kind, a message number that does not exist, a note over 240 characters, anything past the fourth change |
+| Names | fixed | A capitalised word that is not in the message the note is said to come from (or its marked context, the book's title, the note it replaces): the distilling model knows the book and the reader may not |
+| Stated by the reader | Jev, one call a note | A note that the one message it names does not support (`SUPPORT`, at the .8 the reply checks use) |
+| Foreshadowing | fixed | A note about a book that says what will happen (`PROLEPSIS_RE`, the pattern replies are held to) |
+
+Jev answers a second question in the same call: does the note say anything of a book's story? Only a note it finds free of story content (below .1, the limit a reply's sentence is cleared at) is kept apart from the book.
+
+**Spoiler safety.** A note that says anything of a book is *tied*: every `feeling`, and any other note Jev does not find free of story content ("The reader finds Darcy unbearable" is a taste, and is tied). A tied note keeps the `drew_on` record its message was stored with, and reaches a prompt, the checker and the reader's list only while every stretch read then is still read: the rule turns follow (`written_from_read`). "Read it fresh" and "I haven't read this" hide it; reading the text again brings it back.
+
+- The message quoted beside a note on the reader's list follows the same rule for every note, tied or not: the note may be harmless when the message is not.
+- The distilling call is shown, and may replace, only notes usable with what was read when the batch's last message was said; a replacement must also have been usable when its own message was said. Otherwise a newer note could carry an older one past what was read.
+- The writer is told a recollection is the reader's word and proves nothing about the book; the checker's passage says so in its first words.
+
+**Bounded.** Every number is a ceiling on something that would otherwise grow with use.
+
+| What | Limit | Why this number |
+|---|---|---|
+| Notes kept | 300 | The owner's starting figure. Over it the least recently given to a reply go first, `about` and `taste` last |
+| Block in a reply's prompt | 1,200 characters, heading and labels included | The owner's starting figure, about 300 tokens; the same lines go to each sentence check as one passage |
+| Its shares | half to `about` and `taste`, a quarter to `plan`, the rest to moments; room left is filled in that order | Who the reader is must not be pushed out by a pile of feelings |
+| One note | asked for within 200 characters, dropped over 240 | One sentence; a cut sentence is not what the reader said |
+| Messages before a call | 6 | The owner's starting figure |
+| Messages in one call | 12, each cut to 600 characters | A backlog after an outage is read in a few calls, not one growing one |
+| Calls in one run | 3 | The rest waits for the next reply |
+| Changes from one call | 4 | Each costs one check |
+| Kept notes shown to the call | 2,400 characters, chosen by words shared with the batch | 300 notes would be about 60,000 |
+| Mothli's line before a short answer | 300 characters | Its question is at the end of its reply |
+
+- What a reply is given is chosen without a model (`select_recollections`): `about` and `taste` newest first, then `plan`, then feelings in the book in hand and notes tied to another book that share a word with the reader's message, by words shared and then newest.
+- A reply with no notes to give gets exactly the instructions it had before; the one instruction on using them is added only beside a block.
+- The notes are one more passage in every sentence check, and a check over the size the checker accepts is refused (audit 6ad). When the largest check of a reply has no room for that passage, the notes are left out of that reply, for the writer and the checker alike.
+
+**The reader's control.** `GET /api/reader/recollections` lists every note that may be shown, newest first, with its kind, date, book and message, and counts those held back. `DELETE /api/reader/recollections/{id}` forgets one. `DELETE /api/reader/recollections` forgets all, and counts every message stored so far as looked at, so nothing said before the wipe becomes a note after it.
+
+**Data model (catalog.db).**
+
+```sql
+CREATE TABLE IF NOT EXISTS recollections (
+  recollection_id INTEGER PRIMARY KEY,
+  kind        TEXT NOT NULL CHECK (kind IN ('about','taste','plan','feeling')),
+  text        TEXT NOT NULL,             -- one sentence about the reader, third person
+  tied        INTEGER NOT NULL,          -- 1: says something of a book; follows what is read of it
+  book_id     TEXT REFERENCES books(book_id) ON DELETE CASCADE,  -- the book it is tied to, if one
+  drew_on     TEXT,                      -- what was read when the reader said it (as on a turn)
+  said        TEXT NOT NULL,             -- the words of the message it came from
+  said_at     TEXT NOT NULL,             -- when the reader said it
+  created_at  TEXT NOT NULL,
+  used_at     TEXT NOT NULL              -- last given to a reply; the least recently used go first
+);
+CREATE TABLE IF NOT EXISTS recollection_cursors (
+  conversation TEXT NOT NULL,            -- book_id, or '' for the conversation across books
+  incarnation  TEXT NOT NULL,
+  turn_id      INTEGER NOT NULL,         -- the last message looked at
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (conversation, incarnation)
+);
+```
+
+- The message's words are kept on the note, not a pointer to the turn: the conversation may be cleared, and SQLite gives new turns the numbers of deleted ones. For the same reason clearing a conversation removes its cursor.
+- Removing a book removes the notes tied to it and keeps the others.
+- Behind `READER_RECOLLECTIONS`, which follows the read map when unset and cannot be on without it.
+
+**For part two.** `recall`, `select_recollections`, `recollection_block`, `recollection_passage` and `Recollector.ensure(None)` take the conversation across books as they are (`book_id` `None`); one test distils a home conversation through them. Still to decide there: which book a feeling said on the home screen is tied to, since a home turn carries the read map of every book.

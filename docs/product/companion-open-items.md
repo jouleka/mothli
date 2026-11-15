@@ -2,7 +2,7 @@
 
 Every step updates this file: tick what it closed, add what it found, and move nothing back into chat logs.
 
-Taken from sections 6m to 6ad of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
+Taken from sections 6m to 6ae of `companion-audit-2026-11-14.md`; the section in brackets says where each item is described.
 
 ## Now: the voice
 
@@ -39,9 +39,34 @@ Taken from sections 6m to 6ad of `companion-audit-2026-11-14.md`; the section in
 - [ ] An empty shelf gets no home reply at all, so no suggestions either. (6ad)
 - [ ] The evaluation has no case that asks for something new to read, and its home reference is not given the list of books Mothli may suggest. (6ad)
 
+## Next: what Mothli remembers about the reader, part two
+
+Part one is in 6ae: the store, the distilling, the reader's API, and use in the chat inside a book. Stand-in models only.
+
+- [ ] The home chat: give it the same block and passage (`recall` with no book in hand) and start the distilling from its replies and from its "Clear" (`Recollector.ensure(None)`, `clearing(None)`). `home_conversation.py` was not touched in part one. (6ae)
+- [ ] Decide what a feeling said on the home screen is tied to. A home turn carries the read map of every book (6v), so such a note would be hidden by "read it fresh" on any of them; and with no book in hand, notes tied to a book reach a home reply only when they share a word with the reader's message. (6ae)
+- [ ] The reader's screen: see every note with its date and the message it came from, delete one, delete all, and say how many are held back until their pages are read again (`hidden`). The API is there; `frontend/src/api.ts` was not touched. (6ae)
+- [ ] A measured run with real models, small and capped. To look at: how often a batch yields a note and whether "most batches yield nothing" holds; whether Jev's "stated by the reader" passes fair paraphrases and stops additions; whether its story-content answer ties "finds Darcy unbearable" and frees "reads at night"; whether Mothli brings a note up only when it fits and never recites the list; what the block and the extra passage add to reply time and to Jev spend per sentence. (6ae)
+- [ ] An invented memory is not stopped by any check: "You told me you love Tolstoy" carries no story content, and a sentence Jev finds free of story content is shown without needing support. The passage of notes makes a true "you told me chapter 5 wrecked you" pass; it does not make a false one fail. Only the writer's instruction stands against it. A check that such a sentence must be supported by the notes or by the recent messages would be a new judgment on every sentence of every reply, and its limits cannot be set without real models. (6ae)
+- [ ] The reader's notes now sit among the passages a reply is checked against. A guess the reader made about the story, kept as a note ("The reader suspects the servant killed him"), could be read as support for Mothli stating it. Future-tense guesses are dropped by the fixed pattern; one in the present or past tense rests on Jev's own rule that an allegation establishes nothing, and on the passage's label. Not measured. (6ae)
+- [ ] Whether a note says anything of a book is Jev's judgment, at the .1 a reply's sentence is cleared at. A note it wrongly finds free of story content outlives "read it fresh". (6ae)
+- [ ] One "I haven't read this" hides more than it needs to: a tied note carries the whole read map of its message, as a turn does (6w), so a feeling about chapter 1 is hidden when chapter 2, read at the time, is marked not read. (6ae)
+- [ ] Clearing a conversation hands the messages not yet looked at to the distilling call from memory, once. If that call fails, the process stops first, or the checker's provider has just refused the account, they are gone with the conversation. Keeping them on disk until read would keep part of a conversation the reader asked to clear. Owner's call. (6ae)
+- [ ] Switching it on reads back what is already stored: every book conversation with six or more messages kept since 6w is distilled from its first message, at up to three calls after each reply until it is caught up. Starting each cursor at "now" instead would be one statement at first start. Owner's call. (6ae)
+- [ ] The distilling is started by replies and by "Clear", not by page turns as chapter notes are: a batch that failed waits for the reader's next message in that book. (6ae)
+- [ ] While the writing model is down every reply after the sixth message starts one failed call; only a refusal by the checker's provider pauses it, as for chapter notes (6u). (6ae)
+- [ ] Two notes that say the same thing in different words are both kept unless the distilling call replaces one: only word-for-word repeats are caught without a model. The cap bounds what this can cost. (6ae)
+- [ ] The names rule goes by capital letters and an English word list: a note in German, where every noun has one, is kept only if its nouns are in the reader's message; a name written without a capital is not caught by it. (6ae)
+- [ ] Notes tied to another book are matched to the reader's message by whole words, without stems: "storms" does not find "storm". (6ae)
+- [ ] A note keeps the reader's message beside it (up to 500 characters) after the conversation is cleared. It is shown only while what was read then is still read, and goes when the note is deleted. (6ae)
+- [ ] A per-book backup is the whole catalog cut down to one book (`lifecycle/archive.py`), so it carries every note not tied to another book, with the message beside it, as it already carries the home conversation. Read from the code; no backup was made. (6ae)
+- [ ] Recollections exist in local mode only, like the read map and the stored conversations (6m), and need the read map. (6ae)
+
 ## Before going live
 
-- [ ] The chat inside a book builds its sentence checks the way the home chat did before 6ad's fix: ten passages, notes, the place and the app help, with no check on the 30,000 limit. A check over the limit drops its sentence without a word, most likely late in a long recap. Not measured. `fit_passages` and `check_room` are there to use. (6ad)
+- [ ] What Mothli remembers is left out of a reply whenever the book chat's passages leave no room under the checker's size limit, which is likely for a reader deep in a long book with full chapter notes. Fitting the book chat's passages the way the home chat's are fitted would give the notes a fixed place. (6ad, 6ae)
+- [ ] "Wants short answers" is remembered and repeated back, but replies did not get shorter in the one run. (6ae)
+- [ ] The chat inside a book builds its sentence checks the way the home chat did before 6ad's fix: ten passages, notes, the place and the app help, with no check on the 30,000 limit. A check over the limit drops its sentence without a word, most likely late in a long recap. Not measured. `fit_passages` and `check_room` are there to use. (6ad) The reader's notes, one more passage since 6ae, are fitted: they are left out of a reply whose largest check has no room for them. The other passages are as they were. (6ae)
 - [x] Suggestions rest on a list of blurbs known to spoil, found by reading about 450 of 76,763. Everything else is taken as clean unread. Turn it round: suggest only books whose blurb has been read and judged clean. (6ad; done: `classics_reviewed.tsv`, 605 read, 560 clean)
 - [ ] Only the 605 English blurbs read can be suggested: every English book past the first 601 most read is never suggested until its blurb is read, and no non-English blurb has been read, so a shelf of books in another language gets no suggestions at all. (6ad, afterwards)
 - [ ] Suggestion replies all have one shape ("You might like X by Y. If you fancy a change from…"). (6ad)

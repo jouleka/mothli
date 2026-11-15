@@ -42,6 +42,7 @@ from app.read_frontier import requested_snapshot
 from app.read_map import book_record, prefix_map, read_snapshot, skimmed_chapters, visible_turns
 from app.reader_place import (APP_HELP, FRIEND_VOICE, SPEAK_AS_A_FRIEND, content_numbers, note_asked,
                               offers_for, place_line)
+from app.recollections import RECOLLECTION_RULE, recall, recollection_block, recollection_passage
 from app.retrieval_passages import passage_windows
 from app.unicode_text import normalize_text, proper_words, word_tokens
 
@@ -91,6 +92,9 @@ STREAM_SYSTEM = (
     + SPEAK_AS_A_FRIEND +
     "Output only the words of your reply."
 )
+# The same instructions with the one on what the reader has told Mothli before, used only for a
+# reply that is given such notes: every other reply's instructions are exactly STREAM_SYSTEM.
+STREAM_SYSTEM_REMEMBERING = STREAM_SYSTEM.replace(SPEAK_AS_A_FRIEND, RECOLLECTION_RULE + SPEAK_AS_A_FRIEND)
 # A reply in conversation relays no instructions to carry out, so the check on an instruction's
 # dropped timing, recipient or purpose is replaced by the narrower one on a dropped condition.
 CHECKS = {**{name: value for name, value in FIT.items() if name != "omitted_qualification"},
@@ -480,7 +484,8 @@ def write_and_gate(*, catalog, settings, writer, book_id, system, prompt, check,
         yield from gate_sentences(deltas(), check, safe, pool=pool)
 
 
-def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, notes_builder=None):
+def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, notes_builder=None,
+                       recollector=None):
     """Validate the reading position now; return an iterator of event dicts for the reply."""
     started = perf_counter()
     request_id = uuid4().hex[:12]
@@ -671,13 +676,34 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
                 place = place_line(place_now[0])
                 prompt += "\n\nWHERE THE READER IS:\n" + place + "\n\nHOW THIS APP WORKS:\n" + APP_HELP
                 passages += ["Where the reader is: " + place, "How this app works: " + APP_HELP]
+            # What the reader has told Mothli before, within a fixed budget whatever is stored.
+            # A note tied to a book is given only while what was read when the reader said it
+            # is still read, by the rule earlier turns follow. The checker gets the same lines,
+            # so a true "you told me chapter 5 wrecked you" is supported; they are the reader's
+            # word about themselves and are labelled as no evidence of anything in a book.
+            remembered = []
+            if settings.reader_recollections:
+                try:
+                    remembered = recall(catalog, read=book_record(book_id, book, read_map), book_id=book_id,
+                                        query=body.question, other_books=settings.reader_read_map)
+                except Exception:       # a reply without them is better than no reply
+                    logger.exception("recollections could not be read")
+            if remembered and len(fit_passages(passages, [recollection_passage(remembered)],
+                                               budget=check_room(question, identities))) == len(passages):
+                # The largest check of this reply has no room left for them, and a check over
+                # the size the checker accepts is refused and its sentence dropped. They are
+                # left out for the writer too: it is never given what its checker is not.
+                remembered = []
+            if remembered:
+                prompt += "\n\n" + recollection_block(remembered)
+                passages += [recollection_passage(remembered)]
             note_names = names_note(identities)
             if note_names:
                 prompt += "\n\n" + note_names
             prompt += "\n\nReply to the reader now."
             for event in write_and_gate(catalog=catalog, settings=settings, writer=writer, book_id=book_id,
-                                        system=STREAM_SYSTEM, prompt=prompt, check=check, safe=safe,
-                                        note=note):
+                                        system=STREAM_SYSTEM_REMEMBERING if remembered else STREAM_SYSTEM,
+                                        prompt=prompt, check=check, safe=safe, note=note):
                 if event[0] == "sentence":
                     if first_ms is None:
                         first_ms = round((perf_counter() - started) * 1000, 2)
@@ -727,6 +753,8 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
                     logger.exception("conversation turn was not stored")
             if notes_builder is not None and settings.reader_story_notes:
                 notes_builder.ensure(book_id)       # catch up after replying, never before
+            if recollector is not None and settings.reader_recollections:
+                recollector.ensure(book_id)         # the same for what the reader has said of themselves
             with lock:
                 record = {"event": "conversation-stream", "request_id": request_id,
                           "elapsed_ms": round((perf_counter() - started) * 1000, 2),

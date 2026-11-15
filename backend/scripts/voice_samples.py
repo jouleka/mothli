@@ -201,7 +201,9 @@ def main():
             reader_conversation_routing=True, reader_conversation_draft_effort="low",
             reader_conversation_review_effort="low", reader_memory_ingest=False,
             reader_answer_cache=False, reader_prepare_enabled=False, recap_prewarm=False,
-            classics_enabled=False)
+            # Off: the samples show the voice on the same 19 messages each time; notes distilled
+            # from the earlier ones would change the later replies and add calls of their own.
+            classics_enabled=False, reader_recollections=False)
         if not (settings.reader_conversation_stream and settings.reader_story_notes and settings.reader_read_map):
             raise SystemExit("streamed replies, chapter notes and the read map must all be on")
         app = create_app(settings)

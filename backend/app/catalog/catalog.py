@@ -190,6 +190,9 @@ class Catalog:
             self._conn.execute("DELETE FROM cost_ledger WHERE book_id=?", (book_id,))
             self._conn.execute("DELETE FROM chapter_notes WHERE book_id=?", (book_id,))
             self._conn.execute("DELETE FROM conversation_turns WHERE book_id=?", (book_id,))
+            # Notes tied to this book can never be shown again; the others are about the reader.
+            self._conn.execute("DELETE FROM recollections WHERE book_id=?", (book_id,))
+            self._conn.execute("DELETE FROM recollection_cursors WHERE conversation=?", (book_id,))
             self._conn.execute("DELETE FROM read_ranges WHERE book_id=?", (book_id,))
             self._conn.execute("DELETE FROM skimmed_ranges WHERE book_id=?", (book_id,))
             self._conn.execute("DELETE FROM read_position WHERE book_id=?", (book_id,))
@@ -314,18 +317,18 @@ class Catalog:
             self._conn.commit()
         return cur.lastrowid
 
-    def get_turns(self, book_id, *, incarnation, reactions=False):
+    def get_turns(self, book_id, *, incarnation, reactions=False, after=0):
         """Every stored turn of one conversation, oldest first, whether or not it may be read back.
 
         Nothing here decides that. The app reads turns back only through ``visible_turns`` (inside a
-        book) and ``home_turns`` (across books), which do.
+        book) and ``home_turns`` (across books), which do. ``after`` leaves out turns up to that id.
         """
         with self._lock:
             rows = self._conn.execute(
                 "SELECT turn_id,position_epoch,atom,source_offset,role,content,reaction,created_at,drew_on "
-                "FROM conversation_turns WHERE book_id IS ? AND incarnation=?"
+                "FROM conversation_turns WHERE book_id IS ? AND incarnation=? AND turn_id>?"
                 + (" AND reaction=1" if reactions else "") + " ORDER BY turn_id",
-                (book_id, incarnation)).fetchall()
+                (book_id, incarnation, after)).fetchall()
         return [{**dict(row), "drew_on": None if row["drew_on"] is None else json.loads(row["drew_on"])}
                 for row in rows]
 
@@ -430,9 +433,108 @@ class Catalog:
         return (row["atom"], row["source_offset"]) if row else None
 
     def clear_turns(self, book_id):
+        """Forget one conversation, and with it how far it had been looked at for recollections:
+        the next turns stored may be given the ids of the ones deleted here."""
         with self._lock:
             self._conn.execute("DELETE FROM conversation_turns WHERE book_id IS ?", (book_id,))
+            self._conn.execute("DELETE FROM recollection_cursors WHERE conversation=?", (book_id or "",))
             self._conn.commit()
+
+    # ---- what Mothli remembers about the reader ---------------------------------
+    def get_recollections(self):
+        """Every stored note about the reader, oldest first, whether or not it may be used now.
+
+        Nothing here decides that: ``app.recollections`` does, for a prompt and for the reader's list.
+        """
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM recollections ORDER BY recollection_id").fetchall()
+        return [{**dict(row), "tied": bool(row["tied"]),
+                 "drew_on": None if row["drew_on"] is None else json.loads(row["drew_on"])} for row in rows]
+
+    def keep_recollections(self, changes, *, cap, cursor=None):
+        """Store one batch's checked notes, move the conversation's cursor and apply the cap, at once.
+
+        A change that ``replaces`` a note takes its place; if that note is gone (the reader deleted
+        it meanwhile) the change is dropped with it. ``cursor`` is (book_id or None, incarnation,
+        turn_id) and never moves back. Over ``cap`` the least recently used go first, the notes
+        about who the reader is (``about``, ``taste``) last. Returns how many were stored.
+        """
+        self._check_int(cap, "cap")
+        stored = 0
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                for change in changes:
+                    if change.get("replaces") is not None and self._conn.execute(
+                            "DELETE FROM recollections WHERE recollection_id=?",
+                            (change["replaces"],)).rowcount == 0:
+                        continue
+                    now = _now()
+                    self._conn.execute(
+                        "INSERT INTO recollections(kind,text,tied,book_id,drew_on,said,said_at,"
+                        "created_at,used_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (change["kind"], change["text"], int(bool(change["tied"])), change["book_id"],
+                         None if change["drew_on"] is None else json.dumps(change["drew_on"]),
+                         change["said"], change["said_at"], now, now))
+                    stored += 1
+                if cursor is not None:
+                    book_id, incarnation, turn_id = cursor
+                    self._check_int(turn_id, "turn")
+                    self._conn.execute(
+                        "INSERT INTO recollection_cursors VALUES (?,?,?,?) "
+                        "ON CONFLICT(conversation,incarnation) DO UPDATE SET "
+                        "turn_id=MAX(turn_id,excluded.turn_id),updated_at=excluded.updated_at",
+                        (book_id or "", incarnation, turn_id, _now()))
+                self._conn.execute(
+                    "DELETE FROM recollections WHERE recollection_id IN ("
+                    "SELECT recollection_id FROM recollections "
+                    "ORDER BY kind IN ('about','taste'), used_at, recollection_id "
+                    "LIMIT MAX(0, (SELECT COUNT(*) FROM recollections) - ?))", (cap,))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return stored
+
+    def touch_recollections(self, ids):
+        """These notes were just given to a reply."""
+        with self._lock:
+            self._conn.executemany("UPDATE recollections SET used_at=? WHERE recollection_id=?",
+                                   [(_now(), value) for value in ids])
+            self._conn.commit()
+
+    def delete_recollection(self, recollection_id):
+        with self._lock:
+            gone = self._conn.execute("DELETE FROM recollections WHERE recollection_id=?",
+                                      (recollection_id,)).rowcount
+            self._conn.commit()
+        return bool(gone)
+
+    def clear_recollections(self):
+        """Forget every note, and count every message stored so far as looked at, so that nothing
+        said before this moment becomes a note afterwards."""
+        with self._lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                self._conn.execute("DELETE FROM recollections")
+                self._conn.execute(
+                    "INSERT INTO recollection_cursors "
+                    "SELECT COALESCE(book_id,''),incarnation,MAX(turn_id),? FROM conversation_turns "
+                    "WHERE incarnation IS NOT NULL GROUP BY COALESCE(book_id,''),incarnation "
+                    "ON CONFLICT(conversation,incarnation) DO UPDATE SET "
+                    "turn_id=MAX(turn_id,excluded.turn_id),updated_at=excluded.updated_at", (_now(),))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def get_recollection_cursor(self, book_id, *, incarnation):
+        """The id of the last turn of this conversation looked at for recollections (0: none)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT turn_id FROM recollection_cursors WHERE conversation=? AND incarnation=?",
+                (book_id or "", incarnation)).fetchone()
+        return row["turn_id"] if row else 0
 
     def reset_position(self, book_id, *, expected_epoch):
         """Start a new reading pass without deleting memory or ingest receipts.
