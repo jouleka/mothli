@@ -62,17 +62,53 @@ def skipped_before(item):
             "skimmed": [ordinal for ordinal in atoms if ordinal in seen]}
 
 
+# "chapters 1 to 3 and 5", "chapter 2", "chapters 6, 7 and 9": the numbers after the word.
+NAMED_CHAPTERS = re.compile(r"\bchapters?\s+(\d+(?:\s*(?:,|and|to|-|–|—)\s*\d+)*)", re.I)
+
+
+def named_numbers(phrase):
+    """{1, 2, 3, 5} from '1 to 3 and 5'."""
+    numbers, parts = set(), re.split(r"\s*(?:,|and)\s*", phrase)
+    for part in parts:
+        ends = [int(n) for n in re.split(r"\s*(?:to|-|–|—)\s*", part) if n.strip().isdigit()]
+        if len(ends) == 2 and ends[0] <= ends[1] and ends[1] - ends[0] < 1000:
+            numbers.update(range(ends[0], ends[1] + 1))
+        else:
+            numbers.update(ends)
+    return numbers
+
+
 def offers_for(sentences, items):
     """What a reply may offer to do: count the chapters it has just said it was not there for.
 
-    Decided here from the reader's place, never by the writer. At most three books.
+    Exactly those chapters: the numbers named in the sentence where Mothli says it was not there,
+    and of them only chapters before the reader's place not read in full here. A sentence that
+    names no chapter, or (with several books) no book, offers nothing. Decided here, never by
+    the writer. At most three books.
     """
-    if not NOT_THERE.search(" ".join(sentences)):
-        return []
-    found = [(item, skipped_before(item)) for item in items]
-    return [{"book_id": item["book"]["book_id"], "title": item["book"]["title"],
-             "atoms": skipped["atoms"], "chapters": skipped["chapters"]}
-            for item, skipped in found if skipped][:3]
+    named = {}
+    for sentence in sentences:
+        said = NOT_THERE.search(sentence)
+        if not said:
+            continue
+        chapters = NAMED_CHAPTERS.search(sentence, said.end())
+        if not chapters:
+            continue
+        titled = [item for item in items if item["book"]["title"].casefold() in sentence.casefold()]
+        meant = titled if titled else items if len(items) == 1 else []
+        for item in meant[:1]:
+            named.setdefault(item["book"]["book_id"], set()).update(named_numbers(chapters.group(1)))
+    offers = []
+    for item in items:
+        numbers = named.get(item["book"]["book_id"])
+        skipped = skipped_before(item) if numbers else None
+        if not skipped:
+            continue
+        atoms = [atom for atom in skipped["atoms"] if item["numbers"][atom] in numbers]
+        if atoms:
+            offers.append({"book_id": item["book"]["book_id"], "title": item["book"]["title"],
+                           "atoms": atoms, "chapters": spans([item["numbers"][atom] for atom in atoms])})
+    return offers[:3]
 
 
 def content_numbers(manifest):

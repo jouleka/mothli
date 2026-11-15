@@ -29,9 +29,23 @@ export function mapReaderToc(
   atoms?: Atom[],
 ): ReaderTocItem[] {
   const candidates = new Map<string, number[]>();
+  // Atoms that carry their own anchor ("whole.xhtml#c5") are matched by it exactly. Matching by
+  // file alone handed a file's atoms out in order, so a title-page entry in the same file took
+  // chapter one's place and every later entry opened the chapter before its own.
+  const anchored = new Map<string, number>();
+  const anchoredFiles = new Set<string>();
+  const withAnchor = (href: string) => {
+    const fragment = href.split("#")[1];
+    return fragment ? `${normalizeHref(href)}#${fragment}` : null;
+  };
   atoms?.forEach((atom, index) => {
     const href = normalizeHref(atom.href);
     candidates.set(href, [...(candidates.get(href) ?? []), index]);
+    const exact = withAnchor(atom.href);
+    if (exact) {
+      anchored.set(exact, index);
+      anchoredFiles.add(href);
+    }
   });
   const used = new Map<string, number>();
   const walk = (branch: EpubTocItem[], path: string): ReaderTocItem[] => branch.map((item, index) => {
@@ -44,7 +58,12 @@ export function mapReaderToc(
       : -1;
     let atom = section < 0 ? null : (sectionAtoms[section] ?? null);
     const matches = candidates.get(clean) ?? [];
-    if (matches.length) {
+    const exact = href ? withAnchor(href) : null;
+    if (exact && anchoredFiles.has(clean)) {
+      // An anchor in a file whose chapters are found by anchors: that chapter, or none at all
+      // (a title page, a caption) rather than a guess at a neighbour.
+      atom = anchored.get(exact) ?? null;
+    } else if (matches.length) {
       const cursor = Math.min(used.get(clean) ?? 0, matches.length - 1);
       atom = matches[cursor];
       if (children.length === 0) used.set(clean, cursor + 1);

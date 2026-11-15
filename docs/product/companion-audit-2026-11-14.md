@@ -993,6 +993,49 @@ Checking, not building. Nothing in the app was changed; the eval gained position
 - **Positions given only by a chapter number run with the read map off.** The eval turns the map on only for positions with `told` chapters or `pages`. That leaves 3 of Karamazov's 5 position sets (`inside-3`, `inside-5`, `through-5`: 23 of its 35 questions) and both of Pride and Prejudice's (all 17) on the map-off path, so most per-book questions still test the older single-position path, which since 6q is no longer the default. The new Du Bois and Verne positions use `told` and `pages`, so they run with the map.
 - One run of each live check. The panel was not tried with a screen reader.
 
+## 6t. Fixes for problems 1 to 4 of 6s, and the eval on the read map (15 November)
+
+### What changed
+
+| Problem (6s) | Cause | Fix |
+|---|---|---|
+| 4. The French Verne lost 7 of 37 chapters | Its contents labels chapters by bare numerals ("I", "XXXVI"), which did not count as chapter evidence, so the file holding Gutenberg's header and chapters I to IV stayed front matter. The file holding XXXVI, XXXVII and the licence was back matter, with no rescue at all | `signals.is_chapter_leaf`: a bare numeral label counts, but only in a file carrying Gutenberg's START marker or licence. A licence file whose contents entries name chapters is body when it has the `*** END OF THE PROJECT GUTENBERG` marker, where chapter text is already cut. The "End of Project Gutenberg's …" line before that marker is cut too |
+| 2. A Contents jump landed two chapters early (illustrated Pride and Prejudice) | Not the paginator: `mapReaderToc` paired contents entries with chapters by file name only, handing a file's chapters out in order. The title-page entry took chapter I's place and every later entry carried the address of the chapter before it ("Chapter 10" went to `#…00079`, chapter IX). Navigating straight to an anchor always landed exactly | Chapters carrying their own anchor are matched by it. An entry whose anchor is no chapter's (the title page) gets none |
+| 1. The button counted one more chapter than the reply named | The offer was every chapter before the place not read in full, including a partly read one the reply calls "read together" | `offers_for` counts the chapter numbers named in the sentence where Mothli says it was not there, kept only if they are chapters gone past. A sentence naming no chapter offers nothing; with several books, so does one naming no book |
+| 3. Marking chapters read did not refresh the cast | The server queued extraction only on a page-position report, and the reader app reloaded the cast only when its chapter number changed, which a press did not update | `PUT /read-chapters` queues extraction. After any "I've read…" press the reader app takes the new counter and watches extraction (`memoryCatchUp.ts`, every 4 s while it runs and is behind), reloading the cast, the people panel and the story so far as each chapter lands |
+| The eval tested the older path | Positions given by chapter number ran with the map off | Every position runs on the map. "Through N" marks chapters 1 to N read; inside chapter N after a quote marks 1 to N-1 and the stretch of N up to the quote, with the place there. The Verne positions were renumbered for its new chapters |
+
+- **The chapter-text cut is unchanged for books with no END marker inside a chapter.** Pride and Prejudice (Project Gutenberg 1342) and Du Bois (408) were split with main's code and with this branch: the same chapters, titles and text hashes. Verne now has 36 chapters, I to XXXVII; XII is still inside XI because its own contents list has none. Chapter I starts at its first line; the book's table of contents, which names the ending, stays out with the header; no chapter holds any Gutenberg text.
+- **Spoiler safety.** The import change adds chapters only from files Gutenberg marks, and the contents list is kept out. The offer can now only shrink. Nothing else that reaches a model changed.
+
+### Checked in the running app
+
+- **Contents (illustrated Pride and Prejudice, stand-in models):** the entries now read "Section" (title page), "Chapter I.", "Chapter 2", … with the right numbers. "Chapter 8" opened CHAPTER VIII at its first line; "Chapter 20" through the jump dialog opened CHAPTER XX at its first line, footer "Chapter 20 of 61".
+- **Cast (Karamazov, real models, extraction through `codex-local`):** with the Cast tab open, "I've read" pressed for chapters 1 and 2 in Contents, and no page turned: the counter became 2 at once, and when chapter 1's extraction finished about 2.5 minutes later the open tab showed 7 people without a reload. With stand-in models the extraction itself fails ("malformed extraction"), so this needs real models.
+- **The button** was not tried with real replies in this step; unit tests cover the reply forms seen in 6s.
+
+### The eval re-run, once per set (pass 3), next to the two passes of 6s
+
+| Set | As expected (1, 2 → 3) | Facts (1, 2 → 3) | Spoiler flags (3) | Shown; reference says unsupported (3) | Jev $ (3) |
+|---|---|---|---|---|---|
+| Karamazov | 35, 35 → 35 | 44, 47 → 46 of 49 | 0 | 111; 3 | 0.038 |
+| Pride and Prejudice | 17, 17 → 17 | 23, 23 → 20 of 25 | 0 | 47; 0 | 0.094 |
+| Du Bois | 10, 10 → 10 | 13, 13 → 13 of 14 | 0 | 23; 0 | 0.018 |
+| Verne (now 10 chapters read, not 6) | 8, 9 → 9 | 9, 8 → 9 of 10 | 0 | 23; 0 | 0.034 |
+| Home, tidy shelf | 8, 8 → 7 | 9, 9 → 9 of 9 | 1 | 17; 0 | 0.004 |
+| Home, messy shelf | 5, 5 → 5 | 6, 6 → 6 of 6 | 0 | 13; 0 | 0.001 |
+
+- **Changed:** Pride and Prejudice facts fell from 23 to 20 of 25. One is the pattern again (`p-why-stated`: "not handsome enough to tempt him" is right but not in the pattern); two are one recap at chapter 34 that left out parts of the story. One run cannot separate the map from run-to-run variation.
+- **The tidy-shelf flag is the eval's pattern, as in 6p:** "We don't know what Mr. Darcy thinks of Zossima" matches "Darcy thinks".
+- **Verne:** "Pourquoi Phileas Fogg fait-il le tour du monde ?" now has the wager to answer from ("parie 20 000 livres"). One reply was counted as using an internal term for the French word "passage" (as in "son passage"): the same English-only check as problem 5.
+- **Cost:** Pride and Prejudice's Jev cost rose from $0.055 to $0.094, all of it in notes ($0.039 to $0.079) for the same 34 chapters and about the same number of sentences kept. Not explained.
+- Spend for this step: $0.19 of Jev for the re-runs (estimated $0.14), $0.002 for the live check.
+
+### Not done
+
+- The cast entries that are not names, and the eval misreading French (problems 5 and 6), as agreed.
+- Mothli's "I wasn't there" and the chapter numbers are matched in English only, so a reply in French never carries the offer. This was so before this step.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

@@ -93,6 +93,20 @@ DIVIDER_LABEL = re.compile(
     re.I)
 
 
+# A ToC label that is a chapter number and nothing else ("I", "XXXVI", "12"). Project Gutenberg's
+# French editions label chapters this way. Trusted only inside a file that also carries Gutenberg's
+# header or licence, where the alternative is losing whole chapters; elsewhere a bare number could
+# be an endnote or a page reference.
+END_MARK = re.compile(r"\*\*\* ?END OF (?:THE|THIS) PROJECT GUTENBERG", re.I)
+BARE_NUMERAL = re.compile(r"^\s*(?:[ivxlcdm]+|\d+)\s*$", re.I)
+
+
+def is_chapter_leaf(label, in_gutenberg_boilerplate_file=False):
+    """Whether a fragment ToC leaf names a chapter."""
+    return _has_chapter_evidence(label, '') or bool(
+        in_gutenberg_boilerplate_file and BARE_NUMERAL.match(label or ''))
+
+
 def _has_chapter_evidence(label, heading):
     return bool(CHLABEL.search(label or '') or CHLABEL.search(heading or ''))
 

@@ -42,4 +42,18 @@ describe("reader navigation model", () => {
     ], ["whole.xhtml"], [0], anchoredAtoms);
     expect(toc.map((item) => item.atom)).toEqual([0, 1]);
   });
+
+  test("an entry for front matter in the chapters' file does not shift the chapters after it", () => {
+    // The illustrated Pride and Prejudice: a title-page entry, then every chapter, all in one file,
+    // each atom carrying its own anchor. "Chapter 5" must open chapter 5, not chapter 3.
+    const anchored = [1, 2, 3].map((n) => ({ ...atoms[0], ordinal: n, title: "", href: `whole.xhtml#c${n}` }));
+    const toc = mapReaderToc([
+      { label: "PRIDE. and PREJUDICE", href: "whole.xhtml#title" },
+      { label: "Chapter I.", href: "whole.xhtml#c1" },
+      { label: "A caption. CHAPTER II.", href: "whole.xhtml#c2" },
+      { label: "CHAPTER III.", href: "whole.xhtml#c3" },
+    ], ["whole.xhtml"], [0], anchored);
+    expect(toc.map((item) => item.atom)).toEqual([null, 0, 1, 2]);
+    expect(toc.map((item) => safeTocLabel(item, anchored))).toEqual(["Section", "Chapter 1", "Chapter 2", "Chapter 3"]);
+  });
 });

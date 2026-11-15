@@ -1,7 +1,7 @@
 /** Mothli's memory, made visible: the people you've met and the story so far. Everything here is
  * served by bookmark-clamped routes (graph, character, notes, catch-me-up), so nothing past the
  * reader's frontier can appear. Read-only; asking about something hands off to the conversation. */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type ChapterNote, type Character, type GraphNode } from "../api";
 import { Icon } from "../ui/Icon";
 import { Moth } from "../ui/Moth";
@@ -55,11 +55,14 @@ function MemoryState({ mood, children }: { mood: "thinking" | "sleepy" | "curiou
 export function PeoplePanel({
   bookId,
   bookmark,
+  refresh = 0,
   focusId,
   onAsk,
 }: {
   bookId: string;
   bookmark: number;
+  /** Changes when more of the book has been extracted: fetch again, keeping what is shown. */
+  refresh?: number;
   focusId?: number | null;
   onAsk: (name: string) => void;
 }) {
@@ -71,9 +74,11 @@ export function PeoplePanel({
   const [detailFailed, setDetailFailed] = useState(false);
 
   useEffect(() => setSelected(focusId ?? null), [focusId]);
+  const shownFor = useRef("");
   useEffect(() => {
     let live = true;
-    setPeople(null);
+    if (shownFor.current !== `${bookId}:${bookmark}`) setPeople(null);
+    shownFor.current = `${bookId}:${bookmark}`;
     setFailed(false);
     api
       .graph(bookId, bookmark)
@@ -85,7 +90,7 @@ export function PeoplePanel({
     return () => {
       live = false;
     };
-  }, [bookId, bookmark]);
+  }, [bookId, bookmark, refresh]);
   useEffect(() => {
     if (selected == null) return;
     let live = true;
@@ -212,11 +217,14 @@ export function PeoplePanel({
 export function StoryPanel({
   bookId,
   bookmark,
+  refresh = 0,
   onOpenPerson,
   onAskChapter,
 }: {
   bookId: string;
   bookmark: number;
+  /** Changes when more of the book has been extracted: fetch again, keeping what is shown. */
+  refresh?: number;
   onOpenPerson: (id: number) => void;
   onAskChapter: (title: string) => void;
 }) {
@@ -224,9 +232,11 @@ export function StoryPanel({
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
 
+  const shownFor = useRef("");
   useEffect(() => {
     let live = true;
-    setChapters(null);
+    if (shownFor.current !== `${bookId}:${bookmark}`) setChapters(null);
+    shownFor.current = `${bookId}:${bookmark}`;
     setFailed(false);
     api
       .notes(bookId, bookmark)
@@ -238,7 +248,7 @@ export function StoryPanel({
     return () => {
       live = false;
     };
-  }, [bookId, bookmark]);
+  }, [bookId, bookmark, refresh]);
 
   if (failed) return <MemoryState mood="sleepy">I couldn’t open my notes right now. Try again in a moment.</MemoryState>;
   if (!chapters) return <MemoryState mood="thinking">Flipping back through my notes…</MemoryState>;

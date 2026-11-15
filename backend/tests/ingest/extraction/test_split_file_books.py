@@ -106,3 +106,48 @@ def test_a_chapter_inside_a_shared_file_keeps_its_anchor_in_the_link():
     """The reader tells a file's chapters apart, and opens citations, by this anchor."""
     _result, chapters = segment_for_ingest(_gutenberg_like(), "bk")
     assert [c["href"] for c in chapters] == ["f0.html#c1", "f0.html#c2", "f1.html#c3", "f3.html#c4"]
+
+
+def _verne_like():
+    """The French Verne layout (Project Gutenberg 800): bare numeral chapter labels, the header file
+    holding the book's own table of contents and the opening chapters, and the licence file holding
+    the closing chapters."""
+    contents = "Table des matières I DANS LEQUEL ILS PARTENT II OU ILS ARRIVENT III ENDING_SPOILER IL GAGNE"
+    files = [
+        ("h.html",
+         "<p>The Project Gutenberg eBook of Le Tour</p><p>*** START OF THE PROJECT GUTENBERG EBOOK LE TOUR ***</p>"
+         f'<h1 id="toc">{contents}</h1>'
+         f'<h2 id="c1">I DANS LEQUEL ILS PARTENT</h2><p>ONE_OPENING Fogg parie.{WORDS}</p>'),
+        ("m.html", f'<h2 id="c2">II OU ILS ARRIVENT</h2><p>TWO_START Suez.{WORDS}</p>'),
+        ("f.html",
+         f'<h2 id="c3">III IL GAGNE</h2><p>THREE_START the last chapter.{WORDS} FIN</p>'
+         "<p>End of Project Gutenberg's Le Tour, by Jules Verne</p>"
+         "<p>*** END OF THE PROJECT GUTENBERG EBOOK LE TOUR ***</p>"
+         '<h2 id="lic">THE FULL PROJECT GUTENBERG LICENSE</h2><p>LICENCE_TEXT Section 1. General Terms.</p>'),
+    ]
+    toc = [("h.html", "toc", "I DANS LEQUEL ILS PARTENT"), ("h.html", "c1", "I"),
+           ("m.html", "c2", "II"), ("f.html", "c3", "III"),
+           ("f.html", "lic", "THE FULL PROJECT GUTENBERG LICENSE")]
+    return _epub(files, toc)
+
+
+def test_bare_numeral_chapters_in_the_header_and_licence_files_are_kept_and_the_boilerplate_is_not():
+    result, chapters = segment_for_ingest(_verne_like(), "b")
+    assert [c["title"] for c in chapters] == ["I", "II", "III"]
+    assert "ONE_OPENING" in chapters[0]["text"] and "THREE_START" in chapters[2]["text"]
+    assert chapters[2]["text"].endswith("FIN")
+    everything = " ".join(c["text"] for c in chapters)
+    # The book's own contents list names the ending; it stays out with the Gutenberg header.
+    assert "ENDING_SPOILER" not in everything and "Table des matières" not in everything
+    assert "LICENCE_TEXT" not in everything and "Project Gutenberg" not in everything
+    assert not [f for f in result.flags if "coverage gap" in f.lower() or "anchor resolution" in f.lower()]
+
+
+def test_a_licence_file_without_chapters_is_still_left_out():
+    files = [("a.html", f'<h2 id="c1">CHAPTER I.</h2><p>ONE {WORDS}</p>'),
+             ("z.html", "<p>*** END OF THE PROJECT GUTENBERG EBOOK X ***</p>"
+                        '<h2 id="lic">THE FULL PROJECT GUTENBERG LICENSE</h2><p>LICENCE_TEXT</p>')]
+    toc = [("a.html", "c1", "CHAPTER I."), ("z.html", "lic", "THE FULL PROJECT GUTENBERG LICENSE")]
+    result, chapters = segment_for_ingest(_epub(files, toc), "b")
+    assert [c["title"] for c in chapters] == ["CHAPTER I."]
+    assert "LICENCE_TEXT" not in chapters[0]["text"]

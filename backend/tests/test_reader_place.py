@@ -58,3 +58,44 @@ def test_chapters_gone_past_before_the_readers_place_can_be_offered_as_read():
     assert skipped_before(item(here=4, whole=[1], part=[2, 4])) == {"atoms": [2, 3], "chapters": "chapters 2 and 3", "skimmed": []}
     assert skipped_before(item(here=7, whole=range(1, 7), part=[7])) is None       # read in order
     assert skipped_before(item(here=0)) is None                                     # not started
+
+
+def offered(sentences, *items):
+    from app.reader_place import offers_for
+    return [(offer["book_id"], offer["atoms"], offer["chapters"]) for offer in offers_for(sentences, list(items))]
+
+
+def book(book_id, title, **place):
+    return {**item(**place), "book": {"book_id": book_id, "title": title, "author": ""}}
+
+
+def test_the_offer_counts_exactly_the_chapters_mothli_said_it_was_not_there_for():
+    # The reader's page ends chapter 3 and starts chapter 4: chapter 3 was only partly read.
+    pride = book("p", "Pride and Prejudice", here=4, part=[3, 4])
+    said = ["I wasn’t with you for chapters 1 and 2 of Pride and Prejudice.", "In chapter 4, Jane tells Elizabeth."]
+    assert offered(said, pride) == [("p", [1, 2], "chapters 1 and 2")]
+
+
+def test_a_partly_read_chapter_the_reply_calls_read_together_is_not_offered():
+    karamazov = book("k", "The Brothers Karamazov", here=3, part=[1, 3], total=5)
+    said = ["I wasn’t with you for chapter 2, and we’ve only read parts of chapters 1 and 3 together."]
+    assert offered(said, karamazov) == [("k", [2], "chapter 2")]
+
+
+def test_ranges_and_lists_are_read_and_nothing_outside_the_gone_past_chapters_is_counted():
+    reader = book("p", "Pride and Prejudice", here=7, part=[7])
+    assert offered(["I wasn’t with you for chapters 1 to 3 and 5."], reader) == [("p", [1, 2, 3, 5], "chapters 1 to 3 and 5")]
+    # Chapter 9 is ahead of the reader and chapter 7 is where they are: neither may be counted.
+    assert offered(["I wasn’t with you for chapters 6, 7 and 9."], reader) == [("p", [6], "chapter 6")]
+
+
+def test_no_offer_when_the_reply_names_no_chapter_or_no_book():
+    reader = book("p", "Pride and Prejudice", here=4, part=[4])
+    assert offered(["I wasn’t with you for the first few chapters."], reader) == []
+    assert offered(["To tell me, open Contents and press the label."], reader) == []
+    assert offered(["Lydia laughed."], reader) == []
+    other = book("k", "The Brothers Karamazov", here=3, part=[3], total=5)
+    # Two books gone past and the sentence names neither: which one is meant cannot be known.
+    assert offered(["I wasn’t with you for chapters 1 and 2."], reader, other) == []
+    assert offered(["I wasn’t with you for chapters 1 and 2 of The Brothers Karamazov."], reader, other) == [
+        ("k", [1, 2], "chapters 1 and 2")]
