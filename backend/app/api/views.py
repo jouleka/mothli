@@ -605,18 +605,17 @@ def stored_conversation(
     settings=Depends(get_settings),
     worker=Depends(get_worker),
 ):
-    """What was said and shown in this book, up to the current read position, oldest first."""
+    """What was said and shown in this book and may be shown again, oldest first: see ``visible_turns``."""
     from app.read_frontier import current_snapshot
-    from app.read_map import read_snapshot, visible_turns
+    from app.read_map import prefix_map, read_snapshot, visible_turns
     try:
         if settings.reader_read_map:
             point, _chapters, _state, _manifest, book, read_map = read_snapshot(
                 book_id, catalog, settings, worker)
-            turns = visible_turns(book_id, book, read_map, catalog, limit=80)
         else:
             point = current_snapshot(book_id, catalog, settings, worker)[0]
-            turns = catalog.get_turns(book_id, incarnation=catalog.get_book(book_id)["incarnation"],
-                                      atom=point["atom"], offset=point["offset"], limit=80)
+            book, read_map = catalog.get_book(book_id), prefix_map(point["atom"], point["offset"])
+        turns = visible_turns(book_id, book, read_map, catalog, limit=80)
     except LookupError as exc:
         raise HTTPException(404, "unknown book") from exc
     except (ValueError, RuntimeError) as exc:

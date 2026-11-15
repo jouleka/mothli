@@ -1108,7 +1108,7 @@ Nine new tests; eight fail on main, the ninth guards against hiding too much. Wh
 
 ### Found while trying to break it, and not fixed
 
-- **The conversation inside a book has the same fault, in two shapes.** Both reproduced with stand-in models, then the probe removed. A turn written while chapters were only marked as read, before any page was reported, is stored at place (0, 0), which `covers` always counts as read: after "read it fresh" the book's own conversation still returned it, the reader profile still listed it as a reaction, and once another chapter was read it was in the writer's prompt again. And a turn asked from a place that is still read, about a chapter then marked "I haven't read this", stayed shown and stayed in the writer's and the checker's input. Not changed here: it is the per-book path, and turns already stored would need the same decision as above.
+- **The conversation inside a book has the same fault, in two shapes.** Both reproduced with stand-in models, then the probe removed. A turn written while chapters were only marked as read, before any page was reported, is stored at place (0, 0), which `covers` always counts as read: after "read it fresh" the book's own conversation still returned it, the reader profile still listed it as a reaction, and once another chapter was read it was in the writer's prompt again. And a turn asked from a place that is still read, about a chapter then marked "I haven't read this", stayed shown and stayed in the writer's and the checker's input. Not changed here: it is the per-book path, and turns already stored would need the same decision as above. (Closed in 6w.)
 - **One reset hides most of the home chat.** Because a turn counts as drawing on every read book, a greeting or a question about the app written while any book had read text is hidden with the rest. Only a turn written when nothing was read outlives every reset.
 - **Size and time were not measured.** Each turn carries every read book's map, and every stored home turn is loaded and compared on each home visit and each question.
 - **An open home screen is not told.** It loads the conversation when the shelf is opened; a reset made in another tab leaves its copy on screen until then.
@@ -1118,6 +1118,58 @@ Nine new tests; eight fail on main, the ninth guards against hiding too much. Wh
 - Nothing was run with real models or in the running app: the checker's provider had no credits.
 - A catalog from before this change was imitated by dropping the column in a test, not taken from a real installation.
 - The frontend was not touched or run.
+
+## 6w. Earlier turns inside a book follow what is read now (15 November)
+
+6v found the home chat's fault in the conversation inside a book, in two shapes. A book's turns were stored with one place, where the reader was when they asked, and read back while that place was read (`visible_turns`). A turn written while chapters were only marked read sat at place (0, 0), which always counted as read, so "read it fresh" never hid it. And a turn asked from chapter 1 about chapter 2 stayed after chapter 2 was marked "I haven't read this", because chapter 1 was still read.
+
+### What changed
+
+| | Before | Now |
+|---|---|---|
+| What a turn inside a book is stored with | Its place | Also `drew_on`, the column 6v added: the book's shelf lifetime and its whole read map, taken from the snapshot the prompt was built from (`book_record` in `read_map.py`) |
+| Which earlier turns are read back | Those whose place is read | Those whose every stretch read then is still read. One rule, `written_from_read` in `read_map.py`, now decides for a book's turns and for home turns |
+| Who reads a book's turns | `visible_turns` with the read map on; three direct catalog queries "at or before the reader's position" with it off | `visible_turns` everywhere: `GET /api/books/{id}/conversation`, the reactions of `GET /api/reader/profile`, and the earlier turns `stream_read_prefix` gives the writer. With the read map off, "read now" is everything up to the position (`prefix_map`) |
+| The single-place rule | The only rule | Removed. `Catalog.get_turns` no longer takes a place and returns every stored turn of a conversation; the place is still stored and still returned to the screen, and decides nothing |
+| A turn stored before this change | Read back by its place | Never passed on and never shown, as in 6v. The rows stay until the reader clears the book's conversation |
+
+- **The place rule was redundant, not a second safeguard.** A page report puts the reader's place at the end of a stretch it has just added to the map, so a turn whose map is still read also has its place read. The place rule differed from the map in two cases only. One is the fault: place (0, 0). The other is a reader who marks the chapter they are in as not read and then asks: that turn was hidden at once, though it was written only from text that is read, and is now kept while that text stays read.
+- **No check was touched.** How a sentence is checked, how replies are worded and what counts as read are as they were.
+- **The older, non-streamed reply path reads no stored turn.** It takes its earlier conversation from the request, the browser's copy. Nothing here filters that.
+- `backend/scripts/companion_eval.py` stores a case's earlier turns with the book's map (`seed_turns`), or follow-up cases would be asked with no conversation behind them.
+
+### Verified, with stand-in models only
+
+23 new tests in `backend/tests/test_book_turns.py`; 16 fail on main, 7 guard against hiding too much. One catalog test was rewritten for `get_turns` without a place. Each case marked "three surfaces" is one test per surface: the book's conversation, the profile's reactions, and everything the writer and the checker are given with the next question. Whole backend suite: SUITE_RESULT.
+
+| Test | The break it catches |
+|---|---|
+| Chapter 1 marked read, a turn, "read it fresh", then chapter 3 read (three surfaces) | The turn at place (0, 0) outliving the reset |
+| A page of chapter 1 and chapter 2 marked, a turn, chapter 2 marked not read (three surfaces) | Looking at where the reader was, not at what the turn was written from |
+| More pages, another chapter, "read again" (three surfaces) | Hiding a turn whose book was only read further |
+| Chapter marked not read and read again; then read fresh and read again (three surfaces) | The turn not coming back |
+| The reader in chapter 2 marks it not read and asks about chapter 1; then chapter 1 is marked not read | The reader's place deciding anything: the turn hidden at once, or kept after its text is gone |
+| A turn stored with no record, at a place that is read (three surfaces) | Trusting turns stored before this change; and that the rows are left, and cleared with the conversation |
+| Chapter 2 marked not read while the reply is being written | The map taken when the turn is stored, not when its prompt was built |
+| A turn written under the read map from chapter 3, then the read map switched off (three surfaces) | A reader of stored turns going round the filter: the three "at or before the position" queries gave the turn back with the reader, by that rule, in chapter 1 |
+| The read map off from the start: a turn, starting over, back to the same page | The older position rule losing its own conversation |
+| The evaluation's seeded earlier turns | Follow-up cases silently asked without their conversation |
+| One rule, one record, for both conversations | A second scheme |
+
+### Found while trying to break it
+
+- **Fixed: the read map switched off.** The three direct queries above were a second way to read a book's turns, and returned a turn written from a chapter read out of order. They now go through the same filter.
+- **Fixed by where the record is taken: a chapter marked not read during a reply.** Tested above.
+- **Not fixed: the chat panel inside a book shows the browser's own copy.** The reader app never asks for `GET /api/books/{id}/conversation`; it only clears it. So a turn the server no longer passes on or returns is still on that panel, from the browser's storage. The writer and the checker no longer get it. Closing this is the frontend work already listed from 6m.
+- **Not fixed: the older, non-streamed reply path** takes earlier turns from the browser, as said above.
+- **One "I haven't read this" hides more than it needs to.** A turn is stored with the whole map, so marking any chapter not read hides every turn of that book written while it was read, whatever the turn was about, until it is read again. The same trade as 6v.
+- **Size and time were not measured.** Each turn carries the book's whole map, and every stored turn of a book is loaded and compared on each question, each load of its conversation, and once per book on each load of the profile.
+
+### Not verified
+
+- Nothing was run with real models or in the running app: the checker's provider had no credits.
+- The evaluation itself was not run; only its seeding function, against a stand-in book.
+- The frontend was not touched or run. Nothing in it reads the profile's reactions today.
 
 ## 7. Proposed target
 

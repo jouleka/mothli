@@ -494,6 +494,18 @@ def main():
     summarise(rows)
 
 
+def seed_turns(app, settings, bid, boundary, messages):
+    """Store a case's earlier conversation as the server would hold it: written from the book as
+    it is read now. A turn stored without that is never passed on."""
+    from app.read_map import book_record, read_snapshot
+    catalog = app.state.catalog
+    _point, _chapters, _state, _manifest, book, held = read_snapshot(bid, catalog, settings, app.state.worker)
+    for message in messages:
+        catalog.add_turn(bid, incarnation=book["incarnation"], position_epoch=boundary["position_epoch"],
+                         atom=boundary["atom"], offset=boundary["offset"], role=message["role"],
+                         content=message["content"], drew_on=book_record(bid, book, held))
+
+
 def run_cases(args, api, app, settings, name, bid, position, boundary, chapter, leak_tokens,
               traces, reviews, rows, gates, read_chapters):
     for style in args.styles:
@@ -506,10 +518,7 @@ def run_cases(args, api, app, settings, name, bid, position, boundary, chapter, 
             catalog.clear_turns(bid)
             history = [{"role": role, "content": text, "as_of_chapter": chapter}
                        for q, a in case.get("history", []) for role, text in (("user", q), ("assistant", a))]
-            for message in history:
-                catalog.add_turn(bid, incarnation=catalog.get_book(bid)["incarnation"],
-                                 position_epoch=boundary["position_epoch"], atom=boundary["atom"],
-                                 offset=boundary["offset"], role=message["role"], content=message["content"])
+            seed_turns(app, settings, bid, boundary, history)
             before = len(app.state.catalog.get_costs(bid))
             traces.clear()
             reviews.clear()

@@ -21,7 +21,7 @@ from app.conversation_pipeline import compact_candidates
 from app.cost import CostCeilingExceeded
 from app.llm.client import ProviderUnavailable
 from app.llm.jev import JevUnavailable
-from app.read_map import read_snapshot, still_read
+from app.read_map import read_snapshot, written_from_read
 from app.reader_place import APP_HELP, SPEAK_AS_A_FRIEND, content_numbers, offers_for, place_line
 from app.retrieval_passages import passage_windows
 from app.stream_conversation import (HISTORY_TURNS, MAX_PASSAGES, conversation_writer, failure_fields,
@@ -98,11 +98,7 @@ def home_turns(catalog, read, *, limit):
     that text, and reading it again brings them back. A turn stored without its books (before
     they were kept) cannot be shown to be safe and is never returned.
     """
-    def safe(turn):
-        return turn["drew_on"] is not None and all(
-            book_id in read and read[book_id][0] == incarnation and still_read(then, read[book_id][1])
-            for book_id, (incarnation, then) in turn["drew_on"].items())
-    return [turn for turn in catalog.get_turns(None, incarnation=HOME, atom=0, offset=0) if safe(turn)][-limit:]
+    return [turn for turn in catalog.get_turns(None, incarnation=HOME) if written_from_read(turn, read)][-limit:]
 
 
 def shelf_lines(books, elsewhere):

@@ -94,11 +94,12 @@ CREATE TABLE IF NOT EXISTS chapter_notes (
   PRIMARY KEY (book_id, atom)
 );
 
--- One row per message, stamped with the exact position it was written at. Read only at or
--- before the asking position. book_id NULL is a conversation across books: it has no one
--- position, so drew_on keeps the read map of every book that had anything read when the turn was
--- written, as JSON {book_id: [incarnation, {atom: [[start, end]]}]}. drew_on is NULL on a turn
--- inside a book, and on a turn across books stored before it was kept.
+-- One row per message. drew_on keeps what the turn was written from, as JSON
+-- {book_id: [incarnation, {atom: [[start, end]]}]}: the read map of its book for a turn inside a
+-- book, and of every book that had anything read for a conversation across books (book_id NULL).
+-- A turn is read back only while all of that is still read. drew_on is NULL on a turn stored
+-- before it was kept, and such a turn is never read back. (atom, source_offset) is where the
+-- reader was when they asked; it decides nothing.
 CREATE TABLE IF NOT EXISTS conversation_turns (
   turn_id        INTEGER PRIMARY KEY,
   book_id        TEXT REFERENCES books(book_id) ON DELETE CASCADE,

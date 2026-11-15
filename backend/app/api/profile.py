@@ -10,7 +10,7 @@ from app.content_scope import is_content
 from app.deps import get_catalog, get_reader_client, get_settings, get_store, get_worker
 from app.home_conversation import HomeAsk, home_turns, read_maps, shelf_books, stream_home
 from app.ingest.manifest import load_manifest
-from app.read_map import read_snapshot, visible_turns
+from app.read_map import prefix_map, read_snapshot, visible_turns
 
 router = APIRouter(prefix="/api/reader", tags=["reader"])
 REACTIONS = 5
@@ -49,8 +49,8 @@ def reader_profile(catalog, settings, history, worker=None):
         inside = (point["atom"], point["source_offset"]) if (
             point and point["position_epoch"] == state["position_epoch"]) else (0, 0)
         atom, offset = max((state["bookmark"], END_OF_CHAPTER), inside) if state["bookmark"] else inside
-        reactions = catalog.get_turns(book["book_id"], incarnation=book["incarnation"], atom=atom,
-                                      offset=offset, limit=REACTIONS, reactions=True)
+        reactions = visible_turns(book["book_id"], book, prefix_map(atom, offset), catalog,
+                                  limit=REACTIONS, reactions=True)
         books.append({
             "book_id": book["book_id"], "title": book["title"], "author": book["author"],
             "status": ("finished" if content and read == len(content)
