@@ -493,3 +493,27 @@
   position: relative;
   z-index: 20;
 }
+
+/* The read map: whether Mothli counts a chapter as read, beside its title in the contents. */
+.mr .reader-toc li:has(> .toc-read) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2, 0.5rem);
+}
+.mr .reader-toc li:has(> .toc-read) > .toc-link {
+  flex: 1 1 auto;
+}
+.mr .reader-toc li:has(> .toc-read) > ul {
+  flex: 1 0 100%;
+}
+.mr .reader-toc .toc-read {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  opacity: 0.7;
+  text-decoration: underline dotted;
+}
+.mr .reader-toc .toc-read[aria-pressed="true"] {
+  opacity: 1;
+  text-decoration: none;
+}

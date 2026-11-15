@@ -120,16 +120,20 @@ def atom_manifest(book_id: str, catalog=Depends(get_catalog), store=Depends(get_
         raise HTTPException(409, "atom-set mismatch (re-import the book)") from e
     # a missing reading_state row (hand-corrupted catalog) degrades to minimum visibility, never 500
     visible = (catalog.high_water(book_id) or 0) + 1
+    # With the read map, a chapter the reader has read any of has shown them its title.
+    begun = set(catalog.get_read_map(book_id, incarnation=catalog.get_book(book_id)["incarnation"])
+                ) if settings.reader_read_map else set()
     numbers = chapter_numbers(m)
     return {"book_id": book_id, "atom_set_version": m["atom_set_version"], "mode": m["mode"],
             "book_profile": profile,
             "content_language": content_language,
             "content_chapters": max(numbers.values(), default=0),
             "atoms": [{"ordinal": a["ordinal"], "href": a["href"],
-                       "title": a["title"] if a["ordinal"] <= visible else "",
-                       "part_label": a["part_label"] if a["ordinal"] <= visible else "",
+                       "title": a["title"] if a["ordinal"] <= visible or a["ordinal"] in begun else "",
+                       "part_label": a["part_label"] if a["ordinal"] <= visible or a["ordinal"] in begun else "",
                        "char_len": a["char_len"], "chapter_number": numbers.get(a["ordinal"]),
-                       "content_role": ("content" if is_content(a) else "supplementary") if a["ordinal"] <= visible else None}
+                       "content_role": ("content" if is_content(a) else "supplementary")
+                       if a["ordinal"] <= visible or a["ordinal"] in begun else None}
                       for a in m["atoms"]]}
 
 

@@ -15,6 +15,7 @@ import {
   type ReaderMark,
   type ReaderMarkAnchor,
   type ReadFrontier,
+  type ReadOffer,
   type SelectionAction,
 } from "../api";
 import { AskTheBook, type AskSession, type CompanionSeed, type CompanionTab } from "./AskTheBook";
@@ -27,6 +28,8 @@ import { readSavedReplies, writeSavedReplies, type SavedCompanionReply } from ".
 import "./simple-reader.css";
 import { admitRelocation, arrowPagingBlocked, jumpsAhead } from "./guard";
 import { JumpNote } from "./JumpNote";
+import { PagesRead } from "./pagesRead";
+import { ImportOffer } from "./ImportOffer";
 import {
   buildSectionAtomMap,
   finalPageOffset,
@@ -264,6 +267,40 @@ export function ReaderPage({
   const visibleRangeRef = useRef<Range | null>(null); // Foliate's exact current viewport anchor for TTS
   const [readFrontier, setReadFrontier] = useState<ReadFrontier | null>(null);
   const readReporterRef = useRef<ReadFrontierReporter | null>(null);
+  const pagesReadRef = useRef<PagesRead | null>(null); // which pages Mothli may count as read
+  const [mapped, setMapped] = useState(false); // the server keeps a read map for this book
+  const [readShare, setReadShare] = useState<Record<number, number>>({}); // by 0-based chapter index
+  const [readOffer, setReadOffer] = useState<ReadOffer | null>(null);
+  const refreshReadShare = useCallback(async () => {
+    try {
+      const map = await api.readMap?.(bookId);
+      if (map) setReadShare(Object.fromEntries(map.chapters.map((chapter) => [chapter.atom - 1, chapter.read])));
+      // What counts as read decides which chapter titles the contents list may show.
+      setManifest(await api.manifest(bookId));
+    } catch {
+      /* The contents list simply shows no read marks. */
+    }
+  }, [bookId]);
+  const markRead = useCallback(async (atom: number, read: boolean) => {
+    try {
+      await api.readChapters?.(bookId, [atom + 1], read);
+    } finally {
+      await refreshReadShare();
+    }
+  }, [bookId, refreshReadShare]);
+  const answerOffer = useCallback(async (accept: boolean) => {
+    const offer = readOffer;
+    setReadOffer(null);
+    if (!offer) return;
+    try {
+      // Declining is remembered on this device; the offer also ends once anything is read here.
+      if (accept) await api.readChapters?.(bookId, offer.atoms, true, "import");
+      else localStorage.setItem(`rc:read-offer-declined:${bookId}`, "yes");
+    } catch {
+      /* Storage or the network failed; the reader can still use "I've read this" in contents. */
+    }
+    if (accept) await refreshReadShare();
+  }, [bookId, readOffer, refreshReadShare]);
   const readAnchorRef = useRef<((edge: "start" | "end") => ReturnType<typeof pageAnchor>) | null>(null);
 
   const prepareReadContext = useCallback(async () => {
@@ -272,6 +309,12 @@ export function ReaderPage({
     const anchor = readAnchorRef.current?.("end");
     if (anchor) readReporterRef.current?.schedule(anchor);
     await readReporterRef.current?.flush();
+    try {
+      // The reader is asking about the page in front of them, so it counts as read now.
+      await pagesReadRef.current?.confirmCurrent();
+    } catch {
+      /* The page could not be placed in the book; Mothli answers from what it already has. */
+    }
     try {
       const point = await api.readFrontier(bookId);
       if (point && point.position_epoch !== positionEpochRef.current)
@@ -361,6 +404,29 @@ export function ReaderPage({
       }
     });
     readReporterRef.current = readReporter;
+    let mapOff = false;
+    const pagesRead = new PagesRead(async (start, end) => {
+      if (dead || mapOff || !api.readPage || start.position_epoch !== positionEpochRef.current) return;
+      try {
+        await api.readPage(bookId, start, end);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) mapOff = true;
+        else throw error;
+      }
+    });
+    pagesReadRef.current = pagesRead;
+    setMapped(false);
+    setReadOffer(null);
+    void api.readMap?.(bookId)?.then(async (map) => {
+      if (dead) return;
+      setMapped(true);
+      setReadShare(Object.fromEntries(map.chapters.map((chapter) => [chapter.atom - 1, chapter.read])));
+      let declined = false;
+      try { declined = localStorage.getItem(`rc:read-offer-declined:${bookId}`) === "yes"; } catch { /* no storage */ }
+      if (declined || !api.readOffer) return;
+      const { offer } = await api.readOffer(bookId);
+      if (!dead && offer) setReadOffer(offer);
+    }).catch(() => {});
     let disposeHistory = () => {};
     let disposeMotion = () => {};
     const download = new AbortController();
@@ -755,6 +821,7 @@ export function ReaderPage({
 
         view.addEventListener("relocate", (e) => {
           if (dead) return;
+          pagesRead.leave(); // the page that was on screen is gone, however the reader left it
           setNameCard(null);
           setFinishCandidate(null);
           const d = (e as CustomEvent).detail as {
@@ -793,6 +860,8 @@ export function ReaderPage({
             };
             const anchor = readAnchorRef.current("start");
             if (anchor) readReporter.schedule(anchor);
+            pagesRead.show(anchor, readAnchorRef.current("end"),
+              readRange.toString().split(/\s+/u).filter(Boolean).length);
           }
           const r = view.renderer;
           const page = r.page ?? 1;
@@ -903,6 +972,8 @@ export function ReaderPage({
       }
     })();
     return () => {
+      pagesRead.leave(); // closing the book: the page on screen counts if it was read
+      if (pagesReadRef.current === pagesRead) pagesReadRef.current = null;
       dead = true;
       readReporter.dispose();
       if (readReporterRef.current === readReporter) readReporterRef.current = null;
@@ -955,13 +1026,15 @@ export function ReaderPage({
     return () => window.removeEventListener("keydown", onKey);
   }, [pendingJump, startOverOpen]);
 
-  const startNewPass = useCallback(async () => {
+  const startNewPass = useCallback(async (fresh = false) => {
     if (startOverBusy) return;
     setStartOverBusy(true);
     setStartOverError(null);
     reporterRef.current?.cancel();
     try {
-      const reset = await api.resetPosition(bookId, positionEpochRef.current);
+      const reset = fresh
+        ? await api.resetPosition(bookId, positionEpochRef.current, true)
+        : await api.resetPosition(bookId, positionEpochRef.current);
       askSessionRef.current = null;
       setSourceReturn(null);
       setAskOpen(false);
@@ -1008,6 +1081,18 @@ export function ReaderPage({
       setStartOverBusy(false);
     }
   }, [bookId, forget, publishMarks, startOverBusy]);
+
+  const followJumpRead = async () => {
+    // The reader's own word that everything before the chapter they are jumping to is read.
+    if (!pendingJump) return;
+    const before = Array.from({ length: pendingJump.chapter - 1 }, (_, index) => index + 1);
+    try {
+      if (before.length) await api.readChapters?.(bookId, before, true);
+    } catch {
+      /* The jump still happens; Mothli simply does not learn the earlier chapters. */
+    }
+    await followJump();
+  };
 
   const followJump = async () => {
     if (!pendingJump || !viewRef.current) return;
@@ -1422,6 +1507,8 @@ export function ReaderPage({
               onSearchNavigate={(result) => {
                 void viewRef.current?.select(result.cfi);
               }}
+              readShare={mapped ? readShare : undefined}
+              onMarkRead={mapped ? (atom, read) => void markRead(atom, read) : undefined}
             />
             <ReaderMarks
               marks={marks}
@@ -1561,12 +1648,16 @@ export function ReaderPage({
             </div>
           </div>
         )}
-        {pendingJump && <JumpNote chapter={pendingJump.chapter} onFollow={followJump} onStay={() => setPendingJump(null)} />}
+        {readOffer && !pendingJump && !startOverOpen && (
+          <ImportOffer offer={readOffer} onAccept={() => void answerOffer(true)} onDecline={() => void answerOffer(false)} />
+        )}
+        {pendingJump && <JumpNote chapter={pendingJump.chapter} onFollow={followJump} onFollowRead={mapped ? followJumpRead : undefined} onStay={() => setPendingJump(null)} />}
         {startOverOpen && (
           <StartOverNote
             busy={startOverBusy}
             error={startOverError}
-            onConfirm={startNewPass}
+            onConfirm={() => void startNewPass()}
+            onFresh={mapped ? () => void startNewPass(true) : undefined}
             onCancel={() => {
               positionReportingPausedRef.current = false;
               setStartOverError(null);

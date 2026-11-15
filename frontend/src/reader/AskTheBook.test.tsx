@@ -4,6 +4,7 @@ import { axeAA } from "../test-a11y";
 const mocks = vi.hoisted(() => ({
   askBook: vi.fn(),
   askBookStream: vi.fn(),
+  clearConversation: vi.fn(),
   selectionAction: vi.fn(),
   catchMeUp: vi.fn(),
   graph: vi.fn(),
@@ -272,6 +273,8 @@ describe("Mothli conversation", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
     expect(screen.queryByText(answer.claims[0].text)).toBeNull();
+    // The server keeps the conversation too; clearing the panel clears that copy.
+    expect(mocks.clearConversation).toHaveBeenCalledWith("b");
     expect(
       (screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value,
     ).toBe("");

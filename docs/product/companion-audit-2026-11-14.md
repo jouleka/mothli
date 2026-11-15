@@ -602,7 +602,7 @@ Every sentence judgment from 48 streamed replies was saved with its passages (12
 
 ### Fix
 
-A sentence Jev doubts now gets one second look from Terra (low effort, one true/false answer), which alone decides. Two Jev findings cannot be overruled, because the second look missed them on the controls: a dropped condition at 0.7 or more, and a wrongly placed event at 0.45 or more. At most four second looks per reply; an error or a fifth doubted sentence drops the sentence.
+A sentence Jev doubts now gets one second look from Terra (low effort, one true/false answer), which alone decides. Two Jev findings cannot be overruled, because the second look missed them on the controls: a dropped condition at 0.7 or more, and a wrongly placed event at 0.45 or more. At most four second looks per reply (raised to six in 6m); an error or a fifth doubted sentence drops the sentence.
 
 | Second look, measured offline | Result |
 |---|---|
@@ -644,6 +644,226 @@ Opening Pride and Prejudice in the reader with streaming on found two faults tha
 Five questions asked in the chat panel at the start of Chapter VII: first sentence on screen at 1.4–3.1 s, finished at 1.4–4.3 s, a follow-up resolved from the conversation, and both spoiler probes answered "we haven't got there yet".
 
 `READER_CONVERSATION_STREAM` now follows `READER_CONVERSATION_JEV` when unset. Set it to false for the reviewed, non-streamed replies.
+
+## 6m. Chapter notes, a server-held conversation and a reader profile (15 November)
+
+Plan and data model: `docs/product/reader-companion-plan-2026-11-15.md`. Local mode only. The homepage chat is not built.
+
+### What was built
+
+| Piece | Where | Behaviour |
+|---|---|---|
+| Chapter notes | `app/chapter_notes.py`, table `chapter_notes` | When a chapter is wholly read, one writer call turns it into one-fact sentences. Each passes the reply gate against passages of that chapter; only passing sentences are stored. Behind `READER_STORY_NOTES`, off by default |
+| Notes in replies | `stream_conversation.py` | Writer and checker both receive the notes of chapters whose read prefix hashes to the text the notes were written from. A chapter the reader is inside, or whose text changed, contributes nothing |
+| Background writing | `NotesBuilder` | Runs after a chapter is finished (`PUT /position`) and after a reply, never before one. One book at a time |
+| Conversation on the server | table `conversation_turns`, `GET`/`DELETE /api/books/{id}/conversation` | The streamed path stores the question and only the sentences shown, with the exact position. It loads its own last eight turns at or before the request position and ignores `history` from the browser. "Clear" in the panel clears the server copy |
+| Reactions | `conversation_turns.reaction` | A reader message the turn classifier reads as a reaction is flagged. No extra call |
+| Reader profile | `GET /api/reader/profile` | Per book: unread, reading or finished, chapters read, the reader's latest flagged reactions up to the position. Plus history entries not on the shelf. Computed on request; no model call, no table |
+
+The sentence checks were moved out of `stream_read_prefix` into `sentence_checks` so replies and notes share one gate. No check was changed.
+
+### What changed in the guarantee
+
+- **Position boundary: unchanged.** Notes are written only from fully read chapters and reach a reply only by the hash rule above. Tests cover a position inside the chapter, a changed chapter, and "start over".
+- **Looser on faithfulness, as agreed:** a reply sentence may be supported by a note. The note was checked against its chapter; the reply sentence is then checked against the note, not the page.
+
+### Measured
+
+Karamazov fixtures (5 chapters, 69k characters), writer and second look through `codex-local`, Jev 1.14.0 through TypeSafe, one run each unless stated. Timings are from `codex-local` and are not production timings. "Reference" is a medium-effort review of every written sentence against the primary read text only.
+
+All 23 questions, same code, before the two prompt changes below:
+
+| | Notes off | Notes on |
+|---|---|---|
+| As expected | 23 of 23 | 23 of 23 |
+| Spoiler flags | 0 | 0 |
+| Spoiler probes (5, three inside a chapter) | 5 of 5 | 5 of 5 |
+| Whole-book facts (6 questions) | 13 of 21 | 17 of 21 |
+| Other facts (12 questions) | 18 of 18 | 17 of 18 |
+| Sentences shown; reference says unsupported | 70; 3 | 77; 2 |
+| Sentences dropped; reference says correct | 3; 2 | 11; 10 |
+| Jev cost per question | $0.0007 | $0.0009 |
+| Model calls per question | 6.3 | 6.9 |
+| Total time, median (`codex-local`) | 7.5 s | 7.6 s |
+
+- **Eight of the eleven drops were not check failures.** Two recaps ran to 12 sentences and lost the last four to the 8-sentence limit, which is the most recent part of the story.
+- **Writing the notes** for all five chapters: 5 writer calls, 33 of 35 sentences kept, $0.0075 of Jev, 37 to 58 s across four runs.
+- **Mid-chapter positions hold.** Inside chapter 3, "What was Ivan's article about?" got "We haven't got to Ivan's article yet." with notes on and off; chapter 3's notes (which mention the article) were not yet written.
+
+After two prompt changes (replies "never more than seven" sentences; notes use the name the chapter uses), the six whole-book questions with notes on, run twice:
+
+| | Run 1 | Run 2 |
+|---|---|---|
+| Whole-book facts | 18 of 21 | 19 of 21 |
+| Shown; reference says unsupported | 33; 0 | 29; 1 |
+| Dropped; reference says correct | 2; 2 | 9; 9 |
+| Notes kept of written; reference says unsupported | 31 of 35; 1 | 35 of 35; 0 |
+
+- **The length instruction is not reliable.** One recap still ran to 12 sentences in run 2 and lost four.
+- **The one unsupported note** said Adelaïda left "Dmitri" with his father where the chapter says "Mitya". The chapter names Dmitri as her son, so the link is by implication, as with "Lizzy" in 6j.
+- **A recurring slip, with notes on and off:** "after Adelaïda ran away and died, Fyodor forgot Mitya". The book has him forget the boy when she leaves. Jev and the second look pass it; the reference rejects it. It appeared in 1 of 2 runs without notes and 2 of 3 with.
+The limits were then raised to 12 sentences and 6 second looks per reply (they were 8 and 4). All 23 questions with notes on, one run:
+
+| | Result |
+|---|---|
+| As expected; spoiler flags; spoiler probes | 23 of 23; 0; 5 of 5 |
+| Whole-book facts; other facts | 18 of 21; 17 of 18 |
+| Sentences shown; reference says unsupported | 75; 1 |
+| Sentences dropped; reference says correct | 7; 7 |
+| Notes kept of written; reference says unsupported | 34 of 35; 0 |
+| Jev cost and model calls per question | $0.0010; 7.3 |
+| Total time, median and slowest (`codex-local`) | 7.5 s; 69.5 s |
+
+- **This run does not show what the higher limit buys.** No reply ran past eight sentences, so nothing was cut for length either way. The 12-sentence recaps seen in three earlier runs did not recur. Tests show a 13th sentence is cut and a 7th doubted sentence is dropped without a look.
+- **All seven drops were check decisions on correct sentences**, three of them in one recap that used all six second looks. That recap took 69.5 s on `codex-local`, where second looks run two at a time.
+- **The one sentence the reference rejected is supported by the text.** "They fought frequently, though the story that she beat him was only a rumour": chapter 1 says "frequent fights took place" and "rumor had it that" he "was beaten by her". The reference is a yardstick with its own errors.
+
+- **Spend for all of the above:** about $0.18 of Jev across nine runs (one stopped part-way and estimated at $0.01). ChatGPT subscription calls are not priced.
+
+### Inferred, not measured
+
+- Notes for a long book. Every reply check receives every usable note; at 5 chapters that added $0.0002 per question. At 60 chapters it has not been run.
+- Anything on Pride and Prejudice. The late-position cases (`through-34`) are written but the EPUB was not available.
+- Production timing, and behaviour on the direct API.
+- Whether notes make the ordering slip more likely. The counts above are too small to say.
+- How often a shown sentence rests on a note alone. The reference review judged every shown sentence against the pages; it did not separate those a note supported from those a passage supported.
+
+### Found on the way, not changed
+
+- **The event-binding check does nothing on the streamed path.** `unsupported_event_bindings` needs `facts["_entities"]`, which `source_facts` never supplies, so it returns an empty list for any sentence (run: an invented killing and marriage produced no hits). Section 6j lists it as part of the deterministic gate.
+- A forward jump still marks skipped chapters as read (problem 9), so notes would be written for them.
+- The reference review, and any chapter over about 36k bytes on `codex-local`, exceed the 60k per-call input ceiling. Notes now split a long chapter to fit; the review calls the model directly.
+
+### Not done
+
+- The chat panel still shows its browser copy of the conversation and still sends `history`; the streamed path ignores it. Loading the panel from the server is the remaining step for a second device.
+- Hosted mode: no tables, no endpoints.
+- Homepage chat, blurbs for unread books, cross-book cases (written in `companion_eval_cases.json`, not run).
+
+## 6n. A real-length book, and a read map in place of one position (15 November)
+
+Design and decisions: "Read map" in `docs/product/reader-companion-plan-2026-11-15.md`. Both pieces are behind settings that are off by default (`READER_STORY_NOTES`, `READER_READ_MAP`).
+
+### Notes on a 61-chapter book (measured)
+
+Pride and Prejudice, Project Gutenberg 1342 (61 chapters, 686k characters), read through chapter 34. Writer through `codex-local`, one run each.
+
+| At chapter 34, five questions | Notes off | All notes sent | Notes cut to a budget |
+|---|---|---|---|
+| Answered | 5 of 5 | 0 of 5 (all refused as too large, HTTP 413) | 5 of 5 |
+| Facts present | 6 of 11 | none | 8 of 11 |
+| Spoiler flags | 0 | 0 | 0 |
+| Jev cost per question | $0.0008 | — | $0.0012 |
+
+- **Sending every note does not survive a real book.** 34 chapters of notes are 17,000 characters; with ten passages that exceeds the per-call ceiling. This is the failure section 6m listed as not measured.
+- **The fix.** When the notes exceed 6,000 characters, half the room goes to the note sentences sharing most words with the question and the rest to the opening note of chapters spread evenly from first to last (`select_notes`). Writer and checker still receive the same notes.
+- **What it bought.** "What did Mr. Collins come to Longbourn for?" went from "I can't tell from what we've read" to the entail and the plan to marry a daughter. The recap still lost three sentences to the checks.
+- **Writing the notes:** 34 chapters, 232 of 234 sentences kept, $0.038 of Jev, 313 s. At chapter 6: 12 of 12 as expected, 14 of 14 facts.
+
+### The read map (built)
+
+For Mothli, the single furthest position is replaced by the stretches of text the reader has read, each verified against the source.
+
+| Piece | Behaviour |
+|---|---|
+| `read_ranges`, `read_position` tables; `app/read_map.py` | A page enters the map when the reader app reports it, with both ends found exactly once in the chapter. One report may add at most 12,000 characters. The reader's place is kept apart and may move backward |
+| `PUT /read-page`, `PUT /read-chapters`, `GET /read-map` | A page read; "I've read this" or "I haven't" for whole chapters; the share of each chapter read |
+| Replies, notes, stored conversation, profile | All take their text from the map when it is on. A chapter's notes need the whole chapter in the map. A stored turn shows when the place it was written at is in the map |
+| Existing readers | What the older position held as read is carried into the map once, when the book is next opened. After that the older counter never feeds the map: it still advances on a confirmed jump |
+| Start over | Keeps the map and the conversation by default. `fresh` clears the map; earlier conversation reappears as its place is read again |
+| Reader app | Reports a page when it is left after a quarter of ordinary reading time for its words (300 a minute), or when the reader asks about it. Pages flicked past are not reported. The jump dialog no longer claims earlier chapters are read and offers "I've read up to here"; start-over offers "read again" and "read it fresh" |
+
+### Imports and "I've read this" (built)
+
+| Piece | Behaviour |
+|---|---|
+| `GET /read-offer`, `import_offer` | While nothing of a book has been read here, what another app recorded about it. A book marked finished is offered whole. Otherwise the furthest imported highlight found in this text places the reader at the start of its chapter, so Mothli is behind the reader, never ahead. Nothing enters the map until the reader says yes |
+| Reader app | The offer appears once when the book is opened: "Goodreads says you finished this book on May 3, 2021. Should Mothli treat all of it as read?" A no is remembered on that device |
+| Contents list | Each chapter shows "read", "part read" or "not read", and pressing it tells Mothli "I've read this" or "I haven't" |
+
+Checked once in the running reader (stub models, Karamazov with an imported "finished" record): the offer appeared with that text; accepting put all five chapters in the map and ended the offer; the contents list showed five chapters as read; pressing chapter 3 changed it to "not read", the map to four chapters, and the profile from finished to reading.
+
+### The cast, recap and chapter titles follow the map (built)
+
+Those views take one number, the chapter counter. With the read map on, that number now comes from the map.
+
+| Piece | Behaviour |
+|---|---|
+| The counter | The last chapter up to which every chapter is finished. A chapter is finished when at least 80% of it is in the map and its ending was reached. Reaching a page no longer moves it, so a leap does not; "I haven't read this" lowers it |
+| Chapter titles | Shown up to the chapter after the counter, as before, and also for any chapter the reader has read part of |
+| Reading again | Keeps the counter; "read it fresh" returns it to zero |
+| Passage help | A selection is accepted wherever the reader is, since they selected it on screen. It must still match its chapter, and only the selection is used |
+| The older page report | Answered from the map, so it no longer fails after a leap |
+
+- **This is looser than the map itself in one way, on purpose.** Mothli's replies and notes use only text in the map. The counter counts a chapter with one skimmed page as finished, because otherwise a single skimmed page would freeze the cast and recap at that chapter for good. Those views may therefore show something from a skimmed page of a chapter the reader otherwise finished.
+- **The counter only counts from the start.** A reader who opens a book in the middle gets no cast or recap until the earlier chapters are read or marked as read. Mothli itself still talks about what they have read.
+- **A chapter's notes still need the whole chapter.** One skimmed page means no notes for that chapter until the reader presses "I've read this".
+- **Chapter closeout can appear one page late.** The counter moves when the page report for a chapter's last page arrives, which can be after the position report for the next page.
+- Checked once in the running reader: marking chapters 1 and 2 as read moved the counter to 2 and showed titles for chapters 1 to 3; chapters 4 and 5 stayed hidden.
+
+### The read map (measured)
+
+Karamazov fixtures, real models, one run, with a reference review of every sentence against the text inside the map.
+
+| Position | Questions | As expected | Facts | Spoiler flags | Shown; reference says unsupported |
+|---|---|---|---|---|---|
+| Opened the book and read only a stretch of chapter 5 | 5 | 5 | 4 of 4 | 0 | 14; 0 |
+| Chapter 1 marked read, a stretch of chapter 5, then back to a page of chapter 2 | 5 | 5 | 3 of 3 | 0 | 12; 0 |
+
+- Asked about a skipped chapter, Mothli said so: "I can't tell from what we've read here who Fyodor Pavlovitch's first wife was." "Who is Alyosha?" was answered from the page read (he lives in the elder's cell) with nothing from the four chapters skipped.
+- From a page in chapter 2 it still answered about the elder from the chapter 5 stretch, and about the first marriage from the chapter marked as read.
+
+### Not done, or not checked
+
+- **Page reporting was checked once in the running reader** (stub models, Karamazov): one page read for ten seconds, two flicked past, one read for twenty seconds. The server received exactly two page reports, both accepted, and the map showed 30% of chapter 1. The two dialogs were not opened in the browser; they have unit tests only.
+- **The jump and start-over dialogs** were not opened in the browser; they have unit tests only.
+- **An import with no highlights and no "finished" status gives no offer.** The history holds no page or percentage for a book in progress, so there is nothing to place the reader by.
+- **The reviewed, non-streamed reply path does not use the map.** The map requires streamed replies, and the setting is refused without them.
+- **The cast and recap were not opened in the browser with the map on.** They read the counter, which tests and the running reader showed moving correctly; their own screens were not checked.
+- The read-map cases ran once, on five chapters. No re-reading case was run with real models.
+- Spend so far for sections 6m and 6n: about $0.28 of Jev.
+
+## 6o. Mothli on the home screen: one conversation across the reader's books (15 November)
+
+Requires the read map and streamed replies. Not shown where the server does not have them on.
+
+### What was built
+
+| Piece | Behaviour |
+|---|---|
+| `app/home_conversation.py`, `POST /api/reader/ask/stream` | For each book with anything read: passages from its read map, and its notes, each given under the book's name. For a book not started: title and author only. A shelf line per book ("reading, 4 of 5 chapters finished") from stored state. Books recorded in another app with no text here appear as shelf lines only |
+| Checks | The same sentence checks as a book's own conversation, against the shelf lines and the labelled passages. The unread-name check runs once per book, each against that book's own read text |
+| `GET`/`DELETE /api/reader/conversation` | The home conversation is stored with no book id and can be cleared |
+| Home screen | A panel under the current book: earlier turns, a question box, sentences shown as they arrive |
+
+`write_and_gate` was split out of the book reply so both use one writer-and-check loop.
+
+### Measured
+
+Shelf: Karamazov with chapters 1 to 4 read, Pride and Prejudice with chapters 1 to 6 read, Middlemarch on the shelf unopened (an empty stand-in file with that title). Real models, notes on, one run, eight questions.
+
+| | Result |
+|---|---|
+| As expected | 8 of 8 |
+| Facts present | 9 of 9 |
+| Spoiler flags | 0 |
+| Sentences shown; reference says unsupported | 20; 0 |
+| Sentences dropped | 0 |
+| Jev cost and model calls per question | $0.0006; 4.1 |
+
+- "What is Middlemarch about? Should I read it next?" got "We haven't started Middlemarch yet, so I can't tell you what it's about", then a pointer to the book one chapter from its end.
+- "In Pride and Prejudice, who does Lydia run away with?" got "We haven't got there yet", plus what the read chapters say of Lydia.
+- "What does Mr. Darcy think of the elder Zossima?" was answered by naming each man's book and saying nothing connects them.
+- The panel was used once in the running app with stand-in models: a question was sent, the reply appeared, and both turns were stored.
+
+### What this does not do
+
+- **No suggestions of books that are not on the shelf.** That needs a description of each book that is known to give nothing away, and there is none: only classics have a blurb, and those were never screened.
+- **A book not started has no description at all**, for the same reason. This is stricter than the plan, which allowed a spoiler-free blurb.
+- **Spend is recorded against one book**, the first on the shelf with anything read, because the cost ledger has no place for a conversation that belongs to none.
+- **At most six books' read text per reply**, in shelf order. No choice is made by relevance yet, so a seventh book is known only by its shelf line.
+- **Earlier home turns are not filtered by what is read now.** After "read it fresh" on a book, an old home turn about it can still be given to the writer as conversation, though not as evidence.
+- One run, two real books. The stand-in for the unopened book tests the model's own knowledge of a famous title, not a real file.
 
 ## 7. Proposed target
 

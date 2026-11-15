@@ -16,6 +16,7 @@ import { MothliMark } from "../ui/MothliMark";
 import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupportedBookMessage } from "../import/bookFiles";
 import { readLastPassage, sinceLabel } from "../reader/lastPassage";
 import { ProviderSettings } from "./ProviderSettings";
+import { HomeChat } from "./HomeChat";
 import "./shelf-redesign.css";
 
 const recentKey = (owner: string) => `litlet.library-recent:${owner}`;
@@ -623,6 +624,8 @@ export function Shelf({
             </div>
           </section>
         )}
+
+        {"homeConversation" in api && <HomeChat />}
 
         <section className="ml-collection" aria-labelledby="collection-title">
           <div className="ml-collection-head">
