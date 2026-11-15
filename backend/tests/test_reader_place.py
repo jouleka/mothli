@@ -54,7 +54,7 @@ def test_chapters_told_as_read_with_no_place_yet_name_the_next_one_to_read():
 
 def test_chapters_gone_past_before_the_readers_place_can_be_offered_as_read():
     from app.reader_place import skipped_before
-    assert skipped_before(item(here=3, part=[3])) == {"atoms": [1, 2], "chapters": "chapters 1 and 2"}
-    assert skipped_before(item(here=4, whole=[1], part=[2, 4])) == {"atoms": [2, 3], "chapters": "chapters 2 and 3"}
+    assert skipped_before(item(here=3, part=[3])) == {"atoms": [1, 2], "chapters": "chapters 1 and 2", "skimmed": []}
+    assert skipped_before(item(here=4, whole=[1], part=[2, 4])) == {"atoms": [2, 3], "chapters": "chapters 2 and 3", "skimmed": []}
     assert skipped_before(item(here=7, whole=range(1, 7), part=[7])) is None       # read in order
     assert skipped_before(item(here=0)) is None                                     # not started

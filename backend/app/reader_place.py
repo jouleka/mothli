@@ -48,11 +48,18 @@ def skipped_before(item):
 
     The reader went past them: quickly, by a leap, or having read them somewhere else. Only the
     reader can say which, so this is something to ask, never something to assume.
+
+    ``skimmed`` names those the reader turned through quickly here, so the question can say so.
+    A leap past a chapter leaves nothing skimmed.
     """
     numbers, here = item["numbers"], item["point"]["atom"]
     whole = {chapter["ordinal"] for chapter in item["chapters"] if chapter["whole"]}
     atoms = [ordinal for ordinal in sorted(numbers) if ordinal < here and ordinal not in whole]
-    return {"atoms": atoms, "chapters": spans([numbers[ordinal] for ordinal in atoms])} if atoms else None
+    if not atoms:
+        return None
+    seen = item.get("skimmed", set())
+    return {"atoms": atoms, "chapters": spans([numbers[ordinal] for ordinal in atoms]),
+            "skimmed": [ordinal for ordinal in atoms if ordinal in seen]}
 
 
 def offers_for(sentences, items):
@@ -63,7 +70,8 @@ def offers_for(sentences, items):
     if not NOT_THERE.search(" ".join(sentences)):
         return []
     found = [(item, skipped_before(item)) for item in items]
-    return [{"book_id": item["book"]["book_id"], "title": item["book"]["title"], **skipped}
+    return [{"book_id": item["book"]["book_id"], "title": item["book"]["title"],
+             "atoms": skipped["atoms"], "chapters": skipped["chapters"]}
             for item, skipped in found if skipped][:3]
 
 

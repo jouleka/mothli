@@ -42,4 +42,28 @@ describe("ImportOffer for chapters the reader went past", () => {
     fireEvent.click(screen.getByRole("button", { name: "no, I skipped them" }));
     expect(onDecline).toHaveBeenCalledTimes(1);
   });
+
+  test("chapters turned through quickly are asked about as that, not as missed", async () => {
+    const onAccept = vi.fn();
+    const onDecline = vi.fn();
+    const { container } = render(<ImportOffer onAccept={onAccept} onDecline={onDecline} offer={{
+      kind: "skipped", sources: [], finished_on: null, chapter: null, atoms: [1, 2],
+      chapters: "chapters 1 and 2", skimmed: [1, 2] }} />);
+    const note = screen.getByRole("region", { name: /before we go on/i });
+    expect(note.textContent).toMatch(
+      /You went through chapters 1 and 2 quickly\. Did you read them, or were you just getting here\?/);
+    fireEvent.click(screen.getByRole("button", { name: "yes, I read them" }));
+    expect(onAccept).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "I was just getting here" }));
+    expect(onDecline).toHaveBeenCalledTimes(1);
+    expect(await axeAA(container)).toHaveNoViolations();
+  });
+
+  test("if only some were turned through quickly, the plain question is asked", () => {
+    render(<ImportOffer onAccept={() => {}} onDecline={() => {}} offer={{
+      kind: "skipped", sources: [], finished_on: null, chapter: null, atoms: [1, 2],
+      chapters: "chapters 1 and 2", skimmed: [2] }} />);
+    expect(screen.getByRole("region", { name: /before we go on/i }).textContent)
+      .toMatch(/I wasn’t with you for chapters 1 and 2\./);
+  });
 });

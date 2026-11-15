@@ -29,17 +29,21 @@ export function ImportOffer({
   const chapters = offer.atoms.length;
   if (offer.kind === "skipped") {
     const them = chapters === 1 ? "it" : "them";
+    // Every chapter asked about was turned through quickly here, not leapt over.
+    const quickly = chapters > 0 && offer.atoms.every((atom) => offer.skimmed?.includes(atom));
     return (
       <div className="start-over-note import-offer" role="region" aria-labelledby={titleId}>
         <div className="confirmation-copy">
           <strong id={titleId}>Before we go on</strong>
           <p>
-            I wasn’t with you for {offer.chapters}. Have you read {them}?
+            {quickly
+              ? <>You went through {offer.chapters} quickly. Did you read {them}, or were you just getting here?</>
+              : <>I wasn’t with you for {offer.chapters}. Have you read {them}?</>}
           </p>
         </div>
         <div className="confirmation-actions start-over-actions">
-          <Button onClick={onDecline}>no, I skipped {them}</Button>
-          <Button variant="primary" onClick={onAccept}>yes, I’ve read {them}</Button>
+          <Button onClick={onDecline}>{quickly ? "I was just getting here" : `no, I skipped ${them}`}</Button>
+          <Button variant="primary" onClick={onAccept}>{quickly ? `yes, I read ${them}` : `yes, I’ve read ${them}`}</Button>
         </div>
       </div>
     );

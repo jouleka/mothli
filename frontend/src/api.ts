@@ -137,7 +137,11 @@ export type ReadOffer = {
   chapter: number | null; atoms: number[];
   /** For "skipped": the chapters in words, e.g. "chapters 1 and 2". */
   chapters?: string;
+  /** For "skipped": those of them the reader turned through quickly here. */
+  skimmed?: number[];
 };
+/** Chapters before the reader's place not read in full here, and which of them were skimmed. */
+export type SkippedChapters = { atoms: number[]; chapters: string; skimmed?: number[] };
 /** One message of the home conversation, which runs across all the reader's books. */
 export type HomeTurn = { role: "user" | "assistant"; content: string; created_at?: string };
 export type ReadFrontier = { id: string; atom: number; offset: number; position_epoch: number; available_chapter: number };
@@ -656,10 +660,11 @@ export const api = {
    */
   /** The read map: what the reader has read of this book. 404 while the map is off. */
   readMap: (id: string) => fetch(`/api/books/${id}/read-map`).then((r) => j<ReadMap>(r)),
-  readPage: (id: string, start: ReadAnchor, end: ReadAnchor) => fetch(`/api/books/${id}/read-page`, {
+  /** A page read, or with ``skimmed`` one turned quickly on the way (remembered, never read). */
+  readPage: (id: string, start: ReadAnchor, end: ReadAnchor, skimmed = false) => fetch(`/api/books/${id}/read-page`, {
     method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders() },
-    body: JSON.stringify({ start, end }),
-  }).then((r) => j<ReadFrontier & { skipped?: { atoms: number[]; chapters: string } | null }>(r)),
+    body: JSON.stringify(skimmed ? { start, end, skimmed } : { start, end }),
+  }).then((r) => j<ReadFrontier & { skipped?: SkippedChapters | null }>(r)),
   readChapters: (id: string, atoms: number[], read: boolean, source: "told" | "import" = "told") =>
     fetch(`/api/books/${id}/read-chapters`, {
       method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders() },

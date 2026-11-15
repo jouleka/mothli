@@ -909,6 +909,34 @@ The home panel was rebuilt by a second agent to match the conversation inside a 
 - No check changed. What reaches a model is decided by the map and the notes' hash rule, as in 6m and 6n.
 - Notes are written in the background when a chapter is finished, so a server with these defaults now spends on that: in 6n, notes for 34 chapters of Pride and Prejudice took at least one writer call per chapter and $0.038 of Jev.
 
+## 6r. Skimmed pages (15 November)
+
+A page now has three states: read, skimmed, or nothing. This settles the product question left open in 6p.
+
+| Piece | Behaviour |
+|---|---|
+| Reader app (`pagesRead.ts`) | A page left too quickly to be read (the rule is unchanged: a quarter of ordinary reading time) is skimmed only if the next page shown is the one that follows it: the next page of the same file, or the first page of the next file after the last page of text. A link, the contents list, turning back, or closing the book records nothing. A page the reader asked about counts as read and is never also reported as skimmed |
+| `PUT /read-page` with `skimmed: true` | Both ends are checked against the source exactly as for a read page. The stretch goes to a separate table, `skimmed_ranges`. The reader's place does not move and nothing is asked |
+| Settling | The answer to the next page read carries, with the chapters before the place not read in full, which of them were skimmed. If all were, the reader app asks: "You went through chapters 1 and 2 quickly. Did you read them, or were you just getting here?" Yes marks them as told; "I was just getting here" is remembered for those chapters on that device, as before. Otherwise the earlier question ("I wasn't with you for…") is asked |
+| Forgetting | "I haven't read this" on a chapter, and "read it fresh", also forget its skimmed pages |
+
+- **Spoiler safety: unchanged.** Skimmed text is kept in its own table, which nothing that builds a model's input reads. The read map, notes, the counter, the profile and the place line are unchanged. A test asks after skimming and checks that no skimmed sentence reaches the writer or the checker.
+- **Mothli itself is not told about skimming.** Its place line still says "not read with you". Telling it would change its prompts, which would need a measured run.
+
+### Checked in the running reader (stand-in models, Karamazov, one run)
+
+- Clicking through chapter 1 every 0.4 s stored one skimmed stretch of chapter 1 (characters 1,067 to 7,686 of 7,690) and the first page of chapter 2, and nothing as read beyond the first page, on which the reader had stayed.
+- Staying on a page of chapter 2 brought "You went through chapter 1 quickly. Did you read it, or were you just getting here?" Yes marked chapter 1 as told.
+- Clicking through the rest of chapter 2 and staying on a page of chapter 3 brought the same question for chapter 2. "I was just getting here" stored chapter 2 as declined on the device; the server still held it as skimmed, not read.
+- Going from chapter 3 to chapter 5 through the contents list added nothing skimmed.
+
+### Not done, or not checked
+
+- **Scrolled layout** was not tried in the browser. The next-page rule uses the paginator's page numbers, which in scrolled mode count screens of scrolling.
+- **A two-page spread** is one page to this rule; that is what was used above. A single-column phone layout was not tried.
+- **Still open from 6p:** once any chapter in the list was declined, the reader app does not ask about chapters skipped later. With skimming this shows sooner: decline "just getting here" for chapter 2, skim chapter 4, and no question comes.
+- **Still open (step 4):** a skimmed page still keeps a chapter from being read whole, so it still blocks that chapter's notes until the reader says "I've read this".
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

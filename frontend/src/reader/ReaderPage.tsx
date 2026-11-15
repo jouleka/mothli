@@ -411,10 +411,10 @@ export function ReaderPage({
     });
     readReporterRef.current = readReporter;
     let mapOff = false;
-    const pagesRead = new PagesRead(async (start, end) => {
+    const pagesRead = new PagesRead(async (start, end, skimmed) => {
       if (dead || mapOff || !api.readPage || start.position_epoch !== positionEpochRef.current) return;
       try {
-        const point = await api.readPage(bookId, start, end);
+        const point = await api.readPage(bookId, start, end, skimmed);
         // Settled on a page with chapters gone past before it: ask once whether they were read.
         const skipped = point?.skipped;
         if (!dead && skipped) {
@@ -428,7 +428,7 @@ export function ReaderPage({
           if (open.length === skipped.atoms.length) {
             setReadOffer((current) => current ?? {
               kind: "skipped", sources: [], finished_on: null, chapter: null,
-              atoms: skipped.atoms, chapters: skipped.chapters });
+              atoms: skipped.atoms, chapters: skipped.chapters, skimmed: skipped.skimmed });
           }
         }
       } catch (error) {
@@ -886,8 +886,11 @@ export function ReaderPage({
             };
             const anchor = readAnchorRef.current("start");
             if (anchor) readReporter.schedule(anchor);
+            const { page: shownPage, pages: shownPages } = view.renderer;
             pagesRead.show(anchor, readAnchorRef.current("end"),
-              readRange.toString().split(/\s+/u).filter(Boolean).length);
+              readRange.toString().split(/\s+/u).filter(Boolean).length,
+              typeof shownPage === "number" && typeof shownPages === "number"
+                ? { section: idx, page: shownPage, pages: shownPages } : null);
           }
           const r = view.renderer;
           const page = r.page ?? 1;
