@@ -688,6 +688,12 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
                                         query=body.question, other_books=settings.reader_read_map)
                 except Exception:       # a reply without them is better than no reply
                     logger.exception("recollections could not be read")
+            if remembered and len(fit_passages(passages, [recollection_passage(remembered)],
+                                               budget=check_room(question, identities))) == len(passages):
+                # The largest check of this reply has no room left for them, and a check over
+                # the size the checker accepts is refused and its sentence dropped. They are
+                # left out for the writer too: it is never given what its checker is not.
+                remembered = []
             if remembered:
                 prompt += "\n\n" + recollection_block(remembered)
                 passages += [recollection_passage(remembered)]

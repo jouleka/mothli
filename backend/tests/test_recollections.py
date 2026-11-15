@@ -642,6 +642,36 @@ def test_a_reader_with_no_notes_gets_the_prompt_they_had_before(env, monkeypatch
     assert not any(p.startswith(recollections.PASSAGE_HEAD) for state in seen["checked"] for p in state["passages"])
 
 
+def test_the_notes_never_make_a_check_larger_than_the_checker_accepts(env, monkeypatch):
+    """Break caught: a sentence check over the checker's size limit is refused and its sentence
+    dropped (6ad, seen with real models when passages were added to the home chat). The notes
+    are one more passage: when the largest check of a reply has no room for it, the writer and
+    the checker both go without."""
+    from app import stream_conversation
+    api, bid, app, _ = env
+    read_page(api, bid, 1, 1, 3)
+    models(app, monkeypatch, changes=[change("The reader wants short answers.")])
+    said(app, bid, "Short answers please, as short as you can make them.", *chatter(5))
+    catch_up(app, bid)
+    app.state.catalog.clear_turns(bid)
+    seen = models(app, monkeypatch, reply="Mara moved lamp 2 in part 1.")
+    ask(api, bid)
+    assert "short answers" in block_of(seen["reply"][-1])            # room enough: given
+    room = stream_conversation.check_room("What just happened?", [])
+    largest = max(sum(len(json.dumps(p, ensure_ascii=False).encode()) + 2 for p in state["passages"])
+                  for state in seen["checked"])
+    assert largest <= room
+    # The same reply with room for the passages it had before and not one byte more.
+    monkeypatch.setattr(stream_conversation, "CHECK_INPUT_LIMIT",
+                        stream_conversation.CHECK_INPUT_LIMIT - room + largest - 1)
+    app.state.catalog.clear_turns(bid)
+    seen = models(app, monkeypatch, reply="Mara moved lamp 2 in part 1.")
+    events = ask(api, bid)
+    assert [e["text"] for e in events if e["type"] == "sentence"] == ["Mara moved lamp 2 in part 1."]
+    assert block_of(seen["reply"][-1]) is None and seen["system"][-1] == stream_conversation.STREAM_SYSTEM
+    assert not any(p.startswith(recollections.PASSAGE_HEAD) for state in seen["checked"] for p in state["passages"])
+
+
 def test_a_fault_in_reading_the_notes_costs_the_reader_the_notes_not_the_reply(env, monkeypatch):
     """Break caught: a damaged row in the store, and no question in any book is answered."""
     api, bid, app, _ = env

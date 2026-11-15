@@ -208,6 +208,7 @@ Jev answers a second question in the same call: does the note say anything of a 
 
 - What a reply is given is chosen without a model (`select_recollections`): `about` and `taste` newest first, then `plan`, then feelings in the book in hand and notes tied to another book that share a word with the reader's message, by words shared and then newest.
 - A reply with no notes to give gets exactly the instructions it had before; the one instruction on using them is added only beside a block.
+- The notes are one more passage in every sentence check, and a check over the size the checker accepts is refused (audit 6ad). When the largest check of a reply has no room for that passage, the notes are left out of that reply, for the writer and the checker alike.
 
 **The reader's control.** `GET /api/reader/recollections` lists every note that may be shown, newest first, with its kind, date, book and message, and counts those held back. `DELETE /api/reader/recollections/{id}` forgets one. `DELETE /api/reader/recollections` forgets all, and counts every message stored so far as looked at, so nothing said before the wipe becomes a note after it.
 
