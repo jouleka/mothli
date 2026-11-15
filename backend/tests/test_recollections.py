@@ -645,8 +645,8 @@ def test_a_reader_with_no_notes_gets_the_prompt_they_had_before(env, monkeypatch
 def test_the_notes_never_make_a_check_larger_than_the_checker_accepts(env, monkeypatch):
     """Break caught: a sentence check over the checker's size limit is refused and its sentence
     dropped (6ad, seen with real models when passages were added to the home chat). The notes
-    are one more passage: when the largest check of a reply has no room for it, the writer and
-    the checker both go without."""
+    are one more passage, always kept: when the largest check of a reply has no room for
+    everything, read text gives way, for the writer and the checker alike."""
     from app import stream_conversation
     api, bid, app, _ = env
     read_page(api, bid, 1, 1, 3)
@@ -658,9 +658,12 @@ def test_the_notes_never_make_a_check_larger_than_the_checker_accepts(env, monke
     ask(api, bid)
     assert "short answers" in block_of(seen["reply"][-1])            # room enough: given
     room = stream_conversation.check_room("What just happened?", [])
-    largest = max(sum(len(json.dumps(p, ensure_ascii=False).encode()) + 2 for p in state["passages"])
-                  for state in seen["checked"])
+
+    def size(passages):
+        return sum(len(json.dumps(p, ensure_ascii=False).encode()) + 2 for p in passages)
+    largest = max(size(state["passages"]) for state in seen["checked"])
     assert largest <= room
+    before = seen["checked"][0]["passages"]
     # The same reply with room for the passages it had before and not one byte more.
     monkeypatch.setattr(stream_conversation, "CHECK_INPUT_LIMIT",
                         stream_conversation.CHECK_INPUT_LIMIT - room + largest - 1)
@@ -668,8 +671,12 @@ def test_the_notes_never_make_a_check_larger_than_the_checker_accepts(env, monke
     seen = models(app, monkeypatch, reply="Mara moved lamp 2 in part 1.")
     events = ask(api, bid)
     assert [e["text"] for e in events if e["type"] == "sentence"] == ["Mara moved lamp 2 in part 1."]
-    assert block_of(seen["reply"][-1]) is None and seen["system"][-1] == stream_conversation.STREAM_SYSTEM
-    assert not any(p.startswith(recollections.PASSAGE_HEAD) for state in seen["checked"] for p in state["passages"])
+    assert "short answers" in block_of(seen["reply"][-1]) and seen["system"][-1] != stream_conversation.STREAM_SYSTEM
+    for state in seen["checked"]:
+        assert size(state["passages"]) < largest
+        assert [p for p in state["passages"] if p.startswith(recollections.PASSAGE_HEAD)] == [before[-1]]
+        dropped = [p for p in before if p not in state["passages"]]
+        assert dropped and all(p not in seen["reply"][-1] for p in dropped)    # read text gave way
 
 
 def test_a_fault_in_reading_the_notes_costs_the_reader_the_notes_not_the_reply(env, monkeypatch):
