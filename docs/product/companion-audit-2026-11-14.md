@@ -1429,7 +1429,7 @@ Backend suite: 2,120 pass, 83 skipped (12 more passing than main). `ruff check a
 - **The patterns miss and overreach in known ways.** No button: "Chapters 2 and 3 went by in a blur" (the chapters come first), "We turned the pages of chapters 2 and 3 so fast…". A stray button: "I think she raced through chapter 3", if chapter 3 was gone past. English only, like the old pattern (6t).
 - **A chapter read almost to the end with one page turned quickly** is named as gone through quickly, as it is in the reader app's question. The place line also says part of it was read.
 - **The reader app's question is unchanged:** once any chapter was declined it does not ask about chapters skipped later (6p, 6r). Mothli in conversation does not use that record and still raises them.
-- **Seen in the owner's running app on 15 November, not examined:** on the Project Gutenberg front-matter page of Pride and Prejudice, `PUT /api/books/{id}/read-page` answers 422, so that page can never be reported as read and the browser console shows an error; and the shelf says "In chapter 3 of 61" for a book that opens on that page under the heading "Chapter I".
+- **Seen in the owner's running app on 15 November, not examined:** on the Project Gutenberg front-matter page of Pride and Prejudice, `PUT /api/books/{id}/read-page` answers 422, so that page can never be reported as read and the browser console shows an error; and the shelf says "In chapter 3 of 61" for a book that opens on that page under the heading "Chapter I". Examined and fixed in 6ab.
 
 ### 6aa, checked afterwards with real models (one conversation, $0.003 of Jev)
 
@@ -1439,6 +1439,53 @@ Reader of the Karamazov fixture: chapter 1 read, chapters 2 and 3 skimmed, settl
 - "who is Alyosha again?" next: answered, and did not ask again.
 - "yeah i read those, just fast": Mothli explained how to mark them in Contents, with no button. Fixed here: a sentence that tells the reader how to count named chapters now carries the button too (test added). Not tried again with real models.
 - One conversation only.
+
+## 6ab. Front matter that shares a file with chapter one (15 November)
+
+The two things seen in the owner's app at the end of 6aa, examined. Both have one cause, in the reader app. No server check was changed.
+
+### Cause
+
+In the illustrated Pride and Prejudice the first chapter file opens with Project Gutenberg's header, the contents list, a long preface and the list of illustrations, and only then Chapter I. Since 6s the server keeps all of that out of every chapter. The reader app did not know: `atomAtRange` (`frontend/src/reader/readFrontier.ts`) gives text ahead of a file's first chapter anchor to the previous chapter, and for the book's first chapter there is none, so it answered "chapter one".
+
+| Seen | Why |
+|---|---|
+| `PUT /read-page` answered 422 on the front-matter screen | The page was reported as a page of chapter 1 with quotes that are not in chapter 1's text. The server refused it, rightly: nothing was added and the reader's place did not move. Every page of the preface did the same |
+| The shelf said "In chapter 3 of 61", "Continue reading" opened the front matter under "Chapter I", and "You stopped here" quoted the Gutenberg header | The landing was followed as a place in chapter 1: its position was saved, so the book reopened there, and its text was kept as where the reader stopped. The shelf line is the chapter of the last page read (6p), and a front-matter page can never be read, so it stayed at 3 however long the reader sat there |
+
+The second is a fault, not a leftover of manual testing. A fresh library reaches it by reading into chapter 3, going to the front (the book's own contents list, "PREFACE" in Contents, or paging back) and closing the book. The owner's library shows exactly that: reading pass 0 (never reset), last page read in chapter 3, saved position on the header page.
+
+### The rule, and what changed
+
+A page that belongs to no chapter is not a place in the book. That was already the rule for front and back matter in a file of its own ("report nothing, never guess" in `ReaderPage.tsx`): no position saved, no page reported, "where you stopped" untouched. Front matter inside chapter one's file now gets the same.
+
+- `atomAtRange` answers "no chapter" for text ahead of the book's first chapter anchor when that text opens with Gutenberg's header: the server's own test (`_anchor_texts` in `chapter_text.py`), copied, with a comment on each side naming the other. Without the header such text is still the opening of chapter one, as it is on the server.
+- A file with a single chapter anchor no longer gives the text ahead of the anchor to that chapter.
+- On a file that holds no chapter at all (the cover, the licence file) the same function threw a `TypeError` inside the page-turn handler on every landing. Found while writing the tests; it now answers "cannot tell", as its callers expect.
+
+For a reader who has read into chapter 3 and sits on the front matter, all four now agree: `GET /position` keeps the last chapter page and `place_chapter` 3, the shelf says chapter 3 and quotes that page, "Continue reading" opens it, and Mothli is told "the reader is in chapter 3 of 61 now". On a book not yet begun: no position, "Ready to begin", "not started".
+
+### Verified
+
+- **Tests.** Frontend 379 pass (5 new: four fail on main, one guards prose ahead of chapter one in a book without the header). `npx tsc -b` clean. Backend 2,122 pass, 83 skipped; `ruff check app tests scripts` clean. The one new backend test is a guard that passes on main: front-matter pages, and a page that begins in the preface and ends in chapter one, are refused whole, change nothing in the map or the place before or after reading into chapter 3, and none of the preface reaches the writer. An older test's "cannot be placed" case compared a status and asserted nothing; it now asserts.
+- **At the API, fresh temporary library, stand-in models, the real EPUB:** what the reader app used to send reproduced both (422 with place and map unchanged; position saved on the front matter while `place_chapter` stayed 3). The Karamazov fixture has no front matter; text that is in none of its chapters is refused the same way.
+- **In a browser, once, against a throwaway backend with stand-in models:** Pride and Prejudice from the cover through the header, title pages, preface and list of illustrations sent no write at all and logged no error from the app; the first page of Chapter I sent `PUT /position` and `PUT /read-frontier`, and pages stayed on were accepted (`PUT /read-page` 200, chapter 1 at 51% after two screens). Paged back onto the list of illustrations and closed: the shelf said "In chapter 1 of 61", quoted "Chapter I. IT is a truth universally acknowledged…", and "Continue reading" opened that page. The Karamazov fixture opened on its first page and reported it, 200.
+
+### Not verified
+
+- Reading into chapter 3 in the browser (it was done at the API), the licence file at the end in the browser (unit test only), a phone, hosted mode, the read map switched off.
+- No real model was involved or needed.
+
+### Found, and not fixed
+
+- **What Gutenberg's markers cut out of a chapter's own file** is still placed in that chapter by the reader app: the header in a file that is one whole chapter, the licence after the END marker in the last chapter's file. Such pages are still reported and refused (422), and the landing is followed. Read from the code; no such book was opened. Covering it means a second copy of the server's cutting rule in the reader app, or the server telling the app where chapter text begins and ends in each file.
+- **A page that begins in front matter and ends in chapter one** counts for nothing, so the opening lines of chapter one would not be read by Mothli. Before this change it was reported and refused, with the same result. Not seen: in this book Chapter I starts a page.
+- **Front matter is never a saved place, in any book.** A reader who stops in the middle of the preface reopens at the last chapter page, or at the cover if no chapter was reached. Before this change this one book did save it, by the fault above. Saving a place for pages outside the chapters is the owner's call.
+- **"Start again" (keeping what Mothli knows) leaves the reader's place where it was.** Reproduced at the API on the Karamazov fixture: after reading into chapter 3 and starting again the book opens at the start, `place_chapter` is still 3 and Mothli is told "the reader is in chapter 3 of 5 now", until a page of chapter one counts. Clearing the place there also changes the chapter the conversation counts as available, so it was left alone.
+- **A quick look back.** The shelf line is the last page read, "Continue reading" the last chapter page shown. After turning back to an earlier chapter and closing before the page counts (about fifteen seconds for a page of 300 words) the two differ. This is 6p's rule, not a new fault.
+- **On front matter the reader's header and footer keep the last chapter** ("Chapter 1 of 61 · About 11 minutes left in this chapter"), and a book never opened shows "Chapter I." from the cover on.
+- **A library whose saved position is already on a front-matter page** (the owner's) opens there once more; the first chapter page turned to replaces it.
+- **The book's own stylesheets are refused by the content security policy** (`blob:` under `style-src`): one console error for each stylesheet of each file opened, and the book's page-break rules do not apply. Seen in the browser run; whether it is deliberate was not looked into.
 
 ## 7. Proposed target
 

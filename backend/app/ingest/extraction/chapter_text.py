@@ -176,6 +176,8 @@ def _anchor_texts(zf, atoms):
         elif previous is None and a.href in heads:
             # The first file's head is front matter when it carries the PG header; otherwise it
             # is prose ahead of the first anchor and is kept at the start of the first atom.
+            # The reader app decides the same way which pages are in no chapter (atomAtRange in
+            # frontend/src/reader/readFrontier.ts): change the two together.
             head = heads.pop(a.href)
             if not START_RE.search(head[:8000]) and not _PG_FRONT.search(head[:8000]):
                 out[a.chapter_key] = _join_text(head, out.get(a.chapter_key, ""))

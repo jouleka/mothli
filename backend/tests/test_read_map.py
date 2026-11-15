@@ -8,9 +8,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).parent / "api"))
+sys.path.insert(0, str(Path(__file__).parent / "ingest" / "extraction"))
 from _epub import epub_ncx  # noqa: E402
 from test_chapter_notes import models, wait_for  # noqa: E402
 from test_ingest import InlineExecutor  # noqa: E402
+from test_split_file_books import _gutenberg_like  # noqa: E402
 
 from app.chapter_notes import build_missing  # noqa: E402
 from app.config import Settings  # noqa: E402
@@ -23,20 +25,29 @@ def line(chapter, number):
     return f"{PEOPLE[chapter]} moved lamp {number} in part {chapter}."
 
 
-@pytest.fixture
-def map_env(tmp_path):
-    """Three chapters of sixty distinct sentences, so any page can be named exactly."""
+def _opened(tmp_path, epub):
     settings = Settings(_env_file=None, allow_stub=True, reader_page_context=True,
                         reader_conversation_pipeline=True, data_dir=str(tmp_path / "data"))
     app = create_app(settings, ingest_executor=InlineExecutor())
     settings.reader_conversation_jev = settings.reader_conversation_stream = settings.reader_read_map = True
     with TestClient(app) as api:
-        epub = epub_ncx([(f"c{n}.xhtml", f"Part {n}", f"Part {n}",
-                          " ".join(line(n, i) for i in range(1, 61))) for n in (1, 2, 3)],
-                        title="The Lamp Book", author="Ada Writer")
         bid = api.post("/api/books", files={"file": ("b.epub", epub, "application/epub+zip")}).json()["book_id"]
         assert api.get(f"/api/books/{bid}/read-frontier").json()["atom"] == 0     # opened, nothing read
         yield api, bid, app, settings
+
+
+@pytest.fixture
+def map_env(tmp_path):
+    """Three chapters of sixty distinct sentences, so any page can be named exactly."""
+    yield from _opened(tmp_path, epub_ncx(
+        [(f"c{n}.xhtml", f"Part {n}", f"Part {n}", " ".join(line(n, i) for i in range(1, 61))) for n in (1, 2, 3)],
+        title="The Lamp Book", author="Ada Writer"))
+
+
+@pytest.fixture
+def gutenberg_env(tmp_path):
+    """Four chapters; the first file opens with Project Gutenberg's header and a preface."""
+    yield from _opened(tmp_path, _gutenberg_like())
 
 
 def anchor(chapter, number, *, after, epoch=0):
@@ -98,7 +109,7 @@ def test_a_page_report_that_is_too_large_or_cannot_be_placed_adds_nothing(map_en
     api, bid, app, _ = map_env
     read_page(api, bid, 1, 1, 60, to_chapter=3, expect=422)       # not neighbours
     read_page(api, bid, 2, 9, 3, expect=422)                      # ends before it starts
-    api.put(f"/api/books/{bid}/read-page", json={
+    assert api.put(f"/api/books/{bid}/read-page", json={
         "start": {**anchor(1, 1, after=False), "quote": "No such sentence."},
         "end": anchor(1, 2, after=True)}).status_code == 422
     from app import read_map
@@ -108,6 +119,44 @@ def test_a_page_report_that_is_too_large_or_cannot_be_placed_adds_nothing(map_en
     seen = models(app, monkeypatch, reply="Hello.")
     ask(api, bid)
     assert all("lamp" not in prompt for prompt in seen["reply"])
+
+
+def test_front_matter_in_chapter_ones_file_is_never_read_text_and_never_the_readers_place(gutenberg_env, monkeypatch):
+    """A guard: it passes without the reader app's change (6ab), which stops these reports being sent.
+
+    The break it catches: a page of Project Gutenberg's header or the preface, or a page that
+    begins in the preface and ends in chapter one, accepted as read text of chapter one, moving
+    the reader's place, or reaching a model. The app used to place such pages in chapter one.
+    """
+    api, bid, app, _ = gutenberg_env
+    seen = models(app, monkeypatch, reply="Hello.")
+
+    def page(first, last, atom=1):
+        mark = {"atom": atom, "cfi": "epubcfi(/6/2)", "position_epoch": 0}
+        return api.put(f"/api/books/{bid}/read-page", json={
+            "start": {**mark, "quote": first, "prefix": ""}, "end": {**mark, "quote": last, "prefix": last}})
+
+    def front_matter_refused():
+        preface = "PREFACE_SPOILER the heroine marries the villain."
+        assert page("The Project Gutenberg eBook of Split", preface).status_code == 422
+        assert page(preface, "ONE_OPENING Mara arrived.").status_code == 422      # ends in chapter one
+
+    def state():
+        return (api.get(f"/api/books/{bid}/read-map").json(), api.get(f"/api/books/{bid}/position").json()["place_chapter"],
+                api.get(f"/api/books/{bid}/read-frontier").json())
+
+    fresh = state()
+    front_matter_refused()
+    assert state() == fresh and fresh[1] == 0 and all(chapter["read"] == 0 for chapter in fresh[0]["chapters"])
+
+    assert page("CHAPTER I.", "ONE_OPENING Mara arrived.").status_code == 200
+    assert page("CHAPTER III.", "THREE_START Nell counted coins.", atom=3).status_code == 200
+    in_three = state()
+    front_matter_refused()
+    assert state() == in_three and in_three[1] == 3
+    ask(api, bid)
+    assert "the reader is in chapter 3 of 4 now" in seen["reply"][-1]
+    assert not any("PREFACE_SPOILER" in prompt or "Project Gutenberg" in prompt for prompt in seen["reply"])
 
 
 def test_a_page_may_run_from_the_end_of_one_chapter_into_the_next(map_env, monkeypatch):
