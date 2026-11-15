@@ -10,11 +10,13 @@ an explicit reject-DRM/allow-font-obfuscation boundary before any segmentation w
 """
 import io
 import posixpath
+import re
 import stat
 import struct
 import unicodedata
 import zipfile
 from collections import Counter
+from html.entities import html5 as html5_codes
 from urllib.parse import unquote, urlsplit
 
 from lxml import etree
@@ -25,7 +27,8 @@ from app.ingest.segmentation.models import ChapterAtom, SegmentResult
 from app.language import normalize_content_language
 
 # Untrusted-input hardening: recover from imperfect markup, but NO entity resolution, NO network, NO
-# external/loaded DTD, and the default huge_tree=False caps entity expansion (billion-laughs).
+# external/loaded DTD, and the default huge_tree=False caps entity expansion (billion-laughs). HTML's
+# named codes are resolved before parsing from Python's fixed table instead (_resolve_named_codes).
 _XML_PARSER = etree.XMLParser(recover=True, resolve_entities=False, no_network=True,
                               load_dtd=False, dtd_validation=False, huge_tree=False)
 _STRICT_XML_PARSER = etree.XMLParser(recover=False, resolve_entities=False, no_network=True,
@@ -235,11 +238,34 @@ def _validate_encryption(zf):
                 raise EpubDrmError("DRM-protected EPUBs are not supported")
 
 
+_XML_CODES = frozenset({b"amp", b"lt", b"gt", b"quot", b"apos"})
+_NAMED_CODE = re.compile(rb"&([A-Za-z][A-Za-z0-9]{0,31});")
+
+
+def _named_code(match):
+    name = match.group(1)
+    if name in _XML_CODES:
+        return match.group(0)
+    chars = html5_codes.get(name.decode("ascii") + ";")
+    if chars is None:                                   # unknown, or declared by the book itself
+        return b"&amp;" + name + b";"                   # kept as its literal text, never expanded
+    return "".join(f"&#{ord(c)};" for c in chars).encode("ascii")
+
+
+def _resolve_named_codes(raw):
+    """HTML's named codes (``&eacute;``, ``&nbsp;``) mean nothing to an XML parser without the DTD
+    we refuse to load, so it dropped or kept them as raw code text (language audit W3). Rewrite each
+    as the numeric code of its characters, from Python's fixed HTML table, before parsing. A numeric
+    code is always a character, never markup. The five XML codes are left as they are; any other
+    name (unknown, or an entity the book's own DOCTYPE declares) becomes its literal text."""
+    return _NAMED_CODE.sub(_named_code, raw)
+
+
 def _parse(raw):
     if not raw:
         return None
     try:
-        return etree.fromstring(raw, _XML_PARSER)
+        return etree.fromstring(_resolve_named_codes(raw), _XML_PARSER)
     except etree.XMLSyntaxError:
         return None
 
