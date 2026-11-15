@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { atomAtRange, pageAnchor, ReadFrontierReporter } from "./readFrontier";
+import { atomAtRange, NO_CHAPTER, pageAnchor, ReadFrontierReporter } from "./readFrontier";
 
 describe("exact page source anchors", () => {
   test("tracks a passed page separately from the visible-page confirmation", () => {
@@ -37,6 +37,54 @@ describe("exact page source anchors", () => {
     expect(atomAtRange(atoms, "b.xhtml", range, "start")).toBe(0);
     range.selectNodeContents(document.querySelectorAll("p")[1]);
     expect(atomAtRange(atoms, "b.xhtml", range, "start")).toBe(1);
+  });
+  // The break: Project Gutenberg's header, contents list and preface, which share a file with
+  // chapter one, were placed in chapter one. The server holds them in no chapter, so every such
+  // page was reported and refused (422), and the reader's place followed them under "Chapter I".
+  test("Gutenberg's pages ahead of the book's first chapter are in no chapter", () => {
+    document.body.innerHTML = '<header><h2>The Project Gutenberg eBook of Split</h2><p>This eBook is for the use of anyone anywhere.</p>'
+      + '<p>*** START OF THE PROJECT GUTENBERG EBOOK SPLIT ***</p></header><p class="toc">CONTENTS</p><p>A preface.</p>'
+      + '<h2 id="c1">Chapter I.</h2><p>Mara arrived.</p><h2 id="c2">Chapter II.</h2><p>Jonas waited.</p>';
+    const atoms = [{href:"f0.html#c1"}, {href:"f0.html#c2"}, {href:"f1.html#c3"}] as Parameters<typeof atomAtRange>[0];
+    const range = document.createRange();
+    for (const front of [document.querySelector("header p")!, document.querySelector(".toc")!, document.querySelectorAll("p")[3]]) {
+      range.selectNodeContents(front);
+      expect(atomAtRange(atoms, "f0.html", range, "start")).toBe(NO_CHAPTER);
+      expect(atomAtRange(atoms, "f0.html", range, "end")).toBe(NO_CHAPTER);
+    }
+    range.selectNodeContents(document.querySelectorAll("p")[4]);
+    expect(atomAtRange(atoms, "f0.html", range, "start")).toBe(0);
+    range.selectNodeContents(document.querySelectorAll("p")[5]);
+    expect(atomAtRange(atoms, "f0.html", range, "start")).toBe(1);
+  });
+  // The break the other way: prose ahead of the first chapter heading in any other book is the
+  // opening of chapter one on the server, and must stay reportable.
+  test("prose ahead of the first chapter anchor opens chapter one when the file is not Gutenberg front matter", () => {
+    document.body.innerHTML = '<p>A prologue before any heading.</p><h2 id="c1">Chapter I.</h2><p>One.</p><h2 id="c2">Chapter II.</h2>';
+    const atoms = [{href:"a.html#c1"}, {href:"a.html#c2"}] as Parameters<typeof atomAtRange>[0];
+    const range = document.createRange(); range.selectNodeContents(document.querySelector("p")!);
+    expect(atomAtRange(atoms, "a.html", range, "start")).toBe(0);
+  });
+  // The break: a file with one chapter anchor gave all its text to that chapter, the text ahead
+  // of the anchor included.
+  test("text ahead of a file's only chapter anchor is not that chapter's", () => {
+    document.body.innerHTML = '<p>The Project Gutenberg eBook of Split</p><h2 id="c1">Chapter I.</h2><p>One.</p>';
+    const range = document.createRange(); range.selectNodeContents(document.querySelector("p")!);
+    const first = [{href:"f0.html#c1"}, {href:"f1.html#c2"}] as Parameters<typeof atomAtRange>[0];
+    expect(atomAtRange(first, "f0.html", range, "start")).toBe(NO_CHAPTER);
+    const later = [{href:"a.html#c0"}, {href:"f0.html#c1"}] as Parameters<typeof atomAtRange>[0];
+    expect(atomAtRange(later, "f0.html", range, "start")).toBe(0);
+    range.selectNodeContents(document.querySelectorAll("p")[1]);
+    expect(atomAtRange(later, "f0.html", range, "start")).toBe(1);
+    // A chapter that is its whole file needs no anchor.
+    expect(atomAtRange([{href:"f0.html"}] as Parameters<typeof atomAtRange>[0], "f0.html", range, "start")).toBe(0);
+  });
+  // The break: on a file that holds no chapter (a cover, the licence) the lookup threw.
+  test("a file that holds no chapter is not placed", () => {
+    document.body.innerHTML = "<p>*** END OF THE PROJECT GUTENBERG EBOOK SPLIT ***</p>";
+    const range = document.createRange(); range.selectNodeContents(document.querySelector("p")!);
+    const atoms = [{href:"f0.html#c1"}, {href:"f0.html#c2"}] as Parameters<typeof atomAtRange>[0];
+    expect(atomAtRange(atoms, "licence.html", range, "start")).toBe(null);
   });
   test("retains the furthest queued page through a quick backward turn", async () => {
     vi.useFakeTimers();

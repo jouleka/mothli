@@ -493,6 +493,53 @@ describe("reader startup and search boundaries", () => {
     expect(screen.queryByRole("button", { name: "Finish book" })).toBeNull();
   });
 
+  // The break: Project Gutenberg's front matter ahead of chapter one, in chapter one's file, was
+  // followed as a place in chapter one. Its position was saved, so the book reopened there under
+  // "Chapter I" while the shelf said "In chapter 3"; its text became "where you stopped". And a
+  // landing on a file with no chapter at all (the cover) threw.
+  test("front matter in chapter one's file is not a place in the book", async () => {
+    mocks.position.mockResolvedValue({ bookmark: 0, cfi: null, position_epoch: 0, place_chapter: 3 });
+    mocks.manifest.mockResolvedValue({
+      book_id: "b", mode: "anchor-driven", book_type: "novel",
+      atoms: [
+        { ordinal: 1, href: "f0.html#c1", title: "Chapter I.", char_len: 100 },
+        { ordinal: 2, href: "f0.html#c2", title: "Chapter II.", char_len: 100 },
+      ],
+    });
+    mocks.makeBook.mockResolvedValue({
+      sections: [{ id: "cover.html" }, { id: "f0.html" }],
+      destroy: mocks.destroyBook,
+    });
+    const { unmount } = render(<ReaderPage bookId="b" onBack={() => {}} />);
+    await waitFor(() => expect(mocks.goTo).toHaveBeenCalled());
+    const view = document.querySelector("foliate-view") as TestFoliateView;
+    const doc = document.implementation.createHTMLDocument("f0");
+    doc.body.innerHTML = "<p>The Project Gutenberg eBook of Split. This eBook is for the use of anyone anywhere.</p>"
+      + '<h2 id="c1">Chapter I.</h2><p>Mara arrived in the valley before the snow closed the pass.</p>'
+      + '<h2 id="c2">Chapter II.</h2><p>Jonas waited.</p>';
+    const land = (paragraph: number, cfi: string, section: number) => {
+      const range = doc.createRange();
+      range.selectNodeContents(doc.querySelectorAll("p")[paragraph]);
+      act(() => { view.dispatchEvent(new CustomEvent("relocate", { detail: { cfi, section: { current: section }, range } })); });
+    };
+    const stopped = () => Object.keys(localStorage).filter((key) => key.startsWith("mothli.lastPassage:"))
+      .map((key) => localStorage.getItem(key)).join("");
+    land(0, "cover", 0);
+    land(0, "front", 1);
+    expect(stopped()).toBe("");
+    unmount();
+    expect(mocks.putPosition).not.toHaveBeenCalled();
+
+    render(<ReaderPage bookId="b" onBack={() => {}} />);
+    await waitFor(() => expect(mocks.goTo).toHaveBeenCalledTimes(2));
+    const reopened = [...document.querySelectorAll("foliate-view")].at(-1) as TestFoliateView;
+    const range = doc.createRange();
+    range.selectNodeContents(doc.querySelectorAll("p")[1]);
+    act(() => { reopened.dispatchEvent(new CustomEvent("relocate", { detail: { cfi: "one", section: { current: 1 }, range } })); });
+    expect(stopped()).toContain("Mara arrived");
+    await waitFor(() => expect(mocks.putPosition).toHaveBeenCalled());
+  });
+
   test("immediate unmount retains an in-flight completion and latest reread cursor without racing replay", async () => {
     mocks.position.mockResolvedValue({ bookmark: 2, cfi: "2:resume", position_epoch: 0 });
     let release!: (saved: unknown) => void;
