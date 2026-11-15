@@ -8,11 +8,14 @@ export function StartOverNote({
   busy,
   error,
   onConfirm,
+  onFresh,
   onCancel,
 }: {
   busy: boolean;
   error: string | null;
   onConfirm: () => void;
+  /** With the read map: start again and have Mothli forget the book until it is read again. */
+  onFresh?: () => void;
   onCancel: () => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -76,20 +79,35 @@ export function StartOverNote({
     >
       <div className="confirmation-copy">
         <strong id={titleId}>Start a new reading pass?</strong>
-        <p id={descriptionId}>
-          The companion will return to nothing read and reveal your saved memory
-          as you read again. Your book, saved notes, and past AI costs stay
-          intact.
-        </p>
+        {onFresh ? (
+          <p id={descriptionId}>
+            Reading again takes you back to the start, and Mothli keeps what
+            you’ve read and said, so it can talk about the whole book as you
+            go. Reading it fresh makes Mothli forget this book until you read
+            it again. Your book, saved notes, and past AI costs stay intact
+            either way.
+          </p>
+        ) : (
+          <p id={descriptionId}>
+            The companion will return to nothing read and reveal your saved memory
+            as you read again. Your book, saved notes, and past AI costs stay
+            intact.
+          </p>
+        )}
       </div>
       {error && <span role="alert">{error}</span>}
       <div className="confirmation-actions start-over-actions">
         <Button ref={cancelRef} disabled={busy} onClick={onCancel}>
           keep my place
         </Button>
-        <Button variant="danger" disabled={busy} onClick={onConfirm}>
-          {busy ? "starting…" : "start again"}
+        <Button variant={onFresh ? "primary" : "danger"} disabled={busy} onClick={onConfirm}>
+          {busy ? "starting…" : onFresh ? "read again" : "start again"}
         </Button>
+        {onFresh && (
+          <Button variant="danger" disabled={busy} onClick={onFresh}>
+            read it fresh
+          </Button>
+        )}
       </div>
     </div>
   );

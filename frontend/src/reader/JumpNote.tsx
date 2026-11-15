@@ -39,10 +39,13 @@ export function isolateReaderDialog(root: HTMLElement): () => void {
 export function JumpNote({
   chapter,
   onFollow,
+  onFollowRead,
   onStay,
 }: {
   chapter: number;
   onFollow: () => void;
+  /** With the read map: go there and tell Mothli everything before it has been read. */
+  onFollowRead?: () => void;
   onStay: () => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -99,19 +102,29 @@ export function JumpNote({
     >
       <div className="confirmation-copy">
         <strong id={titleId}>Skip ahead to chapter {chapter}?</strong>
-        <p id={descriptionId}>
-          Following this link marks earlier chapters as read and makes their
-          details available to your companion. Continue if you have already read
-          them.
-        </p>
+        {onFollowRead ? (
+          <p id={descriptionId}>
+            Mothli only knows the pages you’ve read, so it won’t know what you
+            skip. If you’ve already read everything before this chapter, say so.
+          </p>
+        ) : (
+          <p id={descriptionId}>
+            Following this link marks earlier chapters as read and makes their
+            details available to your companion. Continue if you have already read
+            them.
+          </p>
+        )}
       </div>
       <div className="confirmation-actions start-over-actions">
         <Button ref={stayRef} onClick={onStay}>
           stay
         </Button>
         <Button variant="primary" onClick={onFollow}>
-          follow
+          {onFollowRead ? "go there" : "follow"}
         </Button>
+        {onFollowRead && (
+          <Button onClick={onFollowRead}>I’ve read up to here</Button>
+        )}
       </div>
     </div>
   );

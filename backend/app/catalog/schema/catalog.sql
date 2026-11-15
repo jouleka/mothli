@@ -79,3 +79,58 @@ CREATE TABLE IF NOT EXISTS cost_reservations (
 );
 
 CREATE INDEX IF NOT EXISTS ix_cost_reservation_book ON cost_reservations(book_id);
+
+-- Mothli's checked notes on one chapter. A function of the chapter's own text, so every reading
+-- pass shares them; a reply may use them only when its read prefix of that chapter hashes to
+-- source_hash, which is true only when the whole, unchanged chapter is inside the read position.
+CREATE TABLE IF NOT EXISTS chapter_notes (
+  book_id     TEXT NOT NULL REFERENCES books(book_id) ON DELETE CASCADE,
+  atom        INTEGER NOT NULL,
+  source_hash TEXT NOT NULL,             -- of the normalized chapter text the notes were written from
+  version     TEXT NOT NULL,             -- prompt and check version; a change rebuilds
+  sentences   TEXT NOT NULL,             -- JSON array of sentences that passed every check
+  dropped     INTEGER NOT NULL,          -- sentences the checks rejected
+  created_at  TEXT NOT NULL,
+  PRIMARY KEY (book_id, atom)
+);
+
+-- One row per message, stamped with the exact position it was written at. Read only at or
+-- before the asking position. book_id NULL is reserved for a conversation across books.
+CREATE TABLE IF NOT EXISTS conversation_turns (
+  turn_id        INTEGER PRIMARY KEY,
+  book_id        TEXT REFERENCES books(book_id) ON DELETE CASCADE,
+  incarnation    TEXT,                   -- shelf lifetime; a re-import does not inherit turns
+  position_epoch INTEGER,
+  atom           INTEGER,
+  source_offset  INTEGER,
+  role           TEXT NOT NULL CHECK (role IN ('user','assistant')),
+  content        TEXT NOT NULL,          -- the reader's words, or only the sentences shown
+  reaction       INTEGER NOT NULL DEFAULT 0,  -- a reader turn judged a reaction to the book
+  request_id     TEXT,
+  created_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_turns_book ON conversation_turns(book_id, atom, source_offset, turn_id);
+
+-- The read map: the stretches of each chapter the reader has read, and how that is known.
+-- Only text inside it may reach a model. Offsets are in the chapter's normalized text.
+CREATE TABLE IF NOT EXISTS read_ranges (
+  book_id      TEXT NOT NULL REFERENCES books(book_id) ON DELETE CASCADE,
+  incarnation  TEXT NOT NULL,
+  atom         INTEGER NOT NULL,
+  start_offset INTEGER NOT NULL,
+  end_offset   INTEGER NOT NULL,          -- exclusive
+  source       TEXT NOT NULL CHECK (source IN ('read','told','import')),
+  updated_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_read_ranges_book ON read_ranges(book_id, incarnation, atom);
+
+-- Where the reader is now. Unlike the read map it may move backward.
+CREATE TABLE IF NOT EXISTS read_position (
+  book_id       TEXT PRIMARY KEY REFERENCES books(book_id) ON DELETE CASCADE,
+  incarnation   TEXT NOT NULL,
+  atom          INTEGER NOT NULL,
+  source_offset INTEGER NOT NULL,
+  updated_at    TEXT NOT NULL
+);

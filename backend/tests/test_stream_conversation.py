@@ -69,8 +69,8 @@ def test_the_deterministic_gate_can_drop_a_sentence_the_model_cleared():
 
 
 def test_a_long_reply_is_cut_at_the_sentence_limit():
-    shown, end = run_gate(" ".join(f"Point {i}." for i in range(12)), lambda s, e: True)
-    assert len(shown) == 8 and end[2] == 4
+    shown, end = run_gate(" ".join(f"Point {i}." for i in range(15)), lambda s, e: True)
+    assert shown == [f"Point {i}." for i in range(12)] and end[2] == 3
 
 
 def events_of(response):
@@ -208,3 +208,15 @@ def test_a_streamed_reply_reads_the_book_alongside_other_requests_instead_of_loc
                 await lease.__anext__()
 
     asyncio.run(scenario())
+
+
+def test_a_long_recap_gets_six_second_looks_and_a_seventh_doubted_sentence_is_dropped(page_env, monkeypatch):
+    api, bid, app, settings = page_env
+    point = confirm(api, bid)
+    settings.reader_conversation_jev = settings.reader_conversation_stream = True
+    reply = " ".join(f"Mara seems careful with tin {i}." for i in range(7))
+    looked = stream_models(app, monkeypatch, reply, unsupported=["careful"], second={"careful": True})
+    events = events_of(api.post(f"/api/books/{bid}/ask/stream",
+                                json={"question": "What did Mara do?", "read_frontier": point}))
+    assert len(looked) == 6 and len([e for e in events if e["type"] == "sentence"]) == 6
+    assert events[-1]["answer"]["dropped_sentences"] == 1

@@ -760,6 +760,8 @@ export function AskTheBook({
                       requestToken: session.getSnapshot().requestToken + 1,
                     });
                     session.scrollTop = null;
+                    // Mothli's own record of this conversation lives on the server.
+                    void api.clearConversation?.(bookId)?.catch(() => undefined);
                     setConfirmClear(false);
                     setPeopleOpen(false);
                     inputRef.current?.focus();

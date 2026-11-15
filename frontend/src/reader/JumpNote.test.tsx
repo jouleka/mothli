@@ -121,3 +121,18 @@ describe("JumpNote", () => {
     expect(await axeAA(container)).toHaveNoViolations();
   });
 });
+
+describe("JumpNote with the read map", () => {
+  test("says a jump is not reading, and lets the reader say they have read up to there", () => {
+    const onFollow = vi.fn();
+    const onFollowRead = vi.fn();
+    render(<JumpNote chapter={15} onFollow={onFollow} onFollowRead={onFollowRead} onStay={() => {}} />);
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.textContent).toMatch(/only knows the pages you.ve read/i);
+    expect(dialog.textContent).not.toMatch(/marks earlier chapters as read/i);
+    fireEvent.click(screen.getByRole("button", { name: "go there" }));
+    expect(onFollow).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "I’ve read up to here" }));
+    expect(onFollowRead).toHaveBeenCalledTimes(1);
+  });
+});

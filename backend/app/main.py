@@ -18,7 +18,7 @@ from starlette.responses import JSONResponse
 from starlette.staticfiles import StaticFiles
 
 from app import deps
-from app.api import books, classics, health, history, ingest, reading, views
+from app.api import books, classics, health, history, ingest, profile, reading, views
 from app.config import Settings
 from app.ingest.worker import IngestWorker
 from app.hosted.auth import api as auth_api
@@ -439,9 +439,14 @@ def create_app(
                     if state["catalog"].high_water(book["book_id"]):
                         warmer.notify(book["book_id"], book["incarnation"])
             app.state.recap_warmer = warmer
+            from app.chapter_notes import NotesBuilder, build_missing
+            notes = app.state.notes_builder = NotesBuilder(lambda book_id: build_missing(
+                book_id, state["catalog"], app.state.store, settings, app.state.reader_client,
+                app.state.worker))
             try:
                 yield
             finally:
+                notes.close()
                 app.state.worker.shutdown()
                 if warmer is not None:
                     await warmer.close()
@@ -490,6 +495,7 @@ def create_app(
         app.include_router(books.router)
         app.include_router(classics.router)
         app.include_router(history.router)
+        app.include_router(profile.router)
         app.include_router(reading.router)
         app.include_router(ingest.router)
         app.include_router(views.router)
