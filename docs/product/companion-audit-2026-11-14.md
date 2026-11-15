@@ -1440,6 +1440,38 @@ Reader of the Karamazov fixture: chapter 1 read, chapters 2 and 3 skimmed, settl
 - "yeah i read those, just fast": Mothli explained how to mark them in Contents, with no button. Fixed here: a sentence that tells the reader how to count named chapters now carries the button too (test added). Not tried again with real models.
 - One conversation only.
 
+## 6ac. The voice, second pass: a quip of its own, shorter catch-ups (15 November)
+
+The owner accepted 6y's voice as "not perfect, but not bad" and asked to keep polishing. 6y had almost no joke, comparison or saying in 19 replies, and a longer catch-up.
+
+### What changed (writer instructions only; no check was changed)
+
+- `FRIEND_VOICE`: playfulness is asked for, not merely allowed: when the reader reacts, has an opinion or asks "did he really?", the reply gets one spark (a dry aside, an everyday comparison, an old saying), in a short sentence of its own after the fact it plays on.
+- Retelling: where things stand now, the two or three things that matter with Mothli's own take, five sentences at most.
+- Both chats: any sentence may be cut, so the next must make sense without it (no opening "also", "too", "that's why").
+
+### Measured, real models (Terra through `codex-local`, Jev 1.14.0), one run each of the same 19 messages
+
+| | 6y voice | Spark asked for | Spark in a sentence of its own (merged) |
+|---|---|---|---|
+| Replies with a quip, comparison or saying shown | 2 | 4 | 6 |
+| Sentences removed by the checks | 2 | 6 | 3 |
+| Replies left broken or emptied by a removal | 2 | 4 | 0 |
+| Replies that gave away something unread | 0 | 0 | 0 |
+| Sentences in the first "catch me up" as shown | 6 | 2 (two removed) | 4 |
+| Jev spend | $0.025 | $0.015 | $0.013 |
+
+- The middle column is why the last change was made: with the quip attached to a fact ("…with the hope that surrendering one's will can eventually lead to freedom from oneself, a pretty startling bargain") the whole sentence went, and the fact with it.
+- With the checks logged in the last run: Jev doubted 20 sentences and blocked none. The quips are among the doubted ("What a pair of parents." scored .36 as story content, "The bar is practically underground." .14) and the second look passed each one.
+- The three sentences removed in the last run were not doubted by Jev at all. Each contains the word "will", and the fixed foreshadowing pattern (`PROLEPSIS_RE` in `app/eval/spoiler_gate/synthesis.py`) matches that word alone, noun or verb: "you surrender your will to him", "giving up your will", "a world where everyone will love one another". Run directly against the pattern, without a model, five of the sentences removed in the last two runs match on "will" and nothing else. One is a future tense inside a reported dream; the other four are the noun.
+- The samples in `voice-samples-after.md` are now this last run.
+
+### Not verified
+
+- One run per column; replies vary from run to run, and the quip counts are my reading of the text.
+- The owner has not read the last set.
+- Spend for this section: $0.029 of Jev (two sample runs). Running total since the cap was set: $0.099 of $0.25.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
