@@ -284,7 +284,7 @@ def test_a_home_turn_stored_without_its_books_is_never_said_or_shown(shelf, monk
     assert "Vex" not in seen["reply"][-1] and "Vex" not in json.dumps(seen["checked"])
     assert shown(api) == ["And then?", "Corvus moved lamp 21 in part 2."]
     assert api.delete("/api/reader/conversation").status_code == 204          # clearing removes those too
-    assert app.state.catalog.get_turns(None, incarnation="home", atom=0, offset=0) == []
+    assert app.state.catalog.get_turns(None, incarnation="home") == []
 
 
 # --- further ways an old turn could outlive the text it was written from -------------------------
@@ -333,5 +333,5 @@ def test_a_reply_being_written_while_its_book_is_read_fresh_is_stored_but_not_sh
         return write(system, user, tier=tier, schema=schema)
     monkeypatch.setattr(app.state.client, "complete", forget_then_write)
     ask(api, "What did Corvus do with lamp 21?")
-    assert len(app.state.catalog.get_turns(None, incarnation="home", atom=0, offset=0)) == 2
+    assert len(app.state.catalog.get_turns(None, incarnation="home")) == 2
     assert shown(api) == []

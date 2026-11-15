@@ -39,7 +39,7 @@ from app.llm.client import ProviderUnavailable
 from app.llm.jev import JevUnavailable
 from app.llm.jev_budget import budgeted_jev
 from app.read_frontier import requested_snapshot
-from app.read_map import read_snapshot, visible_turns
+from app.read_map import book_record, prefix_map, read_snapshot, visible_turns
 from app.reader_place import APP_HELP, SPEAK_AS_A_FRIEND, content_numbers, offers_for, place_line
 from app.retrieval_passages import passage_windows
 from app.unicode_text import normalize_text, proper_words, word_tokens
@@ -462,14 +462,17 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
     # With a read map the reader may be early in the book and have read far ahead of that.
     reach = max([eff, *(ch["ordinal"] for ch in chapters)]) if settings.reader_read_map else eff
     read_through = state.get("read_through", max(0, point["atom"] - 1))
-    # The conversation is the server's own record of what was said and shown, read only where
-    # the reader has read. Whatever history the browser sends is ignored.
-    stored = (visible_turns(book_id, book, read_map, catalog, limit=HISTORY_TURNS)
-              if settings.reader_read_map else
-              catalog.get_turns(book_id, incarnation=book["incarnation"], atom=point["atom"],
-                                offset=point["offset"], limit=HISTORY_TURNS))
+    # The conversation is the server's own record of what was said and shown. Whatever history
+    # the browser sends is ignored. Earlier turns are conversation, not evidence, and no check
+    # reads them: only those written from text that is still read are passed on. This turn is
+    # stored with what is read in this request, taken here, before its prompt is built.
+    if settings.reader_read_map:
+        drew_on = book_record(book_id, book, read_map)
+    else:
+        read_map = prefix_map(point["atom"], point["offset"])
+        drew_on = book_record(book_id, book, {ch["ordinal"]: [(0, len(ch["text"]))] for ch in chapters})
     history = [ConversationMessage(role=turn["role"], content=turn["content"][:2000], as_of_chapter=eff)
-               for turn in stored]
+               for turn in visible_turns(book_id, book, read_map, catalog, limit=HISTORY_TURNS)]
     question = conversation_question(body.question, history, eff)
     query = conversation_retrieval_question(body.question, history, eff)
     timings, calls, lock = {}, [], Lock()
@@ -663,11 +666,12 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
             yield {"type": "error", "status": 500, "message": "reply failed"}
         finally:
             if failure is None and finished is not None:
-                # Stored with the position it was asked at. Only what the reader saw is kept.
+                # Stored with what was read when it was asked. Only what the reader saw is kept.
                 intent_thread.join(timeout=2)
                 try:
                     where = dict(incarnation=book["incarnation"], position_epoch=point["position_epoch"],
-                                 atom=point["atom"], offset=point["offset"], request_id=request_id)
+                                 atom=point["atom"], offset=point["offset"], request_id=request_id,
+                                 drew_on=drew_on)
                     catalog.add_turn(book_id, role="user", content=body.question,
                                      reaction=bool(signals.get("reaction")), **where)
                     if finished:

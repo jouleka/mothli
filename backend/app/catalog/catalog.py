@@ -298,7 +298,11 @@ class Catalog:
 
     def add_turn(self, book_id, *, incarnation, position_epoch, atom, offset, role, content,
                  reaction=False, request_id=None, drew_on=None):
-        """``drew_on``, for a turn across books: {book_id: [incarnation, read map]} as it was written."""
+        """``drew_on``: {book_id: [incarnation, read map]} as it was when the turn's prompt was built.
+
+        (atom, offset) is where the reader was when they asked. It is kept for the screen and
+        decides nothing: what may be read back is decided from ``drew_on`` alone.
+        """
         for value in (position_epoch, atom, offset):
             self._check_int(value, "source position")
         with self._lock:
@@ -310,20 +314,20 @@ class Catalog:
             self._conn.commit()
         return cur.lastrowid
 
-    def get_turns(self, book_id, *, incarnation, atom, offset, limit=None, reactions=False):
-        """Turns written at or before (atom, offset), oldest first; ``limit`` keeps the latest."""
-        for value in (atom, offset):
-            self._check_int(value, "source position")
+    def get_turns(self, book_id, *, incarnation, reactions=False):
+        """Every stored turn of one conversation, oldest first, whether or not it may be read back.
+
+        Nothing here decides that. The app reads turns back only through ``visible_turns`` (inside a
+        book) and ``home_turns`` (across books), which do.
+        """
         with self._lock:
             rows = self._conn.execute(
                 "SELECT turn_id,position_epoch,atom,source_offset,role,content,reaction,created_at,drew_on "
-                "FROM conversation_turns WHERE book_id IS ? AND incarnation=? "
-                "AND (atom<? OR (atom=? AND source_offset<=?))" + (" AND reaction=1" if reactions else "")
-                + " ORDER BY turn_id DESC" + (" LIMIT ?" if limit is not None else ""),
-                (book_id, incarnation, atom, atom, offset, *([limit] if limit is not None else []))
-            ).fetchall()
+                "FROM conversation_turns WHERE book_id IS ? AND incarnation=?"
+                + (" AND reaction=1" if reactions else "") + " ORDER BY turn_id",
+                (book_id, incarnation)).fetchall()
         return [{**dict(row), "drew_on": None if row["drew_on"] is None else json.loads(row["drew_on"])}
-                for row in reversed(rows)]
+                for row in rows]
 
     # ---- the read map --------------------------------------------------------
     @staticmethod

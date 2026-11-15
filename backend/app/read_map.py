@@ -196,15 +196,49 @@ def import_offer(book_id, entries, catalog, settings, worker):
     return {"kind": "progress", "sources": sources, "finished_on": None, "chapter": furthest, "atoms": behind}
 
 
-def visible_turns(book_id, book, held, catalog, *, limit, reactions=False):
-    """Stored turns whose place is inside the map, oldest first; ``limit`` keeps the latest."""
-    turns = catalog.get_turns(book_id, incarnation=book["incarnation"], atom=END, offset=0,
-                              reactions=reactions)
-    seen = [turn for turn in turns if covers(held.get(turn["atom"], []), turn["source_offset"])]
-    return seen[-limit:]
-
-
 def still_read(then, held):
     """Whether every stretch of the stored map ``then`` (chapters as JSON keys) is inside ``held``."""
     return all(any(a <= start and end <= b for a, b in held.get(int(atom), []))
                for atom, stretches in then.items() for start, end in stretches)
+
+
+def written_from_read(turn, read):
+    """Whether everything a stored turn was written from is still read.
+
+    A turn is stored with ``drew_on``: {book_id: [incarnation, read map]} as it was when the
+    turn's prompt was built, one book for a turn inside a book and every read book for a home
+    turn. ``read`` is the same thing now. The turn holds only read text while every book it
+    names is there, in the same shelf lifetime, with every stretch read then still read. A turn
+    stored without the record (before it was kept) cannot be shown to be safe.
+    """
+    return turn["drew_on"] is not None and all(
+        book_id in read and read[book_id][0] == incarnation and still_read(then, read[book_id][1])
+        for book_id, (incarnation, then) in turn["drew_on"].items())
+
+
+def book_record(book_id, book, held):
+    """What a turn inside a book is stored with, where ``held`` is the map its prompt was built from."""
+    return {book_id: [book["incarnation"], held]}
+
+
+def prefix_map(atom, offset):
+    """The map of a reader counted as having read everything up to (atom, offset) and no further.
+
+    This is what "read" means with the read map switched off; chapter lengths are not needed.
+    """
+    return {**{earlier: [(0, END)] for earlier in range(1, atom)}, **({atom: [(0, offset)]} if offset else {})}
+
+
+def visible_turns(book_id, book, held, catalog, *, limit, reactions=False):
+    """One book's stored turns that may be said and shown again, oldest first; ``limit`` keeps the latest.
+
+    Every reader of a book's turns comes through here: the book's conversation, the reactions of
+    the reader profile, and what the writer is given with the next question. ``held`` is what is
+    read of the book now (``prefix_map`` when the read map is off). "Read it fresh" and "I haven't
+    read this" hide the turns written from that text, wherever the reader was when they asked;
+    reading it again brings them back.
+    """
+    read = book_record(book_id, book, held)
+    turns = catalog.get_turns(book_id, incarnation=book["incarnation"], reactions=reactions)
+    return [turn for turn in turns
+            if turn["drew_on"] and book_id in turn["drew_on"] and written_from_read(turn, read)][-limit:]

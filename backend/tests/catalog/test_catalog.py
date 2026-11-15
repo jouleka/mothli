@@ -519,25 +519,26 @@ def test_chapter_notes_are_kept_per_chapter_and_a_rebuild_replaces_them(tmp_path
         (1, "h1", [], 0), (2, "h2b", ["Jonas waited."], 0)]
 
 
-def test_turns_come_back_oldest_first_and_only_up_to_the_asked_position(tmp_path):
+def test_turns_come_back_oldest_first_whatever_place_they_were_asked_from(tmp_path):
+    """The place is kept for the screen and filters nothing here: what may be read back is decided
+    from each turn's record, by ``visible_turns`` and ``home_turns``."""
     cat = _shelved(tmp_path)
     incarnation = cat.get_book("b")["incarnation"]
     def add(role, content, atom, offset, **more):
         return cat.add_turn("b", incarnation=incarnation, position_epoch=0, atom=atom, offset=offset,
                             role=role, content=content, **more)
-    add("user", "Poor Mara.", 2, 40, reaction=True)
+    add("user", "Poor Mara.", 2, 40, reaction=True, drew_on={"b": [incarnation, {2: [(0, 40)]}]})
     add("assistant", "It's the red tin that gets me.", 2, 40)
     add("user", "Who is Corvus?", 3, 10)
     add("user", "Later in two.", 2, 900)
-    at = lambda atom, offset, **more: [  # noqa: E731
-        t["content"] for t in cat.get_turns("b", incarnation=incarnation, atom=atom, offset=offset, **more)]
-    assert at(2, 40) == ["Poor Mara.", "It's the red tin that gets me."]
-    assert at(2, 39) == []
-    assert at(3, 10) == ["Poor Mara.", "It's the red tin that gets me.", "Who is Corvus?", "Later in two."]
-    assert at(3, 10, limit=2) == ["Who is Corvus?", "Later in two."]
-    assert at(9, 0, reactions=True) == ["Poor Mara."]
+    turns = cat.get_turns("b", incarnation=incarnation)
+    assert [(t["content"], t["atom"], t["source_offset"]) for t in turns] == [
+        ("Poor Mara.", 2, 40), ("It's the red tin that gets me.", 2, 40), ("Who is Corvus?", 3, 10),
+        ("Later in two.", 2, 900)]
+    assert [t["drew_on"] for t in turns] == [{"b": [incarnation, {"2": [[0, 40]]}]}, None, None, None]
+    assert [t["content"] for t in cat.get_turns("b", incarnation=incarnation, reactions=True)] == ["Poor Mara."]
     # Another shelf lifetime of the same book id does not inherit them.
-    assert cat.get_turns("b", incarnation="other", atom=9, offset=0) == []
+    assert cat.get_turns("b", incarnation="other") == []
 
 
 def test_removing_a_book_removes_its_notes_and_turns(tmp_path):
@@ -548,7 +549,7 @@ def test_removing_a_book_removes_its_notes_and_turns(tmp_path):
     cat.remove_book("b")
     cat.add_book("b", title="B", db_path="books/b/memory.db")
     assert cat.get_chapter_notes("b") == []
-    assert cat.get_turns("b", incarnation=incarnation, atom=9, offset=0) == []
+    assert cat.get_turns("b", incarnation=incarnation) == []
 
 
 def test_an_existing_catalog_gains_the_books_of_a_turn_and_old_turns_have_none(tmp_path):
@@ -567,7 +568,7 @@ def test_an_existing_catalog_gains_the_books_of_a_turn_and_old_turns_have_none(t
     migrated = Catalog(str(path))
     migrated.add_turn(None, role="user", content="none", drew_on={}, **where)
     migrated.add_turn(None, role="user", content="one", drew_on={"b": ["inc", {2: [(0, 40)]}]}, **where)
-    assert [(t["content"], t["drew_on"]) for t in migrated.get_turns(None, incarnation="home", atom=0, offset=0)] == [
+    assert [(t["content"], t["drew_on"]) for t in migrated.get_turns(None, incarnation="home")] == [
         ("old", None), ("none", {}), ("one", {"b": ["inc", {"2": [[0, 40]]}]})]
     migrated.close()
 
