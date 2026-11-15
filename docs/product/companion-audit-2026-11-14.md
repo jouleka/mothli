@@ -937,6 +937,62 @@ A page now has three states: read, skimmed, or nothing. This settles the product
 - **Still open from 6p:** once any chapter in the list was declined, the reader app does not ask about chapters skipped later. With skimming this shows sooner: decline "just getting here" for chapter 2, skim chapter 4, and no question comes.
 - **Still open (step 4):** a skimmed page still keeps a chapter from being read whole, so it still blocks that chapter's notes until the reader says "I've read this".
 
+## 6s. What had not been checked, checked (15 November)
+
+Checking, not building. Nothing in the app was changed; the eval gained positions for two new books. Real models throughout: Terra through `codex-local`, Jev 1.14.0 through TypeSafe. Spend: about $0.28 of Jev (eval runs $0.27 as recorded, the live app $0.007, plus a Pride and a Verne run stopped within seconds when the runs were split into two parallel chains). Estimated beforehand: $0.40.
+
+### Measured
+
+**The "I've read chapters…" buttons, from real replies (running app, one try each).**
+
+- In a book: Karamazov, jumped to chapter 3 and settled. "Catch me up" got "I wasn't with you for chapter 2, and we've only read parts of chapters 1 and 3 together…", then what was read. Under it, "I've read chapters 1 and 2". Pressing it marked both as told, moved the chapter counter to 2 and showed "Got it. I'll count chapters 1 and 2 as read."
+- On the home screen: Pride and Prejudice, jumped and settled on a page that ends chapter 3 and starts chapter 4. "Can you catch me up on Pride and Prejudice?" got "I wasn't with you for chapters 1 and 2 of Pride and Prejudice. In chapter 4…". The button said **"I've read chapters 1 to 3"**, and pressing it marked chapter 3 as told as well. See problem 1 below.
+
+**Cast and recap with the read map on (running app).** After the button set the counter to 2, the cast showed 7 people, all from chapter 1, and "Story so far" showed chapter I only. Both are held to the lower of the counter and the chapters extracted, and only chapter 1 had been extracted at that point. The screens ask the server for chapter 3; the server caps the request (`_effective` in `api/views.py`), so this is safe.
+
+**Skimming and the home panel at phone width (375 px, running app).**
+
+- **There is no scrolled layout to check.** The reader never sets the paginator's `flow` attribute, so every reader gets pages. The 6r caveat does not apply.
+- In one-column pages, eight next-page presses at 0.5 s stored one unbroken skimmed stretch of chapter 4 (characters 242 to 4,114). The page stayed on while the book loaded counted as read.
+- The home panel fits at 375 px with no sideways scroll. A question sent there was answered correctly for both books ("You're in chapter 3 of The Brothers Karamazov… You're in chapter 4 of Pride and Prejudice…"), and the window followed the reply.
+
+**The eval, two full passes.** Stream style, notes on, reference review (`--audit`) on. Run in two chains side by side, so timings include contention.
+
+| Set | Pass | Questions | As expected | Facts | Spoiler flags | Shown; reference says unsupported | Dropped; reference says correct | Median s | Jev $ |
+|---|---|---|---|---|---|---|---|---|---|
+| Karamazov (5 positions) | 1 | 35 | 35 | 44/49 | 0 | 112; 3 | 7; 3 | 8.9 | 0.034 |
+| | 2 | 35 | 35 | 47/49 | 0 | 112; 2 | 5; 3 | 8.3 | 0.033 |
+| Pride and Prejudice (2) | 1 | 17 | 17 | 23/25 | 0 | 48; 1 | 3; 3 | 8.7 | 0.054 |
+| | 2 | 17 | 17 | 23/25 | 0 | 48; 1 | 3; 3 | 8.3 | 0.055 |
+| Du Bois, non-fiction (2) | 1 | 10 | 10 | 13/14 | 0 | 25; 0 | 0; 0 | 7.6 | 0.019 |
+| | 2 | 10 | 10 | 13/14 | 0 | 25; 0 | 0; 0 | 7.1 | 0.018 |
+| Verne, French (2) | 1 | 9 | 8 | 9/10 | 2 | 23; 1 | 2; 2 | 8.7 | 0.023 |
+| | 2 | 9 | 9 | 8/10 | 1 | 24; 0 | 1; 1 | 8.6 | 0.021 |
+| Home, tidy shelf | 1 | 8 | 8 | 9/9 | 0 | 20; 0 | 0; 0 | 7.3 | 0.005 |
+| | 2 | 8 | 8 | 9/9 | 0 | 19; 1 | 0; 0 | 8.8 | 0.005 |
+| Home, messy shelf | 1 | 5 | 5 | 6/6 | 0 | 13; 0 | 0; 0 | 4.9 | 0.001 |
+| | 2 | 5 | 5 | 6/6 | 0 | 12; 0 | 0; 0 | 5.2 | 0.001 |
+
+- **Spread between passes is small.** As expected: identical except one Verne case. Facts: Karamazov 44 and 47 of 49, Verne 9 and 8 of 10, the rest identical. Sentences shown the reference rejected: 0 to 3 per set. No reply used internal terms in either pass.
+- **All three spoiler flags are the eval's own error** (Verne, see problem 5). Read by hand, no reply in either pass told anything beyond the position.
+- **Du Bois (non-fiction):** 10 of 10 both times. The one missed fact is the eval's pattern: both replies named Washington's silence on civil and political rights and on higher education, which the first fact group did not list. The pattern was left as written.
+- **Verne (French):** every reply was in French. Spoiler probes ("Est-ce que Phileas Fogg se marie à la fin ?", "Fix finit-il par arrêter Fogg ?", "Fogg gagne-t-il son pari ?") were declined in French: "On n'en est pas encore là !". Why Fogg is travelling was answered thinly ("Au Reform-Club, ses collègues ont tenu ce pari avec lui."), because the chapters that tell the wager are not in the app (problem 4).
+- **The 11 sentences the reference rejected were not checked by hand.** At least one is the reference's error: "I wasn't with you for chapters 1 to 4", said of that very position, as in 6p.
+
+### Problems found, with how to reproduce them (not fixed)
+
+1. **The button can count more than the reply says.** The offer is every chapter before the place not read in full, so it includes a chapter the reader read part of, which the reply calls "read together". Reproduce: in Pride and Prejudice, from the start, go to chapter 5 through Contents (it lands near the end of chapter 3; problem 2), stay on that page 30 s, turn once, then ask on the home screen "Can you catch me up on Pride and Prejudice?". The reply names chapters 1 and 2; the button says 1 to 3, and pressing it marks all of chapter 3 as told. Nothing past the reader's place is added, so no spoiler; it is the reader's word misrecorded.
+2. **A Contents jump lands two chapters early in the illustrated Pride and Prejudice** (Project Gutenberg 1342 with images, all 61 chapters in one file, reached by anchors). Reproduce: open it, Contents, "Chapter 5", "go there": the page shown is in chapter III and the footer says "Chapter 3 of 61". The label was right; the landing is wrong. Not investigated; images loading after the jump and moving the text is a guess.
+3. **Marking chapters read does not start their extraction.** `PUT /read-chapters` moves the counter but does not queue extraction; only a later position report does. Reproduce: press "I've read chapters 1 and 2" and turn no page: the cast stays empty ("Gathering everyone you've met…") until the next page turn or reload. With `codex-local`, chapter 1 of Karamazov then took several minutes.
+4. **The French Verne loses seven chapters on import.** Project Gutenberg 800 puts chapters I to IV in the same file as its header and XXXVI to XXXVII in the same file as its licence footer. Both files are treated as outside the book, so 30 of 37 chapters exist for Mothli and the reader's pages in those chapters are never reported. Its contents list also lacks XII, which the app folds into XI. Reproduce: import `pg800.epub` and list the atoms: the first is "V", the last "XXXV". The English Du Bois (Project Gutenberg 408) imported whole, so this is a matter of how the file is split, not of language. Not checked on other Gutenberg books.
+5. **The eval's unread-name check misreads French.** It flagged "connaître", "passe" and "prend" as names from unread text, marking three correct French replies as spoilers. Its name finder suits English capitalisation only.
+6. **Two cast entries are not people's names:** "his wife" and "her divinity student" (Karamazov, chapter 1). An extraction matter, not a read-map one.
+
+### What the eval does not exercise
+
+- **Positions given only by a chapter number run with the read map off.** The eval turns the map on only for positions with `told` chapters or `pages`. That leaves 3 of Karamazov's 5 position sets (`inside-3`, `inside-5`, `through-5`: 23 of its 35 questions) and both of Pride and Prejudice's (all 17) on the map-off path, so most per-book questions still test the older single-position path, which since 6q is no longer the default. The new Du Bois and Verne positions use `told` and `pages`, so they run with the map.
+- One run of each live check. The panel was not tried with a screen reader.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

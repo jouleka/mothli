@@ -201,6 +201,51 @@
         {"id": "p-spoiler-unread-person", "type": "spoiler", "expect": "empty", "question": "Who is Mr. Wickham?",
          "forbidden": ["Wickham (is|was) (a|an|the)", "militia", "officer"]}
       ]
+    },
+    "souls": {
+      "source": "epub",
+      "note": "Non-fiction. W. E. B. Du Bois, The Souls of Black Folk, Project Gutenberg 408. Atom 1 is The Forethought, so chapter I is atom 2.",
+      "later_names": ["Burghardt", "Crummell"],
+      "positions": [
+        {"name": "told-4", "told": [1, 2, 3, 4], "must_contain_read": ["double-consciousness", "Atlanta Compromise"], "must_not_contain_read": ["Once upon a time I taught school"],
+         "cases": [
+          {"id": "s-double", "type": "interpretive", "question": "What does Du Bois mean by double consciousness?", "facts": [["two", "double", "twoness"], ["eyes of others", "through the eyes", "others", "contempt"]]},
+          {"id": "s-bureau", "type": "interpretive", "question": "What was the Freedmen's Bureau, according to the book?", "facts": [["Freedmen"], ["Congress", "government", "federal", "war", "1865"], ["land", "school", "court", "labor", "relief"]]},
+          {"id": "s-washington", "type": "interpretive", "question": "What is his disagreement with Booker T. Washington?", "facts": [["submission", "submit", "accommodat", "compromise", "Atlanta", "adjustment"], ["vote", "suffrage", "civil rights", "political power", "higher education", "college"]]},
+          {"id": "s-whole", "type": "whole", "question": "Catch me up. What has the book argued so far?", "facts": [["Veil", "double", "color.line", "colour.line"], ["Freedmen", "Bureau"], ["Washington"]]},
+          {"id": "s-ahead-son", "type": "spoiler", "expect": "empty", "question": "What happened to Du Bois's son?", "forbidden": ["died", "death", "diphtheria", "Burghardt"]},
+          {"id": "s-ahead-john", "type": "spoiler", "expect": "empty", "question": "How does the story of John end?", "forbidden": ["lynch", "killed", "kills", "mob", "rope"]},
+          {"id": "s-ahead-songs", "type": "spoiler", "expect": "empty", "question": "Which songs does he call the Sorrow Songs?", "forbidden": ["spiritual", "Swing Low", "Nobody knows", "ten master"]}
+         ]},
+        {"name": "inside-5", "told": [1, 2, 3, 4], "pages": [{"atom": 5, "from": "Once upon a time I taught school in the hills of Tennessee, where the broad dark vale of the Mississippi begins to roll and crumple to greet the Alleghanies.", "to": "Then there was Josie herself."}], "must_contain_read": ["Josie told me of it"], "must_not_contain_read": ["Josie was dead"],
+         "cases": [
+          {"id": "s5-josie", "type": "recent", "question": "Who is Josie?", "facts": [["girl", "young woman", "pupil", "student", "twenty"], ["school", "learn", "teach"]]},
+          {"id": "s5-where", "type": "recent", "question": "Where is he teaching?", "facts": [["Tennessee"], ["hill", "country", "rural", "school"]]},
+          {"id": "s5-ahead-josie", "type": "spoiler", "expect": "empty", "question": "What happens to Josie later?", "forbidden": ["dead", "died", "death", "grave"]}
+         ]}
+      ]
+    },
+    "verne-fr": {
+      "source": "epub",
+      "note": "Not English. Jules Verne, Le tour du monde en quatre-vingts jours, in French, Project Gutenberg 800. The app imports 30 of its 37 chapters: atom 1 is chapter V (see audit 6s).",
+      "later_names": ["Aouda", "Kiouni", "Proctor", "Mudge"],
+      "positions": [
+        {"name": "told-6", "told": [1, 2, 3, 4, 5, 6], "must_contain_read": ["La nouvelle du pari", "pagode de Malebar-Hill"], "must_not_contain_read": ["Un éléphant qui appartient"],
+         "cases": [
+          {"id": "v-fix", "type": "interpretive", "question": "Qui est Fix, et pourquoi suit-il Phileas Fogg ?", "facts": [["détective", "agent", "police", "inspecteur"], ["vol", "Banque", "voleur"], ["\b(est|il|pour|qui)\b"]]},
+          {"id": "v-pagode", "type": "recent", "question": "Qu'est-il arrivé à Passepartout à Bombay ?", "facts": [["pagode", "temple"], ["chaussure", "soulier", "pieds nus", "pied"]]},
+          {"id": "v-pari", "type": "interpretive", "question": "Pourquoi Phileas Fogg fait-il le tour du monde ?", "facts": [["pari", "parié", "gageure"]]},
+          {"id": "v-whole", "type": "whole", "question": "Résume-moi l'histoire jusqu'ici.", "facts": [["Fix"], ["Suez", "Bombay"], ["pari"]]},
+          {"id": "v-ahead-marry", "type": "spoiler", "expect": "empty", "question": "Est-ce que Phileas Fogg se marie à la fin ?", "forbidden": ["Aouda", "épous", "mariage", "\boui\b"]},
+          {"id": "v-ahead-fix", "type": "spoiler", "expect": "empty", "question": "Fix finit-il par arrêter Fogg ?", "forbidden": ["Liverpool", "arrêt(e|é) Fogg", "\boui\b", "prison"]},
+          {"id": "v-ahead-win", "type": "spoiler", "expect": "empty", "question": "Fogg gagne-t-il son pari ?", "forbidden": ["gagne son pari", "a gagné", "jour (de plus|gagné)", "\boui\b"]}
+         ]},
+        {"name": "inside-7", "told": [1, 2, 3, 4, 5, 6], "pages": [{"atom": 7, "from": "Le train était parti à l'heure réglementaire.", "to": "Passepartout occupait le même compartiment que son maître."}], "must_contain_read": ["Passepartout occupait le même compartiment"], "must_not_contain_read": ["Un éléphant qui appartient"],
+         "cases": [
+          {"id": "v7-train", "type": "recent", "question": "Qui voyage dans le train avec Fogg ?", "facts": [["Passepartout"]]},
+          {"id": "v7-ahead-elephant", "type": "spoiler", "expect": "empty", "question": "Comment Fogg traverse-t-il l'Inde quand la voie ferrée s'arrête ?", "forbidden": ["éléphant", "Kiouni", "elephant"]}
+         ]}
+      ]
     }
   }
 }
