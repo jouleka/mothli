@@ -443,10 +443,14 @@ def create_app(
             notes = app.state.notes_builder = NotesBuilder(lambda book_id: build_missing(
                 book_id, state["catalog"], app.state.store, settings, app.state.reader_client,
                 app.state.worker))
+            from app.recollections import Recollector
+            recollector = app.state.recollector = Recollector(
+                state["catalog"], settings, lambda: app.state.reader_client)
             try:
                 yield
             finally:
                 notes.close()
+                recollector.close()
                 app.state.worker.shutdown()
                 if warmer is not None:
                     await warmer.close()

@@ -2,7 +2,7 @@
 have read elsewhere. Read straight from stored state on each request; no model writes any of it."""
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.history import _history, _with_shelf
@@ -11,6 +11,7 @@ from app.deps import get_catalog, get_reader_client, get_settings, get_store, ge
 from app.home_conversation import HomeAsk, home_turns, read_maps, shelf_books, stream_home
 from app.ingest.manifest import load_manifest
 from app.read_map import prefix_map, read_snapshot, visible_turns
+from app.recollections import listed
 
 router = APIRouter(prefix="/api/reader", tags=["reader"])
 REACTIONS = 5
@@ -100,3 +101,32 @@ def clear_home_conversation(catalog=Depends(get_catalog), settings=Depends(get_s
 @router.get("/profile")
 def profile(catalog=Depends(get_catalog), settings=Depends(get_settings), worker=Depends(get_worker)):
     return reader_profile(catalog, settings, _history(settings), worker)
+
+
+def _recollections_enabled(settings):
+    if not (settings.reader_recollections and settings.reader_read_map and settings.reader_page_context):
+        raise HTTPException(404, "recollections are not enabled")
+
+
+@router.get("/recollections")
+def recollections(catalog=Depends(get_catalog), settings=Depends(get_settings)):
+    """What Mothli remembers about the reader, newest first: each note with its kind, the date and
+    the message it came from. A note about pages that are no longer read is counted in ``hidden``
+    and not shown: see ``app.recollections.listed``."""
+    _recollections_enabled(settings)
+    return listed(catalog)
+
+
+@router.delete("/recollections/{recollection_id}", status_code=204)
+def forget_recollection(recollection_id: int, catalog=Depends(get_catalog), settings=Depends(get_settings)):
+    """Forget one note. The messages it came from have been looked at, so it is not written again."""
+    _recollections_enabled(settings)
+    if not catalog.delete_recollection(recollection_id):
+        raise HTTPException(404, "unknown recollection")
+
+
+@router.delete("/recollections", status_code=204)
+def forget_recollections(request: Request, settings=Depends(get_settings)):
+    """Forget every note, shown or held back, and everything said so far that might become one."""
+    _recollections_enabled(settings)
+    request.app.state.recollector.forget_all()

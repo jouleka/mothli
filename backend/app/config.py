@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     # conversation setting). Set false to turn either off on its own.
     reader_story_notes: bool | None = None  # give replies Mothli's checked notes on finished chapters
     reader_read_map: bool | None = None     # Mothli follows what was actually read, not the furthest point
+    # What Mothli remembers about the reader between conversations: a few short notes distilled
+    # from the reader's own messages. Follows the read map when unset, which it needs: a note
+    # about a book is used only while what was read when the reader said it is still read.
+    reader_recollections: bool | None = None
     reader_conversation_draft_effort: Literal["low", "medium"] = "medium"
     reader_conversation_review_effort: Literal["low", "medium"] = "medium"
     # One model call in a page conversation. The provider default (120 s) is far past the
@@ -173,6 +177,10 @@ class Settings(BaseSettings):
             self.reader_story_notes = self.reader_conversation_stream
         if self.reader_read_map and not (self.reader_page_context and self.reader_conversation_stream):
             raise ValueError("READER_READ_MAP requires READER_PAGE_CONTEXT and streamed replies")
+        if self.reader_recollections is None:
+            self.reader_recollections = self.reader_read_map
+        if self.reader_recollections and not self.reader_read_map:
+            raise ValueError("READER_RECOLLECTIONS requires READER_READ_MAP")
         if self.llm_transport == "codex-local" and self.deployment_mode != "local":
             raise ValueError("codex-local is only supported for local testing")
         if self.deployment_mode != "hosted":

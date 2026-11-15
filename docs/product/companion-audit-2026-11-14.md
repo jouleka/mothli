@@ -1528,6 +1528,79 @@ The owner agreed to narrow the fixed foreshadowing pattern. This is a change to 
 - 22 new tests (`tests/eval/test_prolepsis_will.py`): 10 noun sentences that must not be hits, all failing on the old pattern, and 12 future-tense sentences that must stay hits, passing before and after. Of the five true sentences this check removed in 6ac's runs, three now pass it; "your own will" and the reported dream do not.
 - Not run with real models: the pattern involves none. What it changes in real replies will show in the next samples.
 
+## 6ae. What Mothli remembers about the reader, part one (16 November)
+
+The owner asked for long-term memory that does not fill up and get worse. Until now Mothli was given the last 8 messages of a conversation and nothing older. The design, the data model and the numbers are in `reader-companion-plan-2026-11-15.md` ("What Mothli remembers about the reader"). In the code the notes are called recollections, because "memory" and "notes" already mean other things here.
+
+### What changed
+
+- **New:** `backend/app/recollections.py`; tables `recollections` and `recollection_cursors`; `Catalog.get_recollections`, `keep_recollections`, `touch_recollections`, `delete_recollection`, `clear_recollections`, `get_recollection_cursor`; setting `READER_RECOLLECTIONS` (follows the read map, needs it).
+- **Distilling:** `Recollector` (a `NotesBuilder`) is started after each reply in a book's chat and by "Clear". One writer call for every 6 reader messages not yet looked at; each proposed note passes fixed rules and one Jev call before it is stored.
+- **The book chat** (`stream_read_prefix`): the chosen notes go to the writer as a block headed `WHAT THE READER HAS TOLD YOU BEFORE`, with one instruction added to its system prompt, and to every sentence check as one more passage. With no notes to give, or the setting off, the prompt and the instructions are byte for byte what they were.
+- **The reader's API**, beside the profile: `GET /api/reader/recollections`, `DELETE /api/reader/recollections/{id}`, `DELETE /api/reader/recollections`.
+- **Elsewhere:** `DELETE /api/books/{id}/conversation` hands over what was not yet looked at before it clears; `clear_turns` and `remove_book` also clear the cursor; `get_turns` takes `after`; the offline stub answers the distilling call with no changes; `companion_eval.py` and `voice_samples.py` switch recollections off, so that they measure what they measured.
+- **No check was changed.** `sentence_packet`, `sentence_cleared`, the second look, the fixed unread-name and foreshadowing gates and `FRIEND_VOICE` are as they were. The 8-message window is as it was.
+- **Not touched:** `home_conversation.py`, `reader_place.py`, `HomeChat.tsx`, `api.ts`, `classics.py`.
+
+### Model calls
+
+| When | Writer | Jev |
+|---|---|---|
+| Each reply | none added. The prompt grows by at most 1,200 characters | none added. Each sentence check, and each second look, reads one more passage of at most about 1,250 characters |
+| Each batch (6 to 12 reader messages) | 1 | 1 for each proposed note that passes the fixed rules, at most 4; none for the usual empty answer |
+| "Clear" with messages not yet looked at | 1 | as for a batch |
+
+### Verified, with stand-in models only
+
+`backend/tests/test_recollections.py`, 37 tests, each naming the break it catches. Fourteen of the guards were then removed one at a time and the file run again: each removal failed a test. Whole backend suite SUITE_PLACEHOLDER; `ruff check app tests scripts` clean. No frontend file changed.
+
+| Asked for | What the test shows |
+|---|---|
+| A batch becomes notes once and only once | Five messages: no call. The sixth: one call, one note, kept with its message. Run twice more: no call. Six more messages: one call, holding only the new ones |
+| A note Jev does not find in the message is not stored | Dropped; the note beside it in the same batch is kept |
+| A newer statement replaces the older | One note afterwards, with the newer message; the same words said a third time add nothing |
+| Nothing from Mothli's words or the book's text | Neither was among what the call or Jev were given, so there was nothing to write them from. A call that writes them anyway, with a name in them, is dropped by the names rule before Jev is asked; a made-up note with no capitalised word in it rests on Jev alone |
+| A short answer | "yes please" gets the end of Mothli's line before it, marked as context, in a field of its own for Jev. This is the one way Mothli's words reach the call, and whether the answer accepts them is Jev's judgment |
+| The budget | With 1,000 notes the block is within 1,200 characters, and the reply's prompt and its largest check are no larger than with 10 |
+| The cap | Over it the plan not used for longest goes before an older `about` note; a batch's additions are held to it |
+| A feeling follows what is read | Gone from the writer's prompt, the checker's passages and the list after "I haven't read this" on a chapter read at the time, and after "read it fresh"; back when all of it is read again |
+| Deleted notes stay deleted | The next batch does not hold the old messages. After "delete all", messages that were still waiting do not become notes |
+| Used in the book chat, and not with the setting off | The exact block; the passage in every check; with the setting off the instructions equal `STREAM_SYSTEM`, no block, no passage, the API answers 404 and nothing is distilled |
+| Clearing distils first and keeps the notes | The two waiting messages are read, the six already looked at are not, the note keeps its message, and the next conversation is read from its first message |
+
+### Tried to break
+
+"Seen" means the test fails with the guard taken out; "by reading" means it was not run that way.
+
+| Attempt | Without the guard | Now |
+|---|---|---|
+| A note carries something unread: the distilling model, which knows the book, writes a name the reader did not ("that servant scares me" becomes the servant's name) | Seen: stored when Jev said yes, and it would then be a passage a reply is checked against | A capitalised word must be in the reader's message. No model decides |
+| A note carries something unread: "The reader finds Darcy unbearable" is a `taste`, and the design tied only feelings to a book | Seen: it outlived "read it fresh" and reached the writer for a reader starting the book again | Any note Jev does not find free of story content is tied |
+| The message quoted beside a harmless note says what the note does not | Seen: shown on the reader's list after "read it fresh" | The message follows the rule for turns |
+| A note hidden by "I haven't read this" is replaced by a newer one stored with a smaller read map | Seen: the newer note is stored and shown, carrying the older | Hidden notes are not shown to the call, and a replacement must have been usable when its message was said |
+| The reader's guess, kept as a note, becomes support for Mothli stating it | Seen: "The reader thinks Corvus will poison Mara" is kept and would be a passage | Partly closed: a note about a book that trips the fixed foreshadowing pattern is dropped. A guess in the present or past tense is left to Jev. Open item |
+| The store grows: a 5,000-character note, thirty changes from one call, the same thing said twice | By reading: each would be stored. Seen for the cap: without it the store passes it | 240 characters, four changes, word-for-word repeats skipped, the cap of 300 applied in the same transaction as the additions |
+| The prompt grows: 1,000 notes, a long book title, long notes | Seen: the block passes its budget | 1,200 characters with heading and labels, and the checker's passage with it |
+| The distilling call grows: 300 kept notes and 80 messages waiting after an outage | By reading: one call of about 100,000 characters | 2,400 characters of kept notes, 12 messages a call, 3 calls a run |
+| A new conversation after "Clear" is never read | Seen: SQLite gives its messages the numbers of the cleared ones, at or below the old cursor | Clearing removes the cursor |
+| "Clear" while that conversation's batch is being read | Seen: the run under way and the batch handed over both store the note | The overtaken run keeps nothing |
+| The distilling call fails | | Nothing stored, cursor not moved, read again after the next reply |
+| The distilling call returns nonsense (prose, a wrong shape, an unknown kind, a message number that does not exist, a note it was not shown) | | Nothing stored and the cursor moves on: it is not asked again |
+| Jev cannot be reached, or answers without a probability | | Outage: nothing stored and the batch waits; five minutes' pause after a refused account. Malformed: that note is dropped, the rest kept |
+| The store itself cannot be read during a reply | | The reply is written without notes |
+
+### Not verified
+
+- Nothing was run with real models. Whether the distilling call finds the right things and usually nothing, whether Jev's two judgments hold on real notes, and how Mothli uses what it is given are all unseen.
+- Reply time and Jev spend with the extra passage; the running app; a browser; hosted mode (recollections are local only).
+- The home chat does not use any of this yet. One test runs the distilling over a home conversation through the same functions.
+
+### Found, and not fixed
+
+- **An invented memory passes the checks.** The design expected "you told me you love Tolstoy" to fail when no note says so. It does not: a sentence Jev finds free of story content is shown without needing support (`sentence_cleared`), and that sentence has none. The notes passage makes a true "you told me chapter 5 wrecked you" supported; nothing makes a false one unsupported. Only the instruction to the writer stands against it. Closing it needs a new judgment on every sentence of every reply; it was not added blind.
+- **The setting is on wherever the read map is.** Merging this starts the distilling in the owner's app, and reads back the book conversations already stored since 6w, at up to three calls after each reply.
+- The rest is in `companion-open-items.md` under part two.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

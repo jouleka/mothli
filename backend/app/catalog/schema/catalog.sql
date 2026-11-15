@@ -152,3 +152,33 @@ CREATE TABLE IF NOT EXISTS read_position (
   source_offset INTEGER NOT NULL,
   updated_at    TEXT NOT NULL
 );
+
+-- What Mothli remembers about the reader between conversations: one short note a row, distilled
+-- from the reader's own messages and checked against the message it came from (app/recollections.py).
+-- Not the per-book memory.db and not chapter_notes: those are about books, this is about the reader.
+-- drew_on is the record the source message was stored with (see conversation_turns). A tied note
+-- says something of a book and is used and listed only while all of drew_on is still read; for
+-- any note, `said` is shown only while it is. What the reader has read is never stored here.
+CREATE TABLE IF NOT EXISTS recollections (
+  recollection_id INTEGER PRIMARY KEY,
+  kind        TEXT NOT NULL CHECK (kind IN ('about','taste','plan','feeling')),
+  text        TEXT NOT NULL,             -- one sentence about the reader, third person
+  tied        INTEGER NOT NULL,          -- 1: says something of a book; follows what is read of it
+  book_id     TEXT REFERENCES books(book_id) ON DELETE CASCADE,  -- the book it is tied to, if one
+  drew_on     TEXT,                      -- what was read when the reader said it
+  said        TEXT NOT NULL,             -- the words of the message it came from, kept here because
+                                         -- the conversation may be cleared and turn ids are reused
+  said_at     TEXT NOT NULL,             -- when the reader said it
+  created_at  TEXT NOT NULL,
+  used_at     TEXT NOT NULL              -- last given to a reply; the least recently used go first
+);
+
+-- The last message of each conversation that has been looked at for recollections, so that none
+-- is distilled twice and a deleted note is not written again from the same messages.
+CREATE TABLE IF NOT EXISTS recollection_cursors (
+  conversation TEXT NOT NULL,            -- book_id, or '' for the conversation across books
+  incarnation  TEXT NOT NULL,
+  turn_id      INTEGER NOT NULL,
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (conversation, incarnation)
+);

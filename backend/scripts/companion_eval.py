@@ -551,7 +551,9 @@ def main():
             reader_conversation_review_effort="low", reader_memory_ingest=False,
             reader_answer_cache=False, reader_prepare_enabled=False, recap_prewarm=False,
             classics_enabled=False, cost_max_usd_per_book=args.max_usd_per_book,
-            reader_story_notes=args.notes)
+            # Off: a note distilled from one case's messages would be given to the next case's
+            # replies, and each batch is a writer call and checks this script does not plan for.
+            reader_story_notes=args.notes, reader_recollections=False)
         app = create_app(settings)
         cache = NotesCache(settings, fresh=args.fresh_notes)
         # The catalog is made when the app starts, so it is read after the client has entered.

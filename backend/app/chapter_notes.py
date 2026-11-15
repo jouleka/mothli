@@ -142,11 +142,12 @@ class NotesBuilder:
     """
     PAUSE_SECONDS = 300
     PAUSE_FOR = frozenset({"no_credits", "unauthorized"})
+    WHAT = "chapter notes"          # what the owner's log line says was not written
 
     def __init__(self, build, *, clock=monotonic):
         self._build, self._queued, self._lock = build, set(), Lock()
         self._clock, self._resume_at = clock, None
-        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="chapter-notes")
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=self.WHAT.replace(" ", "-"))
 
     def ensure(self, book_id):
         with self._lock:
@@ -167,7 +168,7 @@ class NotesBuilder:
                 with self._lock:
                     self._resume_at = self._clock() + self.PAUSE_SECONDS
             logger.warning(
-                "chapter notes were not written: %s%s%s", type(exc).__name__,
+                self.WHAT + " were not written: %s%s%s", type(exc).__name__,
                 f" ({reason}{': ' + exc.detail if exc.detail else ''})" if reason else "",
                 f"; not trying again for {self.PAUSE_SECONDS // 60} minutes"
                 if reason in self.PAUSE_FOR else "")

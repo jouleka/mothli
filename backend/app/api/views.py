@@ -591,7 +591,8 @@ def ask_the_book_stream(
     from fastapi.responses import StreamingResponse
     from app.stream_conversation import stream_read_prefix
     events = stream_read_prefix(book_id, body, catalog, store, settings, client, worker,
-                                notes_builder=request.app.state.notes_builder)
+                                notes_builder=request.app.state.notes_builder,
+                                recollector=request.app.state.recollector)
     return StreamingResponse(
         ("data: " + json.dumps(event, ensure_ascii=False) + "\n\n" for event in events),
         media_type="text/event-stream",
@@ -626,10 +627,16 @@ def stored_conversation(
 
 
 @router.delete("/conversation", status_code=204)
-def clear_conversation(book_id: str, catalog=Depends(get_catalog)):
+def clear_conversation(book_id: str, request: Request, catalog=Depends(get_catalog),
+                       settings=Depends(get_settings)):
     if catalog.get_book(book_id) is None:
         raise HTTPException(404, "unknown book")
-    catalog.clear_turns(book_id)
+    if settings.reader_recollections:
+        # What the reader said of themselves and nobody has looked at yet is taken first, to be
+        # distilled off this request; the conversation is gone when this returns either way.
+        request.app.state.recollector.clearing(book_id)
+    else:
+        catalog.clear_turns(book_id)
 
 
 @router.post("/ask")
