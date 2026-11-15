@@ -234,7 +234,7 @@ def run_cross(args, api, app, settings, spec, epubs, rows, gates):
     """The home conversation: several books on one shelf, each read to its own place."""
     from _epub import epub_ncx
     from app.api.profile import _history, _with_shelf
-    from app.home_conversation import shelf_books, shelf_lines
+    from app.home_conversation import read_maps, shelf_books, shelf_lines
     from app.reader_place import APP_HELP
     cross = spec["cross_book"][args.scenario]
     settings.reader_read_map = True
@@ -271,11 +271,13 @@ def run_cross(args, api, app, settings, spec, epubs, rows, gates):
         shelf_books(app.state.catalog, settings, app.state.worker), elsewhere))
     told = [shelf, "How this app works: " + APP_HELP]
     leak_tokens -= set(word_tokens(" ".join(told)))
+    # A case's earlier turns are stored as written from the shelf as it stands, or they are not passed on.
+    drew_on = read_maps(shelf_books(app.state.catalog, settings, app.state.worker))
     for case in [c for c in cross["cases"] for _ in range(args.repeat) if not args.only or c["id"] in args.only]:
         app.state.catalog.clear_turns(None)
         for role, text in ((r, t) for q, a in case.get("history", []) for r, t in (("user", q), ("assistant", a))):
             app.state.catalog.add_turn(None, incarnation="home", position_epoch=0, atom=0, offset=0,
-                                       role=role, content=text)
+                                       role=role, content=text, drew_on=drew_on)
         before = len(app.state.catalog.get_costs(first))
         gates.clear()
         started = perf_counter()

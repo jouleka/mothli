@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from app.api.history import _history, _with_shelf
 from app.content_scope import is_content
 from app.deps import get_catalog, get_reader_client, get_settings, get_store, get_worker
-from app.home_conversation import HOME, HomeAsk, stream_home
+from app.home_conversation import HomeAsk, home_turns, read_maps, shelf_books, stream_home
 from app.ingest.manifest import load_manifest
 from app.read_map import read_snapshot, visible_turns
 
@@ -83,9 +83,10 @@ def ask_home(body: HomeAsk, catalog=Depends(get_catalog), store=Depends(get_stor
 
 
 @router.get("/conversation")
-def home_conversation(catalog=Depends(get_catalog), settings=Depends(get_settings)):
+def home_conversation(catalog=Depends(get_catalog), settings=Depends(get_settings), worker=Depends(get_worker)):
+    """What was said on the home screen and may be shown again: see ``home_turns``."""
     _home_enabled(settings)
-    turns = catalog.get_turns(None, incarnation=HOME, atom=0, offset=0, limit=80)
+    turns = home_turns(catalog, read_maps(shelf_books(catalog, settings, worker)), limit=80)
     return {"turns": [{"role": turn["role"], "content": turn["content"], "created_at": turn["created_at"]}
                       for turn in turns]}
 

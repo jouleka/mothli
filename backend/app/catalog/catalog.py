@@ -59,6 +59,8 @@ class Catalog:
                 self._conn.execute(
                     "ALTER TABLE reading_state ADD COLUMN position_epoch INTEGER NOT NULL DEFAULT 0"
                 )
+            if "drew_on" not in {r[1] for r in self._conn.execute("PRAGMA table_info(conversation_turns)")}:
+                self._conn.execute("ALTER TABLE conversation_turns ADD COLUMN drew_on TEXT")
             try:
                 duplicates = self._conn.execute(
                     "SELECT book_id,chapter_ordinal FROM cost_ledger "
@@ -295,15 +297,16 @@ class Catalog:
         return [{**dict(row), "sentences": json.loads(row["sentences"])} for row in rows]
 
     def add_turn(self, book_id, *, incarnation, position_epoch, atom, offset, role, content,
-                 reaction=False, request_id=None):
+                 reaction=False, request_id=None, drew_on=None):
+        """``drew_on``, for a turn across books: {book_id: [incarnation, read map]} as it was written."""
         for value in (position_epoch, atom, offset):
             self._check_int(value, "source position")
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO conversation_turns(book_id,incarnation,position_epoch,atom,source_offset,"
-                "role,content,reaction,request_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "role,content,reaction,request_id,created_at,drew_on) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (book_id, incarnation, position_epoch, atom, offset, role, content, int(bool(reaction)),
-                 request_id, _now()))
+                 request_id, _now(), None if drew_on is None else json.dumps(drew_on)))
             self._conn.commit()
         return cur.lastrowid
 
@@ -313,13 +316,14 @@ class Catalog:
             self._check_int(value, "source position")
         with self._lock:
             rows = self._conn.execute(
-                "SELECT turn_id,position_epoch,atom,source_offset,role,content,reaction,created_at "
+                "SELECT turn_id,position_epoch,atom,source_offset,role,content,reaction,created_at,drew_on "
                 "FROM conversation_turns WHERE book_id IS ? AND incarnation=? "
                 "AND (atom<? OR (atom=? AND source_offset<=?))" + (" AND reaction=1" if reactions else "")
                 + " ORDER BY turn_id DESC" + (" LIMIT ?" if limit is not None else ""),
                 (book_id, incarnation, atom, atom, offset, *([limit] if limit is not None else []))
             ).fetchall()
-        return [dict(row) for row in reversed(rows)]
+        return [{**dict(row), "drew_on": None if row["drew_on"] is None else json.loads(row["drew_on"])}
+                for row in reversed(rows)]
 
     # ---- the read map --------------------------------------------------------
     @staticmethod

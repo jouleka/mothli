@@ -21,7 +21,7 @@ from app.conversation_pipeline import compact_candidates
 from app.cost import CostCeilingExceeded
 from app.llm.client import ProviderUnavailable
 from app.llm.jev import JevUnavailable
-from app.read_map import read_snapshot
+from app.read_map import read_snapshot, still_read
 from app.reader_place import APP_HELP, SPEAK_AS_A_FRIEND, content_numbers, offers_for, place_line
 from app.retrieval_passages import passage_windows
 from app.stream_conversation import (HISTORY_TURNS, MAX_PASSAGES, conversation_writer, failure_fields,
@@ -70,13 +70,39 @@ def shelf_books(catalog, settings, worker):
     books = []
     for book in catalog.list_books():
         try:
-            point, chapters, state, manifest, _book, _held = read_snapshot(
+            point, chapters, state, manifest, _book, held = read_snapshot(
                 book["book_id"], catalog, settings, worker)
         except (LookupError, OSError, ValueError, RuntimeError):
             continue                              # a book whose source cannot be verified is left out
         books.append({"book": book, "chapters": chapters, "state": state, "manifest": manifest,
-                      "point": point, "numbers": content_numbers(manifest)})
+                      "point": point, "numbers": content_numbers(manifest), "held": held})
     return books
+
+
+def read_maps(books):
+    """{book_id: [incarnation, read map]} for every book of ``shelf_books`` with anything read.
+
+    A home turn is stored with this, taken from the same snapshot its prompt was built from: it
+    is everything of any book the turn can hold.
+    """
+    return {item["book"]["book_id"]: [item["book"]["incarnation"], item["held"]]
+            for item in books if item["held"]}
+
+
+def home_turns(catalog, read, *, limit):
+    """Stored home turns that may be said and shown again, oldest first; ``limit`` keeps the latest.
+
+    ``read`` is ``read_maps`` now. A turn is kept only while every book it was stored with is on
+    the shelf, in the same shelf lifetime, with every stretch that was read then still read. So
+    "read it fresh", "I haven't read this" and removing a book each hide the turns written from
+    that text, and reading it again brings them back. A turn stored without its books (before
+    they were kept) cannot be shown to be safe and is never returned.
+    """
+    def safe(turn):
+        return turn["drew_on"] is not None and all(
+            book_id in read and read[book_id][0] == incarnation and still_read(then, read[book_id][1])
+            for book_id, (incarnation, then) in turn["drew_on"].items())
+    return [turn for turn in catalog.get_turns(None, incarnation=HOME, atom=0, offset=0) if safe(turn)][-limit:]
 
 
 def shelf_lines(books, elsewhere):
@@ -125,8 +151,11 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere):
     if not getattr(client, "jev", None):
         raise HTTPException(503, "Jev review is not configured")
     books = shelf_books(catalog, settings, worker)
+    drew_on = read_maps(books)
+    # Earlier turns are conversation, not evidence, and no check reads them: only those written
+    # from text that is still read are passed on.
     history = [ConversationMessage(role=turn["role"], content=turn["content"][:2000], as_of_chapter=0)
-               for turn in catalog.get_turns(None, incarnation=HOME, atom=0, offset=0, limit=HISTORY_TURNS)]
+               for turn in home_turns(catalog, drew_on, limit=HISTORY_TURNS)]
     question = conversation_question(body.question, history, 0)
     query = conversation_retrieval_question(body.question, history, 0)
     writer = conversation_writer(client, settings)
@@ -219,7 +248,8 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere):
         finally:
             if failure is None and finished is not None:
                 try:
-                    where = dict(incarnation=HOME, position_epoch=0, atom=0, offset=0, request_id=request_id)
+                    where = dict(incarnation=HOME, position_epoch=0, atom=0, offset=0, request_id=request_id,
+                                 drew_on=drew_on)
                     catalog.add_turn(None, role="user", content=body.question, **where)
                     if finished:
                         catalog.add_turn(None, role="assistant", content=" ".join(finished), **where)
