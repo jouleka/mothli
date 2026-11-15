@@ -82,7 +82,7 @@ SPEAK_AS_A_FRIEND = (
 
 # Mothli saying it was not with the reader for some chapters: the moment to offer to count them.
 NOT_THERE = re.compile(
-    r"wasn[’']t (with you|there)|weren[’']t (with you|there|together)|without me|open Contents", re.I)
+    r"wasn[’']t (with you|there)|weren[’']t (with you|there|together)|without me|open Contents|\bcount(?:ed|ing)?\b", re.I)
 
 
 def skipped_before(item):

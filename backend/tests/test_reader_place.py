@@ -221,3 +221,13 @@ def test_quick_wording_offers_exactly_the_named_chapters_gone_past_and_nothing_o
     assert offered(["We flipped through chapters 2 and 3."], pride, other) == []     # which book?
     assert offered(["We flipped through chapters 1 and 2 of The Brothers Karamazov."], pride, other) == [
         ("k", [1, 2], "chapters 1 and 2")]
+
+
+def test_telling_the_reader_how_to_count_named_chapters_offers_to_count_them():
+    # The reader said "yeah, I read those": Mothli explains how to mark them. Without a button
+    # there the reader is sent to Contents for something one press could do.
+    reader = book("k", "The Brothers Karamazov", here=4, part=[4], total=5)
+    said = ["Got it!", "To let me count chapters 2 and 3 as read, open the book’s Contents and press the label."]
+    assert offered(said, reader) == [("k", [2, 3], "chapters 2 and 3")]
+    # Counting something else offers nothing.
+    assert offered(["I count three brothers so far."], reader) == []

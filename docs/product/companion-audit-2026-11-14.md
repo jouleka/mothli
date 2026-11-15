@@ -1431,6 +1431,15 @@ Backend suite: 2,120 pass, 83 skipped (12 more passing than main). `ruff check a
 - **The reader app's question is unchanged:** once any chapter was declined it does not ask about chapters skipped later (6p, 6r). Mothli in conversation does not use that record and still raises them.
 - **Seen in the owner's running app on 15 November, not examined:** on the Project Gutenberg front-matter page of Pride and Prejudice, `PUT /api/books/{id}/read-page` answers 422, so that page can never be reported as read and the browser console shows an error; and the shelf says "In chapter 3 of 61" for a book that opens on that page under the heading "Chapter I".
 
+### 6aa, checked afterwards with real models (one conversation, $0.003 of Jev)
+
+Reader of the Karamazov fixture: chapter 1 read, chapters 2 and 3 skimmed, settled in chapter 4. Terra through `codex-local`, Jev 1.14.0.
+
+- "catch me up": the reply opened "We went through chapters 2 and 3 pretty quickly, and I didn't take them in; did you read them and want me to count them as read?", carried the button "I've read chapters 2 and 3", then caught the reader up from chapters 1 and 4. Nothing removed by the checks.
+- "who is Alyosha again?" next: answered, and did not ask again.
+- "yeah i read those, just fast": Mothli explained how to mark them in Contents, with no button. Fixed here: a sentence that tells the reader how to count named chapters now carries the button too (test added). Not tried again with real models.
+- One conversation only.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
