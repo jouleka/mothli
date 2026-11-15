@@ -64,6 +64,8 @@ Part one is in 6ae: the store, the distilling, the reader's API, and use in the 
 
 ## Before going live
 
+- [ ] What Mothli remembers is left out of a reply whenever the book chat's passages leave no room under the checker's size limit, which is likely for a reader deep in a long book with full chapter notes. Fitting the book chat's passages the way the home chat's are fitted would give the notes a fixed place. (6ad, 6ae)
+- [ ] "Wants short answers" is remembered and repeated back, but replies did not get shorter in the one run. (6ae)
 - [ ] The chat inside a book builds its sentence checks the way the home chat did before 6ad's fix: ten passages, notes, the place and the app help, with no check on the 30,000 limit. A check over the limit drops its sentence without a word, most likely late in a long recap. Not measured. `fit_passages` and `check_room` are there to use. (6ad) The reader's notes, one more passage since 6ae, are fitted: they are left out of a reply whose largest check has no room for them. The other passages are as they were. (6ae)
 - [x] Suggestions rest on a list of blurbs known to spoil, found by reading about 450 of 76,763. Everything else is taken as clean unread. Turn it round: suggest only books whose blurb has been read and judged clean. (6ad; done: `classics_reviewed.tsv`, 605 read, 560 clean)
 - [ ] Only the 605 English blurbs read can be suggested: every English book past the first 601 most read is never suggested until its blurb is read, and no non-English blurb has been read, so a shelf of books in another language gets no suggestions at all. (6ad, afterwards)

@@ -1703,6 +1703,16 @@ The owner asked for long-term memory that does not fill up and get worse. Until 
 - **The setting is on wherever the read map is.** Merging this starts the distilling in the owner's app, and reads back the book conversations already stored since 6w, at up to three calls after each reply.
 - The rest is in `companion-open-items.md` under part two.
 
+### 6ae, tried with real models (one conversation, $0.008 of Jev)
+
+The chat inside the Karamazov fixture, chapters 1 to 4 read and part of 5. Terra through `codex-local`, Jev 1.14.0.
+
+- **Told, in seven messages:** likes the dry narrator and is bored by long descriptions; wants short answers and reads on the train at night; the monk sent away from Athos "wrecked me"; wants something lighter next, maybe Jane Eyre; plus two plain questions and a thanks.
+- **Kept after the seventh:** four notes, one of each kind, each true to its message: "The reader wants short answers and mostly reads on the train at night.", "The reader loves the narrator's dry style but finds long descriptions boring.", "The bit about the monk sent away from Athos wrecked the reader.", "The reader wants something lighter next and is considering Jane Eyre." Nothing was kept from the questions or the thanks. Two writer calls and four checks.
+- **The conversation was then cleared.** The four notes stayed.
+- **In a new conversation:** "what do you remember about me?" brought all four back, correctly, in three sentences. "Do you remember which part got to me?" named the monk of Athos, but hedged ("though I can't be sure that's the part that got to you"). "Do you remember who my favourite author is?", which was never said, got "I don't remember who your favourite author is. Who is it?": nothing invented. "What's an elder again?" was answered in three sentences, no shorter than before the reader asked for short answers.
+- **Not verified:** one conversation, one book, four notes. Not tried: a contradiction replacing a note, a note hidden by "read it fresh" with real models, a store of hundreds, a reader deep in a long book (where the passages may leave no room for the notes: see the open item on the book chat's check size), the home chat.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
