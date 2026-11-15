@@ -1036,6 +1036,41 @@ Checking, not building. Nothing in the app was changed; the eval gained position
 - The cast entries that are not names, and the eval misreading French (problems 5 and 6), as agreed.
 - Mothli's "I wasn't there" and the chapter numbers are matched in English only, so a reply in French never carries the offer. This was so before this step.
 
+## 6u. Checks the provider refuses: no charge, and a reason the owner can see (15 November)
+
+On 15 November TypeSafe answered every Jev call with HTTP 402, "Your organization has no available TypeSafe API credits". Two faults of ours showed. Each refused call stayed in the book's cost ledger at its full reserved size (4,096 output tokens against a ceiling of 500,000, so about 120 of them lock a book, for notes and replies alike, and it stays locked after the provider recovers). And `JevClient` threw the status away, so the only thing anyone could see was `JevUnavailable`.
+
+### What changed
+
+| | Before | Now |
+|---|---|---|
+| The reason | `JevUnavailable` with no cause | `JevUnavailable.reason`, one of `no_credits` (402), `unauthorized` (401, 403), `rate_limited` (429), `refused` (any other 4xx), `unavailable` (5xx, a redirect, a timeout, a lost connection, an answer that does not parse, and every failure our own code raises) |
+| The ledger | Every failed call settled as `…-failed-reserved` at its reserved size | A call refused with a 4xx did no work, so its reservation is released and nothing is written (`budgeted_jev`). Every other failure is charged exactly as before: spend is unknown, so the estimate stays counted |
+| The owner's log | `"failure": "JevUnavailable"` | The same WARNING line of `conversation-stream` and `conversation-home` also carries `"reason"` and, when there is one, `"provider_message"`. The `mothli.notes` line reads `chapter notes were not written: JevUnavailable (no_credits: …); not trying again for 5 minutes` |
+| The streamed error event | `{"type": "error", "status": 503, "message": …}` | The same, with `"reason"` added. The message is unchanged and the reader app does not read the new field |
+| Notes after a refusal | Started again on every page turn and after every reply | After a run stopped for `no_credits` or `unauthorized`, no book's notes start for five minutes (`NotesBuilder`) |
+
+- **What can be shown is unchanged.** No check that decides whether a sentence is shown was touched. A refused check still counts as an outage: the sentence is not shown, a reply with nothing cleared ends in the 503 event, and notes store nothing. The tests assert this for 402.
+- **No secret in the reason.** The key, the headers and the request body are never put in a message or a log. TypeSafe's own message is kept only for 402, 401, 403 and 429 (answers about the account, which cannot quote what was sent), only when it is one short string in a small JSON answer, cut to 200 characters, and dropped whole if it holds any six characters in a row of the key. For any other 4xx it is not kept, because a complaint about a request can quote the reader's question or the book.
+- **Every caller of Jev gets the ledger rule,** not only replies and notes: the extraction screen, the cast, selections and the recap review go through the same `budgeted_jev`. Background preparation too: a refused call no longer counts toward its own cap.
+
+### Verified, with a stand-in provider only
+
+TypeSafe had no credits, so nothing here was run against it. The tests put a real `JevClient` on a transport that answers 402 (or another status, or times out) and stand-in writers:
+
+- 19 new tests, all failing on main and passing here. Whole backend suite: 2,067 passed, 83 skipped.
+- Five refused calls in a row against a book with room for two charged calls: the ledger and the pending reservations stay empty. Then a 500 and a timeout: both charged as `test-failed-reserved` at full size, and the next call is refused for the ceiling. The unknown-spend rule is intact.
+- A streamed reply, a home reply and a notes run with every check refused: nothing shown or stored, the event and the log line carry `no_credits`, no Jev row in any book's ledger, the key nowhere in the response or the log.
+
+### Not verified, and not done
+
+- **The real provider.** The status codes are the only thing relied on. The shape of TypeSafe's error body is a guess (`{"error": {"message": …}}`, `{"error": "…"}`, `{"message": …}` or `{"detail": …}`); if it is something else, the reason word is still right and only `provider_message` is missing. That TypeSafe bills nothing for a call it answers with a 4xx is assumed from what the status means; it was not checked against an invoice.
+- **Books locked on 15 November stay locked.** Their refused checks are already in the ledger as `…-failed-reserved`, the same phase a timeout gets, so they cannot be picked out safely afterwards. Nothing in this step removes them.
+- **Timeouts and server errors can still lock a book,** after about 120 failed checks, by the rule kept above.
+- **The writer is still paid during an outage.** A reply or a notes run writes first and learns that the checker refuses afterwards. Notes now wait five minutes after `no_credits` or `unauthorized`; replies do not wait, and `rate_limited` does not pause anything.
+- **A call our own code refuses after reserving** (more than 24 questions in one batch) is still charged at its reserved size though it never left the machine. Left as it was.
+- The older, non-streamed reply path logs no reason. The frontend was not touched: the reader sees the same line for every outage.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

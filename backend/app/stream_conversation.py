@@ -298,6 +298,29 @@ def jev_runner(catalog, settings, client, book_id, note):
     return jev_run
 
 
+class Outage(list):
+    """The sentences Jev could not judge, and why: a refusal's reason is kept over an unknown one."""
+    reason, detail = "unavailable", None
+
+    def add(self, sentence, failure):
+        self.append(sentence)
+        if failure.refused and self.reason == "unavailable":
+            self.reason, self.detail = failure.reason, failure.detail
+
+    def error(self):
+        return JevUnavailable("Jev review unavailable", reason=self.reason, detail=self.detail)
+
+
+def failure_fields(failure):
+    """What the owner's log line says of a reply that failed: its kind and, for Jev, the reason."""
+    fields = {"failure": type(failure).__name__ if failure else None}
+    if isinstance(failure, JevUnavailable):
+        fields["reason"] = failure.reason
+        if failure.detail:
+            fields["provider_message"] = failure.detail
+    return fields
+
+
 def sentence_checks(*, book_id, catalog, store, settings, writer, jev_run, note, passages_for,
                     question, identities, read_text, durable, sources=(), phase="stream"):
     """The gates a sentence passes before it is shown, or kept as a note.
@@ -308,7 +331,7 @@ def sentence_checks(*, book_id, catalog, store, settings, writer, jev_run, note,
     """
     read_words = set(word_tokens(read_text))
     facts = source_facts(list(sources))
-    lock, looks, outage = Lock(), [], []
+    lock, looks, outage = Lock(), [], Outage()
 
     def safe(sentence):
         started_call = perf_counter()
@@ -359,8 +382,8 @@ def sentence_checks(*, book_id, catalog, store, settings, writer, jev_run, note,
                 return True
             if sentence_blocked(answers):
                 return False
-        except JevUnavailable:
-            outage.append(sentence)
+        except JevUnavailable as exc:
+            outage.add(sentence, exc)
             return False
         except (AskEvidenceError, KeyError, TypeError):
             return False
@@ -613,7 +636,7 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
                 else:
                     _, kept, dropped = event
                     if not kept and outage:
-                        raise JevUnavailable("Jev review unavailable")
+                        raise outage.error()
                     if not kept:
                         intent_thread.join(timeout=2)
                     finished = kept
@@ -628,7 +651,8 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
             yield {"type": "error", "status": 413, "message": "read text exceeds the bounded search budget"}
         except JevUnavailable as exc:
             failure = exc
-            yield {"type": "error", "status": 503,
+            # The reader's words do not change; ``reason`` is the one word for why, for the owner.
+            yield {"type": "error", "status": 503, "reason": exc.reason,
                    "message": "Jev review unavailable; no unchecked reply was published"}
         except ProviderUnavailable as exc:
             failure = exc
@@ -656,8 +680,7 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
                 record = {"event": "conversation-stream", "request_id": request_id,
                           "elapsed_ms": round((perf_counter() - started) * 1000, 2),
                           "first_sentence_ms": first_ms, "sentences": shown, "dropped": dropped,
-                          "stages_ms": dict(timings),
-                          "failure": type(failure).__name__ if failure else None,
+                          "stages_ms": dict(timings), **failure_fields(failure),
                           "history_turns": len(history), "question_chars": len(body.question),
                           "calls": [{k: v for k, v in call.items()
                                      if k in {"phase", "input_tokens", "output_tokens", "elapsed_ms"}}

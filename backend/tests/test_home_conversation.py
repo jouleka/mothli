@@ -125,6 +125,30 @@ def test_an_outage_shows_nothing_and_keeps_nothing(shelf, monkeypatch):
     assert api.get("/api/reader/conversation").json()["turns"] == []
 
 
+def test_a_refused_home_check_tells_the_owner_why_and_charges_no_book(shelf, monkeypatch, caplog):
+    """The home chat hid the provider's reason too, and charged its refused checks to a book."""
+    from test_jev import NO_CREDITS, provider
+    api, app, _ = shelf
+    models(app, monkeypatch, reply="Corvus moved lamp 21 in part 2.")
+    app.state.client.jev = provider(402)
+    with caplog.at_level("WARNING", logger="mothli.conversation"):
+        response = api.post("/api/reader/ask/stream", json={"question": "What did Corvus do?"})
+    events = [json.loads(row[6:]) for row in response.text.splitlines() if row.startswith("data: ")]
+    assert events == [{"type": "error", "status": 503, "reason": "no_credits",
+                       "message": "Jev review unavailable; no unchecked reply was published"}]
+    assert "lamp" not in response.text and "organization" not in response.text
+    [record] = [json.loads(r.getMessage()) for r in caplog.records
+                if r.name == "mothli.conversation" and r.levelname == "WARNING"]
+    assert record["event"] == "conversation-home" and record["failure"] == "JevUnavailable"
+    assert record["reason"] == "no_credits" and record["provider_message"] == NO_CREDITS
+    assert "private-test-key" not in caplog.text + response.text
+    catalog = app.state.catalog
+    for item in catalog.list_books():
+        assert not [c for c in catalog.get_costs(item["book_id"]) if c["model"].startswith("jev")]
+        assert catalog.get_cost_reservations(item["book_id"]) == []
+    assert api.get("/api/reader/conversation").json()["turns"] == []
+
+
 def test_home_chat_needs_the_read_map_and_an_empty_shelf_calls_no_model(shelf, monkeypatch, tmp_path):
     api, app, settings = shelf
     settings.reader_read_map = False

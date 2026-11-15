@@ -141,6 +141,53 @@ def test_stream_with_nothing_cleared_ends_empty_and_an_outage_shows_nothing(page
     assert [e["type"] for e in events] == ["error"] and events[0]["status"] == 503 and "cobalt" not in response.text
 
 
+def stream_record(caplog):
+    records = [(r.levelname, json.loads(r.getMessage())) for r in caplog.records if r.name == "mothli.conversation"]
+    return [(level, record) for level, record in records if record["event"] == "conversation-stream"]
+
+
+def test_a_refused_check_tells_the_owner_why_charges_nothing_and_shows_nothing(page_env, monkeypatch, caplog):
+    """"No credits" surfaced only as JevUnavailable, and every refused check was charged in full."""
+    from test_jev import NO_CREDITS, provider
+    api, bid, app, settings = page_env
+    point = confirm(api, bid)
+    settings.reader_conversation_jev = settings.reader_conversation_stream = True
+    stream_models(app, monkeypatch, "Mara put the cobalt key in a red tin. Jonas waited beside the forge.")
+    app.state.client.jev = provider(402)
+    with caplog.at_level("WARNING", logger="mothli.conversation"):
+        response = api.post(f"/api/books/{bid}/ask/stream",
+                            json={"question": "What did Mara do?", "read_frontier": point})
+    # The reader sees the same words as for any outage, no billing details, and no unchecked sentence.
+    assert events_of(response) == [{"type": "error", "status": 503, "reason": "no_credits",
+                                    "message": "Jev review unavailable; no unchecked reply was published"}]
+    assert "cobalt" not in response.text and "organization" not in response.text
+    # One warning line for the owner, naming the reason.
+    [(level, record)] = stream_record(caplog)
+    assert level == "WARNING" and record["failure"] == "JevUnavailable"
+    assert record["reason"] == "no_credits" and record["provider_message"] == NO_CREDITS
+    assert "private-test-key" not in caplog.text + response.text
+    # No refused check is left in the book's ledger, settled or pending.
+    catalog = app.state.catalog
+    assert not [c for c in catalog.get_costs(bid) if c["model"].startswith("jev")]
+    assert catalog.get_cost_reservations(bid) == []
+
+
+def test_an_outage_of_unknown_cause_is_named_unavailable_and_stays_charged(page_env, monkeypatch, caplog):
+    """The rule for unknown spend must survive: a failure that is not a refusal keeps its estimate."""
+    api, bid, app, settings = page_env
+    point = confirm(api, bid)
+    settings.reader_conversation_jev = settings.reader_conversation_stream = True
+    stream_models(app, monkeypatch, "Mara put the cobalt key in a red tin.", down=True)
+    with caplog.at_level("WARNING", logger="mothli.conversation"):
+        events = events_of(api.post(f"/api/books/{bid}/ask/stream",
+                                    json={"question": "What did Mara do?", "read_frontier": point}))
+    assert [(e["type"], e["status"], e["reason"]) for e in events] == [("error", 503, "unavailable")]
+    [(level, record)] = stream_record(caplog)
+    assert level == "WARNING" and record["reason"] == "unavailable" and "provider_message" not in record
+    failed = [c["phase"] for c in app.state.catalog.get_costs(bid) if c["model"].startswith("jev")]
+    assert failed and all(phase.endswith("-failed-reserved") for phase in failed)
+
+
 def test_streaming_follows_the_jev_conversation_setting_unless_set():
     from app.config import Settings
     jev = dict(_env_file=None, reader_page_context=True, jev_enabled=True, reader_conversation_jev=True)
