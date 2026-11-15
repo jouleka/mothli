@@ -1140,7 +1140,7 @@ Nine new tests; eight fail on main, the ninth guards against hiding too much. Wh
 
 ### Verified, with stand-in models only
 
-23 new tests in `backend/tests/test_book_turns.py`; 16 fail on main, 7 guard against hiding too much. One catalog test was rewritten for `get_turns` without a place. Each case marked "three surfaces" is one test per surface: the book's conversation, the profile's reactions, and everything the writer and the checker are given with the next question. Whole backend suite: SUITE_RESULT.
+23 new tests in `backend/tests/test_book_turns.py`; 16 fail on main, 7 guard against hiding too much. One catalog test was rewritten for `get_turns` without a place. Each case marked "three surfaces" is one test per surface: the book's conversation, the profile's reactions, and everything the writer and the checker are given with the next question. Whole backend suite: 2,099 passed, 83 skipped.
 
 | Test | The break it catches |
 |---|---|
