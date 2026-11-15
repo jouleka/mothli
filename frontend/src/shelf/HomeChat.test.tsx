@@ -2,7 +2,9 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { axeAA } from "../test-a11y";
 
-const mocks = vi.hoisted(() => ({ homeConversation: vi.fn(), askHome: vi.fn(), clearHome: vi.fn(), readChapters: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  homeConversation: vi.fn(), askHome: vi.fn(), clearHome: vi.fn(), readChapters: vi.fn(), addClassic: vi.fn(),
+}));
 vi.mock("../api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api")>()),
   api: mocks,
@@ -15,6 +17,7 @@ beforeEach(() => {
   mocks.askHome.mockReset();
   mocks.clearHome.mockReset().mockResolvedValue(undefined);
   mocks.readChapters.mockReset().mockResolvedValue(undefined);
+  mocks.addClassic.mockReset().mockResolvedValue({ book_id: "bknew" });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -250,6 +253,90 @@ describe("HomeChat", () => {
       await within(thread).findByText(/I wasn’t with you/);
       expect(within(thread).queryByRole("button")).toBeNull();
       expect(mocks.readChapters).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("offers to add a suggested book to the shelf", () => {
+    const emma = { classic_id: "158", title: "Emma", author: "Jane Austen" };
+    const answerWith = (suggested?: unknown[]) => ({
+      insufficient_evidence: false,
+      claims: [{ text: "You might like Emma by Jane Austen.", citation_ids: [] }],
+      ...(suggested ? { suggested } : {}),
+    });
+    const suggest = async () => {
+      ask("Suggest something new?");
+      return screen.getByRole("region", { name: "Conversation with Mothli" });
+    };
+
+    // Catches: a suggestion the reader can do nothing with; the button under the wrong reply; the
+    // wrong book added; the shelf beside the chat still not showing the book.
+    test("the book a reply named can be added from under that reply, and the shelf is told", async () => {
+      mocks.homeConversation.mockResolvedValue({ turns: history(1) });
+      mocks.askHome.mockResolvedValueOnce(answerWith([emma]));
+      let done: (value: unknown) => void = () => {};
+      mocks.addClassic.mockImplementationOnce(() => new Promise((resolve) => { done = resolve; }));
+      const changed = vi.fn();
+      const { container } = render(<HomeChat onShelfChanged={changed} />);
+      await screen.findByText("Answer 1");
+      const thread = await suggest();
+      const button = await within(thread).findByRole("button", { name: "Add Emma to my shelf" });
+      const items = within(thread).getAllByRole("listitem");
+      expect(items[items.length - 1].contains(button)).toBe(true);
+      expect(items[0].querySelector("button")).toBeNull();
+      expect(await axeAA(container)).toHaveNoViolations();
+      fireEvent.click(button);
+      expect(mocks.addClassic).toHaveBeenCalledWith("158");
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(button); // a second press while it is being added adds nothing twice
+      expect(mocks.addClassic).toHaveBeenCalledTimes(1);
+      expect(changed).not.toHaveBeenCalled();
+      await act(async () => done({ book_id: "bkemma" }));
+      expect(within(thread).queryByRole("button", { name: /Add Emma/ })).toBeNull();
+      expect(within(thread).getByText("Emma is on your shelf now.")).toBeTruthy();
+      expect(screen.getByRole("log", { name: "Mothli’s reply as it arrives" }).textContent).toContain("Emma is on your shelf now.");
+      expect(changed).toHaveBeenCalledTimes(1);
+    });
+
+    // Catches: a failed download shown as success, or the button gone with nothing added.
+    test("if the book cannot be added, Mothli says so and the button comes back", async () => {
+      mocks.askHome.mockResolvedValueOnce(answerWith([emma]));
+      mocks.addClassic.mockRejectedValueOnce(new ApiError("Couldn’t reach the book’s source.", 502));
+      const changed = vi.fn();
+      render(<HomeChat onShelfChanged={changed} />);
+      await screen.findByLabelText("Ask Mothli about your books");
+      const thread = await suggest();
+      fireEvent.click(await within(thread).findByRole("button", { name: "Add Emma to my shelf" }));
+      expect(await within(thread).findByText(/couldn’t add that/)).toBeTruthy();
+      expect((within(thread).getByRole("button", { name: "Add Emma to my shelf" }) as HTMLButtonElement).disabled).toBe(false);
+      expect(within(thread).queryByText(/on your shelf now/)).toBeNull();
+      expect(changed).not.toHaveBeenCalled();
+    });
+
+    // Catches: an error shown for a book that is in fact on the shelf (added from the library meanwhile).
+    test("a book that turns out to be on the shelf already counts as added", async () => {
+      mocks.askHome.mockResolvedValueOnce(answerWith([emma]));
+      mocks.addClassic.mockRejectedValueOnce(new ApiError("book already imported as 'bk9'", 409));
+      render(<HomeChat />);
+      await screen.findByLabelText("Ask Mothli about your books");
+      const thread = await suggest();
+      fireEvent.click(await within(thread).findByRole("button", { name: "Add Emma to my shelf" }));
+      expect(await within(thread).findByText("Emma is on your shelf now.")).toBeTruthy();
+    });
+
+    // Catches: a button under a reply that suggested nothing the reader can add.
+    test("a reply that named no listed book has no button, and clearing takes the button away", async () => {
+      mocks.askHome.mockResolvedValueOnce(answerWith()).mockResolvedValueOnce(answerWith([emma]));
+      render(<HomeChat />);
+      await screen.findByLabelText("Ask Mothli about your books");
+      const thread = await suggest();
+      await within(thread).findByText(/You might like Emma/);
+      expect(within(thread).queryByRole("button")).toBeNull();
+      ask("Go on, suggest one?");
+      await within(thread).findByRole("button", { name: "Add Emma to my shelf" });
+      fireEvent.click(screen.getByRole("button", { name: "Clear conversation" }));
+      fireEvent.click(screen.getByRole("button", { name: "Clear it" }));
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Add Emma to my shelf" })).toBeNull());
+      expect(mocks.addClassic).not.toHaveBeenCalled();
     });
   });
 });
