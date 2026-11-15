@@ -6,7 +6,7 @@ Taken from sections 6m to 6v of `companion-audit-2026-11-14.md`; the section in 
 
 ## Now: the voice
 
-- [ ] Collect the voice samples: `backend/scripts/voice_samples.py` is written, but `voice-samples.md` is not, because TypeSafe refused every Jev check for lack of credits (15 November). Add credits, then run the script once.
+- [x] Collect the voice samples: done on 15 November once TypeSafe had credits again. 19 of 19 in `voice-samples.md`, one run, $0.024 of Jev (146 checks), stopped-at cap $0.08 not reached.
 - [ ] The owner reads `voice-samples.md` and marks the replies that sound wrong; the next step changes how Mothli talks and collects the same messages again with the same script.
 - [ ] Mothli knows the app from one hand-written paragraph (`APP_HELP` in `reader_place.py`); for anything else it is told to say it does not know. (6p)
 - [ ] The checker drops correct sentences: in one run all seven sentences it removed were right, three of them from one recap. (6m, 6s)
@@ -14,7 +14,7 @@ Taken from sections 6m to 6v of `companion-audit-2026-11-14.md`; the section in 
 - [ ] The length instruction is not reliable: a recap can still run to 12 sentences. (6m)
 - [ ] Mothli is not told about skimmed pages, so it says "I wasn't with you" for chapters the reader went through quickly. (6r)
 - [ ] The offer button ("I've read chapters…") never appears under a French reply: "I wasn't there" and the chapter numbers are matched in English only. (6t)
-- [ ] The offer button has not been tried with real replies since its fix in 6t; unit tests only. (6t)
+- [x] The offer button has not been tried with real replies since its fix in 6t; unit tests only. (6t) Seen once with real replies in `voice-samples.md`: samples 10 and 11 carry "I've read chapters 1 to 4" and "I've read chapter 1". One run, English only.
 
 ## Before going live
 
