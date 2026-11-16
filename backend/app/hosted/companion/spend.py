@@ -107,14 +107,15 @@ class PlatformAllowanceReached(AllowanceReached):
     """The platform's own day: every reader waits until the next UTC day."""
 
 
-_DAY = ("Mothli has talked a lot with you today and is resting until tomorrow. "
+# Said by Mothli itself, as it speaks in the chat: the first person, and no amount or setting.
+_DAY = ("We’ve talked a lot today, so I’m resting until tomorrow. "
         "Your book and your place are right here.")
-_MONTH = ("Mothli has used this month's conversations with you and will be back next month. "
+_MONTH = ("We’ve talked our way through this month, so I’ll be back at the start of the next. "
           "Your book and your place are right here.")
-_LIFETIME = ("Mothli has used the conversations this account has. "
+_LIFETIME = ("We’ve used up the conversations this account has. "
              "Your books and your place are right here.")
-_BUSY = "Mothli is still answering you. Give it a moment, then ask again."
-_PLATFORM = ("Mothli is resting for the rest of today and will be back tomorrow. "
+_BUSY = "Give me a moment, I’m still on your last question. Then ask again."
+_PLATFORM = ("I’m resting for the rest of today and I’ll be back tomorrow. "
              "Your book and your place are right here.")
 
 
