@@ -169,6 +169,10 @@ Part one is in 6ae: the store, the distilling, the reader's API, and use in the 
 - [ ] A hosted completion receipt counts when it is live and its content hash equals its chapter's; locally the chapter's stored text is also hashed again, and hosted Postgres stores no chapter text to hash. (ADR 0041 part 4)
 - [ ] The hosted snapshot now offers `content_language` and `view(n).chapters()`, but `HostedBookSource` still does not run the store cross-check (`assert_matches_store`); wiring it is a change to `source.py`, left to part 10. (ADR 0041 part 4)
 - [ ] Each hosted reply loads all of a book's memory rows once (each shelf book once in the home chat); the time and memory for a long book with thousands of rows were not measured. (ADR 0041 part 4)
+- [ ] Hosted `clear_turns` deletes the turns only: there is no hosted recollection cursor yet. Part 7 (migration 0022) must add the cursor's delete to `store_turns.clear_turns`, as the local `Catalog.clear_turns` does. (ADR 0041 part 2)
+- [ ] Hosted turns are capped at 20,000 characters by the table; local turns have no cap. A longer reply would fail to store after it was shown. Part 5 must decide what the stream does then. (ADR 0041 part 2)
+- [ ] With no hosted "read it fresh" (part 1's item above), hosted turns are hidden by "I haven't read this" only; a new reading pass hides nothing in hosted mode yet. (ADR 0041 part 2)
+- [ ] A soft-deleted hosted book keeps its conversation rows (never shown: both routes answer 404); they go only if the book row is deleted. Waits for the deletion decision. (ADR 0041 part 2)
 
 ## Later
 

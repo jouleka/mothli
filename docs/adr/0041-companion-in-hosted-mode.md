@@ -762,6 +762,7 @@ Delivers the smallest end-to-end proof: three small tables, the read-map routes,
 - Proves: two readers; turns hidden after "I haven't read this" exactly as locally
   (`visible_turns` parity); turn ids never appear in a response.
 - Waits for 1. Migration 0019. Size: small.
+- Built on 17 November 2026 in PR #86: as designed, except (1) `add_turn` for a book inserts through a select of this owner's live book in that incarnation and raises `LookupError` when there is none, so a soft-deleted or foreign book is refused by the adapter's own predicates before the foreign key; (2) `get_turns` returns `reaction` as 0/1 and `created_at` as a UTC ISO string, the local shapes, and a book of no id with an incarnation other than `"home"` has no turns (`add_turn` refuses it); (3) `clear_turns` cannot yet forget the recollection cursor, which has no hosted table until part 7; (4) as in part 1, a malformed book id in the path is answered 422 by the route's UUID check, where local answers 404.
 
 **Part 3 — The platform pays: clients, ledger, caps.**
 - Changes `app/deps.py` (client construction moved to a shared function, no behaviour change),
