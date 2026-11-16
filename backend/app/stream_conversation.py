@@ -44,7 +44,7 @@ from app.reader_place import (APP_HELP, FRIEND_VOICE, SPEAK_AS_A_FRIEND, content
                               offers_for, place_line)
 from app.recollections import RECOLLECTION_RULE, recall, recollection_block, recollection_passage
 from app.retrieval_passages import passage_windows
-from app.unicode_text import normalize_text, proper_words, word_tokens
+from app.unicode_text import fold_accents, normalize_text, proper_words, word_tokens
 
 VERSION = "stream-conversation-v1"
 MAX_SENTENCES = 12          # a recap of the whole story needs room for its most recent part
@@ -574,8 +574,10 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
                 except Exception:
                     pass
 
-            asked_names = {normalize_text(w.text) for w in proper_words(body.question)} - STOPWORDS
-            if asked_names - read_words:
+            # A name typed without its accent ("Adelaida") is the one read ("Adelaïda"). This only
+            # picks the fixed line for a reply with nothing shown; it clears nothing for showing.
+            asked_names = {fold_accents(normalize_text(w.text)) for w in proper_words(body.question)} - STOPWORDS
+            if asked_names - {fold_accents(word) for word in read_words}:
                 signals["unread_name"] = True   # a name the reader has not met in these pages
             intent_thread = Thread(target=intent, name="stream-intent", daemon=True)
             intent_thread.start()

@@ -14,6 +14,25 @@ def normalize_text(value):
     return " ".join(unicodedata.normalize("NFC", value or "").casefold().split())
 
 
+def fold_accents(value):
+    """The text with the accents taken off its Latin letters, for comparing words: "Adelaïda" and
+    "Adelaida" are one name to an English reader. Only combining marks on a Latin letter go (ï→i,
+    é→e, ü→u, ç→c, ñ→n); letters with no such mark (ß, æ, ø, œ) and other alphabets are left as
+    they are. ``classics.fold`` does the same for titles, but also applies compatibility forms;
+    this keeps to accents. Never used on text that is stored, quoted or shown."""
+    text = value or ""
+    if text.isascii():
+        return text
+    kept, base = [], ""
+    for char in unicodedata.normalize("NFD", text):
+        if not unicodedata.combining(char):
+            base = char
+        elif "LATIN" in unicodedata.name(base, ""):
+            continue
+        kept.append(char)
+    return unicodedata.normalize("NFC", "".join(kept))
+
+
 def words(value):
     """Yield maximal Unicode letter/mark/number runs while preserving source spans and casing."""
     text = value or ""

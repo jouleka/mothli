@@ -21,7 +21,7 @@ from app.ingest.extraction.resolve import ROLE_NOUNS
 from app.llm.client import ProviderUnavailable
 from app.retrieval_passages import PASSAGE_CHARS, passage_windows
 from app.read_frontier import ReadBoundary
-from app.unicode_text import normalize_text, proper_words, word_tokens, words
+from app.unicode_text import fold_accents, normalize_text, proper_words, word_tokens, words
 
 
 class ConversationMessage(BaseModel):
@@ -371,8 +371,10 @@ def retrieve_ask_sources(
     limit = 24 if candidate_pool else max(0, min(int(limit), 6))
     if not limit or bookmark <= 0:
         return []
-    query_words = content_words(question) - _QUESTION_WORDS
-    query_names = content_words(" ".join(word.text for word in proper_words(question))) & query_words
+    # Words are matched with the accents off their Latin letters: a reader types "Adelaida" for
+    # the book's "Adelaïda". Only the comparison folds; every passage keeps its exact text.
+    query_words = content_words(fold_accents(question)) - _QUESTION_WORDS
+    query_names = content_words(fold_accents(" ".join(word.text for word in proper_words(question)))) & query_words
     visible_name_parts = set(word_tokens(" ".join(known_names), min_length=2))
     query_name_parts = (set(word_tokens(question)) & visible_name_parts) or {
         normalize_text(word.text) for word in proper_words(question)
@@ -419,7 +421,8 @@ def retrieve_ask_sources(
         nonlocal serial
         if not text:
             return None
-        terms = _source_terms(text) if len(text) <= 6000 else frozenset(content_words(text))
+        folded = fold_accents(text)
+        terms = _source_terms(folded) if len(folded) <= 6000 else frozenset(content_words(folded))
         shared = len(query_words & terms)
         # Preserve the named subject before generic wording such as 'the text read so far'. The
         # independent semantic ranking below still retrieves paraphrases with no shared words.

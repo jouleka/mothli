@@ -1834,6 +1834,30 @@ The same conversation as in 6af: seven messages, the home conversation cleared, 
 - **Not verified:** nothing with real models; one book, one reading position, ten pairs. The rebuild had no chapter notes.
 - **Found, not fixed:** a name typed without its accent matches nothing: "Adelaida" is not "Adelaïda" to the search or to the read-word check (`word_tokens` folds case, not accents), so the passage is not found with or without earlier messages, and by reading the code the name counts as one the reader has not met (`unread_name`), so a reply with nothing shown would say we are not there yet. And "why did Adelaïda leave?" alone does not find "she left the house and ran away" ("leave" is not "left", and Adelaïda is named in many passages); it was found with the unrelated earlier message only by chance.
 
+## 6ak. A name typed without its accent is the name in the book (17 November)
+
+The read chapters of the Karamazov fixture at `inside-5` have three accented names: Adelaïda, Miüsov (and "Miüsovs") and Païssy ("Œcumenical" is a ligature, not an accent). Measured with stand-in models, each question on its own with no earlier messages. "Passages" is how many of the last sentence check's passages name the person; "reply" is the stand-in writer's true sentence ("Adelaida ran away with a divinity student." and the like) written with and without the accent; "status" is the reply's status when nothing is shown.
+
+| Question | Passages before | after | Reply, either spelling | Status before | after |
+|---|---|---|---|---|---|
+| why did Adelaïda leave? | 5 of 12 | 5 of 12 | shown | none | none |
+| why did Adelaida leave? | 0 of 11 | 5 of 12 | shown | ahead | none |
+| who is Miüsov? | 6 of 12 | 6 of 12 | shown | none | none |
+| who is Miusov? | 0 of 7 | 3 of 12 | shown | ahead | none |
+| who is Païssy? | 2 of 6 | 2 of 6 | shown | none | none |
+| who is Paissy? | 2 of 7 | 2 of 8 | shown | ahead | none |
+
+- **Both effects of 6ai were real, one more than thought.** The search found no passage naming Adelaïda or Miüsov when typed plain (Païssy is in the chapter just read, which is always given). And with nothing shown, every plain spelling got the "we're not there yet" line about someone already read. A true reply sentence was never removed for its spelling at this position, either way: the fixture's store holds no later name spelled like these.
+- **The folding.** `fold_accents` in `app/unicode_text.py` takes the combining marks off Latin letters only (ï→i, é→e, ü→u, ç→c, ñ→n). ß, æ, ø, œ and other alphabets stay as they are; `classics.fold` also applies compatibility forms, which are not accents, so it is not reused. It is used in three places, not in `normalize_text` / `word_tokens`, which also key ingest merging, recollections, the anchors' neighbours and regex searches over raw text (`ask.py`'s speaker pattern), and whose folding would change accented results:
+  - the search (`retrieve_ask_sources`): the question's words and each passage's words are compared folded. Callers: the book chat, the home chat, the page conversation, the older ask route, answer reuse and recap grounding. Passages keep their exact text.
+  - the question's name check (`unread_name` in `stream_read_prefix`): it only picks the fixed line for a reply with nothing shown.
+  - the later-name check (`score_recap`'s `future_entity_leaks`, used by `safe` and every recap gate): a reply word now hits a later name if the two are equal folded.
+- **Not looser, shown with tests.** In `score_recap` folding only adds hits: the later names are the same set, and an exact match is still a folded match. The whitelist of names read and the reader-parity drops, the comparisons that clear a name, stay exact, so a read "Adelaïda" does not clear a different, later "Adelaida" (pinned). Stricter where it was open: at bookmark 2, "Paissy was one of the great ascetics." named Païssy Velitchkovsky (first named in ch5) and passed the check, because "paissy" matched no stored token; it is now caught, as is a later "Qorvath" written "Qorváth". `safe`'s filter of hits whose words were all read stays exact.
+- **Unchanged:** stored text, quotes, the read-page anchors (`read_map.py`), the voice, `home_suggestions.py`, `frontend/`. For a question typed with the accent and for text with no accents, the search returns exactly what it does with folding switched off (pinned for four questions each, both pool sizes).
+- **Verified,** stand-in models only: `tests/test_names_without_accents.py` (27 tests) and three in `tests/eval/test_spoiler_gate.py`. Whole backend suite and `ruff check app tests scripts` clean; no existing test changed.
+- **Not verified:** nothing with real models; one book, one position, three names. A book with two different people whose names differ only by an accent would have them share the search and the question's name check (the later-name check still tells them apart).
+- **Found, not fixed:** "who is Miusov?" still gets 3 passages naming him against 6 with the accent: the "who is" introduction search and the name link (`first_mention`, `bridge_candidates`) compare exactly. "Leave" does not match "left" (6ai).
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |

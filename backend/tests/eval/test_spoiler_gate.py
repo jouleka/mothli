@@ -943,3 +943,41 @@ def test_cache_key_keys_on_model_prompt_and_atomset():
                              atom_set_version="a2")                      # renumber (atom-set) change
     assert base != cache_key("karamazov", 5, "snap", synth_model="m1", recap_prompt_version="v1",
                              atom_set_version="a1")                      # different bookmark
+
+
+# =========================================================================== 6ak: names without accents
+def test_a_future_name_written_without_its_accent_is_still_caught(gate):
+    """6ak, "not looser". Païssy Velitchkovsky is first named in ch5. A bm-2 reply naming him by
+    the one word "Paissy" matched no stored token ("païssy") and slipped past the check entirely.
+    Break caught: comparing the reply's words with later names exactly instead of accent-folded."""
+    store, _, _ = gate
+    with store.book(BOOK_ID) as mem:
+        rt2 = read_text_upto(mem, 2)
+        assert "Païssy" not in rt2
+        for recap in ("Paissy was one of the great ascetics.", "Païssy was one of the great ascetics."):
+            sc = score_recap(mem, 2, recap, read_text=rt2)
+            assert any("Païssy" in n for n in sc["future_entity_leaks"]), (recap, sc["future_entity_leaks"])
+
+
+def test_a_future_name_stored_without_its_accent_is_caught_when_written_with_one(gate):
+    """6ak, "not looser", the other direction: a later name stored plain, written with an accent.
+    Break caught: folding only one side of the comparison."""
+    store, _, max_bm = gate
+    with store.book(BOOK_ID) as mem:
+        mem.add_entity("Qorvath", "character", revealed_at=max_bm)
+        sc = score_recap(mem, 2, "Then Qorváth appeared at the gate.", read_text=read_text_upto(mem, 2))
+    assert any("Qorvath" in n for n in sc["future_entity_leaks"]), sc["future_entity_leaks"]
+
+
+def test_a_read_accented_name_does_not_clear_a_later_name_spelled_without_the_accent(gate):
+    """6ak, "not looser". Folding is used only where it can add a hit, never where it clears one:
+    a different, later "Adelaida" stays forbidden although the reader has read "Adelaïda". A guard
+    (caught before the change too). Break caught: folding the read-name whitelist or the
+    reader-parity drop, which would let this later name through where today it is caught."""
+    store, _, max_bm = gate
+    with store.book(BOOK_ID) as mem:
+        rt2 = read_text_upto(mem, 2)
+        assert "Adelaïda" in rt2 and "Adelaida" not in rt2
+        mem.add_entity("Adelaida", "character", revealed_at=max_bm)
+        sc = score_recap(mem, 2, "Then Adelaida appeared at the gate.", read_text=rt2)
+    assert "Adelaida" in sc["future_entity_leaks"], sc["future_entity_leaks"]
