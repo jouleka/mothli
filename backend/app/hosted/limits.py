@@ -38,6 +38,8 @@ def _policy_row(row: dict) -> dict:
     for money in _SPEND_CAPS:
         if value.get(money) is not None:
             value[money] = str(value[money])
+    if isinstance(value.get("library_bytes"), Decimal):     # sum() of BIGINT is NUMERIC
+        value["library_bytes"] = int(value["library_bytes"])
     if value.get("spend_usd") is not None:
         value["spend_usd"] = str(value["spend_usd"])
     if value.get("reserved_usd") is not None:
