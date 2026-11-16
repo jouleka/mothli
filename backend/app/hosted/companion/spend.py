@@ -55,8 +55,10 @@ _IN_FLIGHT_SINCE = f"(now() - interval '{IN_FLIGHT_MINUTES} minutes')"
 # The reader's companion day and month as they count against the caps: the ledger's companion
 # rows since the start of the UTC day (month), plus companion reservations still open after
 # IN_FLIGHT_MINUTES that were made in it. One definition, read by ``reserve_cost`` and by the
-# worker's claim (``app.hosted.jobs``), which skips a reader whose allowance is used up.
-_READER_SPENT = f"""
+# worker's claim (``app.hosted.jobs``), which skips a reader whose allowance is used up. Built
+# when it is used, from the module's current bounds.
+def _reader_spent() -> str:
+    return f"""
     COALESCE((SELECT sum(usd) FROM public.cost_ledger
       WHERE owner_id=%(o)s AND purpose IS NOT NULL
         AND recorded_at >= {_DAY_START}),0)
@@ -129,7 +131,7 @@ def reader_cap_reached(conn, owner_id) -> str | None:
     return rows as dicts: the worker's claim calls it under the owner's spend lock. Raises
     ``LookupError`` when the owner has no limit policy."""
     row = conn.execute(
-        f"""SELECT policy.max_spend_usd_per_day,policy.max_spend_usd_per_month,{_READER_SPENT}
+        f"""SELECT policy.max_spend_usd_per_day,policy.max_spend_usd_per_month,{_reader_spent()}
             FROM public.owner_limits AS policy WHERE policy.owner_id=%(o)s""",
         {"o": owner_id}).fetchone()
     if row is None:
@@ -289,7 +291,7 @@ class SpendStore(OwnerBoundAdapter):
                           AND created_at > {_IN_FLIGHT_SINCE}) AS in_flight,
                       COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
                         WHERE owner_id=%(o)s AND state='reserved'),0) AS held_all,
-                      {_READER_SPENT},
+                      {_reader_spent()},
                       COALESCE((SELECT sum(usd) FROM public.cost_ledger
                         WHERE owner_id=%(o)s),0) AS lifetime""",
                 {"o": owner}).fetchone()
