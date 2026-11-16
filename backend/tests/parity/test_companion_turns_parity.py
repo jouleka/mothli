@@ -27,6 +27,9 @@ pytestmark = pytest.mark.postgres
 # Part 1's parity database: a fresh, fully migrated database per test.
 postgres_database = read_map_parity.postgres_database
 
+# An incarnation neither mode's book has: one value, so both modes store the same record.
+OTHER_LIFETIME = str(uuid.uuid4())
+
 
 def _local_side(reader: LocalReader):
     state = reader.app.state
@@ -55,7 +58,7 @@ class Side:
         point, _c, _s, _m, book, held = read_snapshot(self.book, self.catalog,
                                                       self.reader.settings, self.source)
         drew_on = {"now": book_record(self.book, book, held), None: None,
-                   "other": {self.book: [str(uuid.uuid4()), held]}}[record]
+                   "other": {self.book: [OTHER_LIFETIME, held]}}[record]
         self.catalog.add_turn(self.book, incarnation=book["incarnation"], position_epoch=0,
                               atom=point["atom"], offset=point["offset"], role=role,
                               content=content, reaction=reaction, request_id=None,
