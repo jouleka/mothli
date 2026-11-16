@@ -483,6 +483,72 @@ def test_mothli_is_told_to_suggest_at_once_from_the_list_and_only_its_line():
     assert suggestion_line(EMMA) == "“Emma” by Jane Austen (Romance, Humour): " + EMMA["blurb"]
 
 
+# --- a book the reader has named (6ah) --------------------------------------------------------------
+def test_a_reviewed_clean_book_the_reader_names_is_the_first_candidate():
+    """Catches (6af, failed before 6ah): "maybe jane eyre", and Jane Eyre, reviewed clean and in
+    the library, is not among the six, so Mothli says it knows too little of it. Named in the
+    reader's words (any capitals, its subtitle left off), it comes first; the rest keep their order."""
+    shelf = [on_shelf("The Lamp Book", "Ada Writer")]
+    plain = suggestions(shelf, [], ON)
+    assert "Jane Eyre" not in titles(plain)
+    found = suggestions(shelf, [], ON, named=["i think after this one i want something lighter, maybe jane eyre"])
+    assert titles(found)[0] == "Jane Eyre" and found[0]["classic_id"] == "1260"
+    assert titles(found)[1:] == titles(plain)[:LIMIT - 1]
+    # Named nowhere, or in nothing at all: exactly the list as before.
+    assert suggestions(shelf, [], ON, named=["something lighter please", ""]) == plain
+    assert suggestions(shelf, [], ON, named=[]) == plain
+
+
+def test_a_one_word_title_alone_names_no_book():
+    """Catches: "Emma" in "Emma Bovary was awful" or "she" in any sentence putting a book first.
+    With the author's surname in the same text it counts, as for the add button."""
+    plain = suggestions(OWNER, [], ON)
+    for text in ("maybe emma next", "she was so lighthearted", "dracula?", "Emma Bovary bored me"):
+        assert suggestions(OWNER, [], ON, named=[text]) == plain, text
+    # The surname in another text is not enough: one text must name both.
+    assert suggestions(OWNER, [], ON, named=["maybe emma", "something by austen"]) == plain
+    found = suggestions(OWNER, [], ON, named=["maybe emma, the austen one"])
+    assert titles(found)[0] == "Emma" and found[0]["author"] == "Jane Austen"
+    assert titles(suggestions([on_shelf("The Lamp Book", "Ada Writer")], [], ON,
+                              named=["dracula by bram stoker"]))[0] == "Dracula"
+
+
+def test_a_named_book_that_breaks_a_rule_is_not_a_candidate():
+    """Catches: naming a book let it past a rule. On the shelf already (Pride and Prejudice);
+    by the author of a shelf book not finished (Crime and Punishment, while the Karamazovs are
+    in progress); its blurb judged not clean (Anna Karenina) or never read; read in another app."""
+    plain = suggestions(OWNER, [], ON)
+    for text in ("maybe pride and prejudice again", "crime and punishment next?", "maybe anna karenina",
+                 "what about the possessed by dostoyevsky"):
+        found = suggestions(OWNER, [], ON, named=[text])
+        assert found == plain, text
+    history = [elsewhere("Jane Eyre", "Charlotte Brontë")]
+    assert "Jane Eyre" not in titles(suggestions(OWNER, history, ON, named=["maybe jane eyre"]))
+    # A book on the shelf not finished keeps out a book whose line names it, named or not.
+    little = [on_shelf("Little Women", "Louisa May Alcott", read=3, of=47)]
+    assert not [book for book in suggestions(little, [], ON, named=["little men by alcott"])
+                if "Alcott" in book["author"]]
+
+
+def test_a_named_book_whose_line_names_a_book_in_progress_is_not_a_candidate(every_blurb_allowed):
+    """Catches: naming another hand's sequel ("Edmond Dantès" by Edmund Flagg, 'a sequel to the
+    famous "The Count of Monte-Cristo"') putting it in front of a reader still in the Count."""
+    monte = [on_shelf("The Count of Monte Cristo", "Alexandre Dumas", read=60, of=117)]
+    assert "Edmond Dantès" not in titles(suggestions(monte, [], ON, named=["maybe edmond dantès next"]))
+    done = [on_shelf("The Count of Monte Cristo", "Alexandre Dumas", read=117, of=117)]
+    assert titles(suggestions(done, [], ON, named=["maybe edmond dantès next"]))[0] == "Edmond Dantès"
+
+
+def test_named_books_still_make_at_most_six_and_two_by_one_author():
+    """Catches: naming many books growing the list, or three Austens filling it."""
+    found = suggestions(OWNER, [], ON, named=["mansfield park, persuasion or northanger abbey, then jane eyre"])
+    assert len(found) == LIMIT
+    assert set(titles(found)[:2]) < {"Mansfield Park", "Persuasion", "Northanger Abbey"}
+    assert titles(found)[2] == "Jane Eyre"
+    assert sum(book["author"] == "Jane Austen" for book in found) == 2
+    assert len(suggestions(OWNER, [], ON, limit=3, named=["jane eyre", "middlemarch"])) == 3
+
+
 @pytest.mark.parametrize("language", ["en", "en-GB", "fr"])
 def test_the_language_of_a_shelf_book_is_its_main_tag(language, every_blurb_allowed):
     """Catches: "en-GB" matching no catalogue language, so a British file gets nothing. (Every

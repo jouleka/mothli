@@ -44,6 +44,8 @@ from app.stream_conversation import (ASKED_TURNS, HISTORY_TURNS, MAX_PASSAGES, c
 logger = logging.getLogger("mothli.conversation")
 HOME = "home"                 # the conversation that belongs to no single book
 MAX_BOOKS = 6                 # books whose read text one reply may draw on
+MOMENTS = 3                   # notes tied to a book whose moment is looked for in the read text
+PER_MOMENT = 2                # passages of read text one such note may bring
 # How a book Mothli may suggest, and having none, are put to the checker.
 SUGGESTABLE = ("A book Mothli may suggest. It is not on the reader’s shelf; it is in this app’s free "
                "library and is free to add. This line is all that is known of it: ")
@@ -160,29 +162,76 @@ def shelf_lines(books, elsewhere):
     return lines
 
 
-def book_evidence(item, query, settings, catalog, *, limit, notes_budget):
-    """Passages and notes from one book's read text, each under the book's name."""
-    book, chapters = item["book"], item["chapters"]
+def read_passages(item, query, *, limit):
+    """Passages of one book's read text that share words with ``query``, best first, each under
+    the book's name. None when nothing matches."""
+    chapters = item["chapters"]
     texts = {chapter["key"]: chapter["text"] for chapter in chapters}
     atoms = {atom["key"]: atom for atom in item["manifest"]["atoms"]}
     found = compact_candidates(retrieve_ask_sources(
         query, bookmark=max(chapter["ordinal"] for chapter in chapters), chapters=chapters,
         read_chapter=texts.get, semantic_hits=[], atoms=atoms, candidate_pool=True, prefer_recent=False,
         known_names=[]))[:limit]
-    passages = [(source.get("title") or f"chapter {source['ordinal']}", " ".join(source["text"].split()))
-                for source in found]
-    if not passages:
+    return _labelled(item, [(source.get("title") or f"chapter {source['ordinal']}", " ".join(source["text"].split()))
+                            for source in found])
+
+
+def _labelled(item, passages):
+    name = f"From “{item['book']['title']}”"
+    return [f"{name}, {where}: {text}" for where, text in passages]
+
+
+def book_evidence(item, query, settings, catalog, *, limit, notes_budget, message=None):
+    """Passages and notes from one book's read text, each under the book's name.
+
+    ``query`` is the reader's message with the last of the conversation after it, so that "why
+    did she do that?" finds what "she" did. Those earlier words can crowd out what the message
+    itself asks about ("what's an elder?" after "maybe jane eyre", 6ah), so when ``message`` is
+    given and differs, the passages found for the message alone take every other place, its best
+    first, within the same ``limit``.
+    """
+    book, chapters = item["book"], item["chapters"]
+    labelled = read_passages(item, query, limit=limit)
+    if message is not None and message != query:
+        both = [passage for pair in zip_longest(read_passages(item, message, limit=limit), labelled)
+                for passage in pair if passage]
+        labelled = list(dict.fromkeys(both))[:limit]
+    if not labelled:
         # Nothing matched the words of the question: what the reader read last in this book.
         last = chapters[-1]
         windows = [text for _, _, text in passage_windows(last.get("recent") or last["text"])]
-        passages = [(last.get("title") or f"chapter {last['ordinal']}", windows[-1])] if windows else []
+        labelled = _labelled(item, [(last.get("title") or f"chapter {last['ordinal']}", windows[-1])] if windows else [])
     name = f"From “{book['title']}”"
-    labelled = [f"{name}, {where}: {text}" for where, text in passages]
     if settings.reader_story_notes:
         notes = select_notes(usable_notes(book["book_id"], chapters, catalog), query, budget=notes_budget)
         labelled += [f"{name}, your reading notes on {note['title']}: " + " ".join(note["sentences"])
                      for note in notes]
     return labelled
+
+
+def moment_passages(remembered, read):
+    """Read text about the moments the reader's notes speak of, for a reply given those notes.
+
+    A note is the reader's word, no evidence of what is in a book: a sentence that says the
+    moment back ("the monk sent away from Athos wrecked you") stands only on the book's own text
+    about it, which the reader's message ("which part got to me?") may share no words with. So
+    for each of the first ``MOMENTS`` notes tied to a book, the passages of read text that share
+    words with the note itself: in its own book, or, for one said on the home screen, in every
+    book of ``read``. Nothing when nothing matches (never what was read last), at most
+    ``PER_MOMENT`` a note, none twice. Only read text, through the same search as the reader's
+    message, of the same books.
+    """
+    found = []
+    for recollection, _line in [chosen for chosen in remembered if chosen[0]["tied"]][:MOMENTS]:
+        books = [item for item in read
+                 if recollection["book_id"] in (None, item["book"]["book_id"])]
+        each = [read_passages(item, recollection["text"], limit=PER_MOMENT) for item in books]
+        mine = []
+        for passage in (passage for turn in zip_longest(*each) for passage in turn if passage):
+            if passage not in found and passage not in mine:
+                mine.append(passage)
+        found += mine[:PER_MOMENT]
+    return found
 
 
 def stream_home(body, catalog, store, settings, client, worker, elsewhere, recollector=None):
@@ -234,16 +283,7 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere, recol
             lines = shelf_lines(books, elsewhere)
             found = [book_evidence(
                 item, query, settings, catalog, limit=max(2, MAX_PASSAGES // max(1, len(read))),
-                notes_budget=NOTES_BUDGET // max(1, len(read))) for item in read]
-            # Books that are not on the shelf, each with the catalogue's line and nothing else. The
-            # checker gets the same lines, so a sentence may say of such a book what its line
-            # says and no more. They are no part of ``read_text`` below: the fixed gate treats a
-            # name in them like any other name the reader has not met.
-            new.extend(suggestions(books, elsewhere, settings))
-            new_lines = [suggestion_line(candidate) for candidate in new]
-            fixed = ["Where the reader is: " + " ".join(lines), "How this app works: " + APP_HELP,
-                     *(SUGGESTABLE + line for line in new_lines), *([] if new else [NOTHING_NEW])]
-            room = check_room(question, identities=())
+                notes_budget=NOTES_BUDGET // max(1, len(read)), message=body.question) for item in read]
             # What the reader has told Mothli before, chosen as for the chat inside a book. Every
             # shelf book is in view here, so no book is in hand: a note tied to a book is used
             # only while what was read of it when the reader said it is still read, by the read
@@ -255,17 +295,39 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere, recol
                     remembered = recall(catalog, read=drew_on, book_id=None, query=body.question)
                 except Exception:       # a reply without them is better than no reply
                     logger.exception("recollections could not be read")
+
+            def listed(notes):
+                # Books that are not on the shelf, each with the catalogue's line and nothing else.
+                # The checker gets the same lines, so a sentence may say of such a book what its
+                # line says and no more. They are no part of ``read_text`` below: the fixed gate
+                # treats a name in them like any other name the reader has not met. A book the
+                # reader names, in this message or in a plan they told Mothli, comes first when it
+                # passes every rule.
+                new[:] = suggestions(books, elsewhere, settings, named=[
+                    body.question, *(r["text"] for r, _ in notes if r["kind"] == "plan")])
+                return ["Where the reader is: " + " ".join(lines), "How this app works: " + APP_HELP,
+                        *(SUGGESTABLE + suggestion_line(candidate) for candidate in new),
+                        *([] if new else [NOTHING_NEW])]
+
+            fixed = listed(remembered)
+            room = check_room(question, identities=())
             if remembered and len(fit_passages(fixed, [recollection_passage(remembered)],
                                                budget=room)) == len(fixed):
                 # No room beside the fixed passages under the checker's size limit: the writer
-                # goes without them too, as it is never given what its checker is not.
+                # goes without them too, as it is never given what its checker is not, and no
+                # plan of theirs orders the list.
                 remembered = []
+                fixed = listed([])
+            new_lines = [suggestion_line(candidate) for candidate in new]
             if remembered:
                 fixed.append(recollection_passage(remembered))      # read text gives way to them
-            # Read text takes the room the largest check has left, each book's best passage first,
-            # and the writer is given the same passages as its checker.
+            # Read text takes the room the largest check has left: first the text about the
+            # moments the notes speak of, then each book's best passage for the message, and the
+            # writer is given the same passages as its checker.
+            moments = moment_passages(remembered, read)
             passages = fit_passages(
-                fixed, [passage for turn in zip_longest(*found) for passage in turn if passage],
+                fixed, [*moments, *(passage for turn in zip_longest(*found) for passage in turn
+                                    if passage and passage not in moments)],
                 budget=room)
             evidence = passages[len(fixed):]
             # Spend is recorded against one book: the first with read text, else the first on the shelf.

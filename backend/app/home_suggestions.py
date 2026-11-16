@@ -18,7 +18,8 @@ Which books (``suggestions``):
     ``classics_reviewed.tsv`` with the verdict "clean". A book judged "no", and every book whose
     blurb nobody has read, is never suggested. The owner's rule: for unread books use only a
     spoiler-free blurb.
-In which order: books by an author of a book the reader has finished come first, then books
+In which order: a book the reader has named in their own words (``named``) comes first, then
+books by an author of a book the reader has finished, then books
 sharing more genres with the books the reader has finished or is well into, then the catalogue's
 own order (most read first). At most two by one author. "Well into" is a quarter of a book's
 chapters read in full with Mothli, or ten of them.
@@ -148,11 +149,27 @@ def _read_in_full(item):
     return sum(1 for chapter in item["chapters"] if chapter["whole"] and chapter["ordinal"] in numbers), len(numbers)
 
 
-def suggestions(books, elsewhere, settings, *, limit=LIMIT, year=None):
+def _named_in(texts, row):
+    """Whether one of ``texts`` names this book: its title as a person says it (``short_title``),
+    as whole words, whatever the capitals and accents. A title of one word ("Emma", "She") may be
+    a person in a book or an ordinary word, so it counts only with the author's surname in the
+    same text, as ``suggested_in`` counts it."""
+    title = _words(short_title(row.title))
+    if not title.strip():
+        return False
+    surname = author_key(row.author)
+    return any(title in said and (len(title.split()) > 1 or bool(surname) and f" {surname} " in said)
+               for said in map(_words, texts))
+
+
+def suggestions(books, elsewhere, settings, *, limit=LIMIT, year=None, named=()):
     """The books Mothli may suggest now, best first: see the module's own account of the rules.
 
     ``books`` is ``shelf_books``; ``elsewhere`` the reading-history entries that are not on the
     shelf. Each book is ``{classic_id, title, author, genres, blurb}``, all from the catalogue.
+    ``named`` is the reader's own words that may name a book they want (their message, the plans
+    they told Mothli): a book named there that passes every rule above comes first. Where several
+    editions answer to one title, the one these rules put first.
     """
     if not settings.classics_enabled:
         return []
@@ -205,6 +222,15 @@ def suggestions(books, elsewhere, settings, *, limit=LIMIT, year=None):
             if row.pg not in numbers and surname not in avoid
             and not any(_alike(surname, other) for other in taken.get(work, ()))]
     free.sort(key=lambda found: found[:3])
+    texts = [text for text in named if text and text.strip()]
+    if texts:
+        first, titles = set(), set()
+        for found in free:
+            title = _words(short_title(found[3].title))
+            if title not in titles and _named_in(texts, found[3]):
+                titles.add(title)
+                first.add(found[3].pg)
+        free.sort(key=lambda found: found[3].pg not in first)        # stable: otherwise as before
     chosen, by_author = [], {}
     for _author, _genres, _place, row, surname in free:
         if len(chosen) == limit:
