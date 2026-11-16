@@ -135,6 +135,26 @@ describe("The Library", () => {
     expect(window.location.search).toBe("?library=1&lang=fr&kind=romance");
   });
 
+  test("the language list names every language and never shows a raw code", async () => {
+    // Break caught (6al): "enm" and "arp" listed among "English" and "French", because the browser
+    // gives back the code for a language it has no name for.
+    const known: Record<string, string> = { en: "English", fr: "French" };
+    const browser = Intl.DisplayNames;
+    Object.defineProperty(Intl, "DisplayNames", {
+      configurable: true, writable: true, value: class { of(code: string) { return known[code] ?? code; } },
+    });
+    try {
+      mocks.classics.mockResolvedValue({ ...summary, languages: [
+        ...summary.languages, { code: "enm", count: 3 }, { code: "arp", count: 2 }, { code: "xqz", count: 1 }] });
+      render(<FreeLibrary onBack={() => {}} onOpen={() => {}} />);
+      const select = await screen.findByRole("combobox", { name: "Language" });
+      const names = within(select).getAllByRole("option").map((option) => option.textContent);
+      expect(names).toEqual(["Any language", "English", "French", "Middle English", "Arapaho"]);
+    } finally {
+      Object.defineProperty(Intl, "DisplayNames", { configurable: true, writable: true, value: browser });
+    }
+  });
+
   test("searching says so when nothing matches", async () => {
     const user = userEvent.setup();
     render(<FreeLibrary onBack={() => {}} onOpen={() => {}} />);

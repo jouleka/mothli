@@ -36,7 +36,7 @@ Taken from sections 6m to 6ae of `companion-audit-2026-11-14.md`; the section in
 - [ ] A suggested title, or any name in a blurb, that is also a name the reader has not met in a shelf book gets its sentence cut by the fixed gate, and the button with it. Safe, and silent. (6ad)
 - [ ] A title on the shelf counts as read text for every book's fixed gate, because it is in the place lines: an unread shelf book called Emma lets the name through for another book. So before 6ad; seen while testing it. (6ad)
 - [ ] The add button matches titles in English letters as the catalogue spells them; a title Mothli shortens or respells gets no button. The book can still be added from the free library. (6ad)
-- [ ] An empty shelf gets no home reply at all, so no suggestions either. (6ad)
+- [x] An empty shelf gets no home reply at all, so no suggestions either. (6ad) Done in 6al: an empty shelf gets a written reply with the app help and the free library's candidates, every sentence checked, its spend in the home ledger; the chips fit a new reader. Stand-in models only.
 - [ ] The evaluation has no case that asks for something new to read, and its home reference is not given the list of books Mothli may suggest. (6ad)
 
 ## Next: what Mothli remembers about the reader, part two
@@ -147,7 +147,10 @@ Part one is in 6ae: the store, the distilling, the reader's API, and use in the 
 - [ ] Turns inside a book stored before 6w are never said or shown again. Their rows stay in the catalog until the reader clears that book's conversation. (6w)
 - [ ] Each turn inside a book carries the book's whole read map, and every stored turn of a book is loaded and compared on each question, each load of its conversation and each load of the profile. Not measured on a long conversation or a long book. (6w)
 - [ ] 6w has not been tried in the running app or with real models, and the evaluation was not run with its changed seeding; stand-in models only. (6w)
-- [ ] Home chat spend is recorded against the first book on the shelf, because the cost ledger has no place for a conversation that belongs to no book. (6o)
+- [ ] Home chat spend is recorded against the first book on the shelf, because the cost ledger has no place for a conversation that belongs to no book. (6o) Corrected in 6al: the ledger now has that place (`HOME_SPEND`, `home_cost_ledger`), used only while the shelf is empty. With books on the shelf it is still the first book; moving it would be one line in `stream_home` and one in `Recollector._conversation`, and would give the whole home chat one per-book ceiling. Owner's call.
+- [ ] Home spend recorded against a book is deleted with that book (`remove_book` clears its ledger), so taking the first book off the shelf lifts what the home chat had used of that ceiling. Seen while reading for 6al; not changed. (6al)
+- [ ] The home ledger is not carried by the hosted migration or the per-book archive; hosted mode has no home chat today. (6al)
+- [ ] 6al has not been tried with real models or in a browser: whether Jev supports a welcome sentence from the app help, and how often a suggestion's title sentence survives on an empty shelf, are not known. (6al)
 - [ ] The event-binding check does nothing on streamed replies: an invented killing or marriage produces no hit. (6m)
 - [ ] Reply times on the production path have not been measured; every timing so far is through `codex-local`. (6m)
 - [ ] The jump and start-over dialogs have not been opened in a browser; unit tests only. (6n)
