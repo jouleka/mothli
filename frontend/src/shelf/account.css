@@ -1,0 +1,26 @@
+/* Hosted mode: the welcome before signing in, and the reader's account sheet. Built from the
+ * shelf's open-book spread and the "What Mothli remembers" sheet; colours from theme/mothli.css. */
+
+/* ---------- the welcome ---------- */
+.ml-welcome .ml-brand { margin-right: auto; }
+.ml-welcome .ml-spread { margin-top: 40px; }
+.mothli-library a.ml-welcome-cta { text-decoration: none; }
+.ml-welcome-cta:focus-visible { outline: 2px solid var(--m-accent); outline-offset: 3px; }
+.ml-welcome-note {
+  margin: 0;
+  font: italic 400 18px/1.45 var(--m-book);
+  color: var(--m-body);
+}
+
+/* ---------- the account sheet ---------- */
+.fl-sheet.ml-account { width: min(520px, 100%); }
+.ml-account-who { margin: 0; font: 400 19px/1.45 var(--m-book); color: var(--m-body); overflow-wrap: anywhere; }
+.ml-account-who strong { font-weight: 500; color: var(--m-ink); }
+.ml-account-part {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  padding-top: 16px;
+  border-top: 1px solid var(--m-line);
+}
+.ml-account-remember { font-size: 16px; }

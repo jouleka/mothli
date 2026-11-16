@@ -176,6 +176,25 @@ describe("Mothli conversation", () => {
     expect(mocks.askBookStream).toHaveBeenCalledWith("b", "What did he say?", 2, point, expect.any(Function), expect.any(AbortSignal));
   });
 
+  // Catches: the hosted allowance shown as a generic failure with a Retry that cannot work.
+  test("at the allowance, says the server's plain line and offers no Retry", async () => {
+    const line = "Mothli has talked a lot with you today and is resting until tomorrow. Your book and your place are right here.";
+    mocks.askBookStream.mockRejectedValueOnce(new ApiError(line, 429, "allowance_reached"));
+    render(<AskTheBook {...props} prepareReadContext={async () => point} />);
+    submit("Who was at the forge?");
+    expect(await screen.findByText(line)).toBeTruthy();
+    expect(screen.queryByText("Mothli needs a short break. Try again shortly.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  test("while the last question is still being answered, asks for a moment and keeps Retry", async () => {
+    mocks.askBookStream.mockRejectedValueOnce(new ApiError("Mothli is still answering you.", 429, "companion_busy"));
+    render(<AskTheBook {...props} prepareReadContext={async () => point} />);
+    submit("And then?");
+    expect(await screen.findByText("Give me a second — I’m still on your last question. Ask again in a moment.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
   test("asks the ordinary way when the server does not offer streamed replies", async () => {
     const point = {id:"a".repeat(64), atom:2, offset:120, position_epoch:0, available_chapter:2};
     mocks.askBookStream.mockResolvedValueOnce(null);

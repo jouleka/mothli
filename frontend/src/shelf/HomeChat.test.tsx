@@ -160,6 +160,23 @@ describe("HomeChat", () => {
     expect(screen.getByText(/Still thinking/)).toBeTruthy();
   });
 
+  // Catches: the hosted allowance or a reply still in flight shown as a failure.
+  test("at the allowance, says the server's line calmly instead of an error", async () => {
+    const line = "Mothli has talked a lot with you today and is resting until tomorrow. Your book and your place are right here.";
+    mocks.askHome.mockRejectedValueOnce(new ApiError(line, 429, "allowance_reached"));
+    render(<HomeChat />);
+    await screen.findByLabelText("Ask Mothli about your books");
+    ask("What next?");
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe(line));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(box().value).toBe("What next?");
+    mocks.askHome.mockRejectedValueOnce(new ApiError("Mothli is still answering you.", 429, "companion_busy"));
+    ask("What next?");
+    await waitFor(() => expect(screen.getByRole("status").textContent)
+      .toBe("Give me a second — I’m still on your last question. Ask again in a moment."));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   test("a reply with nothing shown says so, a failure keeps the question, and clear empties both sides", async () => {
     mocks.askHome.mockResolvedValueOnce({ insufficient_evidence: true, claims: [] });
     render(<HomeChat />);

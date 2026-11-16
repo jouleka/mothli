@@ -4,6 +4,7 @@
 import {
   acknowledgePosition,
   activeOfflineOwner,
+  announceSignedOut,
   applyPendingMarks,
   discardPositionBeforeEpoch,
   pendingPosition,
@@ -342,6 +343,8 @@ export class ApiError extends Error {
 
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
+    // Hosted mode: the sign-in has ended. The app shows the sign-in screen (main.tsx).
+    if (res.status === 401) announceSignedOut();
     // surface the server's human message (FastAPI's {"detail": ...}), not raw status + JSON
     const text = await res.text();
     let msg = `the server said no (${res.status})`;
@@ -654,7 +657,8 @@ export const api = {
         acknowledgePosition(id, requestBody, saved, owner);
         return saved;
       }).catch((error) => {
-        if (!offlineFailure(error)) throw error;
+        // Signed out mid-read (hosted): keep the place like an offline one, sent after signing in.
+        if (!offlineFailure(error) && !(error instanceof ApiError && error.status === 401)) throw error;
         if (activeOfflineOwner() !== owner)
           throw new ApiError("the reader session changed before the position could be saved", 409);
         return queuePosition(id, url, requestBody) as PutPosition;
@@ -753,10 +757,10 @@ export const api = {
           const event = JSON.parse(line.slice(6)) as
             | { type: "sentence"; text: string }
             | { type: "done"; answer: AskAnswer }
-            | { type: "error"; status: number; message: string };
+            | { type: "error"; status: number; message: string; code?: string };
           if (event.type === "sentence") onSentence(event.text);
           else if (event.type === "done") return event.answer;
-          else throw new ApiError(event.message, event.status);
+          else throw new ApiError(event.message, event.status, event.code ?? null);
         }
       }
       throw new ApiError("The reply ended early.", 502);
@@ -811,10 +815,10 @@ export const api = {
           const event = JSON.parse(line.slice(6)) as
             | { type: "sentence"; text: string }
             | { type: "done"; answer: AskAnswer }
-            | { type: "error"; status: number; message: string };
+            | { type: "error"; status: number; message: string; code?: string };
           if (event.type === "sentence") onSentence(event.text);
           else if (event.type === "done") return event.answer;
-          else throw new ApiError(event.message, event.status);
+          else throw new ApiError(event.message, event.status, event.code ?? null);
         }
       }
       throw new ApiError("The reply ended early.", 502);

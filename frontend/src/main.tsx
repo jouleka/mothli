@@ -16,6 +16,7 @@ import { ReadingHistory } from "./history/ReadingHistory";
 import { FreeLibrary } from "./library/FreeLibrary";
 import { ReaderPage } from "./reader/ReaderPage";
 import { Shelf } from "./shelf/Shelf";
+import { SignInGate } from "./shelf/SignIn";
 import { Icon } from "./ui/Icon";
 import { Button } from "./ui/Button";
 import { AiRuntimeProvider } from "./ui/AiStatus";
@@ -134,7 +135,11 @@ function Boot() {
   return (
     <React.StrictMode>
       <AiRuntimeProvider enabled={initialization.session === undefined}>
-        <App session={initialization.session} />
+        {/* Hosted: the welcome until someone is signed in, and again if a request says they no
+            longer are. Local: the app as it is. */}
+        <SignInGate session={initialization.session}>
+          <App session={initialization.session} />
+        </SignInGate>
       </AiRuntimeProvider>
     </React.StrictMode>
   );
