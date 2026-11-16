@@ -28,6 +28,7 @@ from app.hosted.migrations import apply_migrations
 from app.hosted.limits import LimitExceededError, inspect_limits, update_limits
 from app.hosted.provider_settings import ProviderValidator
 from app.hosted.storage import EPUB_MEDIA_TYPE
+from app.hosted.tenant.grants import tenant_grants
 from app.hosted.tenant.models import MissingTenantResourceError, OwnerId
 from app.hosted.tenant.repository import PostgresTenantRepository
 from app.main import create_app
@@ -78,29 +79,15 @@ def tenant_dsn(database: str, admin_dsn: str):
         )
     with psycopg.connect(database, autocommit=True) as conn:
         conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(role)))
-        conn.execute(
-            sql.SQL(
-                "GRANT SELECT, INSERT, UPDATE ON books, source_objects, reading_state TO {}; "
-                "GRANT SELECT, INSERT, UPDATE ON reader_preferences TO {}; "
-                "GRANT SELECT, INSERT, DELETE ON book_search_documents TO {}; "
-                "GRANT SELECT, INSERT, UPDATE ON highlights TO {}; "
-                "GRANT SELECT, INSERT, UPDATE ON annotations TO {}; "
-                "GRANT SELECT, INSERT, UPDATE ON bookmarks TO {}; "
-                "GRANT SELECT, INSERT, UPDATE ON jobs TO {}; "
-                "GRANT SELECT, INSERT, UPDATE ON provider_credentials TO {}; "
-                "GRANT SELECT, INSERT, UPDATE ON provider_model_settings TO {}; "
-                "GRANT SELECT ON owner_limits TO {}; "
-                "GRANT SELECT, INSERT, UPDATE ON owner_request_windows TO {}; "
-                "GRANT SELECT, INSERT, UPDATE ON cost_reservations TO {}; "
-                "GRANT SELECT ON chapters, ingested_chapters, chapter_summaries, "
-                "events, themes TO {}; "
-                "GRANT SELECT, INSERT, UPDATE ON entities TO {}; "
-                "GRANT SELECT, INSERT ON aliases, edges, event_participants, entity_state, "
-                "entity_corrections TO {}; "
-                "GRANT SELECT, INSERT ON cost_ledger TO {}"
-            ).format(*(sql.Identifier(role) for _ in range(16)))
-        )
-        conn.execute(sql.SQL("GRANT INSERT ON audit_events TO {}").format(sql.Identifier(role)))
+        # Exactly the reviewed allow-list the repository checks at startup (ADR 0041 section 3).
+        for table, privileges in tenant_grants():
+            conn.execute(
+                sql.SQL("GRANT {} ON {} TO {}").format(
+                    sql.SQL(", ").join(sql.SQL(privilege) for privilege in privileges),
+                    sql.Identifier(table),
+                    sql.Identifier(role),
+                )
+            )
     runtime_dsn = conninfo.make_conninfo(database, user=role)
     try:
         yield runtime_dsn

@@ -156,6 +156,12 @@ Part one is in 6ae: the store, the distilling, the reader's API, and use in the 
 - [ ] The jump and start-over dialogs have not been opened in a browser; unit tests only. (6n)
 - [ ] Chapter closeout can appear one page late. (6n)
 - [ ] The Gutenberg import fix was checked on three books; no others. (6s, 6t)
+- [ ] Hosted mode with the read map: `PUT /api/books/{id}/position` still raises the chapter counter to a device's `completed_chapter`, so a stale device can put the counter ahead of what the map says was read until the reader's next read-map call takes it back; the hosted memory route reads that counter meanwhile. Locally, with the map on, a position report never moves the counter. Shown by a test, not changed. (ADR 0041 part 1)
+- [ ] Hosted `POST /position/reset` does not bring the counter back in line with the read map (local reset does), and hosted has no "read it fresh" that clears the map. (ADR 0041 part 1)
+- [ ] Hosted `HostedBookSource` has no store cross-check (`assert_matches_store`): there is no hosted story memory yet. Parts 4 and 10 must add it when there is. (ADR 0041 part 1)
+- [ ] A soft-deleted hosted book keeps its read-map rows (hidden, never shown); they go only if the book row is deleted. Waits for the deletion decision. (ADR 0041 part 1)
+- [ ] Hosted parses each book's EPUB from object storage once per process (cache of `SEGMENTATION_CACHE_MAX_ENTRIES`, 8 books) and again after eviction; the cost of that on a large shelf was not measured, nor were the read-map routes in a browser or with many readers at once. (ADR 0041 part 1)
+- [ ] CodeQL's path-injection check follows untyped `worker` calls across modes; a test stand-in once made it report hosted routes reaching the local file path. Any later test that hands `source_state` a stand-in calling `IngestWorker` methods will bring it back. (ADR 0041 part 1)
 
 ## Later
 

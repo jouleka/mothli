@@ -24,6 +24,9 @@ from app.ingest.worker import IngestWorker
 from app.hosted.auth import api as auth_api
 from app.hosted.auth.oidc import OIDCClient
 from app.hosted.auth.repository import PostgresAuthRepository
+from app.hosted.companion import routes as companion_routes
+from app.hosted.companion import set_connection_limit
+from app.hosted.companion.source import SourceParseCache
 from app.hosted.credentials import build_credential_cipher
 from app.hosted.provider_settings import ProviderValidator, allowed_origins
 from app.hosted.runtime import HostedRuntimeRegistry
@@ -388,6 +391,13 @@ def create_app(
                 app.state.credential_cipher = cipher
                 app.state.provider_origins = origins
                 app.state.provider_validator = validator
+                # The companion's adapters (ADR 0041): bound to one reader per request, sharing
+                # one bounded parse cache and one connection limit per process.
+                set_connection_limit(settings.hosted_companion_db_connections)
+                app.state.companion_dsn = settings.hosted_tenant_dsn.get_secret_value()
+                app.state.companion_sources = SourceParseCache(
+                    settings.segmentation_cache_max_entries
+                )
                 yield
             finally:
                 drained = True
@@ -488,6 +498,7 @@ def create_app(
 
         app.include_router(auth_api.router)
         app.include_router(tenant_api.router)
+        app.include_router(companion_routes.router)
         app.add_middleware(_EpubUploadBodyLimit, max_file_bytes=settings.epub_max_upload_bytes)
         app.add_middleware(_CredentialBodyLimit)
         app.add_middleware(_HostedNoStore)

@@ -28,6 +28,7 @@ from app.hosted.credentials import (
 )
 from app.hosted.limits import LimitExceededError
 from app.hosted.provider_settings import ValidationResult
+from app.hosted.tenant.grants import ALL_TABLE_PRIVILEGES, TENANT_TABLE_PRIVILEGES
 from app.hosted.tenant.models import (
     FuturePositionVersionError,
     InvalidPositionError,
@@ -55,37 +56,10 @@ class PostgresTenantRepository:
 
     async def check_runtime_role(self) -> None:
         required = {
-            "public.books": {"SELECT", "INSERT", "UPDATE"},
-            "public.source_objects": {"SELECT", "INSERT", "UPDATE"},
-            "public.reading_state": {"SELECT", "INSERT", "UPDATE"},
-            "public.reader_preferences": {"SELECT", "INSERT", "UPDATE"},
-            "public.book_search_documents": {"SELECT", "INSERT", "DELETE"},
-            "public.highlights": {"SELECT", "INSERT", "UPDATE"},
-            "public.annotations": {"SELECT", "INSERT", "UPDATE"},
-            "public.bookmarks": {"SELECT", "INSERT", "UPDATE"},
-            "public.chapters": {"SELECT"},
-            "public.ingested_chapters": {"SELECT"},
-            "public.chapter_summaries": {"SELECT"},
-            "public.entities": {"SELECT", "INSERT", "UPDATE"},
-            "public.aliases": {"SELECT", "INSERT"},
-            "public.edges": {"SELECT", "INSERT"},
-            "public.events": {"SELECT"},
-            "public.event_participants": {"SELECT", "INSERT"},
-            "public.entity_state": {"SELECT", "INSERT"},
-            "public.entity_corrections": {"SELECT", "INSERT"},
-            "public.themes": {"SELECT"},
-            "public.cost_ledger": {"SELECT", "INSERT"},
-            "public.cost_reservations": {"SELECT", "INSERT", "UPDATE"},
-            "public.jobs": {"SELECT", "INSERT", "UPDATE"},
-            "public.provider_credentials": {"SELECT", "INSERT", "UPDATE"},
-            "public.provider_model_settings": {"SELECT", "INSERT", "UPDATE"},
-            "public.owner_limits": {"SELECT"},
-            "public.owner_request_windows": {"SELECT", "INSERT", "UPDATE"},
-            "public.audit_events": {"INSERT"},
+            f"public.{table}": set(privileges)
+            for table, privileges in TENANT_TABLE_PRIVILEGES.items()
         }
-        all_privileges = {
-            "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"
-        }
+        all_privileges = set(ALL_TABLE_PRIVILEGES)
         async with await self._connect() as conn:
             role = await (
                 await conn.execute(

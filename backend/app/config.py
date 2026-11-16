@@ -154,6 +154,9 @@ class Settings(BaseSettings):
         "https://api.openai.com,https://api.anthropic.com"
     )
     hosted_provider_validation_timeout_seconds: float = Field(default=5.0, gt=0, le=15)
+    # The most database connections the hosted companion adapters hold at once in one process
+    # (ADR 0041 section 2): a burst of page reports cannot exceed Postgres max_connections.
+    hosted_companion_db_connections: int = Field(default=20, ge=1, le=1000)
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
@@ -175,10 +178,16 @@ class Settings(BaseSettings):
             self.reader_read_map = self.reader_conversation_stream
         if self.reader_story_notes is None:
             self.reader_story_notes = self.reader_conversation_stream
-        if self.reader_read_map and not (self.reader_page_context and self.reader_conversation_stream):
+        # Hosted mode may keep the read map without streamed replies: it sends nothing to any
+        # model (ADR 0041 part 1). Locally it still needs them.
+        hosted = self.deployment_mode == "hosted"
+        if self.reader_read_map and not (self.reader_page_context
+                                         and (self.reader_conversation_stream or hosted)):
             raise ValueError("READER_READ_MAP requires READER_PAGE_CONTEXT and streamed replies")
+        if hosted and (self.reader_story_notes or self.reader_recollections):
+            raise ValueError("chapter notes and recollections are not available in hosted mode yet")
         if self.reader_recollections is None:
-            self.reader_recollections = self.reader_read_map
+            self.reader_recollections = self.reader_read_map and not hosted
         if self.reader_recollections and not self.reader_read_map:
             raise ValueError("READER_RECOLLECTIONS requires READER_READ_MAP")
         if self.llm_transport == "codex-local" and self.deployment_mode != "local":

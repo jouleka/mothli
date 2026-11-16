@@ -24,6 +24,7 @@ Concurrency: single-flight per book — one running task per book_id; a new enqu
 target the running task re-checks each loop. Different books ingest in parallel (the executor pool).
 """
 
+import hashlib
 import json
 import os
 import threading
@@ -31,6 +32,7 @@ import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from app.cost import (
     budgeted_completion,
@@ -55,7 +57,7 @@ from app.ingest.extraction.validation import (
     merge_reviewed_extractions,
     review_extraction,
 )
-from app.ingest.manifest import load_manifest, position_length
+from app.ingest.manifest import load_manifest, position_length, source_epub_path
 from app.llm import versioning
 from app.llm import jev_tasks
 from app.llm.jev import JevUnavailable
@@ -376,6 +378,29 @@ class IngestWorker:
             while len(self._segcache) > self._segcache_max:
                 self._segcache.popitem(last=False)
             return segmented
+
+    def verified_source(self, book_id, book):
+        """(manifest, chapters) of a book whose stored EPUB still matches its import.
+
+        ``book`` is the catalog's row; its ``book_id`` names the storage, never the route.
+        """
+        storage_id = book["book_id"]
+        manifest = load_manifest(self._settings.data_dir, book_id)
+        # A cached parse must never keep authorizing text after its source has changed on disk.
+        try:
+            books_root = (Path(self._settings.data_dir) / "books").resolve()
+            # The catalog owns storage identity. Never derive a filesystem path directly
+            # from the route parameter, even after separately checking its manifest.
+            source_path = Path(source_epub_path(self._settings.data_dir, storage_id)).resolve()
+            source_path.relative_to(books_root)
+            with source_path.open("rb") as source:
+                digest = hashlib.file_digest(source, "sha256").hexdigest()
+        except (OSError, ValueError) as exc:
+            raise ValueError("source is unavailable") from exc
+        if book.get("file_hash") and digest != book["file_hash"]:
+            raise ValueError("source no longer matches its import")
+        chapters = self.source_chapters(book_id)
+        return manifest, chapters
 
     def source_chapters(self, book_id):
         """Exact canonical source, shared bounded parse cache; callers MUST apply a read boundary."""
