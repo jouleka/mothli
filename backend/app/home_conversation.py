@@ -8,6 +8,10 @@ passes the same checks as a sentence in a book's own conversation before it is s
 Mothli may also suggest books that are not on the shelf: a short list from the free library's
 catalogue, chosen by fixed rules (``home_suggestions``). Of each it has the catalogue's own line
 and nothing else, and the checker is given the same line. None of it counts as read text.
+
+What the reader has told Mothli about themselves (``recollections``) is given as in a book's own
+conversation: the same block to the writer, the same passage to the checker, the same rule for
+a note tied to a book, and nothing at all for a reply that has no notes.
 """
 from itertools import zip_longest
 import json
@@ -30,6 +34,7 @@ from app.llm.jev import JevUnavailable
 from app.read_map import read_snapshot, skimmed_chapters, written_from_read
 from app.reader_place import (APP_HELP, FRIEND_VOICE, SPEAK_AS_A_FRIEND, content_numbers, note_asked,
                               offers_for, place_line)
+from app.recollections import RECOLLECTION_RULE, recall, recollection_block, recollection_passage
 from app.retrieval_passages import passage_windows
 from app.stream_conversation import (ASKED_TURNS, HISTORY_TURNS, MAX_PASSAGES, check_room,
                                      conversation_writer, fit_passages,
@@ -91,6 +96,9 @@ HOME_SYSTEM = (
     "got there yet. Never confirm, deny, hint or guess.\n"
     "Output only the words of your reply."
 )
+# The same instructions with the one on what the reader has told Mothli before, used only for a
+# reply that is given such notes: every other home reply's instructions are exactly HOME_SYSTEM.
+HOME_SYSTEM_REMEMBERING = HOME_SYSTEM.replace(SPEAK_AS_A_FRIEND, RECOLLECTION_RULE + SPEAK_AS_A_FRIEND)
 
 
 class HomeAsk(BaseModel):
@@ -177,8 +185,11 @@ def book_evidence(item, query, settings, catalog, *, limit, notes_budget):
     return labelled
 
 
-def stream_home(body, catalog, store, settings, client, worker, elsewhere):
-    """An iterator of event dicts for one home reply: checked sentences, then ``done`` or ``error``."""
+def stream_home(body, catalog, store, settings, client, worker, elsewhere, recollector=None):
+    """An iterator of event dicts for one home reply: checked sentences, then ``done`` or ``error``.
+
+    ``recollector`` is started on the home conversation after the reply, as a book's is after its own.
+    """
     started = perf_counter()
     request_id = uuid4().hex[:12]
     if not getattr(client, "jev", None):
@@ -232,11 +243,30 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere):
             new_lines = [suggestion_line(candidate) for candidate in new]
             fixed = ["Where the reader is: " + " ".join(lines), "How this app works: " + APP_HELP,
                      *(SUGGESTABLE + line for line in new_lines), *([] if new else [NOTHING_NEW])]
+            room = check_room(question, identities=())
+            # What the reader has told Mothli before, chosen as for the chat inside a book. Every
+            # shelf book is in view here, so no book is in hand: a note tied to a book is used
+            # only while what was read of it when the reader said it is still read, by the read
+            # map this reply is built from (the other shelf books' maps are looked up). The
+            # checker gets the same lines; they prove nothing about any book.
+            remembered = []
+            if settings.reader_recollections:
+                try:
+                    remembered = recall(catalog, read=drew_on, book_id=None, query=body.question)
+                except Exception:       # a reply without them is better than no reply
+                    logger.exception("recollections could not be read")
+            if remembered and len(fit_passages(fixed, [recollection_passage(remembered)],
+                                               budget=room)) == len(fixed):
+                # No room beside the fixed passages under the checker's size limit: the writer
+                # goes without them too, as it is never given what its checker is not.
+                remembered = []
+            if remembered:
+                fixed.append(recollection_passage(remembered))      # read text gives way to them
             # Read text takes the room the largest check has left, each book's best passage first,
             # and the writer is given the same passages as its checker.
             passages = fit_passages(
                 fixed, [passage for turn in zip_longest(*found) for passage in turn if passage],
-                budget=check_room(question, identities=()))
+                budget=room)
             evidence = passages[len(fixed):]
             # Spend is recorded against one book: the first with read text, else the first on the shelf.
             home = (read or books)[0]["book"]["book_id"]
@@ -267,10 +297,13 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere):
                          or "(none: you have no new books to suggest)")
                       + "\n\nWHAT YOU HAVE READ TOGETHER (all of it; each piece names its book):\n\n"
                       + ("\n\n".join(f"[{number}] {passage}" for number, passage in enumerate(evidence, 1))
-                         or "(nothing read yet)")
-                      + "\n\nReply to the reader now.")
+                         or "(nothing read yet)"))
+            if remembered:
+                prompt += "\n\n" + recollection_block(remembered)
+            prompt += "\n\nReply to the reader now."
             for event in write_and_gate(catalog=catalog, settings=settings, writer=writer, book_id=home,
-                                        system=HOME_SYSTEM, prompt=prompt, check=check, safe=safe,
+                                        system=HOME_SYSTEM_REMEMBERING if remembered else HOME_SYSTEM,
+                                        prompt=prompt, check=check, safe=safe,
                                         note=note, phase="home"):
                 if event[0] == "sentence":
                     shown += 1
@@ -310,6 +343,8 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere):
                         catalog.add_turn(None, role="assistant", content=" ".join(finished), **where)
                 except Exception:
                     logger.exception("home conversation turn was not stored")
+            if recollector is not None and settings.reader_recollections:
+                recollector.ensure(None)            # what the reader said of themselves, after replying
             logger.log(logging.WARNING if failure else logging.INFO, json.dumps({
                 "event": "conversation-home", "request_id": request_id, "sentences": shown,
                 "elapsed_ms": round((perf_counter() - started) * 1000, 2), "books": len(books),

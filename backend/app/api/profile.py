@@ -70,13 +70,14 @@ def _home_enabled(settings):
 
 
 @router.post("/ask/stream")
-def ask_home(body: HomeAsk, catalog=Depends(get_catalog), store=Depends(get_store),
+def ask_home(body: HomeAsk, request: Request, catalog=Depends(get_catalog), store=Depends(get_store),
              settings=Depends(get_settings), client=Depends(get_reader_client), worker=Depends(get_worker)):
     """Server-sent events, as for a book: one ``sentence`` per checked sentence, then ``done``."""
     _home_enabled(settings)
     _total, entries = _history(settings).list(limit=500)
     elsewhere = [entry for entry in _with_shelf(entries, catalog, settings) if not entry["book_id"]]
-    events = stream_home(body, catalog, store, settings, client, worker, elsewhere)
+    events = stream_home(body, catalog, store, settings, client, worker, elsewhere,
+                         recollector=request.app.state.recollector)
     return StreamingResponse(
         ("data: " + json.dumps(event, ensure_ascii=False) + "\n\n" for event in events),
         media_type="text/event-stream",
@@ -93,9 +94,14 @@ def home_conversation(catalog=Depends(get_catalog), settings=Depends(get_setting
 
 
 @router.delete("/conversation", status_code=204)
-def clear_home_conversation(catalog=Depends(get_catalog), settings=Depends(get_settings)):
+def clear_home_conversation(request: Request, catalog=Depends(get_catalog), settings=Depends(get_settings)):
     _home_enabled(settings)
-    catalog.clear_turns(None)
+    if settings.reader_recollections:
+        # As for a book's conversation: what the reader said of themselves and nobody has looked
+        # at yet is taken first, to be distilled off this request. The notes are kept.
+        request.app.state.recollector.clearing(None)
+    else:
+        catalog.clear_turns(None)
 
 
 @router.get("/profile")

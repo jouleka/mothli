@@ -1713,6 +1713,57 @@ The chat inside the Karamazov fixture, chapters 1 to 4 read and part of 5. Terra
 - **In a new conversation:** "what do you remember about me?" brought all four back, correctly, in three sentences. "Do you remember which part got to me?" named the monk of Athos, but hedged ("though I can't be sure that's the part that got to you"). "Do you remember who my favourite author is?", which was never said, got "I don't remember who your favourite author is. Who is it?": nothing invented. "What's an elder again?" was answered in three sentences, no shorter than before the reader asked for short answers.
 - **Not verified:** one conversation, one book, four notes. Not tried: a contradiction replacing a note, a note hidden by "read it fresh" with real models, a store of hundreds, a reader deep in a long book (where the passages may leave no room for the notes: see the open item on the book chat's check size), the home chat.
 
+## 6af. What Mothli remembers: the home chat and the reader's screen (16 November)
+
+Part two of 6ae. The home chat now uses the notes the way the chat inside a book does, and the reader can see and delete them.
+
+### What changed
+
+- **The home chat** (`stream_home`): calls `recall(catalog, read=drew_on, book_id=None, query=body.question)`, where `drew_on` is `read_maps(books)`, the read maps the reply's prompt is built from and the home turn is stored with. With no book in hand, `book_id=None`; `other_books` keeps its default, so `read_now` adds the catalog's map for every shelf book that has nothing read here (or that `shelf_books` left out). A note tied to any shelf book is used only while everything read of it when the reader said it is still read, by those maps. The passage goes into `fixed`, so read text gives way to it; when even the fixed passages leave it no room under `check_room`, the notes are left out for writer and checker alike. The block is added just before "Reply to the reader now.", and `HOME_SYSTEM_REMEMBERING` (the home instructions with `RECOLLECTION_RULE` before `SPEAK_AS_A_FRIEND`) is used only for a reply that has notes. With no notes, the setting off, or no room, the prompt, the instructions and every check's passages are byte for byte what they were.
+- **Distilling the home conversation:** `POST /api/reader/ask/stream` passes `app.state.recollector`, and `stream_home` calls `recollector.ensure(None)` after the reply is stored (`None` is the home conversation; the catalog keeps its cursor under the empty string). `DELETE /api/reader/conversation` calls `recollector.clearing(None)` when recollections are on, so what was not yet looked at is distilled first and the notes are kept; otherwise it clears as before.
+- **The reader's screen:** a "What Mothli remembers" button beside "Clear conversation" in `HomeChat.tsx` opens `MothliRemembers.tsx`, a modal sheet built on the reading history's `fl-scrim`/`fl-sheet` with the provider settings dialog's focus handling. `api.ts` has `recollections`, `forgetRecollection` and `forgetRecollections` with their types.
+- **Not touched:** `recollections.py`, `stream_conversation.py`, `reader_place.py`, `home_suggestions.py`, every check.
+
+### Verified, with stand-in models only
+
+`backend/tests/test_home_recollections.py`, 7 tests. The first (unchanged with no notes or the setting off) is the guard and passed before the change; the other six failed before it, each for the break it names. Whole backend suite 2,233 pass, 83 skipped; `ruff check app tests scripts` clean. `frontend/src/shelf/MothliRemembers.test.tsx`, 8 tests, failing before the screen existed; `npx tsc -b` clean; `npm test` 391 pass.
+
+| Asked for | What the test shows |
+|---|---|
+| Unchanged without notes | Setting off, on with no notes, and off with a note stored: the same system (`HOME_SYSTEM`), the same prompt, the same passages in every check |
+| Notes reach the home writer and checker | The exact block, ending just before "Reply to the reader now."; the passage in every check; the instructions equal `HOME_SYSTEM` with the rule added |
+| A tied note follows what is read | Gone from the prompt and the checks after "read it fresh" on its book, while a note about the reader stays; back when the same page is read again |
+| Distilled once | Six home messages: one call, marked "written on the home screen", one note. One more message: no call. Setting off: none |
+| Clearing keeps the notes | The two waiting messages are read, the six already looked at are not; the note already kept stays |
+| Inside the size limit | Every book read in full: the largest check within `check_room`. With room for the fixed passages and the notes only, no read passage is given and the notes are. With room for the fixed passages without the notes, neither writer nor checker gets them |
+| A fault reading the store | The reply comes, without notes |
+| The screen | Lists what the API returns in its order, with the book's title, the date in words and the reader's words; "Forget this" deletes that one and moves focus to the next; a failed delete says so and keeps the row; "Forget everything" asks first and can be called off; the held-back line; the empty line; a failed load says so and is not shown as empty; Escape and the close button close it and focus returns to the button; no axe violations |
+
+Seen in a browser (the in-app pane, Chromium), against a backend of this branch with stub models, a temporary data folder and three notes put straight into the catalog, on its own ports: the sheet opens centred, fits 375 pixels with no overflow, "Forget this" removes the row and focuses the next button, the confirmation and "Forget everything" empty the list and focus the heading, and Escape returns focus to the button. Light mode only.
+
+### Not verified
+
+- Nothing with real models: whether Mothli uses the notes well across books, and whether a home batch yields sensible notes.
+- Dark mode, a screen reader, Safari, hosted mode.
+- The words a 404 shows ("Mothli doesn’t remember anything between conversations here.") are not covered by a test.
+
+### Found, and not fixed
+
+- A feeling said on the home screen is stored tied, with no book, and with the read map of every book read at the time, so "read it fresh" on any one of them hides it. Unchanged from 6ae; still the owner's call (open items).
+- With no book in hand, a note tied to a book reaches a home reply only when it shares a word with the reader's message (`select_recollections`). Unchanged.
+- `RECOLLECTION_RULE` says the notes prove nothing about "the book"; in the home chat there are several. The rule was left as it is, as asked.
+- The button shows wherever the home chat does, also where the server keeps no notes; there the sheet says so.
+### 6af, tried with real models (one home conversation, $0.008 of Jev)
+
+The home chat with the Karamazov fixture on the shelf (chapters 1 to 4 read, part of 5), the free library on. Terra through `codex-local`, Jev 1.14.0. The same seven messages as in 6ae, then the home conversation cleared, then four questions.
+
+- **Kept:** the same four notes as in the book chat, in slightly different words, from two writer calls and four checks. They survived the clear.
+- **"What do you remember about me?"** brought back three of the four. The sentence about the monk sent away from Athos was written and removed by the checks. **"Do you remember which part got to me?"** lost its whole answer the same way and showed only "That one stayed with you." A note that names something in a book is only the reader's word; the sentence repeating it needs the book's own passage, and the home chat fetches passages for the reader's message, not for the note. The chat inside a book answered both (6ae).
+- **"Who my favourite author is"** (never said): "I don't remember you telling me who your favourite author is. Who is it?" Nothing invented.
+- **"Any new book you would suggest for me?"** got a suggestion with a reason and the add button. It did not use the note that the reader was considering Jane Eyre: the six candidates are chosen without looking at what the reader has named, and Jane Eyre was not among them.
+- Seen in passing, not from this change: the home chat is weaker than the book chat on plain book questions. "What's an elder?" got "we haven't yet read an explanation", though chapter 5 gives one, and the first sentence of "who is Alyosha again?" was removed.
+- **Not verified:** one conversation. The screen was not tried against real notes in this run.
+
 ## 6ag. The chat inside a book keeps every check inside the size limit (16 November)
 
 6ad found that the chat inside a book built its sentence checks the way the home chat did before its fix: ten passages of read text, the chapter notes, the place line and the app help, and since 6ae what Mothli remembers about the reader, with nothing holding the total to the 30,000 bytes `budgeted_jev` accepts. A refused check drops its sentence without a word. 6ae's notes were fitted on their own and were left out whenever the rest left no room.

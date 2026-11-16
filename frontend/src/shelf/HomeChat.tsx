@@ -11,6 +11,7 @@ import { api, ApiError, type HomeTurn, type ReadSkipped, type SuggestedBook } fr
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { Moth } from "../ui/Moth";
+import { MothliRemembers } from "./MothliRemembers";
 import "./home-chat.css";
 
 const NOTHING_SHOWN = "We haven’t got there yet, or I don’t have enough from what we’ve read to say.";
@@ -74,6 +75,16 @@ export function HomeChat({ onShelfChanged }: { onShelfChanged?: () => void } = {
   const following = useRef(true);
   const reveal = useRef<{ height: number; focus: number } | null>(null);
   const placed = useRef(false);
+  // "What Mothli remembers": open, and whether focus is owed back to the button that opened it.
+  const [remembering, setRemembering] = useState(false);
+  const rememberRef = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
+
+  useEffect(() => {
+    if (remembering || !returnFocus.current) return;
+    returnFocus.current = false;
+    rememberRef.current?.focus();
+  }, [remembering]);
 
   useEffect(() => {
     let dead = false;
@@ -273,21 +284,41 @@ export function HomeChat({ onShelfChanged }: { onShelfChanged?: () => void } = {
           <h2 id={titleId}>Talk with Mothli about your books</h2>
           <p>One conversation across your whole shelf.</p>
         </div>
-        {exchanges.length > 0 && !confirming && (
+        <div className="ml-hc-actions">
           <button
-            ref={clearRef}
+            ref={rememberRef}
             type="button"
             className="ml-hc-link ml-hc-clear"
-            disabled={busy}
-            onClick={() => {
-              setConfirming(true);
-              window.setTimeout(() => keepRef.current?.focus());
-            }}
+            aria-haspopup="dialog"
+            onClick={() => setRemembering(true)}
           >
-            Clear conversation
+            What Mothli remembers
           </button>
-        )}
+          {exchanges.length > 0 && !confirming && (
+            <button
+              ref={clearRef}
+              type="button"
+              className="ml-hc-link ml-hc-clear"
+              disabled={busy}
+              onClick={() => {
+                setConfirming(true);
+                window.setTimeout(() => keepRef.current?.focus());
+              }}
+            >
+              Clear conversation
+            </button>
+          )}
+        </div>
       </header>
+
+      {remembering && (
+        <MothliRemembers
+          onClose={() => {
+            returnFocus.current = true;
+            setRemembering(false);
+          }}
+        />
+      )}
 
       {confirming && (
         <div className="ml-hc-confirm" role="group" aria-labelledby={confirmId}>
