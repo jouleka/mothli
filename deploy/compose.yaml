@@ -1,0 +1,216 @@
+# Mothli on one server behind Cloudflare (ADR 0041 part 9; runbook: docs/runbooks/hosted-deployment.md).
+#
+#   reader --HTTPS--> Cloudflare --tunnel--> tunnel --HTTP--> proxy --HTTP--> web --> db
+#                                                               (static app)        worker --> db
+#
+# Nothing listens on the server's public address: the Cloudflare tunnel connects out. The database
+# is on a network with no way out and no published port. Settings come from two files next to this
+# one, both git-ignored and readable by root only: `.env` (this file's variables: the domain, the
+# database passwords, the tunnel token) and `app.env` (the app's own settings). Each container
+# receives only what it needs; the database superuser password reaches only `db` and `migrate`.
+
+name: mothli
+
+x-backend: &backend
+  image: ${MOTHLI_IMAGE_PREFIX:-mothli}-backend:${MOTHLI_RELEASE:-local}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+    target: backend
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  logging: &logging
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+
+services:
+  db:
+    image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${MOTHLI_DB_NAME:-mothli}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - db:/var/lib/postgresql/data
+    networks: [data]
+    shm_size: 256mb
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits: {memory: 1g}
+    logging: *logging
+
+  # One-shot, before web and worker: roles, migrations, exact grants, the schema marker, and the
+  # app's own startup role checks. If any step fails, web and worker are not started.
+  migrate:
+    <<: *backend
+    restart: "no"
+    command: ["python", "scripts/hosted_roles.py", "deploy"]
+    environment:
+      MOTHLI_DB_HOST: db
+      MOTHLI_DB_NAME: ${MOTHLI_DB_NAME:-mothli}
+      MOTHLI_DB_ROLE_PREFIX: ${MOTHLI_DB_ROLE_PREFIX:-mothli}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      MOTHLI_DB_OWNER_PASSWORD: ${MOTHLI_DB_OWNER_PASSWORD:?set MOTHLI_DB_OWNER_PASSWORD in deploy/.env}
+      MOTHLI_DB_AUTH_PASSWORD: ${MOTHLI_DB_AUTH_PASSWORD:?set MOTHLI_DB_AUTH_PASSWORD in deploy/.env}
+      MOTHLI_DB_TENANT_PASSWORD: ${MOTHLI_DB_TENANT_PASSWORD:?set MOTHLI_DB_TENANT_PASSWORD in deploy/.env}
+      MOTHLI_DB_WORKER_PASSWORD: ${MOTHLI_DB_WORKER_PASSWORD:?set MOTHLI_DB_WORKER_PASSWORD in deploy/.env}
+      MOTHLI_DB_AUDIT_PASSWORD: ${MOTHLI_DB_AUDIT_PASSWORD:?set MOTHLI_DB_AUDIT_PASSWORD in deploy/.env}
+      MOTHLI_DB_OPERATOR_PASSWORD: ${MOTHLI_DB_OPERATOR_PASSWORD:?set MOTHLI_DB_OPERATOR_PASSWORD in deploy/.env}
+    networks: [data]
+    depends_on:
+      db: {condition: service_healthy}
+
+  web:
+    <<: *backend
+    restart: unless-stopped
+    # --forwarded-allow-ips: only the proxy may say who the client is.
+    command: ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000",
+              "--proxy-headers", "--forwarded-allow-ips", "${MOTHLI_PROXY_ADDRESS:-10.88.88.6}",
+              "--no-access-log", "--no-server-header", "--timeout-keep-alive", "75"]
+    env_file:
+      - path: ${MOTHLI_APP_ENV_FILE:-app.env}
+        required: true
+    environment:
+      DEPLOYMENT_MODE: hosted
+      TRUSTED_HOSTS: ${MOTHLI_DOMAIN:?set MOTHLI_DOMAIN in deploy/.env}
+      OIDC_REDIRECT_URI: https://${MOTHLI_DOMAIN}/api/auth/callback
+      HOSTED_AUTH_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_auth:${MOTHLI_DB_AUTH_PASSWORD:?set MOTHLI_DB_AUTH_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
+      HOSTED_TENANT_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_tenant:${MOTHLI_DB_TENANT_PASSWORD:?set MOTHLI_DB_TENANT_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
+      HOSTED_STORAGE_BACKEND: filesystem
+      HOSTED_STORAGE_FILESYSTEM_ROOT: /var/lib/mothli/books
+    volumes:
+      - books:/var/lib/mothli/books
+    networks: [data, edge, egress]
+    stop_grace_period: 30s
+    healthcheck:
+      # The app refuses a Host header outside TRUSTED_HOSTS, so the probe names the domain.
+      test: ["CMD", "python", "-c", "import os,urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:8000/api/health/ready', headers={'Host': os.environ['TRUSTED_HOSTS'].split(',')[0].strip()}), timeout=15)"]
+      interval: 30s
+      timeout: 20s
+      start_period: 30s
+      retries: 3
+    depends_on:
+      db: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    deploy:
+      resources:
+        limits: {cpus: "2", memory: 1536m}
+
+  # The durable job worker. Off until ADR 0041 part 6 gives it a job dispatcher to run
+  # (HOSTED_JOB_HANDLER in app.env); turn on with COMPOSE_PROFILES=worker in deploy/.env.
+  worker:
+    <<: *backend
+    profiles: [worker]
+    restart: unless-stopped
+    command: ["python", "-m", "app.hosted.worker"]
+    env_file:
+      - path: ${MOTHLI_APP_ENV_FILE:-app.env}
+        required: true
+    environment:
+      DEPLOYMENT_MODE: hosted
+      HOSTED_WORKER_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_worker:${MOTHLI_DB_WORKER_PASSWORD:?set MOTHLI_DB_WORKER_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
+      HOSTED_TENANT_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_tenant:${MOTHLI_DB_TENANT_PASSWORD:?set MOTHLI_DB_TENANT_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
+      HOSTED_STORAGE_BACKEND: filesystem
+      HOSTED_STORAGE_FILESYSTEM_ROOT: /var/lib/mothli/books
+    volumes:
+      - books:/var/lib/mothli/books
+    networks: [data, egress]
+    stop_grace_period: 30s
+    depends_on:
+      db: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 1g}
+
+  # Command-line tools only (`docker compose run --rm tools ...`): reader limits and the audit log.
+  # Their database roles are never given to web or worker.
+  tools:
+    <<: *backend
+    profiles: [tools]
+    restart: "no"
+    command: ["python", "-m", "app.hosted.limits", "show"]
+    environment:
+      DATABASE_URL: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_operator:${MOTHLI_DB_OPERATOR_PASSWORD:?set MOTHLI_DB_OPERATOR_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
+      HOSTED_AUDIT_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_audit:${MOTHLI_DB_AUDIT_PASSWORD:?set MOTHLI_DB_AUDIT_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
+    networks: [data]
+    depends_on:
+      db: {condition: service_healthy}
+
+  # Serves the built app and passes /api to web, unbuffered (deploy/Caddyfile).
+  proxy:
+    image: ${MOTHLI_IMAGE_PREFIX:-mothli}-proxy:${MOTHLI_RELEASE:-local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: proxy
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/data, /config, /tmp]
+    environment:
+      XDG_DATA_HOME: /data
+      XDG_CONFIG_HOME: /config
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks:
+      edge:
+        ipv4_address: ${MOTHLI_PROXY_ADDRESS:-10.88.88.6}
+      tunnel: {}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      web: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 256m}
+    logging: *logging
+
+  # The only way in: an outbound connection to Cloudflare. The token is the tunnel's credential.
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in deploy/.env}
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks: [tunnel, egress]
+    depends_on:
+      proxy: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 128m}
+    logging: *logging
+
+networks:
+  # The database and the processes that use it. No way out, nothing published.
+  data:
+    internal: true
+  # Proxy and web only, on a fixed small range. The proxy has a fixed address (the range's last,
+  # MOTHLI_PROXY_ADDRESS) outside the part handed out to others (MOTHLI_EDGE_DYNAMIC_RANGE), and
+  # the web trusts forwarded headers from that address alone.
+  edge:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${MOTHLI_EDGE_SUBNET:-10.88.88.0/29}
+          ip_range: ${MOTHLI_EDGE_DYNAMIC_RANGE:-10.88.88.0/30}
+  # Proxy and the tunnel connector.
+  tunnel:
+    internal: true
+  # Outbound internet: sign-in service and AI providers (web, worker), Cloudflare (tunnel).
+  egress: {}
+
+volumes:
+  db:
+  books:

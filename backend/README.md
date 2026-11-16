@@ -239,8 +239,11 @@ Hosted startup requires these secret-manager/environment values:
 | `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | Confidential OIDC client credentials |
 | `OIDC_REDIRECT_URI` | Exact registered HTTPS `/api/auth/callback` URI |
 
-The database role is provisioned outside migrations so no password enters source control. It receives
-only the per-table grants recorded in ADR 0020; startup rejects broader DML access. Authorization Code
+The database roles are provisioned outside migrations so no password enters source control:
+`scripts/hosted_roles.py` creates them from passwords in the environment and grants each exactly the
+allow-list its startup check reads (the tenant's from `app/hosted/tenant/grants.py`); startup rejects
+broader or narrower access. The deployment in `../deploy/` runs it before every start
+(`../docs/runbooks/hosted-deployment.md`). Authorization Code
 uses S256 PKCE, one-time browser-bound state, signed ID-token validation, and `(issuer, subject)` to
 internal UUID resolution. Session and CSRF cookies use the `__Host-` prefix, Secure, Path=/, and
 SameSite=Lax; the session is HttpOnly and both raw tokens are stored only as digests. Run the same

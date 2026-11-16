@@ -2,15 +2,19 @@
 around the per-process singletons; the lifespan owns their startup/shutdown (Store.close serializes
 against in-flight sessions; the D-A7 fail-loud predicate fires during startup, refusing a stub deploy
 unless ALLOW_STUB is explicitly set)."""
+import asyncio
+import hashlib
 import logging
 import json
 import tempfile
-from time import perf_counter
+from time import monotonic, perf_counter
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import psycopg
 from fastapi import FastAPI
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -29,6 +33,7 @@ from app.hosted.companion import set_connection_limit
 from app.hosted.companion.source import SourceParseCache
 from app.hosted.companion.spend import set_spend_limits
 from app.hosted.credentials import build_credential_cipher
+from app.hosted.migrations import discover_migrations
 from app.hosted.provider_settings import ProviderValidator, allowed_origins
 from app.hosted.runtime import HostedRuntimeRegistry
 from app.hosted.storage import build_object_storage
@@ -53,6 +58,78 @@ def _platform_ai_configured(settings: Settings) -> bool:
                 or settings.reader_recollections or settings.jev_enabled
                 or settings.openai_api_key or settings.anthropic_api_key
                 or settings.typesafe_api_key is not None)
+
+
+# Hosted readiness (ADR 0041 part 9). The runtime roles may read no table outside their
+# allow-lists, the migration table included, so the deployment step that applies the migrations
+# also records which history it left in this database setting (backend/scripts/hosted_roles.py),
+# derived from the database's own migration table; readiness compares it with this code's files.
+SCHEMA_MARKER_SETTING = "mothli.schema_version"
+_READINESS_CACHE_SECONDS = 10.0
+_READINESS_TIMEOUT_SECONDS = 10.0
+
+
+def schema_marker(rows: Iterable[tuple[int, str, str]]) -> str:
+    """One short value naming a whole migration history: its last version and a digest of every
+    (version, name, checksum). Equal only for the same files applied in the same order."""
+    items = [(int(version), str(name), str(checksum)) for version, name, checksum in rows]
+    digest = hashlib.sha256(
+        "\n".join(f"{version}:{name}:{checksum}" for version, name, checksum in items).encode()
+    ).hexdigest()[:16]
+    return f"{items[-1][0] if items else 0:04d}-{digest}"
+
+
+def expected_schema_marker() -> str:
+    return schema_marker(
+        (migration.version, migration.name, migration.checksum)
+        for migration in discover_migrations()
+    )
+
+
+async def _read_schema_marker(dsn: str) -> str | None:
+    async with await psycopg.AsyncConnection.connect(dsn, connect_timeout=5) as conn:
+        row = await (
+            await conn.execute("SELECT current_setting(%s, true)", (SCHEMA_MARKER_SETTING,))
+        ).fetchone()
+    return row[0] if row else None
+
+
+class _HostedReadiness:
+    """Ready only when the database answers as the runtime roles, each role holds exactly its
+    reviewed privileges (the startup checks, run again), and the database's migration history is
+    the one this code was built with. One check at a time, its answer reused for a few seconds, so
+    a probe cannot be turned into load on the database. The answer carries no detail."""
+
+    def __init__(self, *, read_marker: Callable[[], Awaitable[str | None]], repositories,
+                 expected: str) -> None:
+        self._read_marker = read_marker
+        self._repositories = tuple(repositories)
+        self._expected = expected
+        self._lock = asyncio.Lock()
+        self._checked_at: float | None = None
+        self._ready = False
+
+    async def ready(self) -> bool:
+        async with self._lock:
+            if (self._checked_at is not None
+                    and monotonic() - self._checked_at < _READINESS_CACHE_SECONDS):
+                return self._ready
+            self._ready = await self._probe()
+            self._checked_at = monotonic()
+            return self._ready
+
+    async def _probe(self) -> bool:
+        # Nothing is logged (hosted logs carry only reviewed static messages, app/hosted/audit.py):
+        # the deployment step (`docker compose run --rm migrate`) names the failing check.
+        try:
+            async with asyncio.timeout(_READINESS_TIMEOUT_SECONDS):
+                if await self._read_marker() != self._expected:
+                    return False
+                for repository in self._repositories:
+                    await repository.check_runtime_role()
+        except Exception:  # noqa: BLE001 - any failure at all is "not ready"
+            return False
+        return True
 
 
 _CONTENT_SECURITY_POLICY = "; ".join((
@@ -354,9 +431,11 @@ def create_app(
     object_storage=None,
     credential_cipher=None,
     provider_validator=None,
+    schema_marker_reader=None,
 ) -> FastAPI:
     """``ingest_executor`` lets tests inject a deterministic inline executor; production uses the
-    worker's own threadpool."""
+    worker's own threadpool. ``schema_marker_reader`` lets tests stand in for the database read
+    behind hosted readiness."""
     settings = settings or Settings()
 
     @asynccontextmanager
@@ -423,6 +502,12 @@ def create_app(
                 app.state.companion_dsn = settings.hosted_tenant_dsn.get_secret_value()
                 app.state.companion_sources = SourceParseCache(
                     settings.segmentation_cache_max_entries
+                )
+                tenant_dsn = settings.hosted_tenant_dsn.get_secret_value()
+                app.state.readiness = _HostedReadiness(
+                    read_marker=schema_marker_reader or (lambda: _read_schema_marker(tenant_dsn)),
+                    repositories=(repository, tenant),
+                    expected=expected_schema_marker(),
                 )
                 yield
             finally:
@@ -523,6 +608,12 @@ def create_app(
         @app.get("/api/health/live", tags=["health"])
         def hosted_live():
             return {"status": "ok"}
+
+        @app.get("/api/health/ready", tags=["health"])
+        async def hosted_ready():
+            ready = await app.state.readiness.ready()
+            return JSONResponse({"status": "ready" if ready else "not_ready"},
+                                status_code=200 if ready else 503)
 
         app.include_router(auth_api.router)
         # Without reader keys the key routes are not mounted: they answer as unknown paths.

@@ -1,0 +1,28 @@
+# The image build context is the repository root (deploy/Dockerfile). Send only what a build
+# reads, and never a secret, a local library or a test fixture.
+**
+!backend/pyproject.toml
+!backend/uv.lock
+!backend/app/**
+!backend/scripts/hosted_roles.py
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/index.html
+!frontend/tsconfig.json
+!frontend/vite.config.ts
+!frontend/public/**
+!frontend/src/**
+!deploy/Caddyfile
+
+# Re-excluded inside the allowed folders.
+**/__pycache__
+**/*.py[cod]
+**/node_modules
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.epub
+**/*.sqlite
+**/*.sqlite3
+**/*.db
