@@ -1528,6 +1528,14 @@ The owner agreed to narrow the fixed foreshadowing pattern. This is a change to 
 - 22 new tests (`tests/eval/test_prolepsis_will.py`): 10 noun sentences that must not be hits, all failing on the old pattern, and 12 future-tense sentences that must stay hits, passing before and after. Of the five true sentences this check removed in 6ac's runs, three now pass it; "your own will" and the reported dream do not.
 - Not run with real models: the pattern involves none. What it changes in real replies will show in the next samples.
 
+### 6ac, again: "their own will" (17 November)
+
+The owner had agreed to narrow the pattern for the noun, with "own" among the words named. It was left out then because "left on their own will tear each other apart" is a future tense. It kept costing true sentences in a book about obedience: "an elder is a spiritual guide to whom someone voluntarily gives up their own will" was removed in three separate runs.
+
+- `PROLEPSIS_RE` no longer counts "will" after a possessive and "own" (`my`, `your`, `his`, `her`, `their`, `our`, `its`, `one's`), unless "on" or "of" comes before the possessive: "on their own will…" and "of his own will…" can be the future tense and stay hits. Everything else in the pattern is as it was.
+- 11 more tests in `tests/eval/test_prolepsis_will.py`: five noun sentences that failed on the old pattern, six future-tense sentences ("left on her own will she manage?", "a house of his own will cost more", "those who own will pay") that stay hits before and after. 33 in the file.
+- No model involved; not run with real models.
+
 ## 6ad. Mothli suggests books that are not on the shelf (16 November)
 
 The owner asked the home chat for something new to read. Mothli asked twice whether he wanted ideas, then said it had no titles to suggest. That was the design: it could only point at books on the shelf.
@@ -1712,6 +1720,14 @@ The chat inside the Karamazov fixture, chapters 1 to 4 read and part of 5. Terra
 - **The conversation was then cleared.** The four notes stayed.
 - **In a new conversation:** "what do you remember about me?" brought all four back, correctly, in three sentences. "Do you remember which part got to me?" named the monk of Athos, but hedged ("though I can't be sure that's the part that got to you"). "Do you remember who my favourite author is?", which was never said, got "I don't remember who your favourite author is. Who is it?": nothing invented. "What's an elder again?" was answered in three sentences, no shorter than before the reader asked for short answers.
 - **Not verified:** one conversation, one book, four notes. Not tried: a contradiction replacing a note, a note hidden by "read it fresh" with real models, a store of hundreds, a reader deep in a long book (where the passages may leave no room for the notes: see the open item on the book chat's check size), the home chat.
+
+### 6ae, afterwards: a wish about how to be spoken to is acted on (17 November)
+
+In 6ae's run "keep your answers short" was remembered and said back, and replies stayed three sentences long. One sentence was added to the instruction that goes with the notes (`RECOLLECTION_RULE`): a note on how the reader likes to be spoken to is their standing wish, to be followed in every reply without saying so; a reader who wants short answers gets one or two sentences. No check changed.
+
+- Tried once with real models ($0.009 of Jev), the same conversation as 6ae with two more questions at the end: once the note existed, all six replies in the new conversation were two sentences ("what is an elder again?", "why did adelaida leave?", "tell me more about zossima", and the three memory questions). In 6ae the same questions got three.
+- Not verified: one run; no wish other than short answers was tried; the home chat uses the same instruction and was not rerun.
+- Seen in the same run: "An elder is a spiritual guide to whom someone voluntarily gives up their own will in obedience." was removed by the fixed foreshadowing pattern, for "own will" (see the open item on that).
 
 ## 6af. What Mothli remembers: the home chat and the reader's screen (16 November)
 

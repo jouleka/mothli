@@ -49,3 +49,30 @@ def test_the_noun_after_a_word_that_cannot_precede_the_future_tense_is_not_a_hit
 def test_the_future_tense_is_still_a_hit(sentence):
     # Breaks if the narrowing lets a statement about what is coming through this check.
     assert hits(sentence)
+
+
+@pytest.mark.parametrize("sentence", [
+    "An elder is a spiritual guide to whom someone voluntarily gives up their own will in obedience.",
+    "Giving up your own will is the hardest part.",
+    "He bent her own will to his.",
+    "It is not my own will, the monk says.",
+    "Surrendering one’s own will is the whole idea.",
+])
+def test_own_will_after_a_possessive_is_the_noun(sentence):
+    # Breaks if "their own will" is taken for the future tense: true sentences about elders
+    # and obedience were cut for it (audit 6ae, afterwards).
+    assert hits(sentence) == []
+
+
+@pytest.mark.parametrize("sentence", [
+    # "On their own" and "of his own" can stand before the future tense: these stay hits.
+    "The brothers left on their own will tear each other apart.",
+    "Left on her own will she manage?",
+    "A house of his own will cost more than he has.",
+    "People with money of their own will leave first.",
+    "Those who own will pay.",
+    "Whatever they own will be sold.",
+])
+def test_own_before_the_future_tense_is_still_a_hit(sentence):
+    # Breaks if the narrowing for "own will" lets a statement about what is coming through.
+    assert hits(sentence)
