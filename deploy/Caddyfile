@@ -1,0 +1,64 @@
+# Mothli's proxy (ADR 0041 part 9). Plain HTTP on the private network: the Cloudflare tunnel
+# (cloudflared) is the only way in and carries TLS from the reader to Cloudflare and from
+# Cloudflare to this server. Nothing here listens on the server's public address.
+{
+	admin off
+	persist_config off
+	auto_https off
+	servers {
+		timeouts {
+			# An EPUB upload may be up to 128 MB.
+			read_body 5m
+			read_header 30s
+			# A whole response: a streamed reply can last well over a minute (the slowest
+			# measured: 69.5 s) and a book download on a slow line much longer.
+			write 30m
+			idle 5m
+		}
+	}
+}
+
+:8080 {
+	# The same browser defences the backend sets on its own responses (app/main.py
+	# _SecurityHeaders), here for the static app too. A backend test keeps the two equal.
+	header {
+		Content-Security-Policy "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; frame-src 'self' blob:; form-action 'self'; script-src 'self'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	request_body {
+		max_size 140MB
+	}
+
+	handle /api/* {
+		# No `encode` here: compressing would hold back a streamed reply's chunks. Caddy flushes
+		# a text/event-stream (or any response of unknown length) at once on its own.
+		# `flush_interval -1` is deliberately not set: it would keep a reply running, and
+		# paying, after the reader has gone.
+		reverse_proxy web:8000 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 2m
+				read_timeout 10m
+				write_timeout 5m
+				# Shorter than the backend's keep-alive (75 s), so a reused connection is
+				# never one the backend is closing.
+				keepalive 30s
+			}
+		}
+	}
+
+	handle {
+		root * /srv/mothli
+		encode zstd gzip
+		@hashed path /assets/*
+		header @hashed Cache-Control "public, max-age=31536000, immutable"
+		@unhashed not path /assets/*
+		header @unhashed Cache-Control "no-cache"
+		file_server
+	}
+}

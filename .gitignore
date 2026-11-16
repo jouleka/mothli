@@ -23,6 +23,8 @@ build/
 .env
 .env.*
 !.env.example
+deploy/app.env
+deploy/backups/
 *.pem
 *.key
 *.p12

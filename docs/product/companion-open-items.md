@@ -189,6 +189,13 @@ Part one is in 6ae: the store, the distilling, the reader's API, and use in the 
 - [ ] A story memory that cannot be read ends a hosted reply with the generic "reply failed" (500) error event, which the app cannot tell from any other fault. (ADR 0041 part 5)
 - [ ] Hosted replies use the platform client as built; `READER_FAST_MODE` (local: a copy of the writer on the fast tier) is ignored in hosted mode without a word. (ADR 0041 part 5)
 - [ ] The hosted chat was run with stand-in models through the test client only: never in a browser, through a proxy or Cloudflare, with a real writer or Jev, or with many readers at once. (ADR 0041 part 5)
+- [ ] The worker has nothing to run: no job dispatcher exists until part 6, so the compose file keeps it behind the `worker` profile, off. Uploads wait as before. (ADR 0041 part 9)
+- [ ] The streamed reply through Cloudflare was not checked: only through the proxy, locally, with a stand-in stream of 90 seconds. Check one long reply through the real tunnel once the server exists. (ADR 0041 part 9)
+- [ ] Cloudflare's free plan refuses request bodies over 100 MB; the app allows EPUBs up to 128 MB, so a larger upload fails at Cloudflare with its own error page. (ADR 0041 part 9)
+- [ ] One web process with FastAPI's 40 threads, as before: how many streams it holds at once was not measured, and nothing here raises it. (ADR 0041 part 9)
+- [ ] Hosted readiness and startup log nothing on failure (only reviewed static log messages are allowed); the deployment step (`docker compose run --rm migrate`) is the way to see what failed. A startup settings refusal prints pydantic's error, which includes a shortened copy of the settings it read (start and end only); a secret at either end could show in the log. (ADR 0041 part 9)
+- [ ] Monitoring and alerts (worker not claiming, a provider pause, platform spend over 80% of the day cap) are not built; only `/api/health/ready` exists for an uptime check. (ADR 0041 part 9)
+- [ ] Only the owner can supply, before the first deployment: the domain, the Cloudflare account and tunnel token (with the cache and rate-limit rules), the server and its size, the sign-in service with its issuer, client ID and secret, the AI accounts and keys (once the companion is on), confirmation of the caps ($0.10 per reader per day, $2.00 per month, $5.00 per day for the platform), backup retention and where off-server copies go, and where the offline copy of the keys is kept. (ADR 0041 part 9)
 
 ## Later
 
