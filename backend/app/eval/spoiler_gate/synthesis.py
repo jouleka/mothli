@@ -33,7 +33,7 @@ from functools import lru_cache
 
 from app.ingest.extraction.resolve import ROLE_NOUNS, _norm
 from app.language import english_recap_contract
-from app.unicode_text import is_proper_word, proper_words, word_tokens, words
+from app.unicode_text import fold_accents, is_proper_word, proper_words, word_tokens, words
 
 _LEAD_DET = {"the", "a", "an", "this", "that", "these", "those",
              "his", "her", "their", "our", "my", "your"}
@@ -514,7 +514,11 @@ def score_recap(db, bm, recap_text, read_text=None):
     supplied = _proper_nouns(" ".join(facts["characters"] + facts["chapter_summaries"] + facts["events"]))
     recap_words = set(word_tokens(_norm(recap_text)))             # case-insensitive whole words
     recap_nouns = _proper_nouns(recap_text)
-    future_hits = sorted({future[t] for t in future if t in recap_words})
+    # A later name is caught however its accents are written ("Paissy" for "Païssy", 6ak). Folding
+    # is used only here, where it can add a hit; the whitelist and reader-parity drops above stay
+    # exact, so a read "Adelaïda" never clears a different, later "Adelaida".
+    folded_recap = {fold_accents(w) for w in recap_words}
+    future_hits = sorted({future[t] for t in future if fold_accents(t) in folded_recap})
     theme_hits = sorted({theme_future[t] for t in theme_future if t in recap_words})
     prolepsis = sorted({m.group(0).lower() for m in PROLEPSIS_RE.finditer(recap_text)})
     ungrounded = sorted(t for t in recap_nouns if t not in supplied and t not in future)
