@@ -52,6 +52,29 @@ IN_FLIGHT_MINUTES = 15
 _IN_FLIGHT_SINCE = f"(now() - interval '{IN_FLIGHT_MINUTES} minutes')"
 
 
+# The reader's companion day and month as they count against the caps: the ledger's companion
+# rows since the start of the UTC day (month), plus companion reservations still open after
+# IN_FLIGHT_MINUTES that were made in it. One definition, read by ``reserve_cost`` and by the
+# worker's claim (``app.hosted.jobs``), which skips a reader whose allowance is used up. Built
+# when it is used, from the module's current bounds.
+def _reader_spent() -> str:
+    return f"""
+    COALESCE((SELECT sum(usd) FROM public.cost_ledger
+      WHERE owner_id=%(o)s AND purpose IS NOT NULL
+        AND recorded_at >= {_DAY_START}),0)
+    + COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
+      WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL
+        AND created_at <= {_IN_FLIGHT_SINCE}
+        AND created_at >= {_DAY_START}),0) AS day,
+    COALESCE((SELECT sum(usd) FROM public.cost_ledger
+      WHERE owner_id=%(o)s AND purpose IS NOT NULL
+        AND recorded_at >= {_MONTH_START}),0)
+    + COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
+      WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL
+        AND created_at <= {_IN_FLIGHT_SINCE}
+        AND created_at >= {_MONTH_START}),0) AS month"""
+
+
 @dataclass(frozen=True)
 class SpendLimits:
     """The caps from the environment (``HOSTED_READER_USD_PER_DAY``, ``..._PER_MONTH``,
@@ -86,6 +109,34 @@ def set_spend_limits(*, reader_usd_per_day, reader_usd_per_month, platform_usd_p
 
 def spend_limits() -> SpendLimits:
     return _limits
+
+
+def _reader_cap_reached(used, policy, limits) -> str | None:
+    """"day" or "month" when that companion allowance of the reader is used up, else None: the
+    reader's own ``owner_limits`` cap, or the process default where it is NULL."""
+    day_cap = policy["max_spend_usd_per_day"]
+    month_cap = policy["max_spend_usd_per_month"]
+    day_cap = limits.reader_usd_per_day if day_cap is None else day_cap
+    month_cap = limits.reader_usd_per_month if month_cap is None else month_cap
+    if used["day"] >= day_cap:
+        return "day"
+    if used["month"] >= month_cap:
+        return "month"
+    return None
+
+
+def reader_cap_reached(conn, owner_id) -> str | None:
+    """"day" or "month" when ``reserve_cost`` would refuse this owner's next call for that cap
+    (a reply already under way aside), else None. Read on the caller's connection, which must
+    return rows as dicts: the worker's claim calls it under the owner's spend lock. Raises
+    ``LookupError`` when the owner has no limit policy."""
+    row = conn.execute(
+        f"""SELECT policy.max_spend_usd_per_day,policy.max_spend_usd_per_month,{_reader_spent()}
+            FROM public.owner_limits AS policy WHERE policy.owner_id=%(o)s""",
+        {"o": owner_id}).fetchone()
+    if row is None:
+        raise LookupError("owner limit policy is unavailable")
+    return _reader_cap_reached(row, row, _limits)
 
 
 class AllowanceReached(RuntimeError):
@@ -240,33 +291,17 @@ class SpendStore(OwnerBoundAdapter):
                           AND created_at > {_IN_FLIGHT_SINCE}) AS in_flight,
                       COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
                         WHERE owner_id=%(o)s AND state='reserved'),0) AS held_all,
-                      COALESCE((SELECT sum(usd) FROM public.cost_ledger
-                        WHERE owner_id=%(o)s AND purpose IS NOT NULL
-                          AND recorded_at >= {_DAY_START}),0)
-                      + COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
-                        WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL
-                          AND created_at <= {_IN_FLIGHT_SINCE}
-                          AND created_at >= {_DAY_START}),0) AS day,
-                      COALESCE((SELECT sum(usd) FROM public.cost_ledger
-                        WHERE owner_id=%(o)s AND purpose IS NOT NULL
-                          AND recorded_at >= {_MONTH_START}),0)
-                      + COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
-                        WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL
-                          AND created_at <= {_IN_FLIGHT_SINCE}
-                          AND created_at >= {_MONTH_START}),0) AS month,
+                      {_reader_spent()},
                       COALESCE((SELECT sum(usd) FROM public.cost_ledger
                         WHERE owner_id=%(o)s),0) AS lifetime""",
                 {"o": owner}).fetchone()
-            day_cap = policy["max_spend_usd_per_day"]
-            month_cap = policy["max_spend_usd_per_month"]
-            day_cap = limits.reader_usd_per_day if day_cap is None else day_cap
-            month_cap = limits.reader_usd_per_month if month_cap is None else month_cap
+            reached = _reader_cap_reached(used, policy, limits)
             lifetime_cap = policy["max_spend_usd"]
             if under_way:
                 pass                                   # admitted with its first call: it finishes
-            elif used["day"] >= day_cap:
+            elif reached == "day":
                 raise ReaderAllowanceReached("day", _DAY)
-            elif used["month"] >= month_cap:
+            elif reached == "month":
                 raise ReaderAllowanceReached("month", _MONTH)
             elif (lifetime_cap is not None
                   and used["lifetime"] + used["held_all"] + amount > lifetime_cap):

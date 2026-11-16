@@ -1,5 +1,5 @@
 {
-  "version": 16,
+  "version": 17,
   "required_surface_classes": [
     "list",
     "get",
@@ -443,6 +443,11 @@
       "resource": "runtime-cache-and-locks",
       "operations": ["cache", "serialize"],
       "cross_tenant_test": "test_same_owner_book_serializes_but_same_uuid_for_another_owner_does_not"
+    },
+    {
+      "resource": "companion-jobs",
+      "operations": ["enqueue", "claim", "run-as-tenant", "store-notes", "pause"],
+      "cross_tenant_test": "test_second_reader_cannot_see_trigger_or_change_first_readers_notes_or_jobs"
     }
   ],
   "unavailable": [

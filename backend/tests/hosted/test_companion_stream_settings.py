@@ -97,9 +97,8 @@ def test_the_chat_is_refused_without_each_part_5_condition(values, named, tmp_pa
 @pytest.mark.parametrize("values, match", [
     (without("jev_enabled"), "requires local page context and Jev"),
     ({**CHAT, "reader_page_context": False}, "requires local page context and Jev"),
-    (without("reader_story_notes"), "not available in hosted mode yet"),
-    ({**CHAT, "reader_story_notes": True}, "not available in hosted mode yet"),
-    ({**CHAT, "reader_recollections": True}, "not available in hosted mode yet"),
+    ({**CHAT, "reader_recollections": True}, "recollections are not available in hosted mode"),
+    ({"reader_story_notes": True}, "chapter notes in hosted mode require READER_CONVERSATION_JEV"),
     ({**CHAT, "llm_transport": "codex-local"}, "codex-local"),
     ({**CHAT, "allow_stub": True}, "ALLOW_STUB"),
     ({**CHAT, "jev_windows_credential": True}, "JEV_WINDOWS_CREDENTIAL"),
@@ -113,10 +112,19 @@ def test_the_chat_is_refused_without_each_part_5_condition(values, named, tmp_pa
 def test_what_hosted_mode_still_refuses_with_the_chat_on(values, match, tmp_path) -> None:
     """The break it catches: the chat's settings opening a door section 7 keeps shut: the
     owner's subscription CLI, the stub, a Windows credential store, files shared by every reader,
-    deferred memory, a writer address nobody allowed, or chapter notes and recollections before
-    their parts land."""
+    deferred memory, a writer address nobody allowed, recollections before part 7, or chapter
+    notes without the chat's conditions (keys and caps)."""
     with pytest.raises(ValueError, match=match):
         hosted_settings(tmp_path, **values)
+
+
+def test_chapter_notes_are_allowed_in_hosted_mode_with_the_chat(tmp_path) -> None:
+    """ADR 0041 part 6 lifts the hosted refusal of chapter notes: on by default with the
+    streamed chat, as locally, and only on the chat's conditions."""
+    assert hosted_settings(tmp_path, **without("reader_story_notes")).reader_story_notes is True
+    settings = hosted_settings(tmp_path, **{**CHAT, "reader_story_notes": True})
+    assert settings.reader_story_notes and settings.reader_recollections is False
+    assert hosted_settings(tmp_path).reader_story_notes is False
 
 
 def test_local_rules_for_the_conversation_are_unchanged(tmp_path) -> None:

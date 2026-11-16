@@ -21,6 +21,14 @@ from app.hosted.credentials import (
     ResolvedProviderCredential,
 )
 from app.hosted.limits import LimitExceededError
+from app.hosted.tenant.grants import ALL_TABLE_PRIVILEGES, WORKER_TABLE_PRIVILEGES
+
+# ADR 0041 section 5: the companion's background kinds. At most one of an owner, kind and book
+# waits (a unique index) and at most one runs (the claim); they wait while the platform's provider
+# account is paused and while their owner is at a companion cap.
+COMPANION_KINDS = frozenset({"chapter_notes", "recollect"})
+PAUSABLE_PROVIDERS = frozenset({"typesafe", "openai-compatible", "anthropic"})
+PAUSE_REASONS = frozenset({"no_credits", "unauthorized"})
 
 _WORKER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _FAILURE_CODES = frozenset(
@@ -69,8 +77,8 @@ class SanitizedFailure:
 class ClaimedJob:
     owner_id: uuid.UUID
     job_id: uuid.UUID
-    book_id: uuid.UUID
-    book_incarnation: uuid.UUID
+    book_id: uuid.UUID | None
+    book_incarnation: uuid.UUID | None
     kind: str
     attempt_no: int
     worker_id: str
@@ -101,21 +109,10 @@ class PostgresWorkerRepository:
 
     def check_runtime_role(self) -> None:
         required = {
-            "public.jobs": {"SELECT", "UPDATE"},
-            "public.job_attempts": {"SELECT", "INSERT", "UPDATE"},
-            "public.chapters": {"SELECT", "INSERT"},
-            "public.chapter_summaries": {"INSERT"},
-            "public.cost_ledger": {"SELECT", "INSERT"},
-            "public.ingested_chapters": {"SELECT", "INSERT"},
-            "public.provider_credentials": {"SELECT"},
-            "public.provider_model_settings": {"SELECT"},
-            "public.owner_limits": {"SELECT"},
-            "public.cost_reservations": {"SELECT", "INSERT", "UPDATE"},
-            "public.audit_events": {"INSERT"},
+            f"public.{table}": set(privileges)
+            for table, privileges in WORKER_TABLE_PRIVILEGES.items()
         }
-        all_privileges = {
-            "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"
-        }
+        all_privileges = set(ALL_TABLE_PRIVILEGES)
         with self._connect() as conn:
             role = conn.execute(
                 """
@@ -226,10 +223,52 @@ class PostgresWorkerRepository:
         )
 
     @staticmethod
-    def _recover_expired(conn: psycopg.Connection) -> None:
+    def _requeue(
+        conn: psycopg.Connection,
+        *,
+        owner_id: uuid.UUID,
+        job_id: uuid.UUID,
+        kind: str,
+        retry_seconds: float,
+        failure: SanitizedFailure | None = None,
+    ) -> None:
+        """Put a job back to wait. A companion job whose owner, kind and book already has a job
+        waiting is cancelled instead: the waiting one does the same work from the rows as they
+        are then (ADR 0041 section 5), and only one may wait."""
+        error = None if failure is None else psycopg.types.json.Jsonb(failure.as_json())
+        pending = (
+            """
+            UPDATE public.jobs
+            SET state='pending',run_after=now()+(%s*interval '1 second'),updated_at=now(),
+                sanitized_error=COALESCE(%s::jsonb,sanitized_error)
+            WHERE owner_id=%s AND id=%s
+            """,
+            (retry_seconds, error, owner_id, job_id),
+        )
+        if kind not in COMPANION_KINDS:
+            conn.execute(*pending)
+            return
+        try:
+            with conn.transaction():
+                conn.execute(*pending)
+            return
+        except psycopg.errors.UniqueViolation:
+            pass
+        conn.execute(
+            """
+            UPDATE public.jobs
+            SET state='cancelled',completed_at=now(),updated_at=now(),
+                sanitized_error=COALESCE(%s::jsonb,sanitized_error)
+            WHERE owner_id=%s AND id=%s
+            """,
+            (error, owner_id, job_id),
+        )
+
+    @classmethod
+    def _recover_expired(cls, conn: psycopg.Connection) -> None:
         rows = conn.execute(
             """
-            SELECT attempt.owner_id,attempt.job_id,attempt.attempt_no,
+            SELECT attempt.owner_id,attempt.job_id,attempt.attempt_no,job.kind,
                    job.attempt_count,job.max_attempts,job.cancellation_requested_at
             FROM public.job_attempts AS attempt
             JOIN public.jobs AS job
@@ -269,21 +308,46 @@ class PostgresWorkerRepository:
                     (row["owner_id"], row["job_id"]),
                 )
             else:
-                conn.execute(
-                    """
-                    UPDATE public.jobs
-                    SET state='pending',run_after=now(),updated_at=now()
-                    WHERE owner_id=%s AND id=%s
-                    """,
-                    (row["owner_id"], row["job_id"]),
+                cls._requeue(
+                    conn,
+                    owner_id=row["owner_id"],
+                    job_id=row["job_id"],
+                    kind=row["kind"],
+                    retry_seconds=0,
                 )
 
-    def claim_next(self, *, worker_id: str, lease_for: timedelta) -> ClaimedJob | None:
+    @staticmethod
+    def _companion_capped(conn: psycopg.Connection, owner_id: uuid.UUID) -> bool:
+        """Whether the companion's ``reserve_cost`` would refuse this owner's next call for their
+        day or month cap: the same SQL and the same comparison (``reader_cap_reached``), read
+        under the owner's spend lock, so the claim and the first paid call cannot disagree."""
+        from app.hosted.companion.spend import reader_cap_reached
+
+        try:
+            return reader_cap_reached(conn, owner_id) is not None
+        except LookupError as exc:
+            raise WorkerConfigurationError("owner limit policy is unavailable") from exc
+
+    def claim_next(
+        self,
+        *,
+        worker_id: str,
+        lease_for: timedelta,
+        kinds: frozenset[str] | None = None,
+    ) -> ClaimedJob | None:
+        """Lease the next job, of ``kinds`` only when given (the kinds this worker can run).
+
+        A companion job is skipped while another of the same owner, kind and book is leased or
+        running, while any platform provider pause is in force, and while its owner is at a
+        companion cap; a capped owner's job is moved to the start of the next UTC day.
+        """
         self._validate_worker_id(worker_id)
         lease_seconds = _seconds(lease_for)
+        wanted = None if kinds is None else sorted(kinds)
         with self._connect() as conn, conn.transaction():
             self._recover_expired(conn)
             blocked_owners: list[uuid.UUID] = []
+            capped_owners: list[uuid.UUID] = []
             while True:
                 row = conn.execute(
                     """
@@ -293,12 +357,23 @@ class PostgresWorkerRepository:
                     WHERE job.state='pending' AND job.run_after<=now()
                       AND job.cancellation_requested_at IS NULL
                       AND job.attempt_count<job.max_attempts
-                      AND NOT (job.owner_id=ANY(%s::uuid[]))
+                      AND NOT (job.owner_id=ANY(%(blocked)s::uuid[]))
+                      AND (%(kinds)s::text[] IS NULL OR job.kind=ANY(%(kinds)s::text[]))
+                      AND (job.kind<>ALL(%(companion)s::text[]) OR (
+                        NOT (job.owner_id=ANY(%(capped)s::uuid[]))
+                        AND NOT EXISTS (SELECT 1 FROM public.provider_pauses AS pause
+                                        WHERE pause.paused_until>now())
+                        AND NOT EXISTS (SELECT 1 FROM public.jobs AS active
+                                        WHERE active.owner_id=job.owner_id
+                                          AND active.kind=job.kind
+                                          AND active.book_id IS NOT DISTINCT FROM job.book_id
+                                          AND active.state IN ('leased','running'))))
                     ORDER BY job.priority DESC,job.run_after,job.created_at,job.id
                     FOR UPDATE OF job SKIP LOCKED
                     LIMIT 1
                     """,
-                    (blocked_owners,),
+                    {"blocked": blocked_owners, "kinds": wanted, "capped": capped_owners,
+                     "companion": sorted(COMPANION_KINDS)},
                 ).fetchone()
                 if row is None:
                     return None
@@ -308,6 +383,22 @@ class PostgresWorkerRepository:
                 ).fetchone()
                 if not lock["acquired"]:
                     blocked_owners.append(row["owner_id"])
+                    continue
+                if row["kind"] in COMPANION_KINDS and self._companion_capped(
+                    conn, row["owner_id"]
+                ):
+                    # Nothing of theirs could be paid for before the next UTC day.
+                    conn.execute(
+                        """
+                        UPDATE public.jobs
+                        SET run_after=(date_trunc('day', now() AT TIME ZONE 'UTC')
+                                       + interval '1 day') AT TIME ZONE 'UTC',
+                            updated_at=now()
+                        WHERE owner_id=%s AND id=%s AND state='pending'
+                        """,
+                        (row["owner_id"], row["id"]),
+                    )
+                    capped_owners.append(row["owner_id"])
                     continue
                 concurrency = conn.execute(
                     """
@@ -375,8 +466,8 @@ class PostgresWorkerRepository:
     def _locked_lease(conn: psycopg.Connection, claim: ClaimedJob) -> dict:
         row = conn.execute(
             """
-            SELECT job.state,job.cancellation_requested_at,job.attempt_count,job.max_attempts,
-                   attempt.lease_expires_at>now() AS lease_live
+            SELECT job.state,job.kind,job.cancellation_requested_at,job.attempt_count,
+                   job.max_attempts,attempt.lease_expires_at>now() AS lease_live
             FROM public.jobs AS job
             JOIN public.job_attempts AS attempt
               ON (attempt.owner_id,attempt.job_id)=(job.owner_id,job.id)
@@ -564,6 +655,42 @@ class PostgresWorkerRepository:
             )
             return row["cancellation_requested_at"] is not None
 
+    def pause_provider(
+        self, claim: ClaimedJob, *, provider: str, reason: str, pause_for: timedelta
+    ) -> None:
+        """Record that the platform's account at ``provider`` was refused while running ``claim``.
+
+        The account is the platform's, so the pause is platform-wide: no companion job of any
+        owner is claimed until it ends (ADR 0041 section 5). One row per provider: a later
+        refusal extends the pause and never adds a second one.
+        """
+        if provider not in PAUSABLE_PROVIDERS or reason not in PAUSE_REASONS:
+            raise ValueError("provider pause must use the reviewed provider and reason")
+        pause_seconds = _seconds(pause_for)
+        with self._connect() as conn, conn.transaction():
+            conn.execute(
+                """
+                INSERT INTO public.provider_pauses (provider,reason,paused_until)
+                VALUES (%s,%s,now()+(%s*interval '1 second'))
+                ON CONFLICT (provider) DO UPDATE
+                SET reason=EXCLUDED.reason,
+                    paused_until=GREATEST(public.provider_pauses.paused_until,
+                                          EXCLUDED.paused_until),
+                    updated_at=now()
+                """,
+                (provider, reason, pause_seconds),
+            )
+            record_event(
+                conn,
+                owner_id=claim.owner_id,
+                actor_kind="worker",
+                action="provider.pause",
+                target_kind="job",
+                target_id=claim.job_id,
+                result="failed",
+                reason_code=reason,
+            )
+
     def succeed(self, claim: ClaimedJob) -> bool:
         with self._connect() as conn, conn.transaction():
             row = self._locked_lease(conn, claim)
@@ -633,19 +760,13 @@ class PostgresWorkerRepository:
                     (claim.owner_id, claim.job_id),
                 )
             elif failure.retryable and row["attempt_count"] < row["max_attempts"]:
-                conn.execute(
-                    """
-                    UPDATE public.jobs
-                    SET state='pending',run_after=now()+(%s*interval '1 second'),updated_at=now(),
-                        sanitized_error=%s::jsonb
-                    WHERE owner_id=%s AND id=%s
-                    """,
-                    (
-                        retry_seconds,
-                        psycopg.types.json.Jsonb(failure.as_json()),
-                        claim.owner_id,
-                        claim.job_id,
-                    ),
+                self._requeue(
+                    conn,
+                    owner_id=claim.owner_id,
+                    job_id=claim.job_id,
+                    kind=row["kind"],
+                    retry_seconds=retry_seconds,
+                    failure=failure,
                 )
             else:
                 conn.execute(

@@ -11,6 +11,7 @@ import threading
 
 from app.hosted.companion import OwnerBoundAdapter, as_uuid, check_position
 from app.hosted.companion.spend import SpendStore
+from app.hosted.companion.store_notes import NotesStore
 from app.hosted.companion.store_read_map import ReadMapStore
 from app.hosted.companion.store_turns import TurnStore
 from app.hosted.storage import SourceObjectRef
@@ -161,7 +162,7 @@ class _BookStore(OwnerBoundAdapter):
 
 
 # The combining line: each part adds its feature's methods here.
-class HostedCompanionCatalog(_BookStore, ReadMapStore, TurnStore, SpendStore):
+class HostedCompanionCatalog(_BookStore, ReadMapStore, TurnStore, SpendStore, NotesStore):
     """The companion's catalog for one hosted reader. Construct per request or per job:
     ``HostedCompanionCatalog(dsn, owner_id)``."""
 

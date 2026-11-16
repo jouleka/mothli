@@ -8,7 +8,11 @@ import re
 import sys
 from pathlib import Path
 
-from app.hosted.tenant.grants import TENANT_FUNCTION_PRIVILEGES, TENANT_TABLE_PRIVILEGES
+from app.hosted.tenant.grants import (
+    TENANT_FUNCTION_PRIVILEGES,
+    TENANT_TABLE_PRIVILEGES,
+    WORKER_TABLE_PRIVILEGES,
+)
 
 BACKEND = Path(__file__).resolve().parents[2]
 REPO = BACKEND.parent
@@ -73,13 +77,12 @@ def test_the_role_script_grants_the_tenant_exactly_what_grants_py_lists() -> Non
 
 def test_the_role_script_matches_every_startup_check_as_written() -> None:
     """The break it catches: an allow-list changed in a repository's startup check and not in
-    the role script, or the reverse. The tenant list comes from grants.py itself."""
+    the role script, or the reverse. The tenant and worker lists come from grants.py itself."""
     roles = load_roles()
     by_key = {role.key: role for role in roles.RUNTIME_ROLES}
     assert by_key["auth"].tables == check_list(
         BACKEND / "app" / "hosted" / "auth" / "repository.py", "PostgresAuthRepository")
-    assert by_key["worker"].tables == check_list(
-        BACKEND / "app" / "hosted" / "jobs.py", "PostgresWorkerRepository")
+    assert by_key["worker"].tables is WORKER_TABLE_PRIVILEGES
     assert by_key["tenant"].tables is TENANT_TABLE_PRIVILEGES
     for key in ("auth", "worker", "audit", "operator"):
         tables, functions = granted(roles.render(roles.grant_statements("mothli", by_key[key])))

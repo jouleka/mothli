@@ -196,7 +196,8 @@ class PostgresTenantRepository:
                             WHERE object.owner_id=limits.owner_id AND object.deleted_at IS NULL),0)
                               AS library_bytes,
                            (SELECT count(*) FROM public.jobs AS job
-                            WHERE job.owner_id=limits.owner_id AND job.state IN
+                            WHERE job.owner_id=limits.owner_id AND job.kind='ingest_book'
+                              AND job.state IN
                               ('waiting_configuration','pending','leased','running')) AS active_jobs,
                            COALESCE((SELECT sum(entry.usd) FROM public.cost_ledger AS entry
                             WHERE entry.owner_id=limits.owner_id),0) AS spend_usd,
@@ -1811,7 +1812,8 @@ class PostgresTenantRepository:
                        WHERE owner_id=%s AND deleted_at IS NULL) AS books,
                       COALESCE((SELECT sum(byte_size) FROM public.source_objects
                        WHERE owner_id=%s AND deleted_at IS NULL),0) AS library_bytes,
-                      (SELECT count(*) FROM public.jobs WHERE owner_id=%s AND state IN
+                      (SELECT count(*) FROM public.jobs WHERE owner_id=%s
+                       AND kind='ingest_book' AND state IN
                        ('waiting_configuration','pending','leased','running')) AS active_jobs
                     """,
                     (owner_id.value, owner_id.value, owner_id.value),
@@ -1986,7 +1988,7 @@ class PostgresTenantRepository:
                               AND receipt.book_incarnation=job.book_incarnation)
                              AS completed_chapters
                     FROM public.jobs AS job
-                    WHERE job.owner_id=%s
+                    WHERE job.owner_id=%s AND job.kind='ingest_book'
                     ORDER BY job.created_at DESC,job.id DESC
                     """,
                     (owner_id.value,),
@@ -2010,7 +2012,7 @@ class PostgresTenantRepository:
                               AND receipt.book_incarnation=job.book_incarnation)
                              AS completed_chapters
                     FROM public.jobs AS job
-                    WHERE job.owner_id=%s AND job.id=%s
+                    WHERE job.owner_id=%s AND job.id=%s AND job.kind='ingest_book'
                     """,
                     (owner_id.value, job_id),
                 )
@@ -2018,12 +2020,14 @@ class PostgresTenantRepository:
         return self._job_payload(row) if row else None
 
     async def cancel_job(self, owner_id: OwnerId, job_id: uuid.UUID) -> dict | None:
+        # The reader's job routes show and cancel extraction only; companion jobs are the
+        # server's own background work (ADR 0041 section 5) and answer as unknown here.
         async with self._transaction(owner_id) as conn:
             row = await (
                 await conn.execute(
                     """
                     SELECT id,state FROM public.jobs
-                    WHERE owner_id=%s AND id=%s
+                    WHERE owner_id=%s AND id=%s AND kind='ingest_book'
                     FOR UPDATE
                     """,
                     (owner_id.value, job_id),
@@ -2365,7 +2369,7 @@ class PostgresTenantRepository:
                     """
                     UPDATE public.jobs
                     SET state='waiting_configuration',credential_id=NULL,updated_at=now()
-                    WHERE owner_id=%s AND state='pending'
+                    WHERE owner_id=%s AND state='pending' AND kind='ingest_book'
                     """,
                     (owner_id.value,),
                 )
@@ -2416,7 +2420,7 @@ class PostgresTenantRepository:
                         UPDATE public.jobs
                         SET state='pending',credential_id=%s,run_after=now(),updated_at=now()
                         WHERE owner_id=%s AND state='waiting_configuration'
-                          AND cancellation_requested_at IS NULL
+                          AND kind='ingest_book' AND cancellation_requested_at IS NULL
                         """,
                         (row["credential_id"], owner_id.value),
                     )

@@ -103,8 +103,11 @@ services:
       resources:
         limits: {cpus: "2", memory: 1536m}
 
-  # The durable job worker. Off until ADR 0041 part 6 gives it a job dispatcher to run
-  # (HOSTED_JOB_HANDLER in app.env); turn on with COMPOSE_PROFILES=worker in deploy/.env.
+  # The durable job worker: writes chapter notes (ADR 0041 part 6) with the companion dispatcher
+  # (HOSTED_JOB_HANDLER in app.env). Off by default; turn on with COMPOSE_PROFILES=worker in
+  # deploy/.env once chapter notes are on. It claims jobs as the worker role and does every
+  # reader's work as the tenant role. It signs no one in: the auth address it is given names no
+  # database and is never used, so the worker never holds the sign-in role's password.
   worker:
     <<: *backend
     profiles: [worker]
@@ -115,6 +118,9 @@ services:
         required: true
     environment:
       DEPLOYMENT_MODE: hosted
+      TRUSTED_HOSTS: ${MOTHLI_DOMAIN:?set MOTHLI_DOMAIN in deploy/.env}
+      OIDC_REDIRECT_URI: https://${MOTHLI_DOMAIN}/api/auth/callback
+      HOSTED_AUTH_DSN: postgresql://unused.invalid/the-worker-signs-no-one-in
       HOSTED_WORKER_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_worker:${MOTHLI_DB_WORKER_PASSWORD:?set MOTHLI_DB_WORKER_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
       HOSTED_TENANT_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_tenant:${MOTHLI_DB_TENANT_PASSWORD:?set MOTHLI_DB_TENANT_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
       HOSTED_STORAGE_BACKEND: filesystem

@@ -90,3 +90,20 @@ def test_worker_classifies_unavailable_credential_without_leaking_detail() -> No
     assert DurableWorker(repository, fail, "worker").run_once()
     assert repository.calls[-1][1] == SanitizedFailure("provider_rejected", retryable=False)
     assert "private-key-canary" not in repr(repository.calls)
+
+
+def test_worker_claims_only_the_kinds_its_handler_runs() -> None:
+    """The break it catches: a companion-only worker claiming extraction jobs it cannot run (and
+    failing them), or a handler without ``kinds`` losing the claim of every kind."""
+    class NotesOnly:
+        kinds = frozenset({"chapter_notes"})
+
+        def __call__(self, claim, repository):
+            return None
+
+    limited = FakeRepository(None)
+    assert DurableWorker(limited, NotesOnly(), "worker").run_once() is False
+    assert limited.calls[0][1]["kinds"] == frozenset({"chapter_notes"})
+    everything = FakeRepository(None)
+    assert DurableWorker(everything, lambda claim, repo: None, "worker").run_once() is False
+    assert "kinds" not in everything.calls[0][1]

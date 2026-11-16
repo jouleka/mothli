@@ -197,8 +197,13 @@ class Settings(BaseSettings):
         if self.reader_read_map and not (self.reader_page_context
                                          and (self.reader_conversation_stream or hosted)):
             raise ValueError("READER_READ_MAP requires READER_PAGE_CONTEXT and streamed replies")
-        if hosted and (self.reader_story_notes or self.reader_recollections):
-            raise ValueError("chapter notes and recollections are not available in hosted mode yet")
+        # ADR 0041 part 6: chapter notes run in hosted mode as durable jobs, with the streamed
+        # chat's conditions (they call the same paid writer and checks). Recollections wait for
+        # part 7.
+        if hosted and self.reader_recollections:
+            raise ValueError("recollections are not available in hosted mode yet")
+        if hosted and self.reader_story_notes and not self.reader_conversation_jev:
+            raise ValueError("chapter notes in hosted mode require READER_CONVERSATION_JEV")
         if self.reader_recollections is None:
             self.reader_recollections = self.reader_read_map and not hosted
         if self.reader_recollections and not self.reader_read_map:

@@ -11,6 +11,8 @@ These are plain ``def`` routes: FastAPI runs them in its thread pool, and every 
 short synchronous transaction (ADR 0041 section 2), so a streamed reply holds no database
 connection while a model answers. Only the streamed chat calls a model: the platform's, paid by
 the owner of Mothli and held to the reader's caps by the catalog's spend methods (section 6).
+Where the local routes start chapter notes (a finished chapter, a reply), these add a durable
+``chapter_notes`` job for the worker instead (part 6); none of them waits for it.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from fastapi.responses import StreamingResponse
 from app.api.reading import ReadChapters, ReadPage
 from app.ask import AskRequest
 from app.hosted.companion import CompanionDatabaseBusy
+from app.hosted.companion.jobs import ChapterNotesQueue
 from app.hosted.companion.memory import HostedBookStore
 from app.hosted.companion.source import HostedBookSource
 from app.hosted.companion.store import HostedCompanionCatalog, ReplyCatalog
@@ -45,11 +48,9 @@ router = APIRouter(prefix="/api/books/{book_id}", tags=["hosted-library"])
 
 
 class _NotYet:
-    """The background workers handed to the streamed chat (``notes_builder``, ``recollector``).
-
-    The chat calls ``ensure`` only while chapter notes or recollections are on, which hosted
-    settings refuse until parts 6 and 7 give them durable jobs; until then this does nothing.
-    """
+    """The ``recollector`` handed to the streamed chat. The chat calls ``ensure`` only while
+    recollections are on, which hosted settings refuse until part 7 gives them durable jobs;
+    until then this does nothing."""
 
     __slots__ = ()
 
@@ -58,6 +59,16 @@ class _NotYet:
 
 
 _NOT_YET = _NotYet()
+
+
+def _notes_wanted(settings) -> bool:
+    """The local routes' condition for asking for chapter notes (``app/api/reading.py``)."""
+    return bool(settings.reader_story_notes and settings.reader_conversation_jev)
+
+
+def _notes_queue(request: Request, owner_id: OwnerId) -> ChapterNotesQueue:
+    """This reader's ``notes_builder``: ``ensure`` adds a durable ``chapter_notes`` job."""
+    return ChapterNotesQueue(request.app.state.companion_dsn, owner_id)
 
 
 def _bound(request: Request, owner_id: OwnerId, catalog_type=HostedCompanionCatalog):
@@ -95,7 +106,8 @@ def put_read_page(book_id: uuid.UUID, body: ReadPage, request: Request,
     """The reader has read one page: both ends are checked against the source before it counts.
 
     A skimmed page is checked the same way and only remembered. A page in no chapter (a cover,
-    Project Gutenberg's own page) is accepted and adds nothing.
+    Project Gutenberg's own page) is accepted and adds nothing. A page that finishes a chapter
+    asks for that chapter's notes, as locally (a durable job here).
     """
     catalog, source, settings = _bound(request, owner_id)
     book = str(book_id)
@@ -106,7 +118,7 @@ def put_read_page(book_id: uuid.UUID, body: ReadPage, request: Request,
             return sync_counter(book, catalog, settings, source)
         point, place = sync_counter(book, catalog, settings, source, with_place=True)
         # If chapters before this page were gone past, the app may ask once whether they were read.
-        return {**point, "skipped": skipped_before(place)}
+        point = {**point, "skipped": skipped_before(place)}
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc
     except LookupError as exc:
@@ -115,6 +127,9 @@ def put_read_page(book_id: uuid.UUID, body: ReadPage, request: Request,
         raise HTTPException(409, "reading pass changed; reload before continuing") from exc
     except ValueError as exc:
         raise HTTPException(422, "page could not be verified against the source") from exc
+    if finished and _notes_wanted(settings):
+        _notes_queue(request, owner_id).ensure(book)
+    return point
 
 
 @router.put("/read-chapters")
@@ -126,13 +141,16 @@ def put_read_chapters(book_id: uuid.UUID, body: ReadChapters, request: Request,
     try:
         mark_chapters(book, body.atoms, read=body.read, source=body.source, catalog=catalog,
                       settings=settings, worker=source)
-        return sync_counter(book, catalog, settings, source)
+        point = sync_counter(book, catalog, settings, source)
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc
     except LookupError as exc:
         raise HTTPException(404, "unknown book") from exc
     except ValueError as exc:
         raise HTTPException(422, "chapters could not be verified against the source") from exc
+    if body.read and _notes_wanted(settings):
+        _notes_queue(request, owner_id).ensure(book)
+    return point
 
 
 @router.get("/read-frontier")
@@ -190,7 +208,8 @@ def ask_the_book_stream(book_id: uuid.UUID, body: AskRequest, request: Request,
     try:
         events = stream_read_prefix(str(book_id), body, catalog, store, settings,
                                     request.app.state.platform_client, source,
-                                    notes_builder=_NOT_YET, recollector=_NOT_YET)
+                                    notes_builder=_notes_queue(request, owner_id),
+                                    recollector=_NOT_YET)
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc
     return StreamingResponse(

@@ -1,8 +1,9 @@
-"""The exact table privileges of the hosted tenant role (ADR 0021, ADR 0041 section 3).
+"""The exact table privileges of the hosted tenant and worker roles (ADR 0021, ADR 0024, ADR 0041
+section 3).
 
-One list, read by the repository's startup check, the test fixtures and the deployment's role
-script, so a table added for the companion is granted and checked in one place. The role must hold
-exactly these privileges: one more or one fewer refuses startup.
+One list per role, read by that role's startup check, the test fixtures and the deployment's role
+script, so a table added for the companion is granted and checked in one place. Each role must
+hold exactly its privileges: one more or one fewer refuses startup.
 """
 
 from __future__ import annotations
@@ -41,6 +42,28 @@ TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "read_position": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
     # ADR 0041 part 2: conversations (migration 0019).
     "conversation_turns": frozenset({"SELECT", "INSERT", "DELETE"}),
+    # ADR 0041 part 6: chapter notes (migration 0021). Companion jobs are inserted through the
+    # existing grant on ``jobs``; the tenant role holds nothing on ``provider_pauses``.
+    "chapter_notes": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
+}
+
+# The job worker (ADR 0024): BYPASSRLS, because it schedules across owners. Every owner's
+# companion work after a claim goes through the tenant role instead (ADR 0041 section 5); the
+# worker itself only claims, leases, finishes and pauses jobs, and commits extraction chapters.
+WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
+    "jobs": frozenset({"SELECT", "UPDATE"}),
+    "job_attempts": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    "chapters": frozenset({"SELECT", "INSERT"}),
+    "chapter_summaries": frozenset({"INSERT"}),
+    "cost_ledger": frozenset({"SELECT", "INSERT"}),
+    "ingested_chapters": frozenset({"SELECT", "INSERT"}),
+    "provider_credentials": frozenset({"SELECT"}),
+    "provider_model_settings": frozenset({"SELECT"}),
+    "owner_limits": frozenset({"SELECT"}),
+    "cost_reservations": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    "audit_events": frozenset({"INSERT"}),
+    # ADR 0041 part 6: the platform-wide pause after the provider refused the account.
+    "provider_pauses": frozenset({"SELECT", "INSERT", "UPDATE"}),
 }
 
 # ADR 0041 part 3 (migration 0020): the platform's day total is reached only through these two
@@ -69,4 +92,12 @@ def tenant_function_grants() -> list[tuple[str, tuple[str, ...]]]:
     return [
         (function, tuple(sorted(privileges)))
         for function, privileges in sorted(TENANT_FUNCTION_PRIVILEGES.items())
+    ]
+
+
+def worker_grants() -> list[tuple[str, tuple[str, ...]]]:
+    """(table, privileges) pairs of the worker role in a stable order."""
+    return [
+        (table, tuple(sorted(privileges)))
+        for table, privileges in sorted(WORKER_TABLE_PRIVILEGES.items())
     ]
