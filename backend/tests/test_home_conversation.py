@@ -149,7 +149,9 @@ def test_a_refused_home_check_tells_the_owner_why_and_charges_no_book(shelf, mon
     assert api.get("/api/reader/conversation").json()["turns"] == []
 
 
-def test_home_chat_needs_the_read_map_and_an_empty_shelf_calls_no_model(shelf, monkeypatch, tmp_path):
+def test_home_chat_needs_the_read_map_and_an_empty_shelf_is_answered(shelf, monkeypatch, tmp_path):
+    """An empty shelf used to get no model call and the fixed "nothing passed" line (6al); it
+    now gets a checked reply: see test_first_hello.py."""
     api, app, settings = shelf
     settings.reader_read_map = False
     assert api.post("/api/reader/ask/stream", json={"question": "Hello there"}).status_code == 404
@@ -160,8 +162,8 @@ def test_home_chat_needs_the_read_map_and_an_empty_shelf_calls_no_model(shelf, m
     with TestClient(empty) as other:
         seen = models(empty, monkeypatch, reply="Hello.")
         events = ask(other, "What should I read?")
-        assert [e["type"] for e in events] == ["done"] and events[0]["answer"]["insufficient_evidence"]
-        assert seen["reply"] == []
+        assert [e["type"] for e in events] == ["sentence", "done"] and not events[-1]["answer"]["insufficient_evidence"]
+        assert len(seen["reply"]) == 1 and len(seen["checked"]) == 1
 
 
 def test_a_home_reply_that_says_mothli_was_not_there_offers_to_count_those_chapters(shelf, monkeypatch):

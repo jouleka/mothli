@@ -437,9 +437,11 @@ class Recollector(NotesBuilder):
         """(incarnation, title, the book its spend is recorded against), or None when there is none."""
         if book_id is None:
             from app.home_conversation import HOME
+            from app.catalog.catalog import HOME_SPEND
             books = self._catalog.list_books()
-            # The cost ledger has no place for a conversation that belongs to no book.
-            return (HOME, None, books[0]["book_id"]) if books else None
+            # Spend is recorded against the first book on the shelf, as the reply's is; with an
+            # empty shelf, in the home conversation's own ledger, as the reply's is (6al).
+            return (HOME, None, books[0]["book_id"] if books else HOME_SPEND)
         book = self._catalog.get_book(book_id)
         return (book["incarnation"], book["title"], book_id) if book else None
 

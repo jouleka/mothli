@@ -73,6 +73,32 @@ describe("HomeChat", () => {
     expect(await within(thread).findByText("Chapter four.")).toBeTruthy();
   });
 
+  test("with nothing on the shelf, the first questions and the line above them fit a new reader", async () => {
+    // Break caught (6al): a reader with an empty shelf was offered "Where did I leave off?".
+    mocks.askHome.mockResolvedValue({ insufficient_evidence: false, claims: [{ text: "Hi, I’m Mothli.", citation_ids: [] }] });
+    const { container } = render(<HomeChat shelfEmpty />);
+    expect(await screen.findByText(
+      "Nothing on your shelf yet? Ask me what I can do, or for a good first book to start with.")).toBeTruthy();
+    expect(screen.queryByText(/Ask me about any book on your shelf/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Where did I leave off?" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "What should I read tonight?" })).toBeNull();
+    expect(screen.getByRole("button", { name: "What should I read first?" })).toBeTruthy();
+    expect(await axeAA(container)).toHaveNoViolations();
+    fireEvent.click(screen.getByRole("button", { name: "What can you do?" }));
+    expect(mocks.askHome.mock.calls[0][0]).toBe("What can you do?");
+    const thread = await screen.findByRole("region", { name: "Conversation with Mothli" });
+    expect(await within(thread).findByText("Hi, I’m Mothli.")).toBeTruthy();
+  });
+
+  test("with books on the shelf, the first questions are as before", async () => {
+    render(<HomeChat shelfEmpty={false} />);
+    expect(await screen.findByText(
+      "Ask me about any book on your shelf: where you left off, who someone was, what to read next.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Where did I leave off?" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "What should I read tonight?" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "What can you do?" })).toBeNull();
+  });
+
   test("shows the earlier conversation, then each checked sentence of a new reply as it arrives", async () => {
     mocks.homeConversation.mockResolvedValue({ turns: [
       { role: "user", content: "Where am I?", created_at: "2026-11-15T10:00:00Z" },

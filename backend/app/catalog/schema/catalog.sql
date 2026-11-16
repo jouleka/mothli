@@ -80,6 +80,36 @@ CREATE TABLE IF NOT EXISTS cost_reservations (
 
 CREATE INDEX IF NOT EXISTS ix_cost_reservation_book ON cost_reservations(book_id);
 
+-- The home conversation's spend when it belongs to no book (an empty shelf): the same columns as
+-- the two tables above, with no book to refer to. It is reached only through the reserved id
+-- ``HOME_SPEND`` and held to the same per-book ceilings, as if it were one book.
+CREATE TABLE IF NOT EXISTS home_cost_ledger (
+  entry_id          INTEGER PRIMARY KEY,
+  book_id           TEXT NOT NULL CHECK (book_id = 'home'),
+  chapter_ordinal   INTEGER,
+  phase             TEXT,
+  model             TEXT,
+  input_tokens      INTEGER,
+  output_tokens     INTEGER,
+  usd               REAL,
+  at                TEXT
+);
+
+CREATE TABLE IF NOT EXISTS home_cost_reservations (
+  reservation_id       TEXT PRIMARY KEY,
+  book_id               TEXT NOT NULL CHECK (book_id = 'home'),
+  chapter_ordinal       INTEGER,
+  phase                 TEXT NOT NULL,
+  model                 TEXT,
+  reserved_input_tokens INTEGER NOT NULL,
+  reserved_output_tokens INTEGER NOT NULL,
+  reserved_usd          REAL NOT NULL,
+  actual_input_tokens   INTEGER,
+  actual_output_tokens  INTEGER,
+  actual_usd            REAL,
+  at                    TEXT NOT NULL
+);
+
 -- Mothli's checked notes on one chapter. A function of the chapter's own text, so every reading
 -- pass shares them; a reply may use them only when its read prefix of that chapter hashes to
 -- source_hash, which is true only when the whole, unchanged chapter is inside the read position.

@@ -72,9 +72,50 @@ export function AiRuntimeProvider({
   );
 }
 
+/** The AI runtime for whoever runs the app. ``compact`` is the shelf's footer, which every reader
+ * sees: there the developer's details (models, effort, local testing, test embeddings, "Check
+ * connection") stay folded behind one short line the reader can open, in every state but one.
+ * The exception is a test model standing in for AI (demo mode): every reader is told that plainly,
+ * since its answers are not real. */
+function FoldedStatus({ runtime }: { runtime: RuntimeState }) {
+  const { data } = runtime;
+  const degraded = data?.completion_status === "degraded";
+  const title = runtime.failed || !data
+    ? "AI status unavailable"
+    : degraded
+      ? "AI connection unavailable"
+      : data.completion_status === "ready"
+        ? "AI connected"
+        : "AI configured";
+  return (
+    <details className="ai-status ai-status-compact" data-mode={degraded || runtime.failed ? "unavailable" : "live"}>
+      <summary><Icon name="sparkle" size={14} /> {title} <Icon name="chevronDown" size={13} /></summary>
+      {data && !runtime.failed && (
+        <>
+          <p>
+            {data.models.synthesis}
+            {degraded
+              ? " · Check your provider configuration."
+              : data.completion_status === "unchecked"
+                ? " · Not yet checked by a successful request."
+                : " · Answers use evidence from your completed pages."}
+          </p>
+          {data.local_testing && <p>Local testing · Using your ChatGPT account.</p>}
+          {data.reasoning && <p>Low effort for extraction and selection · Medium for answers and review.</p>}
+          {data.embedding_mode === "demo" && (
+            <p>Search is using test embeddings. Configure a real embedding provider before judging retrieval quality.</p>
+          )}
+        </>
+      )}
+      <Button variant="ghost" onClick={runtime.retry} disabled={runtime.checking}>{runtime.checking ? "Checking…" : "Check connection"}</Button>
+    </details>
+  );
+}
+
 export function AiStatus({ compact = false }: { compact?: boolean }) {
   const runtime = useContext(RuntimeContext);
   if (!runtime || (!runtime.data && !runtime.failed)) return null;
+  if (compact && (runtime.failed || runtime.data?.mode !== "demo")) return <FoldedStatus runtime={runtime} />;
   if (runtime.failed)
     return (
       <div className="ai-status" role="status">
@@ -88,16 +129,6 @@ export function AiStatus({ compact = false }: { compact?: boolean }) {
   if (!data) return null;
   const demo = data.mode === "demo";
   const degraded = data.completion_status === "degraded";
-  if (compact && !demo && data.completion_status === "ready" && data.embedding_mode !== "demo")
-    return (
-      <details className="ai-status ai-status-compact" data-mode="live">
-        <summary><Icon name="sparkle" size={14} /> AI connected <Icon name="chevronDown" size={13} /></summary>
-        <p>{data.models.synthesis} · Answers use evidence from your completed pages.</p>
-        {data.local_testing && <p>Local testing · Using your ChatGPT account.</p>}
-        {data.reasoning && <p>Low effort for extraction and selection · Medium for answers and review.</p>}
-        <Button variant="ghost" onClick={runtime.retry} disabled={runtime.checking}>{runtime.checking ? "Checking…" : "Check connection"}</Button>
-      </details>
-    );
   return (
     <div
       className="ai-status"
