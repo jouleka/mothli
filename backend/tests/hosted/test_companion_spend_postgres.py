@@ -44,6 +44,7 @@ admin_dsn = read_map_gate.admin_dsn
 database = read_map_gate.database
 tenant_dsn = read_map_gate.tenant_dsn
 readers = read_map_gate.readers
+reading_app = read_map_gate.reading_app
 
 SETTINGS = Settings(_env_file=None)          # the per-call token ceilings the wrappers apply
 
