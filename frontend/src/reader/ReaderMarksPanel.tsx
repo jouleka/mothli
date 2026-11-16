@@ -28,6 +28,7 @@ export function ReaderMarks({
   onClearSelection,
   onTalkAboutSelection,
   savedReplies = [],
+  keptBackReplies = 0,
   onNavigateReply,
   onDeleteReply,
   openRequest = 0,
@@ -47,6 +48,8 @@ export function ReaderMarks({
   onClearSelection: () => void;
   onTalkAboutSelection?: () => void;
   savedReplies?: SavedCompanionReply[];
+  /** Saved replies not shown because the pages they were written from no longer count as read. */
+  keptBackReplies?: number;
   onNavigateReply?: (reply: SavedCompanionReply) => void;
   onDeleteReply?: (id: string) => void;
   openRequest?: number;
@@ -67,6 +70,11 @@ export function ReaderMarks({
   ).sort((a, b) => a.anchor.atom - b.anchor.atom);
 
   const visibleReplies = savedReplies.filter(reply => `${reply.question} ${reply.body}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  // Never an empty list with no word why: say how many wait for their pages to be read again.
+  const keptBackLine = keptBackReplies < 1 ? ""
+    : savedReplies.length
+      ? `${keptBackReplies === 1 ? "1 more is" : `${keptBackReplies} more are`} kept back until you’ve read those pages again.`
+      : `${keptBackReplies === 1 ? "1 saved reply is" : `${keptBackReplies} saved replies are`} kept back until you’ve read those pages again.`;
 
   useEffect(() => {
     if (openRequest > 0 && !open) toggle();
@@ -275,7 +283,7 @@ export function ReaderMarks({
             </ol> : (filter !== "all" || !visibleReplies.length) && <div className="notebook-empty"><Icon name="book" size={30} /><p>{query.trim() ? "Nothing found." : "A little space for your favorite pages."}</p></div>}
           </section>}
           {(filter === "all" || filter === "mothli") && <section className="notebook-section notebook-mothli-keeps" aria-label="Saved from Mothli">
-            {(visibleReplies.length > 0 || filter === "mothli") && <h3><Icon name="sparkle" size={15} /> From Mothli</h3>}
+            {(visibleReplies.length > 0 || filter === "mothli" || keptBackLine) && <h3><Icon name="sparkle" size={15} /> From Mothli</h3>}
             {visibleReplies.length ? <ol className="marks-list">
               {visibleReplies.map(reply => <li key={reply.id}>
                 <div className="notebook-saved-reply"><span className="notebook-reply-question">{reply.question}</span><p>{reply.body}</p>
@@ -283,7 +291,8 @@ export function ReaderMarks({
                 </div>
                 {onDeleteReply && <Button variant="ghost" className="mark-delete icon-button" aria-label="Delete saved reply" onClick={() => onDeleteReply(reply.id)}><Icon name="close" size={15} /></Button>}
               </li>)}
-            </ol> : filter === "mothli" && <div className="notebook-empty"><Icon name="sparkle" size={30} /><p>{query.trim() ? "Nothing found." : "Keep a favorite reply here."}</p></div>}
+            </ol> : filter === "mothli" && !keptBackLine && <div className="notebook-empty"><Icon name="sparkle" size={30} /><p>{query.trim() ? "Nothing found." : "Keep a favorite reply here."}</p></div>}
+            {keptBackLine && <p className="notebook-kept-back">{keptBackLine}</p>}
           </section>}
           <a
             className="plain marks-export"

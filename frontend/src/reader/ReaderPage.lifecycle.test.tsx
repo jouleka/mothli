@@ -54,7 +54,8 @@ vi.mock("./BookNavigation", () => ({
 
 import { ReaderPage } from "./ReaderPage";
 import { ApiError } from "../api";
-import { pendingPosition } from "../pwa/offline";
+import { activeOfflineOwner, pendingPosition } from "../pwa/offline";
+import { readSavedReplies, writeSavedReplies } from "./companionNotes";
 
 class TestFoliateView extends HTMLElement {
   renderer = Object.assign(document.createElement("div"), {
@@ -209,6 +210,67 @@ describe("reader startup and search boundaries", () => {
       delete extra.readChapters;
       delete extra.readMap;
     }
+  });
+  describe("replies kept in the Notebook follow what is read", () => {
+    const reply = (id: string, chapter: number) => ({
+      id, question: `About chapter ${chapter}?`, body: `A reply about chapter ${chapter}.`, citations: [], asOfChapter: chapter });
+    const shares = (...read: number[]) => ({ chapters: read.map((share, index) => ({ atom: index + 1, read: share })) });
+    async function openBook(map: ReturnType<typeof vi.fn>) {
+      const extra = mocks as Record<string, unknown>;
+      extra.readMap = map;
+      extra.readChapters = vi.fn().mockResolvedValue({});
+      const view = render(<ReaderPage bookId="b" onBack={() => {}} />);
+      await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+      await waitFor(() => expect(mocks.onMarkRead).toBeTruthy());
+      await waitFor(() => expect(map).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole("button", { name: "Notebook" }));
+      return view;
+    }
+    afterEach(() => {
+      const extra = mocks as Record<string, unknown>;
+      delete extra.readMap;
+      delete extra.readChapters;
+    });
+
+    // Catches: the fault in 6z's list. A reply kept about a chapter stayed in the Notebook after
+    // "I haven't read this" on that chapter; and hiding it must not delete it, nor touch a reply
+    // about a chapter still read.
+    test("a kept reply leaves with its chapter, says so, and comes back when it is read again", async () => {
+      writeSavedReplies("b", activeOfflineOwner(), 0, [reply("one", 1), reply("two", 2)]);
+      const map = vi.fn().mockResolvedValue(shares(1, 0.5, 0));
+      const { unmount } = await openBook(map);
+      expect(await screen.findByText("A reply about chapter 2.")).toBeTruthy();
+      expect(screen.getByText("A reply about chapter 1.")).toBeTruthy();
+      expect(screen.queryByText(/kept back/)).toBeNull();
+      map.mockResolvedValue(shares(1, 0, 0));
+      await act(async () => mocks.onMarkRead!(1, false));     // chapter 2: "I haven't read this"
+      await waitFor(() => expect(screen.queryByText("A reply about chapter 2.")).toBeNull());
+      expect(screen.getByText("A reply about chapter 1.")).toBeTruthy();
+      expect(screen.getByText("1 more is kept back until you’ve read those pages again.")).toBeTruthy();
+      expect(readSavedReplies("b", activeOfflineOwner(), 0).map((kept) => kept.id)).toEqual(["one", "two"]);
+      map.mockResolvedValue(shares(1, 1, 0));
+      await act(async () => mocks.onMarkRead!(1, true));
+      expect(await screen.findByText("A reply about chapter 2.")).toBeTruthy();
+      expect(screen.getByText("A reply about chapter 1.")).toBeTruthy();
+      expect(screen.queryByText(/kept back/)).toBeNull();
+      unmount();
+    });
+
+    // Catches: after "read it fresh" a reply kept in the earlier reading pass either shown at once
+    // (its pages no longer count as read) or lost for good (it was filed under the old pass).
+    test("a reply kept in an earlier reading pass waits until its chapter is read in this one", async () => {
+      mocks.position.mockResolvedValue({ bookmark: 0, cfi: "0:resume", position_epoch: 1 });
+      writeSavedReplies("b", activeOfflineOwner(), 0, [reply("old", 1)]);
+      const map = vi.fn().mockResolvedValue(shares(0, 0, 0));
+      const { unmount } = await openBook(map);
+      expect(await screen.findByText("1 saved reply is kept back until you’ve read those pages again.")).toBeTruthy();
+      expect(screen.queryByText("A reply about chapter 1.")).toBeNull();
+      map.mockResolvedValue(shares(1, 0, 0));
+      await act(async () => mocks.onMarkRead!(0, true));
+      expect(await screen.findByText("A reply about chapter 1.")).toBeTruthy();
+      expect(screen.queryByText(/kept back/)).toBeNull();
+      unmount();
+    });
   });
   test.each([
     { bookmark: 1, target: "c2.html" },

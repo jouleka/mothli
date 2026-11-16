@@ -86,6 +86,12 @@ export function HomeChat({ onShelfChanged }: { onShelfChanged?: () => void } = {
     rememberRef.current?.focus();
   }, [remembering]);
 
+  // Leaving the home screen while a reply is written drops it: stop the request too, so the server
+  // does not store a reply the reader never saw. (Nothing else stops a reply here: a new message
+  // and "Clear conversation" both wait until it is done.)
+  const request = useRef<AbortController | null>(null);
+  useEffect(() => () => request.current?.abort(), []);
+
   useEffect(() => {
     let dead = false;
     api.homeConversation()
@@ -169,12 +175,14 @@ export function HomeChat({ onShelfChanged }: { onShelfChanged?: () => void } = {
     following.current = true;
     setUnseen(false);
     const streamed: string[] = [];
+    const controller = new AbortController();
+    request.current = controller;
     try {
       const answer = await api.askHome(value, (sentence) => {
         streamed.push(sentence);
         setSentences((current) => [...current, sentence]);
         setSpoken((current) => [...current, sentence]);
-      });
+      }, controller.signal);
       const claims = answer.claims.map((claim) => claim.text);
       const reply = claims.join(" ") || NOTHING_SHOWN;
       const unsaid = claims.length ? claims.filter((text) => !streamed.includes(text)) : [NOTHING_SHOWN];
@@ -200,6 +208,7 @@ export function HomeChat({ onShelfChanged }: { onShelfChanged?: () => void } = {
         ? "Mothli can’t check its reply right now, so it said nothing. Try again in a moment."
         : "That didn’t go through. Your question is still here.");
     } finally {
+      if (request.current === controller) request.current = null;
       setAsked(null);
       setSentences([]);
     }

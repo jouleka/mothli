@@ -173,6 +173,29 @@ export type AskCost = {
 export const ASK_TIMEOUT_MS = 60_000;
 // null until the server has answered once: whether it offers replies sentence by sentence.
 let streamedReplies: boolean | null = null;
+/** A reply the reader stopped, or one the panel dropped: the request was aborted on purpose. */
+export const ASK_STOPPED = "ask_stopped";
+/** One controller for a question: aborted when the reply takes too long, or when the caller's
+ * ``signal`` fires (the reader pressed Cancel, or the reply was dropped from the screen). Stopping
+ * the request matters: a streamed reply the server finishes is stored, and would come back. */
+function askController(signal?: AbortSignal) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
+  const stop = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener("abort", stop, { once: true });
+  return {
+    signal: controller.signal,
+    failed: (error: unknown): unknown =>
+      signal?.aborted ? new ApiError("The reply was stopped.", 499, ASK_STOPPED)
+      : controller.signal.aborted ? new ApiError("The reply is taking longer than expected.", 504, "ask_timeout")
+      : error,
+    done: () => {
+      window.clearTimeout(timeout);
+      signal?.removeEventListener("abort", stop);
+    },
+  };
+}
 /** Chapters the reader went past without reading them here; Mothli may offer to count them. */
 export type ReadSkipped = { book_id: string; title: string; atoms: number[]; chapters: string };
 /** A book from the free library, not on the shelf, that a sentence of Mothli's reply named. */
@@ -656,20 +679,18 @@ export const api = {
   readFrontier: (id: string, anchor?: ReadAnchor) => fetch(`/api/books/${id}/read-frontier`, anchor ? {
     method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders() }, body: JSON.stringify(anchor),
   } : {}).then((r) => j<ReadFrontier>(r)),
-  askBook: (id: string, question: string, bookmark?: number, history?: ConversationMessage[], readFrontier?: ReadFrontier) => {
+  askBook: (id: string, question: string, bookmark?: number, history?: ConversationMessage[], readFrontier?: ReadFrontier, signal?: AbortSignal) => {
     // A reply that has not arrived in a minute is not coming: stop waiting instead of leaving
     // the reader on the thinking dots with no way forward but Cancel.
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
+    const request = askController(signal);
     return fetch(`/api/books/${id}/ask`, {
       method: "POST",
       headers: { "content-type": "application/json", ...csrfHeaders() },
       body: JSON.stringify({ question, ...(bookmark != null ? { bookmark } : {}), ...(history?.length ? { history } : {}), ...(readFrontier ? {read_frontier:readFrontier} : {}) }),
-      signal: controller.signal,
+      signal: request.signal,
     }).then((r) => j<AskAnswer>(r)).catch((error: unknown) => {
-      if (controller.signal.aborted) throw new ApiError("The reply is taking longer than expected.", 504, "ask_timeout");
-      throw error;
-    }).finally(() => window.clearTimeout(timeout));
+      throw request.failed(error);
+    }).finally(request.done);
   },
   /**
    * A reply delivered sentence by sentence, each already checked by the server. Resolves with
@@ -705,15 +726,14 @@ export const api = {
     fetch("/api/reader/recollections", { method: "DELETE", headers: csrfHeaders() }).then((r) => {
       if (!r.ok) throw new ApiError("Couldn’t forget them.", r.status);
     }),
-  askHome: async (question: string, onSentence: (text: string) => void): Promise<AskAnswer> => {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
+  askHome: async (question: string, onSentence: (text: string) => void, signal?: AbortSignal): Promise<AskAnswer> => {
+    const request = askController(signal);
     try {
       const response = await fetch("/api/reader/ask/stream", {
         method: "POST",
         headers: { "content-type": "application/json", ...csrfHeaders() },
         body: JSON.stringify({ question }),
-        signal: controller.signal,
+        signal: request.signal,
       });
       if (!response.ok || !response.body) return await j<AskAnswer>(response);
       const reader = response.body.getReader();
@@ -738,10 +758,9 @@ export const api = {
       }
       throw new ApiError("The reply ended early.", 502);
     } catch (error) {
-      if (controller.signal.aborted) throw new ApiError("The reply is taking longer than expected.", 504, "ask_timeout");
-      throw error;
+      throw request.failed(error);
     } finally {
-      window.clearTimeout(timeout);
+      request.done();
     }
   },
   /** The conversation inside a book, as the server may show it now: only turns written from
@@ -755,17 +774,17 @@ export const api = {
   // No earlier conversation is sent: the server keeps its own record and reads nothing else.
   askBookStream: async (
     id: string, question: string, bookmark: number,
-    readFrontier: ReadFrontier, onSentence: (text: string) => void,
+    readFrontier: ReadFrontier, onSentence: (text: string) => void, signal?: AbortSignal,
   ): Promise<AskAnswer | null> => {
     if (streamedReplies === false) return null;
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), ASK_TIMEOUT_MS);
+    // Aborting stops the server too: it stores a turn only once the reply is done.
+    const request = askController(signal);
     try {
       const response = await fetch(`/api/books/${id}/ask/stream`, {
         method: "POST",
         headers: { "content-type": "application/json", ...csrfHeaders() },
         body: JSON.stringify({ question, bookmark, read_frontier: readFrontier }),
-        signal: controller.signal,
+        signal: request.signal,
       });
       if (response.status === 404 || response.status === 405) {
         if (response.status === 405 || /not enabled|not found/i.test(await response.clone().text())) {
@@ -797,10 +816,9 @@ export const api = {
       }
       throw new ApiError("The reply ended early.", 502);
     } catch (error) {
-      if (controller.signal.aborted) throw new ApiError("The reply is taking longer than expected.", 504, "ask_timeout");
-      throw error;
+      throw request.failed(error);
     } finally {
-      window.clearTimeout(timeout);
+      request.done();
     }
   },
   selectionAction: (

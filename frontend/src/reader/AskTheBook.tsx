@@ -79,6 +79,13 @@ export type AskSession = {
    * whole conversation off the screen now, and drop a reply still on its way. What may be shown
    * comes back from the server at the next load. */
   hide: () => void;
+  /** Stops the request for the reply in flight, if any. Called whenever that reply is dropped
+   * (a new `requestToken`), and when the session itself is let go (a new reading pass, a rewind,
+   * the book closed). A streamed reply the server finishes is stored and would come back at the
+   * next load; one stopped before it is done is not stored. */
+  abandon: () => void;
+  /** The request for the reply in flight. */
+  request: AbortController | null;
 };
 const BOOK_USAGE_LIMIT_MESSAGE =
   "Mothli is paused for this book: its usage limit has been reached.";
@@ -237,7 +244,17 @@ function createAskSession(
         listeners.delete(listener);
       };
     },
+    request: null,
+    abandon: () => {
+      session.request?.abort();
+      session.request = null;
+    },
     update: (changes) => {
+      // A new request token means the reply in flight is no longer wanted (Cancel, hide, or a
+      // new question): stop its request. A reply that had already finished was stored by the
+      // server and stays stored; it is the reader's, and comes back at the next load.
+      if (changes.requestToken !== undefined && changes.requestToken !== snapshot.requestToken)
+        session.abandon();
       snapshot = { ...snapshot, ...changes };
       if ("question" in changes && owner === activeOfflineOwner()) storeDraft(key, snapshot.question);
       listeners.forEach((listener) => listener());
@@ -323,6 +340,8 @@ export function AskTheBook({
     retainedSession.current.readingPass !== pass ||
     retainedSession.current.bookmark > bookmark
   ) {
+    // The old session's reply in flight will never be shown: stop it, so it is not stored.
+    retainedSession.current?.abandon();
     retainedSession.current = createAskSession(bookId, bookmark, owner, pass);
   }
   const session = retainedSession.current;
@@ -467,6 +486,8 @@ export function AskTheBook({
       streaming: "",
       requestToken,
     });
+    const request = new AbortController();
+    session.request = request;
     const isCurrentRequest = () =>
       isCurrent() && session.getSnapshot().requestToken === requestToken;
     const scopeSelection = bookScope ? null : selection;
@@ -533,7 +554,7 @@ export function AskTheBook({
           ? await api.askBookStream(bookId, value, requestBookmark, readPoint, (sentence) => {
               if (isCurrentRequest())
                 session.update({ streaming: [session.getSnapshot().streaming, sentence].filter(Boolean).join(" ") });
-            })
+            }, request.signal)
           : null;
         if (!isCurrentRequest()) return;
         kept = streamed !== null;
@@ -562,8 +583,8 @@ export function AskTheBook({
           ])
           .slice(-8);
         result = streamed ?? (readPoint
-          ? await api.askBook(bookId, value, requestBookmark, earlier(), readPoint)
-          : await api.askBook(bookId, value, requestBookmark, earlier()));
+          ? await api.askBook(bookId, value, requestBookmark, earlier(), readPoint, request.signal)
+          : await api.askBook(bookId, value, requestBookmark, earlier(), undefined, request.signal));
         if (
           result.as_of_chapter > requestBookmark ||
           result.citations.some((citation) => citation.ordinal > requestBookmark) ||
@@ -617,6 +638,7 @@ export function AskTheBook({
         session.update({ error: message });
       }
     } finally {
+      if (session.request === request) session.request = null;
       if (isCurrentRequest())
         session.update({ busy: false, pendingQuestion: null, streaming: "" });
     }
