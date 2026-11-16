@@ -24,7 +24,7 @@ import { crossedMilestone, milestoneLine, recordReadingDay, unlockCast } from ".
 import { Moth } from "../ui/Moth";
 import "./reader.css";
 import "./panels.css";
-import { readSavedReplies, writeSavedReplies, type SavedCompanionReply } from "./companionNotes";
+import { keptPasses, keptReplyShown, readSavedReplies, writeSavedReplies, type SavedCompanionReply } from "./companionNotes";
 import "./simple-reader.css";
 import { admitRelocation, arrowPagingBlocked, jumpsAhead } from "./guard";
 import { JumpNote } from "./JumpNote";
@@ -167,24 +167,37 @@ export function ReaderPage({
   const [companionNav, setCompanionNav] = useState<{ tab: CompanionTab; personId: number | null; nonce: number } | null>(null);
   const [cornerNotes, setCornerNotes] = useState<CornerNote[]>([]);
   const [streak, setStreak] = useState(0);
-  const [replySnapshot, setReplySnapshot] = useState<{scope:string;replies:SavedCompanionReply[]}>({scope:"",replies:[]});
+  const [replySnapshot, setReplySnapshot] = useState<{scope:string;kept:{pass:string;reply:SavedCompanionReply}[]}>({scope:"",kept:[]});
   const workspaceTriggerRef = useRef<HTMLElement | null>(null);
   const askSessionRef = useRef<AskSession | null>(null);
   const offlineOwner = activeOfflineOwner();
   useEffect(() => {
     const session = askSessionRef.current;
-    if (session && (session.bookId !== bookId || session.owner !== offlineOwner))
+    if (session && (session.bookId !== bookId || session.owner !== offlineOwner)) {
+      session.abandon();
       askSessionRef.current = null;
+    }
   }, [bookId, offlineOwner]);
+  // The book is closed: a reply still being written will never be shown, so stop it and the
+  // server does not store it.
+  useEffect(() => () => askSessionRef.current?.abandon(), []);
   const readingPass = pos?.position_epoch ?? 0;
   const replyScope = JSON.stringify([bookId, offlineOwner, readingPass]);
-  const savedReplies = pos != null && replySnapshot.scope === replyScope ? replySnapshot.replies : [];
+  // Every reply kept for this book, with the reading pass it was kept in.
+  const keptReplies = pos != null && replySnapshot.scope === replyScope ? replySnapshot.kept : [];
+  const savedReplies = keptReplies.filter((kept) => kept.pass === String(readingPass)).map((kept) => kept.reply);
   useEffect(() => {
-    setReplySnapshot({scope:replyScope,replies:pos == null ? [] : readSavedReplies(bookId, offlineOwner, readingPass)});
+    setReplySnapshot({scope:replyScope,kept:pos == null ? [] : keptPasses(bookId, offlineOwner)
+      .filter((pass) => pass !== String(readingPass))
+      .concat(String(readingPass))
+      .flatMap((pass) => readSavedReplies(bookId, offlineOwner, pass).map((reply) => ({pass, reply})))});
   }, [bookId, offlineOwner, readingPass, replyScope, pos == null]);
-  const saveReplies = (next: SavedCompanionReply[]) => {
-    writeSavedReplies(bookId, offlineOwner, readingPass, next);
-    setReplySnapshot({scope:replyScope,replies:next});
+  const saveReplies = (next: SavedCompanionReply[], pass = String(readingPass)) => {
+    writeSavedReplies(bookId, offlineOwner, pass, next);
+    setReplySnapshot({scope:replyScope,kept:[
+      ...keptReplies.filter((kept) => kept.pass !== pass),
+      ...next.map((reply) => ({pass, reply})),
+    ].sort((left, right) => Number(left.pass) - Number(right.pass))});
   };
   const [selectionAssist, setSelectionAssist] = useState<{
     action: SelectionAction;
@@ -273,6 +286,14 @@ export function ReaderPage({
   const mappedRef = useRef(false); // the same, for the page-turn handler
   const [readShare, setReadShare] = useState<Record<number, number>>({}); // by 0-based chapter index
   const [readOffer, setReadOffer] = useState<ReadOffer | null>(null);
+  // The Notebook shows a kept reply only while what it was written from still counts as read,
+  // as the chat panel does: "I haven't read this" or "read it fresh" keeps it back (not deleted)
+  // until those pages are read again, in this reading pass or a later one. Without the read map
+  // nothing is known, and only the replies kept in this reading pass are shown, as before.
+  const shownReplies = mapped
+    ? keptReplies.filter((kept) => keptReplyShown(kept.reply, readShare)).map((kept) => kept.reply)
+    : savedReplies;
+  const keptBack = mapped ? keptReplies.length - shownReplies.length : 0;
   // Bumped as extraction catches up with chapters marked read, so the cast and recap refresh.
   const [memoryRefresh, setMemoryRefresh] = useState(0);
   const stopMemoryWatch = useRef<(() => void) | null>(null);
@@ -308,6 +329,8 @@ export function ReaderPage({
     // "I haven't read this": the conversation leaves the screen now, whether or not the chat
     // panel is open, and comes back from the server with only the turns it still shows.
     if (!read) askSessionRef.current?.hide();
+    // Kept replies about this chapter leave the Notebook now too, not once the map is back.
+    if (!read) setReadShare((shares) => (atom in shares ? { ...shares, [atom]: 0 } : shares));
     try {
       await api.readChapters?.(bookId, [atom + 1], read);
     } finally {
@@ -440,6 +463,15 @@ export function ReaderPage({
       if (dead || mapOff || !api.readPage || start.position_epoch !== positionEpochRef.current) return;
       try {
         const point = await api.readPage(bookId, start, end, skimmed);
+        // The page now counts as read: its chapter is at least part read. The full map is asked
+        // for only when the reader changes what is read by hand; this keeps a reply kept from
+        // this page in the Notebook (and the contents list) without asking again per page.
+        if (!dead && !skimmed && point && start.position_epoch === positionEpochRef.current) {
+          setReadShare((shares) => {
+            const touched = [start.atom - 1, end.atom - 1].filter((index) => index in shares && !(shares[index] > 0));
+            return touched.length ? { ...shares, ...Object.fromEntries(touched.map((index) => [index, 0.0001])) } : shares;
+          });
+        }
         // Settled on a page with chapters gone past before it: ask once whether they were read.
         const skipped = point?.skipped;
         if (!dead && skipped) {
@@ -1094,11 +1126,19 @@ export function ReaderPage({
       const reset = fresh
         ? await api.resetPosition(bookId, positionEpochRef.current, true)
         : await api.resetPosition(bookId, positionEpochRef.current);
+      askSessionRef.current?.abandon(); // a new reading pass: a reply in flight is never shown
       askSessionRef.current = null;
       setSourceReturn(null);
       setAskOpen(false);
       setInitialAction(null);
       positionEpochRef.current = reset.position_epoch;
+      // "Read it fresh" empties the read map, "read again" keeps it: until the server says which,
+      // nothing counts as read (replies kept earlier wait in the Notebook), then its map stands.
+      setReadShare((shares) => Object.fromEntries(Object.keys(shares).map((index) => [index, 0])));
+      void api.readMap?.(bookId)?.then((map) => {
+        if (positionEpochRef.current === reset.position_epoch)
+          setReadShare(Object.fromEntries(map.chapters.map((chapter) => [chapter.atom - 1, chapter.read])));
+      }).catch(() => {});
       setReadFrontier(null);
       readAnchorRef.current = null;
       positionVersionRef.current =
@@ -1610,7 +1650,8 @@ export function ReaderPage({
               onSourceJump={() => {
                 if (currentAnchor) setSourceReturn({ cfi: currentAnchor.cfi, destination: "notebook" });
               }}
-              savedReplies={savedReplies}
+              savedReplies={shownReplies}
+              keptBackReplies={keptBack}
               onTalkAboutSelection={() => openConversation()}
               onNavigateReply={(reply) => {
                 const citation = reply.citations[0];
@@ -1618,7 +1659,10 @@ export function ReaderPage({
               }}
               onDeleteReply={(id) => {
                 try {
-                  saveReplies(savedReplies.filter((reply) => reply.id !== id));
+                  // Filed under the reading pass it was kept in, which may be an earlier one.
+                  const pass = keptReplies.find((kept) => kept.reply.id === id)?.pass ?? String(readingPass);
+                  saveReplies(keptReplies.filter((kept) => kept.pass === pass && kept.reply.id !== id)
+                    .map((kept) => kept.reply), pass);
                   setMarksStatus("Deleted");
                 } catch {
                   setMarksStatus("Couldn’t delete. Try again.");

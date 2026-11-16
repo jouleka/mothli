@@ -65,6 +65,7 @@ beforeEach(() => {
   mocks.owner.mockReturnValue("local");
   mocks.askBook.mockResolvedValue(answer);
   mocks.bookConversation.mockReset().mockResolvedValue(stored());
+  mocks.askBookStream.mockReset();
   mocks.clearConversation.mockReset().mockResolvedValue(undefined);
   mocks.catchMeUp.mockResolvedValue({
     as_of_chapter: 2,
@@ -172,7 +173,7 @@ describe("Mothli conversation", () => {
     expect(screen.queryByText("Cancel")).toBeNull();
     expect(mocks.askBook).not.toHaveBeenCalled();
     // The server keeps the conversation and ignores any the browser sends: none is sent.
-    expect(mocks.askBookStream).toHaveBeenCalledWith("b", "What did he say?", 2, point, expect.any(Function));
+    expect(mocks.askBookStream).toHaveBeenCalledWith("b", "What did he say?", 2, point, expect.any(Function), expect.any(AbortSignal));
   });
 
   test("asks the ordinary way when the server does not offer streamed replies", async () => {
@@ -182,7 +183,7 @@ describe("Mothli conversation", () => {
     render(<AskTheBook {...props} prepareReadContext={async () => point} />);
     submit("Where did they meet?");
     await screen.findByText(answer.claims[0].text);
-    expect(mocks.askBook).toHaveBeenCalledWith("b", "Where did they meet?", 2, [], point);
+    expect(mocks.askBook).toHaveBeenCalledWith("b", "Where did they meet?", 2, [], point, expect.any(AbortSignal));
   });
 
   test("confirms the visible page before sending and rejects a different source boundary", async () => {
@@ -197,7 +198,7 @@ describe("Mothli conversation", () => {
     view.rerender(<AskTheBook {...props} bookmark={2} prepareReadContext={prepare} />);
     await act(async () => confirm(point));
     await screen.findByText(answer.claims[0].text);
-    expect(mocks.askBook).toHaveBeenCalledWith("b", "Where did they meet?", 2, [], point);
+    expect(mocks.askBook).toHaveBeenCalledWith("b", "Where did they meet?", 2, [], point, expect.any(AbortSignal));
     mocks.askBook.mockResolvedValue({...answer, read_frontier:{...point,id:"b".repeat(64)}});
     submit("And then?");
     await act(async () => confirm(point));
@@ -228,7 +229,7 @@ describe("Mothli conversation", () => {
     expect(mocks.askBook).toHaveBeenLastCalledWith("b", "And why?", 3, [
       { role: "user", content: "Where did they meet?", as_of_chapter: 2 },
       { role: "assistant", content: answer.claims[0].text, as_of_chapter: 2 },
-    ]);
+    ], undefined, expect.any(AbortSignal));
     second.rerender(<AskTheBook {...props} sessionRef={sessionRef} readingPass={1} />);
     expect(screen.queryByText("Where did they meet?")).toBeNull();
     mocks.owner.mockReturnValue("other");
@@ -345,7 +346,7 @@ describe("Mothli conversation", () => {
     render(<AskTheBook {...props} />);
     fireEvent.click(screen.getByRole("button", { name: "Catch me up" }));
     await screen.findByText("Aldric arrived in the valley.");
-    expect(mocks.askBook).toHaveBeenCalledWith("b", "Catch me up", 2, []);
+    expect(mocks.askBook).toHaveBeenCalledWith("b", "Catch me up", 2, [], undefined, expect.any(AbortSignal));
     fireEvent.click(screen.getByRole("button", { name: "Who was that?" }));
     fireEvent.click(await screen.findByRole("button", { name: "Aldric" }));
     expect(mocks.graph).toHaveBeenCalledWith("b",2);
@@ -356,6 +357,8 @@ describe("Mothli conversation", () => {
       "Remind me who Aldric is.",
       2,
       expect.any(Array),
+      undefined,
+      expect.any(AbortSignal),
     );
     expect(screen.queryByText(/Provider|embeddings|terra/i)).toBeNull();
   });
@@ -597,6 +600,83 @@ describe("the server's conversation", () => {
     await act(async () => finish(streamedReply("Darcy called her tolerable.")));
     expect(screen.queryByText("Darcy called her tolerable.")).toBeNull();
     expect((screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value).toBe("What did he say?");
+  });
+
+  /** A stand-in server for streamed replies: it stores an exchange once the reply is done, unless
+   * the request was stopped first, as `stream_read_prefix` does. */
+  function streamingServer() {
+    const turns: [string, string][] = [];
+    const pending: { signal?: AbortSignal; question: string; resolve: (value: unknown) => void }[] = [];
+    mocks.bookConversation.mockImplementation(async () => stored(...turns));
+    mocks.askBookStream.mockImplementation((...args: unknown[]) => new Promise((resolve) => {
+      pending.push({ question: args[1] as string, signal: args[5] as AbortSignal | undefined, resolve });
+    }));
+    return {
+      pending,
+      /** The server finishes every reply it is still writing. */
+      finish: (reply: string) => {
+        for (const { question, signal, resolve } of pending.splice(0)) {
+          if (signal?.aborted) continue;
+          turns.push([question, reply]);
+          resolve(streamedReply(reply));
+        }
+      },
+    };
+  }
+
+  // Catches: Cancel only taking the reply off the screen while the request runs on (audit 6z).
+  test("Cancel stops the request for the reply being written", async () => {
+    const server = streamingServer();
+    render(<AskTheBook {...props} prepareReadContext={async () => point} />);
+    submit("What did he say?");
+    await waitFor(() => expect(server.pending).toHaveLength(1));
+    const signal = server.pending[0].signal;
+    expect(signal?.aborted).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(signal?.aborted).toBe(true);
+  });
+
+  // Catches: the fault in 6z's list. The reply the reader cancelled was finished and stored by
+  // the server, and appeared the next time the conversation was loaded.
+  test("a cancelled exchange does not come back at the next load", async () => {
+    const server = streamingServer();
+    const view = render(<AskTheBook {...props} prepareReadContext={async () => point} readVersion={0} />);
+    submit("What did he say?");
+    await waitFor(() => expect(server.pending).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => server.finish("Darcy called her tolerable."));
+    view.rerender(<AskTheBook {...props} prepareReadContext={async () => point} readVersion={1} />);
+    await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    expect(screen.queryByText("Darcy called her tolerable.")).toBeNull();
+    expect(screen.queryByText("What did he say?", { selector: ".mothli-question" })).toBeNull();
+    // A reply that is not cancelled is stored and comes back, as before.
+    submit("And then?");
+    await waitFor(() => expect(server.pending).toHaveLength(1));
+    await act(async () => server.finish("She laughed."));
+    await screen.findByText("She laughed.");
+    view.rerender(<AskTheBook {...props} prepareReadContext={async () => point} readVersion={2} />);
+    await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalledTimes(3));
+    expect(screen.getAllByText("She laughed.")).toHaveLength(1);
+  });
+
+  // Catches: the other ways a reply in flight is dropped from the screen leaving its request
+  // running: "I haven't read this" (hide) and a new reading pass.
+  test("a reply dropped by “I haven’t read this” or a new reading pass is stopped too", async () => {
+    const server = streamingServer();
+    const sessionRef = { current: null as AskSession | null };
+    const view = render(<AskTheBook {...props} sessionRef={sessionRef} prepareReadContext={async () => point} />);
+    submit("What did he say?");
+    await waitFor(() => expect(server.pending).toHaveLength(1));
+    const hidden = server.pending[0].signal;
+    act(() => sessionRef.current!.hide());
+    expect(hidden?.aborted).toBe(true);
+    await act(async () => server.finish("Darcy called her tolerable."));
+    submit("And then?");
+    await waitFor(() => expect(server.pending).toHaveLength(1));
+    const reset = server.pending[0].signal;
+    view.rerender(<AskTheBook {...props} sessionRef={sessionRef} prepareReadContext={async () => point} bookmark={0} readingPass={1} />);
+    expect(reset?.aborted).toBe(true);
   });
 
   // Catches: the reply shown twice (the panel's copy and the server's), or drawn again, when

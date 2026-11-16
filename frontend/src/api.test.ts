@@ -322,6 +322,36 @@ describe("Hosted writes", () => {
     await expect(api.clearConversation("book")).rejects.toMatchObject({ status: 404 });
   });
 
+  // Catches: a caller's stop not reaching the request. Cancel and a dropped reply abort the fetch
+  // itself, so the server sees the browser go before the reply is done and stores nothing; the
+  // panel is told it was stopped, not that it took too long.
+  test("a stopped question aborts its request, for a book and on the home screen", async () => {
+    vi.spyOn(document, "cookie", "get").mockReturnValue("__Host-litlet-csrf=csrf-token");
+    const point = { id: "a".repeat(64), atom: 2, offset: 120, position_epoch: 0, available_chapter: 2 };
+    const seen: AbortSignal[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      const signal = init!.signal!;
+      seen.push(signal);
+      signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    }));
+    const asks = [
+      (stop: AbortSignal) => api.askBookStream("book", "Why?", 2, point, () => {}, stop),
+      (stop: AbortSignal) => api.askHome("Why?", () => {}, stop),
+      (stop: AbortSignal) => api.askBook("book", "Why?", 2, [], point, stop),
+    ];
+    for (const [index, ask] of asks.entries()) {
+      const stop = new AbortController();
+      const reply = ask(stop.signal);
+      await vi.waitFor(() => expect(seen).toHaveLength(index + 1));
+      const request = seen[index];
+      expect(request.aborted).toBe(false);
+      stop.abort();
+      expect(request.aborted).toBe(true);
+      await expect(reply).rejects.toMatchObject({ code: "ask_stopped" });
+    }
+    expect(seen).toHaveLength(3);
+  });
+
   test("posts an exact-frontier memory correction with CSRF", async () => {
     vi.spyOn(document, "cookie", "get").mockReturnValue("__Host-litlet-csrf=csrf-token");
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({

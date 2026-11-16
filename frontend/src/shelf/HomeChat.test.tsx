@@ -110,6 +110,19 @@ describe("HomeChat", () => {
     expect(await axeAA(container)).toHaveNoViolations();
   });
 
+  // Catches: leaving the home screen while a reply is written dropped it from the screen but let
+  // the request run on, so the server stored a reply the reader never saw (as in audit 6z).
+  test("leaving the home screen while a reply is written stops its request", async () => {
+    mocks.askHome.mockImplementation(() => new Promise(() => {}));
+    const view = render(<HomeChat />);
+    await screen.findByLabelText("Ask Mothli about your books");
+    ask("Who is Alyosha?");
+    const signal = mocks.askHome.mock.calls[0][2] as AbortSignal | undefined;
+    expect(signal?.aborted).toBe(false);
+    view.unmount();
+    expect(signal?.aborted).toBe(true);
+  });
+
   test("a long wait before the first sentence is acknowledged calmly", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     mocks.askHome.mockImplementation(() => new Promise(() => {}));
