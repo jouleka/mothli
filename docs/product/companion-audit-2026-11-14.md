@@ -1812,6 +1812,32 @@ The same conversation as in 6af: seven messages, the home conversation cleared, 
 - Still seen: in the home chat the first sentence of "who is Alyosha again?" was removed in one run ("Alyosha is the youngest Karamazov son…, and Ivan is his older brother."), a true sentence.
 - **Not verified:** two runs of one conversation, one book on the shelf. The add button was not pressed.
 
+## 6aj. A cancelled reply stays cancelled; a kept reply follows what is read (17 November)
+
+Two faults from 6z's "Found, and not fixed".
+
+### What changed
+
+- **Cancel stops the request.** Before, Cancel only took the reply off the panel; the request ran on, the server finished the reply, stored the turn, and the exchange came back at the next load. Now `askBookStream`, `askBook` and `askHome` take an abort signal, and the panel aborts the request whenever it drops a reply in flight: Cancel, "I haven't read this" (`hide`), a new reading pass or a rewind (a new panel session), and closing the book. A stopped request is not reported as "That took too long". A reply that had already finished when Cancel was pressed was stored by the server and stays stored: it is the reader's, and it comes back at the next load.
+- **What the server does when the browser goes away.** Nothing needed changing. The streamed reply runs as a generator inside a `StreamingResponse`; when the connection drops before "done", the response stops pulling from it, the generator is closed, and its `finally` sees no finished reply, so no turn is stored. The same holds for the home chat (`stream_home`). `stream_conversation.py` and `home_conversation.py` are unchanged.
+- **The home chat** has no Cancel, and a new message or "Clear conversation" waits until the reply is done. The one way a reply is abandoned there is leaving the home screen while it is written: that now stops the request too, so the server does not store a reply the reader never saw.
+- **Kept replies in the Notebook follow what is read.** A kept reply already records the chapter it was written at (`asOfChapter`) and its citations, and is filed in the browser under the reading pass. The Notebook now shows one only while that chapter and every chapter it cites are at least part read in the read map the reader app already has (the same map the contents list shows; no new server call). Hidden replies are not deleted: they come back when those chapters are read again. Replies kept in an earlier reading pass are now looked up too, so after "read it fresh" they wait until their chapters are read in the new pass (before, they were never shown again), and after "read again", which keeps the map, they stay. When some are kept back the Notebook says so in one line: "1 more is kept back until you’ve read those pages again." (or "2 more are…"), or, when none is shown, "1 saved reply is kept back until you’ve read those pages again." Without a read map nothing is known and the Notebook behaves as before.
+- To keep that map current without asking per page: "I haven't read this" sets the chapter to unread at once, a page read here marks its chapter at least part read, and a new reading pass counts nothing as read until the server's map for it arrives.
+
+### Verified
+
+- Frontend, API mocked: 400 pass (391 before), type check and build clean. Nine new tests, all failing on main: Cancel aborts the request's signal; with a stand-in server that stores a reply only if its request was not stopped, a cancelled exchange does not come back at the next load while a finished one does; "I haven't read this" and a new reading pass abort the request; leaving the home screen aborts its request; the API functions abort their `fetch` on the caller's signal and report it as stopped; a kept reply for a chapter marked not read leaves the Notebook with the line shown, is still in storage, and returns when the chapter is read again, while one for a chapter still read is untouched; a reply kept in an earlier reading pass waits until its chapter is read in this one; the reading passes with kept replies are found; the showing rule, citations and opening pages included. Five existing tests changed only to expect the abort signal as a new argument.
+- Backend, stand-in models: `tests/test_stream_early_close.py` drives `/api/books/{id}/ask/stream` and `/api/reader/ask/stream` through the app with a browser that leaves after the first sentence. The reply's generator ran its last lines after fewer sentences than the reply had, no turn was stored (`catalog.get_turns` empty, nothing in the conversation), and a full request afterwards was stored. With the storing condition loosened by hand the test fails. Ruff clean.
+
+### Not verified
+
+- Not seen in a browser, not tried with real models, on a phone or in hosted mode. Whether a real proxy in front of the server passes the disconnect on at once was not tested.
+
+### Found, and not fixed
+
+- A reply the panel refuses when it arrives (past the reader's place, or the read position changed) was already finished, so the server stored it.
+- Kept replies are still a copy in one browser, and they follow the map by chapter, not by the exact pages they were written from. Where there is no read map (hosted mode, or the setting off) nothing hides them, and for the moment before the map loads on opening a book this pass's kept replies show as before.
+- Leaving the home screen mid-reply now loses that question and its reply; the home chat still has no Cancel of its own.
 ## 6ai. Does the chat inside a book lose passages to earlier messages? (17 November)
 
 6ah left open whether the chat inside a book, which builds its search words the same way (`conversation_retrieval_question`: the message, then the last two messages), loses the passage a plain question needs after an unrelated earlier message. Measured with stand-in models: the Karamazov fixture read to `inside-5` with `enter_by_map`, the earlier messages stored in the book's conversation as the app stores them (each with a short reply and a `drew_on` record), then the question; once with the earlier messages and once with the conversation cleared. "Present" means the passage that answers is among the passages of every sentence check and in the writer's prompt; the rank is its place among the last check's passages.
