@@ -1,23 +1,30 @@
-"""The read-map and conversation routes in hosted mode, at the local paths (ADR 0041 parts 1
-and 2, section 8).
+"""The read-map, conversation and streamed chat routes in hosted mode, at the local paths (ADR
+0041 parts 1, 2 and 5, section 8).
 
-Each route runs the unchanged local ``app.read_map`` functions against a ``HostedCompanionCatalog``
-and a ``HostedBookSource`` bound to the signed-in reader. The owner comes from the session only
+Each route runs the unchanged local modules (``app.read_map``, ``app.stream_conversation``)
+against a ``HostedCompanionCatalog``, a ``HostedBookSource`` and, for the chat, a
+``HostedBookStore`` bound to the signed-in reader. The owner comes from the session only
 (``_owner`` / ``_csrf_owner``, which also apply CSRF and the per-owner request limit). A book that
 is not this reader's is unknown: the same 404 as a book that does not exist.
 
 These are plain ``def`` routes: FastAPI runs them in its thread pool, and every adapter call is one
-short synchronous transaction (ADR 0041 section 2). Nothing here calls a model.
+short synchronous transaction (ADR 0041 section 2), so a streamed reply holds no database
+connection while a model answers. Only the streamed chat calls a model: the platform's, paid by
+the owner of Mothli and held to the reader's caps by the catalog's spend methods (section 6).
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from app.api.reading import ReadChapters, ReadPage
+from app.ask import AskRequest
 from app.hosted.companion import CompanionDatabaseBusy
+from app.hosted.companion.memory import HostedBookStore
 from app.hosted.companion.source import HostedBookSource
 from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.tenant.api import _csrf_owner, _owner
@@ -32,8 +39,25 @@ from app.read_map import (
     visible_turns,
 )
 from app.reader_place import skipped_before
+from app.stream_conversation import stream_read_prefix
 
 router = APIRouter(prefix="/api/books/{book_id}", tags=["hosted-library"])
+
+
+class _NotYet:
+    """The background workers handed to the streamed chat (``notes_builder``, ``recollector``).
+
+    The chat calls ``ensure`` only while chapter notes or recollections are on, which hosted
+    settings refuse until parts 6 and 7 give them durable jobs; until then this does nothing.
+    """
+
+    __slots__ = ()
+
+    def ensure(self, book_id) -> None:
+        return None
+
+
+_NOT_YET = _NotYet()
 
 
 def _bound(request: Request, owner_id: OwnerId):
@@ -142,6 +166,36 @@ def put_read_frontier(book_id: uuid.UUID, body: ReadAnchor, request: Request,
         raise HTTPException(409, "reading pass changed; reload before continuing") from exc
     except ValueError as exc:
         raise HTTPException(422, "page anchor could not be verified against the source") from exc
+
+
+@router.post("/ask/stream")
+def ask_the_book_stream(book_id: uuid.UUID, body: AskRequest, request: Request,
+                        owner_id: OwnerId = Depends(_csrf_owner)):
+    """Server-sent events: one ``sentence`` per checked sentence, then ``done`` or ``error``.
+
+    The local route's body over the hosted adapters: the unchanged ``stream_read_prefix`` with this
+    reader's catalog, story memory and source, and the platform's clients. A book that is not this
+    reader's is refused with 404 while the read position is taken, before any model is called or
+    anything is reserved.
+    """
+    settings = request.app.state.settings
+    if not (settings.reader_conversation_stream and settings.reader_page_context):
+        raise HTTPException(404, "streamed replies are not enabled")
+    if body.read_frontier is None:
+        raise HTTPException(422, "a streamed reply needs the confirmed read position")
+    catalog, source, settings = _bound(request, owner_id)
+    # One story memory per request: every sentence's check of this reply reads the same snapshot.
+    store = HostedBookStore(request.app.state.companion_dsn, owner_id)
+    try:
+        events = stream_read_prefix(str(book_id), body, catalog, store, settings,
+                                    request.app.state.platform_client, source,
+                                    notes_builder=_NOT_YET, recollector=_NOT_YET)
+    except CompanionDatabaseBusy as exc:
+        raise _busy(exc) from exc
+    return StreamingResponse(
+        ("data: " + json.dumps(event, ensure_ascii=False) + "\n\n" for event in events),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 @router.get("/conversation")

@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 16,
   "required_surface_classes": [
     "list",
     "get",
@@ -408,6 +408,14 @@
       "access": "delete",
       "repository_method": "HostedCompanionCatalog.clear_turns",
       "cross_tenant_test": "test_second_reader_gets_first_readers_book_as_missing_on_conversation_routes"
+    },
+    {
+      "method": "POST",
+      "path": "/api/books/{book_id}/ask/stream",
+      "surface": "answer",
+      "access": "streamed-answer",
+      "repository_method": "HostedCompanionCatalog.add_turn",
+      "cross_tenant_test": "test_second_reader_cannot_stream_from_first_readers_book"
     }
   ],
   "background": [
