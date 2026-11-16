@@ -26,7 +26,7 @@ from app.ask import AskRequest
 from app.hosted.companion import CompanionDatabaseBusy
 from app.hosted.companion.memory import HostedBookStore
 from app.hosted.companion.source import HostedBookSource
-from app.hosted.companion.store import HostedCompanionCatalog
+from app.hosted.companion.store import HostedCompanionCatalog, ReplyCatalog
 from app.hosted.tenant.api import _csrf_owner, _owner
 from app.hosted.tenant.models import OwnerId
 from app.read_frontier import ReadAnchor
@@ -60,12 +60,12 @@ class _NotYet:
 _NOT_YET = _NotYet()
 
 
-def _bound(request: Request, owner_id: OwnerId):
+def _bound(request: Request, owner_id: OwnerId, catalog_type=HostedCompanionCatalog):
     """(catalog, source, settings) for this reader, or 404 while the read map is off."""
     settings = request.app.state.settings
     if not (settings.reader_page_context and settings.reader_read_map):
         raise HTTPException(404, "the read map is not enabled")
-    catalog = HostedCompanionCatalog(request.app.state.companion_dsn, owner_id)
+    catalog = catalog_type(request.app.state.companion_dsn, owner_id)
     source = HostedBookSource(request.app.state.object_storage, catalog,
                               request.app.state.companion_sources)
     return catalog, source, settings
@@ -183,7 +183,8 @@ def ask_the_book_stream(book_id: uuid.UUID, body: AskRequest, request: Request,
         raise HTTPException(404, "streamed replies are not enabled")
     if body.read_frontier is None:
         raise HTTPException(422, "a streamed reply needs the confirmed read position")
-    catalog, source, settings = _bound(request, owner_id)
+    # One reply: once its first call is admitted under the caps, the rest of it finishes.
+    catalog, source, settings = _bound(request, owner_id, ReplyCatalog)
     # One story memory per request: every sentence's check of this reply reads the same snapshot.
     store = HostedBookStore(request.app.state.companion_dsn, owner_id)
     try:

@@ -572,6 +572,20 @@ owner pays (map B9.5) and local mode keeps it. The per-call token ceiling still 
 reservation (`cost/limits.py:211-215`). Reservations left open by a crash stay counted until settled,
 as ADR 0027 already accepts.
 
+**Changed on 17 November 2026, by the owner's decision** ("if replies are underway, then we should let
+it finish"). Checks 1 and 2 above no longer add open reservations or the call's own worst case: a call
+is refused once the reader's real spend for the day or month has reached the cap (the ledger, which
+already holds a timed-out call at its reserved size). A reply the reader is waiting on is admitted by
+its first call; its later calls are not refused for the day, month, lifetime or platform cap, so a
+reply that began under the cap is shown whole. The route builds a `ReplyCatalog` per reply
+(`store.py`), an adapter with the same fixed owner that only remembers whether its first call was
+admitted; background work uses the plain catalog and is checked call by call. Check 4 counts a
+reservation as in flight for 15 minutes; one still open after that was left by a crash and is counted
+as spent, at its reserved size, on the day it was made, so a crash neither blocks a reader for good
+nor loses money nobody can account for. Check 5 is unchanged for a reply's first call and for
+background calls; a later call of an admitted reply is added to the platform's reserved total
+without the test. No migration: the two platform functions are used as they are.
+
 **Why a separate in-flight limit.** The existing `max_provider_concurrency` of 2 (`0011:11-12`) counts
 open reservations (`tenant/repository.py:650-663`). One streamed reply has the writer plus up to four
 checks in flight at once (`stream_conversation.py:482-484`), so counting companion calls against 2
