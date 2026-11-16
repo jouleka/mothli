@@ -116,22 +116,34 @@ def sync_counter(book_id, catalog, settings, worker, *, with_place=False):
 def record_page(book_id, start, end, catalog, settings, worker, *, skimmed=False):
     """Add the page between two verified anchors to the map and move the reader's place to its end.
 
-    Returns whether a chapter the page touches is now read from start to finish.
+    Returns whether a chapter the page touches is now read from start to finish, or None when
+    the page is in no chapter.
 
     With ``skimmed`` the page was turned quickly on the way somewhere: it is checked the same way
     but kept out of the map, so it never reaches a model, and the reader's place does not move.
+
+    A page of a piece that is not part of the book proper (a cover, Project Gutenberg's own page)
+    is in no chapter: it is accepted and adds nothing, never refused, as the reader app sends
+    nothing for such a page in a chapter's own file (6ab). Its text, which may be text the server
+    keeps out of every piece (Gutenberg's header), is never looked at. A page running from such a
+    piece into a chapter counts only its part in the chapter.
     """
     state, book, manifest, chapters = source_state(book_id, catalog, settings, worker)
     if not (start.position_epoch == end.position_epoch == state["position_epoch"]):
         raise RuntimeError("reading pass changed")
     if not (1 <= start.atom <= end.atom <= len(chapters)) or end.atom - start.atom > 1:
         raise ValueError("a page lies within one chapter or across two neighbours")
+    inside = [is_content(manifest["atoms"][anchor.atom - 1]) for anchor in (start, end)]
+    if not any(inside):
+        return None
     _started(book_id, book, state, manifest, chapters, catalog)
     first, last = chapters[start.atom - 1], chapters[end.atom - 1]
-    begin, finish = anchor_offset(first["text"], start), anchor_offset(last["text"], end)
     length = len(normalize_source(first["text"]))
-    stretches = ([(start.atom, begin, finish)] if start.atom == end.atom
-                 else [(start.atom, begin, length), (end.atom, 0, finish)])
+    if start.atom == end.atom:
+        stretches = [(start.atom, anchor_offset(first["text"], start), anchor_offset(last["text"], end))]
+    else:
+        stretches = (([(start.atom, anchor_offset(first["text"], start), length)] if inside[0] else [])
+                     + ([(end.atom, 0, anchor_offset(last["text"], end))] if inside[1] else []))
     if any(b < a for _, a, b in stretches) or sum(b - a for _, a, b in stretches) > PAGE_CHARS:
         raise ValueError("page anchors do not bound one page")
     if skimmed:
@@ -141,7 +153,8 @@ def record_page(book_id, start, end, catalog, settings, worker, *, skimmed=False
     for atom, a, b in stretches:
         catalog.add_read_range(book_id, incarnation=book["incarnation"], atom=atom, start=a, end=b,
                                source="read")
-    catalog.set_read_position(book_id, incarnation=book["incarnation"], atom=end.atom, offset=finish)
+    here, _begin, finish = stretches[-1]
+    catalog.set_read_position(book_id, incarnation=book["incarnation"], atom=here, offset=finish)
     held = catalog.get_read_map(book_id, incarnation=book["incarnation"])
     return any(held.get(atom) == [(0, len(normalize_source(chapters[atom - 1]["text"])))]
                for atom, _, _ in stretches)

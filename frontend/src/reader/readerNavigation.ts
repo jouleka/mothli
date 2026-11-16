@@ -1,5 +1,6 @@
 import type { Atom } from "../api";
 import { normalizeHref } from "./offset";
+import { chapterNumber } from "./chapterPlace";
 
 export type EpubTocItem = {
   label?: string | null;
@@ -89,7 +90,10 @@ export function safeTocLabel(item: ReaderTocItem, atoms: Atom[]): string {
   const atom = atoms[target];
   if (!atom) return "Section";
   if (item.atom == null && atom.part_label) return atom.part_label;
-  return atom.title || `Chapter ${atom.ordinal}`;
+  if (atom.title) return atom.title;
+  // The book's own chapter number, as everywhere else (chapterPlace); none for a piece in no chapter.
+  const number = chapterNumber(atoms, target);
+  return number == null ? "Section" : `Chapter ${number}`;
 }
 
 export function tocContainsAtom(item: ReaderTocItem, atom: number): boolean {

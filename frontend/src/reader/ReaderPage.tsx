@@ -63,6 +63,7 @@ import {
 } from "./readerPreferences";
 import { PositionReporter, type PendingPosition, type PositionSyncState } from "./reporter";
 import { atomAtRange, pageAnchor, ReadFrontierReporter } from "./readFrontier";
+import { chapterCount, chapterLine, chapterNumber, chaptersFinished, finishedNoteFor } from "./chapterPlace";
 import { StartOverNote } from "./StartOverNote";
 import { useWelcomeBack } from "./welcomeBack";
 import { useCompactReaderShell } from "./mobileShell";
@@ -942,7 +943,9 @@ export function ReaderPage({
             readAnchorRef.current = (edge) => {
               if (positionReportingPausedRef.current || dead) return null;
               const exactAtom = atomAtRange(m.atoms, bookSections[idx]?.id ?? "", readRange, edge);
-              return exactAtom === null || exactAtom < 0 ? null
+              // A page of a piece in no chapter (a cover, Project Gutenberg's own page) reports
+              // nothing, like a page ahead of chapter one in that chapter's file (6ab).
+              return exactAtom === null || exactAtom < 0 || chapterNumber(m.atoms, exactAtom) === null ? null
                 : pageAnchor(readRange, exactAtom, cfi, positionEpochRef.current, edge);
             };
             const anchor = readAnchorRef.current("start");
@@ -1406,16 +1409,19 @@ export function ReaderPage({
     [bookId, publishMarks],
   );
 
+  // The chapter on screen, by the page the reader is on (not the last position the server
+  // answered, which lags a page turn behind). Nothing for a piece in no chapter: a cover, or
+  // Project Gutenberg's own page, is not a chapter and has no chapter title to show.
   const chapterLabel =
-    pos && manifest
-      ? manifest.atoms[Math.min(pos.current_chapter, manifest.atoms.length) - 1]
-          ?.title || ""
+    manifest && chapterNumber(manifest.atoms, currentAtom) != null
+      ? manifest.atoms[currentAtom]?.title || ""
       : "";
   const unit = presentationFor(
     manifest?.book_profile?.book_type ?? "novel",
   ).unit;
   const completedTitle = (chapter: number) =>
-    manifest?.atoms[chapter - 1]?.title?.trim() || `${unit} ${chapter}`;
+    manifest?.atoms[chapter - 1]?.title?.trim() ||
+    `${unit} ${(manifest && chapterNumber(manifest.atoms, chapter - 1)) ?? chapter}`;
   const throughLabel = pos && pos.bookmark > 0 ? completedTitle(pos.bookmark) : "";
 
   // Journey: the streak on open, and Mothli's moments when a chapter is finished.
@@ -1435,10 +1441,10 @@ export function ReaderPage({
     if (bookmark == null || !manifest) return;
     const previous = lastSeenBookmark.current;
     lastSeenBookmark.current = bookmark;
-    if (previous == null || bookmark <= previous || bookmark > manifest.atoms.length) return;
-    const role = manifest.atoms[bookmark - 1]?.content_role;
-    if (role && role !== "content") return;
-    const chapterTitle = completedTitle(bookmark);
+    // Only for a chapter: never for a cover or Project Gutenberg's own page (finishedNoteFor).
+    const finished = finishedNoteFor(manifest.atoms, previous, bookmark, unit);
+    if (!finished) return;
+    const chapterTitle = finished.title;
     const noteId = `chapter-${bookmark}`;
     const tellMe = {
       label: "Tell me",
@@ -1450,7 +1456,9 @@ export function ReaderPage({
           label: `After ${chapterTitle}`,
         }),
     };
-    const mark = crossedMilestone(previous, bookmark, manifest.atoms.length);
+    // Milestones in the book's own chapters, as the footer counts them.
+    const mark = crossedMilestone(chaptersFinished(manifest.atoms, previous ?? 0),
+      chaptersFinished(manifest.atoms, bookmark), chapterCount(manifest.atoms));
     pushNote({
       id: noteId,
       text: `${mark ? `${milestoneLine(mark, title || "this book")} ` : ""}That’s ${chapterTitle} done! Want to hear what I noticed?`,
@@ -1519,8 +1527,11 @@ export function ReaderPage({
     }
   }, [isDark]);
 
-  const totalChapters = manifest?.atoms.length ?? 0;
-  const percent = totalChapters ? Math.round((Math.min(pos?.bookmark ?? 0, totalChapters) / totalChapters) * 100) : 0;
+  // Counted in the book's own chapters, as Mothli counts them (chapterPlace).
+  const totalChapters = manifest ? chapterCount(manifest.atoms) : 0;
+  const percent = totalChapters && manifest
+    ? Math.round((Math.min(chaptersFinished(manifest.atoms, pos?.bookmark ?? 0), totalChapters) / totalChapters) * 100)
+    : 0;
   const latestNote = cornerNotes[0] ?? null;
   // Reading shortcuts: arrows turn the page, "/" opens Mothli, "n" opens the Notebook.
   shortcutRef.current = (event) => {
@@ -1780,7 +1791,7 @@ export function ReaderPage({
             <Icon name="arrowLeft" size={20} />
           </button>
           <div className="mr-progress">
-            <span>{totalChapters ? `${unit[0].toUpperCase()}${unit.slice(1)} ${Math.min(currentAtom + 1, totalChapters)} of ${totalChapters}` : "Preparing your pages"}</span>
+            <span>{manifest?.atoms.length ? chapterLine(manifest.atoms, currentAtom, pos?.bookmark ?? 0, unit) : "Preparing your pages"}</span>
             <div className="mr-bar" aria-hidden="true">
               <div style={{ width: `${percent}%` }} />
             </div>

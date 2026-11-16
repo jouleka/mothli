@@ -15,6 +15,7 @@ import { Moth } from "../ui/Moth";
 import { MothliMark } from "../ui/MothliMark";
 import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupportedBookMessage } from "../import/bookFiles";
 import { readLastPassage, sinceLabel } from "../reader/lastPassage";
+import { shelfJourney } from "../reader/chapterPlace";
 import { ProviderSettings } from "./ProviderSettings";
 import { HomeChat } from "./HomeChat";
 import "./shelf-redesign.css";
@@ -263,11 +264,17 @@ export function Shelf({
         .catch(() => null),
     ])
       .then(([position, manifest]) => {
-        const total = manifest?.atoms?.length || position.atoms || 0;
+        const bookmark = Math.max(0, Math.floor(Number(position.bookmark) || 0));
+        const placeAtom = Math.max(0, Math.floor(Number(position.place_chapter) || 0));
+        // In the book's own chapters, as the reader's footer and Mothli count them (chapterPlace).
+        if (manifest?.atoms?.length) {
+          const counted = shelfJourney(manifest.atoms, bookmark, placeAtom);
+          if (!dead && counted.total) setJourney({ id: spotlightId, ...counted });
+          return;
+        }
+        const total = position.atoms || 0;
         if (dead || !total) return;
-        const done = Math.min(total, Math.max(0, Math.floor(Number(position.bookmark) || 0)));
-        const place = Math.min(total, Math.max(0, Math.floor(Number(position.place_chapter) || 0)));
-        setJourney({ id: spotlightId, done, total, place });
+        setJourney({ id: spotlightId, done: Math.min(total, bookmark), total, place: Math.min(total, placeAtom) });
       })
       .catch(() => {});
     return () => {
