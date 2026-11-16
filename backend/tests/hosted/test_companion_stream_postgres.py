@@ -639,6 +639,46 @@ def test_at_the_day_cap_the_chat_ends_with_allowance_reached_before_the_writer(
     assert a.client.get("/api/books").status_code == 200
 
 
+def test_a_reply_begun_under_the_day_cap_is_shown_whole_and_the_next_waits(
+        chat_app, readers, database, monkeypatch):
+    """The break it catches: a reader with a little allowance left whose reply is cut off, or
+    never starts, because the reply's own calls pass the cap part-way; or a reader who, having
+    passed the cap, is answered again."""
+    from app.hosted.companion.spend import _DAY
+
+    _client, _tokens, app = chat_app
+    a, book = opened(chat_app, readers, database, "empty")
+    update_limits(database, a.owner, {"max_spend_usd_per_day": Decimal("0.05")})
+    catalog, _source = adapters(app, a.owner)
+    held = catalog.reserve_cost(book, phase="stream-reply", model="gpt-6.1-terra",
+                                input_tokens=10, output_tokens=10, usd=0.0499999,
+                                max_input_tokens=1, max_output_tokens=1, max_usd=0.0)
+    catalog.settle_cost(book, held)                    # a hair under the cap
+    reserve, past_the_cap = SpendStore.reserve_cost, []
+
+    def reserve_cost(adapter, book_id, **call):
+        spent = sum(row["usd"] for row in ledger_of(database, a.owner))
+        held = reserve(adapter, book_id, **call)
+        past_the_cap.append(spent >= Decimal("0.05"))
+        return held
+
+    monkeypatch.setattr(SpendStore, "reserve_cost", reserve_cost)
+    models = StandIns(app.state.platform_client, monkeypatch, reply=ORDINARY)
+    events = a.ask(book)
+    assert events[-1]["type"] == "done", events[-1]
+    assert sentences(events) == [line(1, 2), "She seems careful with it.", line(1, 3),
+                                 "It looks like she trusts Jonas less now.",
+                                 "What did you make of that?"]
+    # The reply's first call was admitted under the cap; later ones were made past it.
+    assert past_the_cap[0] is False and any(past_the_cap)
+    assert not [row for row in reservations_of(database, a.owner) if row["state"] == "reserved"]
+
+    writes = models.writes
+    assert a.ask(book) == [{"type": "error", "status": 429, "code": "allowance_reached",
+                            "message": _DAY}]
+    assert models.writes == writes
+
+
 class OpenReservations:
     """Every companion reservation open at once, by wrapping the adapter's four spend calls."""
 

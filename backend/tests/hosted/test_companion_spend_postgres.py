@@ -20,6 +20,7 @@ import pytest
 from psycopg import conninfo, sql
 
 from app.config import Settings
+import app.hosted.companion.spend as spend_rules
 from app.cost import CostCeilingExceeded, budgeted_completion
 from app.hosted.auth.repository import AuthConfigurationError
 from app.hosted.companion.spend import (
@@ -28,7 +29,7 @@ from app.hosted.companion.spend import (
     set_spend_limits,
     spend_limits,
 )
-from app.hosted.companion.store import HostedCompanionCatalog
+from app.hosted.companion.store import HostedCompanionCatalog, ReplyCatalog
 from app.hosted.limits import inspect_limits, update_limits
 from app.hosted.tenant.grants import TENANT_FUNCTION_PRIVILEGES, TENANT_TABLE_PRIVILEGES
 from app.hosted.tenant.models import OwnerId
@@ -161,13 +162,14 @@ def platform_today(dsn: str) -> tuple:
     return row or (Decimal(0), Decimal(0))
 
 
-def test_each_cap_refuses_the_call_that_would_pass_it_before_the_provider_is_called(
+def test_each_cap_refuses_a_call_once_it_is_reached_before_the_provider_is_called(
     tenant_dsn: str, database: str, readers: dict
 ) -> None:
-    """The break it catches: a call that passes a reader's day, month or lifetime dollars, their
-    calls in flight, or the platform's day, and is still made (and paid); or one reader at a cap
-    holding up another. Each refusal must come before the writer is reached and leave nothing
-    reserved."""
+    """The break it catches: a call made (and paid) after a reader's day, month or lifetime
+    dollars, their calls in flight, or the platform's day is used up; one reader at a cap holding
+    up another; or a reader turned away while they still have allowance, because a call's worst
+    case would not fit in what is left. Each refusal must come before the writer is reached and
+    leave nothing reserved."""
     a, b = readers["a"], readers["b"]
     book_a, book_b = shelve(database, a), shelve(database, b)
     owner_a, owner_b = catalog(tenant_dsn, a), catalog(tenant_dsn, b)
@@ -194,6 +196,8 @@ def test_each_cap_refuses_the_call_that_would_pass_it_before_the_provider_is_cal
     # The day: A's own cap, $0.10; B keeps the platform default ($1 here) and is not held up.
     cap(database, a, max_spend_usd_per_day=Decimal("0.10"))
     spend(owner_a, book_a, 0.099)
+    passes(owner_a, book_a)                    # allowance left, however little: not turned away
+    spend(owner_a, book_a, 0.001)
     assert isinstance(refused(owner_a, book_a, "day"), ReaderAllowanceReached)
     passes(owner_b, book_b)
     # Spend before today's UTC midnight is not today's.
@@ -210,6 +214,8 @@ def test_each_cap_refuses_the_call_that_would_pass_it_before_the_provider_is_cal
             " WHERE owner_id=%s", (a,))
     passes(owner_a, book_a)
     spend(owner_a, book_a, 0.199)
+    passes(owner_a, book_a)
+    spend(owner_a, book_a, 0.001)
     refused(owner_a, book_a, "month")
     passes(owner_b, book_b)
 
@@ -242,12 +248,13 @@ def test_each_cap_refuses_the_call_that_would_pass_it_before_the_provider_is_cal
         assert isinstance(refused(adapter, book, "platform_day"), PlatformAllowanceReached)
 
 
-def test_reservations_racing_for_the_last_cent_admit_exactly_what_fits(
+def test_reservations_racing_for_the_platforms_last_cent_admit_exactly_what_fits(
     tenant_dsn: str, database: str, readers: dict
 ) -> None:
-    """The break it catches: two requests at once both reading the same remaining allowance and
-    both reserving, so a cap is passed. For one reader the owner lock serializes them; across
-    readers, the platform day's row lock does."""
+    """The break it catches: requests at once all reading the same remaining platform allowance
+    and all reserving, so the owner's worst day is passed without bound; the platform day's row
+    lock serializes them. A reader's own day counts what was really spent, so two of their calls
+    at once are both admitted while allowance is left, and the next waits once it is spent."""
     a, b = readers["a"], readers["b"]
     book_a, book_b = shelve(database, a), shelve(database, b)
 
@@ -268,15 +275,18 @@ def test_reservations_racing_for_the_last_cent_admit_exactly_what_fits(
             thread.join(timeout=60)
         return [r for r in results if isinstance(r, str)], [r for r in results if not isinstance(r, str)]
 
-    # One reader, $0.10 a day, $0.09 spent: two calls of $0.01 race for the last cent.
+    # One reader, $0.10 a day, $0.09 spent: two calls at once, both admitted; once what they
+    # cost is in the ledger the day is used up.
     cap(database, a, max_spend_usd_per_day=Decimal("0.10"))
-    spend(catalog(tenant_dsn, a), book_a, 0.09)
+    owner_a = catalog(tenant_dsn, a)
+    spend(owner_a, book_a, 0.09)
     won, lost = race([(catalog(tenant_dsn, a), book_a, 0.01) for _ in range(2)])
-    assert len(won) == 1 and [exc.limit for exc in lost] == ["day"]
-    # Eight more at once from a fresh day's room: exactly what fits.
-    cap(database, a, max_spend_usd_per_day=Decimal("0.19"))
-    won, lost = race([(catalog(tenant_dsn, a), book_a, 0.03) for _ in range(8)])
-    assert len(won) == 3 and len(lost) == 5
+    assert len(won) == 2 and lost == []
+    for held in won:
+        owner_a.settle_cost(book_a, held)
+    with pytest.raises(ReaderAllowanceReached) as raised:
+        reserve(owner_a, book_a, 0.01)
+    assert raised.value.limit == "day"
 
     # Two readers against the platform's day: $0.06 left there, eight calls of $0.02 from both.
     cap(database, a, max_spend_usd_per_day=Decimal("1"))
@@ -329,26 +339,95 @@ def test_a_refused_provider_call_releases_its_reservation_and_a_timed_out_one_st
         check(adapter, book, jev()[0])
 
 
-def test_a_reservation_left_open_by_a_crash_still_counts(
-    tenant_dsn: str, database: str, readers: dict
+def test_a_reservation_left_open_by_a_crash_counts_as_spent_and_stops_holding_a_place(
+    tenant_dsn: str, database: str, readers: dict, monkeypatch
 ) -> None:
-    """The break it catches: a reservation forgotten when the process that made it dies before
-    settling (no settle, no release), which would let the next process spend past the cap."""
+    """The break it catches: a reservation left by a process that died before settling (no
+    settle, no release) being forgotten, so money nobody can account for is never counted; or
+    holding one of the reader's calls in flight for good, so a few crashes refuse their
+    companion until an operator steps in."""
     a = readers["a"]
     book = shelve(database, a)
     reserve(catalog(tenant_dsn, a), book, 0.08)            # ... and the process dies here
-    cap(database, a, max_spend_usd_per_day=Decimal("0.10"), max_companion_calls_in_flight=2)
+    cap(database, a, max_spend_usd_per_day=Decimal("0.08"), max_companion_calls_in_flight=1)
 
     restarted = catalog(tenant_dsn, a)
     assert [r["reserved_usd"] for r in restarted.get_cost_reservations(book)] == [0.08]
+    # While it could still be a call under way it holds its place, and is not yet money spent.
     with pytest.raises(ReaderAllowanceReached) as raised:
-        reserve(restarted, book, 0.03)
-    assert raised.value.limit == "day"
-    reserve(restarted, book, 0.02)
-    with pytest.raises(ReaderAllowanceReached) as raised:
-        reserve(restarted, book, 0)
+        reserve(restarted, book, 0.01)
     assert raised.value.limit == "calls_in_flight"
-    assert platform_today(database)[1] >= Decimal("0.10")
+    assert platform_today(database)[1] >= Decimal("0.08")
+    # Past the time any call lasts (here: at once), it is spend of the day it was made ...
+    monkeypatch.setattr(spend_rules, "_IN_FLIGHT_SINCE", "now()")
+    with pytest.raises(ReaderAllowanceReached) as raised:
+        reserve(restarted, book, 0.01)
+    assert raised.value.limit == "day"
+    # ... and no longer one of the calls in flight: with room in the day, the reader goes on.
+    cap(database, a, max_spend_usd_per_day=Decimal("0.09"))
+    reserve(restarted, book, 0.01)
+    # A day later it is not today's spend.
+    with psycopg.connect(database) as conn:
+        conn.execute("UPDATE cost_reservations SET created_at=created_at - interval '1 day'"
+                     " WHERE owner_id=%s", (a,))
+    cap(database, a, max_spend_usd_per_day=Decimal("0.01"))
+    reserve(restarted, book, 0.01)
+
+
+def test_a_reply_under_way_is_finished_and_the_next_one_waits(
+    tenant_dsn: str, database: str, readers: dict
+) -> None:
+    """The break it catches: a reply that began with allowance left being cut off part-way
+    because one of its own later calls met the reader's cap or the platform's (the reader gets
+    half an answer); or the opposite, one reply's admission carrying over to the reader's next
+    reply or to background work, so the cap never holds; or a reply's later calls missing from
+    the platform's books."""
+    a, b = readers["a"], readers["b"]
+    book = shelve(database, a)
+    cap(database, a, max_spend_usd_per_day=Decimal("0.05"))
+    spend(catalog(tenant_dsn, a), book, 0.049)
+
+    reply = ReplyCatalog(tenant_dsn, OwnerId(a))
+    spend(reply, book, 0.02)             # the reply's first call: admitted; the day is now past
+    settled, held = platform_today(database)
+    writer, (checker, checks) = Writer(), jev()
+    write(reply, book, writer)
+    check(reply, book, checker)
+    assert writer.calls == 1 and len(checks) == 1
+    open_call = reserve(reply, book, 0.03)
+    assert platform_today(database)[1] == held + Decimal("0.03")     # on the platform's books
+    reply.settle_cost(book, open_call)
+    spent = sum(row[6] for row in ledger(database, a)[2:])
+    assert platform_today(database) == (settled + spent, held)
+
+    # The next reply and background work both wait; a reply refused at its first call was never
+    # admitted, so asking it again changes nothing.
+    again = ReplyCatalog(tenant_dsn, OwnerId(a))
+    for adapter in (again, again, catalog(tenant_dsn, a)):
+        writer = Writer()
+        with pytest.raises(CostCeilingExceeded) as raised:
+            write(adapter, book, writer)
+        assert refusal(raised).limit == "day" and writer.calls == 0
+
+    # The platform's day does not cut a reply under way either, and still stops a new one.
+    book_b = shelve(database, b)
+    reply_b = ReplyCatalog(tenant_dsn, OwnerId(b))
+    reserve(reply_b, book_b, 0.001)
+    settled, held = platform_today(database)
+    set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=5,
+                     platform_usd_per_day=settled + held)
+    reserve(reply_b, book_b, 0.02)
+    assert platform_today(database)[1] == held + Decimal("0.02")
+    with pytest.raises(PlatformAllowanceReached):
+        reserve(ReplyCatalog(tenant_dsn, OwnerId(b)), book_b, 0.001)
+    with pytest.raises(PlatformAllowanceReached):
+        reserve(catalog(tenant_dsn, b), book_b, 0.001)
+
+    # The calls in flight still bound a reply under way: that cap is about load, not money.
+    cap(database, b, max_companion_calls_in_flight=2)
+    with pytest.raises(ReaderAllowanceReached) as raised:
+        reserve(reply_b, book_b, 0.001)
+    assert raised.value.limit == "calls_in_flight"
 
 
 def test_one_readers_spend_is_hidden_from_another_by_row_level_security_alone(
@@ -428,9 +507,9 @@ def test_spend_adapter_isolates_owners_by_its_own_predicates_with_rls_bypassed(
         reserve(other, book_a, 0.01)
     assert (ledger(database, a), reservations(database, a)) == before
 
-    # A at a day cap of exactly what A has spent and holds; B, with nothing spent, is unaffected.
-    cap(database, a, max_spend_usd_per_day=Decimal("0.07"))
-    cap(database, b, max_spend_usd_per_day=Decimal("0.07"))
+    # A at a day cap of exactly what A has spent; B, with nothing spent, is unaffected.
+    cap(database, a, max_spend_usd_per_day=Decimal("0.05"))
+    cap(database, b, max_spend_usd_per_day=Decimal("0.05"))
     with pytest.raises(ReaderAllowanceReached):
         reserve(owner_a, book_a, 0.001)
     other.settle_cost(book_b, reserve(other, book_b, 0.07))

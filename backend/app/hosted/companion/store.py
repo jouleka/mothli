@@ -7,11 +7,14 @@ Only live (not soft-deleted) books are returned, and every other read is reached
 
 from __future__ import annotations
 
+import threading
+
 from app.hosted.companion import OwnerBoundAdapter, as_uuid, check_position
 from app.hosted.companion.spend import SpendStore
 from app.hosted.companion.store_read_map import ReadMapStore
 from app.hosted.companion.store_turns import TurnStore
 from app.hosted.storage import SourceObjectRef
+from app.hosted.tenant.models import OwnerId
 
 _BOOK_COLUMNS = """
     SELECT book.id,book.incarnation,book.title,book.author,book.file_hash,
@@ -163,3 +166,19 @@ class HostedCompanionCatalog(_BookStore, ReadMapStore, TurnStore, SpendStore):
     ``HostedCompanionCatalog(dsn, owner_id)``."""
 
     __slots__ = ()
+
+
+class ReplyCatalog(HostedCompanionCatalog):
+    """The catalog for one reply a reader is waiting on. Construct one per reply.
+
+    The reply's first model call is checked against the caps like any other. Once that call is
+    admitted, the reply's later calls are not refused for a dollar cap (``spend.py``), so a reply
+    that began under the cap is finished. The owner is fixed as in every adapter; the only thing
+    that changes is whether this one reply has been admitted.
+    """
+
+    __slots__ = ("_admitted",)
+
+    def __init__(self, dsn: str, owner_id: OwnerId) -> None:
+        super().__init__(dsn, owner_id)
+        object.__setattr__(self, "_admitted", threading.Event())

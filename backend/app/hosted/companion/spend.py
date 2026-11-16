@@ -7,11 +7,23 @@ provider refused outright. Nothing here decides when a call is charged; those tw
 unchanged, in both modes.
 
 The owner of Mothli pays. ``reserve_cost`` checks, in one transaction under the owner's lock
-(the lock the hosted repository already takes for spend), against the ledger plus every open
-reservation: the reader's UTC day, the reader's UTC month, the reader's lifetime cap if one is
-set, the reader's companion calls in flight, and then the platform's UTC day (its row locked).
-A refusal is raised before any money is spent, as a ``RuntimeError``, so the two wrappers turn it
-into ``CostCeilingExceeded`` unchanged. A reservation nobody settles (a crash) stays counted.
+(the lock the hosted repository already takes for spend): the reader's UTC day, the reader's UTC
+month, the reader's lifetime cap if one is set, the reader's companion calls in flight, and then
+the platform's UTC day (its row locked). A refusal is raised before any money is spent, as a
+``RuntimeError``, so the two wrappers turn it into ``CostCeilingExceeded`` unchanged.
+
+The reader's day and month count what was really spent: the ledger, where the wrappers also put a
+call whose outcome is unknown (a timeout) at its reserved size. A call is refused once that spend
+has reached the cap, not when its own worst case would pass it, so a reader is never turned away
+with allowance left. A reply a reader is waiting on is admitted once, by its first call; its later
+calls (the sentence checks and second looks) are then never refused for a dollar cap, so a reply
+that began under the cap is finished and not cut off mid-way (``ReplyCatalog`` in ``store.py``).
+A reader can therefore end a day past the cap by at most the replies under way when it was
+reached; background work is checked call by call and has no such allowance.
+
+A reservation counts as in flight for ``IN_FLIGHT_MINUTES``. One still open after that was left
+by a process that died: it no longer holds a place among the calls in flight, and since nobody
+knows what it cost, it is counted as spent, at its reserved size, on the day it was made.
 
 The per-book ceilings the wrappers pass (``max_input_tokens``, ``max_output_tokens``,
 ``max_usd``) are accepted and not used: the owner pays, so the caps are the reader's and the
@@ -35,6 +47,9 @@ _CENT_FRACTION = Decimal("1e-10")          # NUMERIC(20,10)
 _OWNER_SPEND_LOCK = "SELECT pg_advisory_xact_lock(hashtextextended(%s::text,47))"
 _DAY_START = "(date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')"
 _MONTH_START = "(date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')"
+# No companion call lasts this long: the writer and the checker both time out in seconds.
+IN_FLIGHT_MINUTES = 15
+_IN_FLIGHT_SINCE = f"(now() - interval '{IN_FLIGHT_MINUTES} minutes')"
 
 
 @dataclass(frozen=True)
@@ -92,14 +107,15 @@ class PlatformAllowanceReached(AllowanceReached):
     """The platform's own day: every reader waits until the next UTC day."""
 
 
-_DAY = ("Mothli has talked a lot with you today and is resting until tomorrow. "
+# Said by Mothli itself, as it speaks in the chat: the first person, and no amount or setting.
+_DAY = ("We’ve talked a lot today, so I’m resting until tomorrow. "
         "Your book and your place are right here.")
-_MONTH = ("Mothli has used this month's conversations with you and will be back next month. "
+_MONTH = ("We’ve talked our way through this month, so I’ll be back at the start of the next. "
           "Your book and your place are right here.")
-_LIFETIME = ("Mothli has used the conversations this account has. "
+_LIFETIME = ("We’ve used up the conversations this account has. "
              "Your books and your place are right here.")
-_BUSY = "Mothli is still answering you. Give it a moment, then ask again."
-_PLATFORM = ("Mothli is resting for the rest of today and will be back tomorrow. "
+_BUSY = "Give me a moment, I’m still on your last question. Then ask again."
+_PLATFORM = ("I’m resting for the rest of today and I’ll be back tomorrow. "
              "Your book and your place are right here.")
 
 
@@ -177,11 +193,12 @@ class SpendStore(OwnerBoundAdapter):
     def reserve_cost(self, book_id, *, phase, model, input_tokens, output_tokens, usd,
                      max_input_tokens, max_output_tokens, max_usd, chapter_ordinal=None,
                      expected_reading_scope=None, max_preparation_usd=None):
-        """Reserve one call's worst case against this reader's and the platform's caps.
+        """Reserve one call, unless this reader's or the platform's allowance is used up.
 
         Returns the reservation id. Raises ``ReaderAllowanceReached`` or
-        ``PlatformAllowanceReached`` (both ``RuntimeError``) when the call would pass a cap,
-        ``ValueError`` for an unknown book or a malformed value; nothing is reserved then.
+        ``PlatformAllowanceReached`` (both ``RuntimeError``) at a cap, ``ValueError`` for an
+        unknown book or a malformed value; nothing is reserved then. A later call of a reply
+        already admitted (module docstring) is refused only for the calls in flight.
         """
         for value, what in ((input_tokens, "input_tokens"), (output_tokens, "output_tokens"),
                             (max_input_tokens, "max_input_tokens"),
@@ -203,6 +220,8 @@ class SpendStore(OwnerBoundAdapter):
         # Jev's models are named jev-<version> (config); every other call is the writer's.
         kind = "judge" if model.startswith("jev-") else "synthesis"
         limits = _limits
+        admitted = getattr(self, "_admitted", None)       # set on a ReplyCatalog only
+        under_way = admitted is not None and admitted.is_set()
         reservation = uuid.uuid4()
         owner = self._owner.value
         with self._transaction() as conn:
@@ -217,19 +236,24 @@ class SpendStore(OwnerBoundAdapter):
             used = conn.execute(
                 f"""SELECT
                       (SELECT count(*) FROM public.cost_reservations
-                        WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL)
-                        AS in_flight,
-                      COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
-                        WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL),0)
-                        AS held,
+                        WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL
+                          AND created_at > {_IN_FLIGHT_SINCE}) AS in_flight,
                       COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
                         WHERE owner_id=%(o)s AND state='reserved'),0) AS held_all,
                       COALESCE((SELECT sum(usd) FROM public.cost_ledger
                         WHERE owner_id=%(o)s AND purpose IS NOT NULL
-                          AND recorded_at >= {_DAY_START}),0) AS day,
+                          AND recorded_at >= {_DAY_START}),0)
+                      + COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
+                        WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL
+                          AND created_at <= {_IN_FLIGHT_SINCE}
+                          AND created_at >= {_DAY_START}),0) AS day,
                       COALESCE((SELECT sum(usd) FROM public.cost_ledger
                         WHERE owner_id=%(o)s AND purpose IS NOT NULL
-                          AND recorded_at >= {_MONTH_START}),0) AS month,
+                          AND recorded_at >= {_MONTH_START}),0)
+                      + COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
+                        WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL
+                          AND created_at <= {_IN_FLIGHT_SINCE}
+                          AND created_at >= {_MONTH_START}),0) AS month,
                       COALESCE((SELECT sum(usd) FROM public.cost_ledger
                         WHERE owner_id=%(o)s),0) AS lifetime""",
                 {"o": owner}).fetchone()
@@ -237,19 +261,28 @@ class SpendStore(OwnerBoundAdapter):
             month_cap = policy["max_spend_usd_per_month"]
             day_cap = limits.reader_usd_per_day if day_cap is None else day_cap
             month_cap = limits.reader_usd_per_month if month_cap is None else month_cap
-            if used["day"] + used["held"] + amount > day_cap:
-                raise ReaderAllowanceReached("day", _DAY)
-            if used["month"] + used["held"] + amount > month_cap:
-                raise ReaderAllowanceReached("month", _MONTH)
             lifetime_cap = policy["max_spend_usd"]
-            if lifetime_cap is not None and used["lifetime"] + used["held_all"] + amount > lifetime_cap:
+            if under_way:
+                pass                                   # admitted with its first call: it finishes
+            elif used["day"] >= day_cap:
+                raise ReaderAllowanceReached("day", _DAY)
+            elif used["month"] >= month_cap:
+                raise ReaderAllowanceReached("month", _MONTH)
+            elif (lifetime_cap is not None
+                  and used["lifetime"] + used["held_all"] + amount > lifetime_cap):
                 raise ReaderAllowanceReached("lifetime", _LIFETIME)
             if used["in_flight"] >= policy["max_companion_calls_in_flight"]:
                 raise ReaderAllowanceReached("calls_in_flight", _BUSY, code="companion_busy")
-            fits = conn.execute("SELECT public.companion_platform_reserve(%s,%s) AS fits",
-                                (amount, limits.platform_usd_per_day)).fetchone()["fits"]
-            if not fits:
-                raise PlatformAllowanceReached("platform_day", _PLATFORM)
+            if under_way:
+                # Recorded against the platform's day like any call, but not refused by it.
+                conn.execute(
+                    "SELECT public.companion_platform_adjust((now() AT TIME ZONE 'UTC')::date,%s,0)",
+                    (amount,))
+            else:
+                fits = conn.execute("SELECT public.companion_platform_reserve(%s,%s) AS fits",
+                                    (amount, limits.platform_usd_per_day)).fetchone()["fits"]
+                if not fits:
+                    raise PlatformAllowanceReached("platform_day", _PLATFORM)
             conn.execute(
                 """INSERT INTO public.cost_reservations
                      (owner_id,id,book_id,book_incarnation,chapter_ordinal,phase,model,
@@ -258,6 +291,8 @@ class SpendStore(OwnerBoundAdapter):
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (owner, reservation, book, incarnation, chapter_ordinal, kind, model,
                  input_tokens, output_tokens, amount, f"companion:{reservation.hex}", phase))
+        if admitted is not None:
+            admitted.set()
         return reservation.hex
 
     def note_reservation_actual(self, book_id, reservation_id, *, input_tokens, output_tokens,
