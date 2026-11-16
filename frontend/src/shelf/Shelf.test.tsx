@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   providerSettings: vi.fn(),
   classics: vi.fn(),
   addClassic: vi.fn(),
+  recollections: vi.fn(),
 }));
 vi.mock("../api", () => ({
   api: {
@@ -26,6 +27,10 @@ vi.mock("../api", () => ({
     providerSettings: mocks.providerSettings,
     classics: mocks.classics,
     addClassic: mocks.addClassic,
+    recollections: mocks.recollections,
+  },
+  ApiError: class ApiError extends Error {
+    status = 0;
   },
 }));
 
@@ -38,6 +43,7 @@ beforeEach(() => {
   mocks.providerSettings.mockReset().mockRejectedValue(new Error("local mode"));
   mocks.classics.mockReset().mockRejectedValue(new Error("no catalogue"));
   mocks.addClassic.mockReset();
+  mocks.recollections.mockReset().mockRejectedValue(new Error("not kept"));
 });
 
 afterEach(() => {
@@ -220,6 +226,35 @@ describe("Library interactions", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(toggle);
+  });
+
+  // Catches: anything of hosted sign-in reaching local mode, where there are no accounts.
+  test("local mode has no account, no sign-in and no sign-out", async () => {
+    const user = userEvent.setup();
+    render(<Shelf onOpen={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Library settings and account" }));
+    const menu = document.getElementById("library-utilities")!;
+    expect(within(menu).queryByRole("button", { name: "Your account" })).toBeNull();
+    expect(within(menu).queryByRole("link")).toBeNull();
+    expect(within(menu).queryByText(/sign (in|out)/i)).toBeNull();
+  });
+
+  test("hosted: the reader's account opens from the menu and focus comes back to it", async () => {
+    const user = userEvent.setup();
+    const session = {
+      user: { id: "05dbebd1-e9e8-4be8-8172-eb65ca8d2a67", display_name: "Wren Example" },
+      expires_at: "2099-01-01T00:00:00+00:00",
+    };
+    render(<Shelf onOpen={() => {}} session={session} />);
+    const toggle = screen.getByRole("button", { name: "Library settings and account" });
+    await user.click(toggle);
+    expect(screen.queryByRole("button", { name: /erase offline books/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Your account" }));
+    const sheet = await screen.findByRole("dialog", { name: "Your account" });
+    expect(within(sheet).getByRole("button", { name: "Sign out" })).toBeTruthy();
+    await user.click(within(sheet).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(toggle));
   });
 
   test("shows loading before books arrive and offers a working retry after an error", async () => {

@@ -344,6 +344,113 @@ def test_a_capped_reader_waits_for_the_next_day_and_others_go_on(notes_app, read
     assert [n["sentences"] for n in notes_of(database, b.owner)] == [kept(1)]
 
 
+def spend_on_ledger(database: str, owner: uuid.UUID, book: str, usd: str) -> None:
+    """A companion call already settled today, written as ``settle_cost`` writes it."""
+    with psycopg.connect(database) as conn:
+        conn.execute(
+            """INSERT INTO cost_ledger (owner_id,book_id,book_incarnation,phase,model,input_tokens,
+                                        output_tokens,usd,idempotency_key,purpose)
+               SELECT owner_id,id,incarnation,'synthesis','gpt-6.1-terra',10,10,%s,%s,'notes-write'
+               FROM books WHERE owner_id=%s AND id=%s""",
+            (Decimal(usd), f"companion:{uuid.uuid4().hex}", owner, book))
+
+
+def test_the_claim_and_reserve_cost_agree_on_who_is_capped(notes_app, readers, database,
+                                                           worker_dsn) -> None:
+    """The break it catches: the claim's idea of a capped reader drifting from the cap rule in
+    ``spend.py``, so a job is claimed and refused at its first call, or a reader with allowance
+    left waits a day. Same owner, same ledger: the claim says capped exactly when
+    ``reserve_cost`` refuses for the day or the month."""
+    from app.hosted.companion.spend import ReaderAllowanceReached
+
+    a, book = opened(notes_app, readers)
+    catalog = HostedCompanionCatalog(database, OwnerId(a.owner))
+
+    def claim_says() -> bool:
+        with psycopg.connect(worker_dsn, row_factory=psycopg.rows.dict_row) as conn:
+            return PostgresWorkerRepository._companion_capped(conn, a.owner)
+
+    def reserve_says() -> bool:
+        try:
+            held = catalog.reserve_cost(book, phase="notes-write", model="gpt-6.1-terra",
+                                        input_tokens=10, output_tokens=10, usd=0.001,
+                                        max_input_tokens=1, max_output_tokens=1, max_usd=0.0)
+        except ReaderAllowanceReached as exc:
+            assert exc.limit in {"day", "month"}
+            return True
+        catalog.discard_cost_reservation(book, held)
+        return False
+
+    def open_reservation(usd: str, minutes_ago: int) -> None:
+        with psycopg.connect(database) as conn:
+            conn.execute(
+                """INSERT INTO cost_reservations
+                     (owner_id,id,book_id,book_incarnation,phase,model,reserved_input_tokens,
+                      reserved_output_tokens,reserved_usd,idempotency_key,purpose,created_at)
+                   SELECT owner_id,%s,id,incarnation,'synthesis','gpt-6.1-terra',10,10,%s,%s,
+                          'notes-write',now()-%s*interval '1 minute'
+                   FROM books WHERE owner_id=%s AND id=%s""",
+                (uuid.uuid4(), Decimal(usd), f"companion:{uuid.uuid4().hex}", minutes_ago,
+                 a.owner, book))
+
+    seen = []
+
+    def both(expected: bool) -> None:
+        assert (claim_says(), reserve_says()) == (expected, expected)
+        seen.append(expected)
+
+    update_limits(database, a.owner, {"max_spend_usd_per_day": Decimal("0.05"),
+                                      "max_spend_usd_per_month": Decimal("0.08")})
+    both(False)                                            # nothing spent
+    spend_on_ledger(database, a.owner, book, "0.049")
+    both(False)                                            # just under the day cap
+    open_reservation("0.5", minutes_ago=1)
+    both(False)                                            # in flight: not counted in dollars
+    open_reservation("0.001", minutes_ago=20)
+    both(True)                                             # left by a dead process: counted
+    update_limits(database, a.owner, {"max_spend_usd_per_day": Decimal("1")})
+    both(False)
+    spend_on_ledger(database, a.owner, book, "0.03")
+    both(True)                                             # the month: 0.08 of 0.08
+    update_limits(database, a.owner, {"max_spend_usd_per_day": None,
+                                      "max_spend_usd_per_month": None})
+    both(False)                                            # the defaults: $1 a day, $5 a month
+    assert seen == [False, False, False, True, False, True, False]
+
+
+def test_a_notes_job_stopped_by_the_cap_keeps_what_it_wrote_and_waits_for_tomorrow(
+        notes_app, readers, database, worker_dsn, monkeypatch):
+    """The break it catches: notes already checked and stored thrown away when the reader's cap
+    is reached part-way through a book, or a job that keeps being claimed and refused that day."""
+    _client, _tokens, app = notes_app
+    a, book = opened(notes_app, readers)
+    a.mark(book, [2])                                      # one job for chapters 1 and 2
+    update_limits(database, a.owner, {"max_spend_usd_per_day": Decimal("1")})
+
+    def reach_the_cap_while_chapter_two_is_written():
+        if len(models.notes_prompts) == 2:
+            spend_on_ledger(database, a.owner, book, "1")
+
+    models = NotesModels(app.state.platform_client, monkeypatch,
+                         notes_hook=reach_the_cap_while_chapter_two_is_written)
+    work = worker(app, worker_dsn)
+    assert work.run_once()
+    assert [(n["atom"], n["sentences"]) for n in notes_of(database, a.owner)] == [(1, kept(1))]
+    [job] = jobs_of(database, a.owner)
+    assert (job["state"], job["sanitized_error"]) == (
+        "pending", {"code": "budget_exceeded", "retryable": True})
+    with psycopg.connect(database) as conn:
+        conn.execute("UPDATE jobs SET run_after=now() WHERE kind='chapter_notes'")
+    assert work.run_once() is False                        # capped: moved to tomorrow
+    tomorrow = rows(database, "SELECT (date_trunc('day', now() AT TIME ZONE 'UTC') + interval "
+                              "'1 day') AT TIME ZONE 'UTC' AS at")[0]["at"]
+    [job] = jobs_of(database, a.owner)
+    assert (job["state"], job["run_after"]) == ("pending", tomorrow)
+    assert [(n["atom"], n["sentences"]) for n in notes_of(database, a.owner)] == [(1, kept(1))]
+    assert len(models.notes_prompts) == 2
+    assert not [row for row in spend_of(database, a.owner)[0] if row["state"] == "reserved"]
+
+
 # ---- a lost lease, a restart --------------------------------------------------------------------
 
 def test_a_lease_lost_mid_run_does_not_store_notes_twice(notes_app, readers, database, worker_dsn,

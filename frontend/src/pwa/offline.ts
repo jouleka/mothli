@@ -43,6 +43,14 @@ type MarkMutation = {
 
 type OfflineMutation = PositionMutation | MarkMutation;
 
+/** Fired when the server answers 401: the hosted sign-in has ended while the app was open. Only
+ * hosted mode listens (main.tsx); local mode has no sign-in and never answers 401. */
+export const SIGNED_OUT_EVENT = "mothli:signed-out";
+
+export function announceSignedOut(): void {
+  globalThis.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+}
+
 let flushPromise: Promise<void> | null = null;
 let listenersInstalled = false;
 const positionDeliveries = new Map<string, Set<Promise<unknown>>>();

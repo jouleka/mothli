@@ -318,33 +318,15 @@ class PostgresWorkerRepository:
 
     @staticmethod
     def _companion_capped(conn: psycopg.Connection, owner_id: uuid.UUID) -> bool:
-        """Whether this owner is at their companion day or month cap, counted exactly as the
-        companion's ``reserve_cost`` counts it (ledger plus open companion reservations), so no
-        call of theirs could be reserved now. Read under the owner's spend lock."""
-        from app.hosted.companion.spend import _DAY_START, _MONTH_START, spend_limits
+        """Whether the companion's ``reserve_cost`` would refuse this owner's next call for their
+        day or month cap: the same SQL and the same comparison (``reader_cap_reached``), read
+        under the owner's spend lock, so the claim and the first paid call cannot disagree."""
+        from app.hosted.companion.spend import reader_cap_reached
 
-        limits = spend_limits()
-        row = conn.execute(
-            f"""
-            SELECT COALESCE(policy.max_spend_usd_per_day,%(day)s) AS day_cap,
-                   COALESCE(policy.max_spend_usd_per_month,%(month)s) AS month_cap,
-                   COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
-                     WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL),0) AS held,
-                   COALESCE((SELECT sum(usd) FROM public.cost_ledger
-                     WHERE owner_id=%(o)s AND purpose IS NOT NULL
-                       AND recorded_at >= {_DAY_START}),0) AS day,
-                   COALESCE((SELECT sum(usd) FROM public.cost_ledger
-                     WHERE owner_id=%(o)s AND purpose IS NOT NULL
-                       AND recorded_at >= {_MONTH_START}),0) AS month
-            FROM public.owner_limits AS policy WHERE policy.owner_id=%(o)s
-            """,
-            {"o": owner_id, "day": limits.reader_usd_per_day,
-             "month": limits.reader_usd_per_month},
-        ).fetchone()
-        if row is None:
-            raise WorkerConfigurationError("owner limit policy is unavailable")
-        return (row["day"] + row["held"] >= row["day_cap"]
-                or row["month"] + row["held"] >= row["month_cap"])
+        try:
+            return reader_cap_reached(conn, owner_id) is not None
+        except LookupError as exc:
+            raise WorkerConfigurationError("owner limit policy is unavailable") from exc
 
     def claim_next(
         self,

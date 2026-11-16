@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { api } from "./api";
-import { flushOfflineMutations, pendingPosition, queuePosition } from "./pwa/offline";
+import { flushOfflineMutations, pendingPosition, queuePosition, SIGNED_OUT_EVENT } from "./pwa/offline";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -350,6 +350,50 @@ describe("Hosted writes", () => {
       await expect(reply).rejects.toMatchObject({ code: "ask_stopped" });
     }
     expect(seen).toHaveLength(3);
+  });
+
+  // Catches: a streamed reply's own reason for stopping (hosted allowance, a reply still in
+  // flight) being dropped, so the chats could only show a generic failure.
+  test("a streamed reply that ends at the allowance keeps its code and the server's line", async () => {
+    const point = { id: "a".repeat(64), atom: 2, offset: 120, position_epoch: 0, available_chapter: 2 };
+    const ended = (code: string, message: string) => new Response(
+      `data: ${JSON.stringify({ type: "error", status: 429, code, message })}\n\n`,
+      { status: 200, headers: { "content-type": "text/event-stream" } });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(ended("allowance_reached", "Mothli is resting until tomorrow."))
+      .mockResolvedValueOnce(ended("companion_busy", "Mothli is still answering you."));
+    await expect(api.askBookStream("book", "Who?", 2, point, () => {})).rejects.toMatchObject({
+      status: 429, code: "allowance_reached", message: "Mothli is resting until tomorrow.",
+    });
+    await expect(api.askHome("Who?", () => {})).rejects.toMatchObject({ status: 429, code: "companion_busy" });
+  });
+
+  // Catches: a hosted sign-in that ended going unnoticed, leaving the reader on failing screens.
+  test("a 401 answer tells the app the reader is signed out; other refusals do not", async () => {
+    const heard = vi.fn();
+    window.addEventListener(SIGNED_OUT_EVENT, heard);
+    try {
+      vi.spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Authentication required" }), { status: 401 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "CSRF validation failed" }), { status: 403 }));
+      await expect(api.books()).rejects.toMatchObject({ status: 401 });
+      expect(heard).toHaveBeenCalledTimes(1);
+      await expect(api.books()).rejects.toMatchObject({ status: 403 });
+      expect(heard).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(SIGNED_OUT_EVENT, heard);
+    }
+  });
+
+  // Catches: the reader's last page being lost when the sign-in ends mid-read. The place is kept
+  // like an offline one and sent once they are signed in again.
+  test("a position refused with 401 is kept for after signing in again", async () => {
+    localStorage.setItem("litlet.offline.owner", "05dbebd1-e9e8-4be8-8172-eb65ca8d2a67");
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ detail: "Authentication required" }), { status: 401 }));
+    const saved = await api.putPosition("book", "page-40", 40, 2, 0, 0, "reader-client", 1);
+    expect(saved).toMatchObject({ queued: true });
+    expect(pendingPosition("book")).toMatchObject({ cfi: "page-40", offset: 40 });
   });
 
   test("posts an exact-frontier memory correction with CSRF", async () => {
