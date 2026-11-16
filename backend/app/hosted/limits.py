@@ -27,11 +27,17 @@ class LimitExceededError(RuntimeError):
         self.action = action
 
 
+# The dollar caps: lifetime (LIT-47), and per UTC day and month for the companion the platform
+# pays for (ADR 0041 part 3; NULL means the HOSTED_READER_USD_PER_DAY / _PER_MONTH default).
+_SPEND_CAPS = ("max_spend_usd", "max_spend_usd_per_day", "max_spend_usd_per_month")
+
+
 def _policy_row(row: dict) -> dict:
     value = dict(row)
     value["owner_id"] = str(value["owner_id"])
-    if value.get("max_spend_usd") is not None:
-        value["max_spend_usd"] = str(value["max_spend_usd"])
+    for money in _SPEND_CAPS:
+        if value.get(money) is not None:
+            value[money] = str(value[money])
     if value.get("spend_usd") is not None:
         value["spend_usd"] = str(value["spend_usd"])
     if value.get("reserved_usd") is not None:
@@ -79,6 +85,9 @@ def update_limits(dsn: str, owner_id: uuid.UUID, updates: dict[str, object]) -> 
         "request_window_seconds",
         "max_provider_concurrency",
         "max_spend_usd",
+        "max_spend_usd_per_day",
+        "max_spend_usd_per_month",
+        "max_companion_calls_in_flight",
     }
     if not updates or not set(updates) <= allowed:
         raise ValueError("one or more reviewed limit fields are required")
@@ -112,10 +121,17 @@ def main(argv: list[str] | None = None) -> int:
         "requests_per_window",
         "request_window_seconds",
         "max_provider_concurrency",
+        "max_companion_calls_in_flight",
     ):
         set_parser.add_argument("--" + field.replace("_", "-"), dest=field, type=int)
     set_parser.add_argument("--max-spend-usd", type=Decimal)
     set_parser.add_argument("--clear-spend-limit", action="store_true")
+    set_parser.add_argument("--max-spend-usd-per-day", type=Decimal)
+    set_parser.add_argument("--clear-day-spend-limit", action="store_true",
+                            help="use HOSTED_READER_USD_PER_DAY for this owner")
+    set_parser.add_argument("--max-spend-usd-per-month", type=Decimal)
+    set_parser.add_argument("--clear-month-spend-limit", action="store_true",
+                            help="use HOSTED_READER_USD_PER_MONTH for this owner")
     args = parser.parse_args(argv)
     dsn = os.environ.get(args.dsn_env)
     if not dsn:
@@ -131,14 +147,20 @@ def main(argv: list[str] | None = None) -> int:
         "requests_per_window",
         "request_window_seconds",
         "max_provider_concurrency",
+        "max_companion_calls_in_flight",
     )
     updates = {field: getattr(args, field) for field in fields if getattr(args, field) is not None}
-    if args.max_spend_usd is not None:
-        updates["max_spend_usd"] = args.max_spend_usd
-    if args.clear_spend_limit:
-        if "max_spend_usd" in updates:
-            parser.error("choose either --max-spend-usd or --clear-spend-limit")
-        updates["max_spend_usd"] = None
+    for cap, clear, flag in (
+        ("max_spend_usd", args.clear_spend_limit, "--clear-spend-limit"),
+        ("max_spend_usd_per_day", args.clear_day_spend_limit, "--clear-day-spend-limit"),
+        ("max_spend_usd_per_month", args.clear_month_spend_limit, "--clear-month-spend-limit"),
+    ):
+        if getattr(args, cap) is not None:
+            updates[cap] = getattr(args, cap)
+        if clear:
+            if cap in updates:
+                parser.error(f"choose either --{cap.replace('_', '-')} or {flag}")
+            updates[cap] = None
     try:
         result = update_limits(dsn, args.owner, updates)
     except (ValueError, psycopg.errors.CheckViolation) as exc:

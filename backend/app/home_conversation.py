@@ -425,8 +425,12 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere, recol
         except CostCeilingExceeded as exc:
             failure = exc
             large = "per-call" in str(exc)
+            # Hosted mode: the reader's or the platform's allowance (ADR 0041 section 6).
+            allowance = exc.__cause__ if getattr(exc.__cause__, "reader_message", None) else None
             yield {"type": "error", "status": 413 if large else 429,
-                   "message": "request too large" if large else "book cost ceiling reached"}
+                   "message": "request too large" if large else "book cost ceiling reached",
+                   **({"code": allowance.code, "message": allowance.reader_message}
+                      if allowance else {})}
         except AskRetrievalLimit as exc:
             failure = exc
             yield {"type": "error", "status": 413, "message": "read text exceeds the bounded search budget"}

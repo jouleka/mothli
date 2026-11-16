@@ -43,6 +43,14 @@ TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "conversation_turns": frozenset({"SELECT", "INSERT", "DELETE"}),
 }
 
+# ADR 0041 part 3 (migration 0020): the platform's day total is reached only through these two
+# functions, which run as their owner and answer "fits" or nothing, never a sum. The tenant role
+# holds no privilege on ``platform_spend_days`` itself, and PUBLIC holds none on the functions.
+TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
+    "companion_platform_reserve(numeric,numeric)": frozenset({"EXECUTE"}),
+    "companion_platform_adjust(date,numeric,numeric)": frozenset({"EXECUTE"}),
+}
+
 ALL_TABLE_PRIVILEGES = frozenset(
     {"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"}
 )
@@ -53,4 +61,12 @@ def tenant_grants() -> list[tuple[str, tuple[str, ...]]]:
     return [
         (table, tuple(sorted(privileges)))
         for table, privileges in sorted(TENANT_TABLE_PRIVILEGES.items())
+    ]
+
+
+def tenant_function_grants() -> list[tuple[str, tuple[str, ...]]]:
+    """(function signature, privileges) pairs in a stable order, for a script that grants them."""
+    return [
+        (function, tuple(sorted(privileges)))
+        for function, privileges in sorted(TENANT_FUNCTION_PRIVILEGES.items())
     ]

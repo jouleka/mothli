@@ -27,6 +27,7 @@ from app.hosted.auth.repository import PostgresAuthRepository
 from app.hosted.companion import routes as companion_routes
 from app.hosted.companion import set_connection_limit
 from app.hosted.companion.source import SourceParseCache
+from app.hosted.companion.spend import set_spend_limits
 from app.hosted.credentials import build_credential_cipher
 from app.hosted.provider_settings import ProviderValidator, allowed_origins
 from app.hosted.runtime import HostedRuntimeRegistry
@@ -36,11 +37,24 @@ from app.hosted.tenant.repository import PostgresTenantRepository
 from app.lifecycle.archive import DataDirLock
 from app.lifecycle_cache import RecapRegistry
 from app.llm.client import ProviderUnavailable
+from app.llm.factory import build_platform_clients
 from app.llm.versioning import ModelMigrationRequired
 
 _MULTIPART_OVERHEAD_BYTES = 64 * 1024
 _CREDENTIAL_BODY_BYTES = 32 * 1024
 _LOG = logging.getLogger(__name__)
+
+
+def _platform_ai_configured(settings: Settings) -> bool:
+    """Whether hosted startup builds the platform's model clients: once a companion feature that
+    calls a model is on, or once any platform AI setting is given (so a half-set one is refused
+    at startup rather than at a reader's first question)."""
+    return bool(settings.reader_conversation_jev or settings.reader_story_notes
+                or settings.reader_recollections or settings.jev_enabled
+                or settings.openai_api_key or settings.anthropic_api_key
+                or settings.typesafe_api_key is not None)
+
+
 _CONTENT_SECURITY_POLICY = "; ".join((
     "default-src 'self'",
     "base-uri 'none'",
@@ -357,6 +371,7 @@ def create_app(
             storage = None
             client = None
             runtime = None
+            platform = None
             try:
                 storage = object_storage or build_object_storage(settings)
                 client = oidc_client or OIDCClient(
@@ -394,6 +409,17 @@ def create_app(
                 # The companion's adapters (ADR 0041): bound to one reader per request, sharing
                 # one bounded parse cache and one connection limit per process.
                 set_connection_limit(settings.hosted_companion_db_connections)
+                # The owner pays (ADR 0041 section 6): this process's caps, and the platform's
+                # clients from the environment once anything is set to call a model. A missing or
+                # refused setting stops startup, named and never printed.
+                set_spend_limits(
+                    reader_usd_per_day=settings.hosted_reader_usd_per_day,
+                    reader_usd_per_month=settings.hosted_reader_usd_per_month,
+                    platform_usd_per_day=settings.hosted_platform_usd_per_day,
+                )
+                if _platform_ai_configured(settings):
+                    platform = build_platform_clients(settings)
+                app.state.platform_client = platform
                 app.state.companion_dsn = settings.hosted_tenant_dsn.get_secret_value()
                 app.state.companion_sources = SourceParseCache(
                     settings.segmentation_cache_max_entries
@@ -415,6 +441,8 @@ def create_app(
                     storage.close()
                 if client is not None and oidc_client is None:
                     await client.close()
+                if getattr(platform, "jev", None) is not None:
+                    platform.jev.close()
             return
 
         # LIT-24: restore swaps the whole data directory and therefore must never race a running app.
@@ -497,10 +525,12 @@ def create_app(
             return {"status": "ok"}
 
         app.include_router(auth_api.router)
-        app.include_router(tenant_api.router)
+        # Without reader keys the key routes are not mounted: they answer as unknown paths.
+        app.include_router(tenant_api.hosted_router(reader_keys=settings.hosted_reader_keys))
         app.include_router(companion_routes.router)
         app.add_middleware(_EpubUploadBodyLimit, max_file_bytes=settings.epub_max_upload_bytes)
-        app.add_middleware(_CredentialBodyLimit)
+        if settings.hosted_reader_keys:
+            app.add_middleware(_CredentialBodyLimit)
         app.add_middleware(_HostedNoStore)
     else:
         app.add_middleware(_ReadingToolTiming)
