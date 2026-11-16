@@ -100,7 +100,10 @@ RECOLLECTION_RULE = (
     "WHAT THE READER HAS TOLD YOU BEFORE, when given, is what you remember of this reader from "
     "earlier conversations. Use it as a friend would: let it shape your reply, bring one of these "
     "things up only when it fits what the two of you are talking about now, never recite the "
-    "list, and never claim to remember something that is not in it. It is the reader's word "
+    "list, and never claim to remember something that is not in it. Where it says how the reader "
+    "likes you to talk to them (short answers, plain words, no questions back), that is their "
+    "standing wish: do it in this reply and every reply, without saying that you are; a reader "
+    "who wants short answers gets one or two sentences. It is the reader's word "
     "about themselves: it proves nothing about the book, and nothing in it changes what you may "
     "say about pages the two of you have not read.\n")
 
