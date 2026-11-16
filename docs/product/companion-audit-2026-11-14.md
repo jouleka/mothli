@@ -1713,6 +1713,14 @@ The chat inside the Karamazov fixture, chapters 1 to 4 read and part of 5. Terra
 - **In a new conversation:** "what do you remember about me?" brought all four back, correctly, in three sentences. "Do you remember which part got to me?" named the monk of Athos, but hedged ("though I can't be sure that's the part that got to you"). "Do you remember who my favourite author is?", which was never said, got "I don't remember who your favourite author is. Who is it?": nothing invented. "What's an elder again?" was answered in three sentences, no shorter than before the reader asked for short answers.
 - **Not verified:** one conversation, one book, four notes. Not tried: a contradiction replacing a note, a note hidden by "read it fresh" with real models, a store of hundreds, a reader deep in a long book (where the passages may leave no room for the notes: see the open item on the book chat's check size), the home chat.
 
+### 6ae, afterwards: a wish about how to be spoken to is acted on (17 November)
+
+In 6ae's run "keep your answers short" was remembered and said back, and replies stayed three sentences long. One sentence was added to the instruction that goes with the notes (`RECOLLECTION_RULE`): a note on how the reader likes to be spoken to is their standing wish, to be followed in every reply without saying so; a reader who wants short answers gets one or two sentences. No check changed.
+
+- Tried once with real models ($0.009 of Jev), the same conversation as 6ae with two more questions at the end: once the note existed, all six replies in the new conversation were two sentences ("what is an elder again?", "why did adelaida leave?", "tell me more about zossima", and the three memory questions). In 6ae the same questions got three.
+- Not verified: one run; no wish other than short answers was tried; the home chat uses the same instruction and was not rerun.
+- Seen in the same run: "An elder is a spiritual guide to whom someone voluntarily gives up their own will in obedience." was removed by the fixed foreshadowing pattern, for "own will" (see the open item on that).
+
 ## 6af. What Mothli remembers: the home chat and the reader's screen (16 November)
 
 Part two of 6ae. The home chat now uses the notes the way the chat inside a book does, and the reader can see and delete them.
