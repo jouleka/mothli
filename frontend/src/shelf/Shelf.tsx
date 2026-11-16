@@ -16,6 +16,7 @@ import { MothliMark } from "../ui/MothliMark";
 import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupportedBookMessage } from "../import/bookFiles";
 import { readLastPassage, sinceLabel } from "../reader/lastPassage";
 import { shelfJourney } from "../reader/chapterPlace";
+import { Account } from "./Account";
 import { ProviderSettings } from "./ProviderSettings";
 import { HomeChat } from "./HomeChat";
 import "./shelf-redesign.css";
@@ -154,7 +155,7 @@ export function Shelf({
   const offlineIds =
     offlineState.owner === owner ? offlineState.ids : new Set<string>();
   const [offlineStatus, setOfflineStatus] = useState("");
-  const [signingOut, setSigningOut] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "recent" | "offline">("all");
   const [sort, setSort] = useState("added");
@@ -333,17 +334,6 @@ export function Shelf({
     }
     onOpen(id);
   };
-  const logout = async () => {
-    setSigningOut(true);
-    setErr(null);
-    try {
-      await api.logout();
-      location.assign("/api/auth/login?return_to=/");
-    } catch (error) {
-      setErr(msg(error));
-      setSigningOut(false);
-    }
-  };
   const filtered = (books ?? [])
     .filter(
       (book) =>
@@ -520,8 +510,7 @@ export function Shelf({
           {settingsAvailable && <Button variant="ghost" icon="settings" onClick={() => { utilitiesToggle.current?.focus(); setShowUtilities(false); setShowSettings(true); }}>Connection settings</Button>}
           <InstallApp />
           {session?.user && <span className="account-name">{session.user.display_name}</span>}
-          {session === null && <a className="account-link" href="/api/auth/login?return_to=/">Sign in</a>}
-          {session?.user && <Button variant="ghost" className="account-signout" icon="arrowRight" aria-label={signingOut ? "Signing out" : "Sign out and erase offline books"} title="Sign out and erase offline books" disabled={signingOut} onClick={() => { void logout(); }}>{signingOut ? "Signing out…" : "Sign out and erase offline books"}</Button>}
+          {session?.user && <Button variant="ghost" icon="people" onClick={() => { utilitiesToggle.current?.focus(); setShowUtilities(false); setShowAccount(true); }}>Your account</Button>}
         </div>
       </header>
 
@@ -865,6 +854,16 @@ export function Shelf({
 
       {showSettings && (
         <ProviderSettings onClose={() => setShowSettings(false)} />
+      )}
+      {showAccount && session?.user && (
+        <Account
+          session={session}
+          onClose={() => {
+            setShowAccount(false);
+            // After the sheet has gone and the page behind is no longer inert.
+            window.setTimeout(() => utilitiesToggle.current?.focus());
+          }}
+        />
       )}
       {offlineStatus && (
         <div className="library-toast ml-toast" aria-live="polite">

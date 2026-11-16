@@ -10,6 +10,7 @@ import {
 } from "react";
 import { api, ApiError, type AskAnswer, type AskCitation, type BookTurn, type ReadFrontier, type ReadSkipped } from "../api";
 import { Button } from "../ui/Button";
+import { companionPause, isAllowanceLine } from "../ui/companionPause";
 import { Icon } from "../ui/Icon";
 import { Moth, type MothMood } from "../ui/Moth";
 import { PeoplePanel, StoryPanel } from "./StoryMemory";
@@ -621,7 +622,8 @@ export function AskTheBook({
     } catch (reason) {
       if (isCurrentRequest()) {
         const message =
-          reason instanceof ApiError && reason.status === 413
+          companionPause(reason)?.line ??
+          (reason instanceof ApiError && reason.status === 413
             ? REQUEST_TOO_LARGE_MESSAGE
             : reason instanceof ApiError && reason.status === 429
             ? /cost ceiling/i.test(reason.message)
@@ -635,7 +637,7 @@ export function AskTheBook({
             ? "Your reading position changed. Please try again from this page."
             : reason instanceof ApiError && reason.code === "ask_timeout"
             ? "That took too long, so I stopped. Try again?"
-            : "I couldn’t get a reply. Try again?";
+            : "I couldn’t get a reply. Try again?");
         session.update({ error: message });
       }
     } finally {
@@ -758,11 +760,12 @@ export function AskTheBook({
         if (!isCurrentRequest()) return;
         session.update({
           error:
-            reason instanceof ApiError && reason.status === 409
+            companionPause(reason)?.line ??
+            (reason instanceof ApiError && reason.status === 409
               ? "I’m still taking notes on that chapter. Ask me again in a minute."
               : reason instanceof ApiError && reason.status === 429
                 ? BOOK_USAGE_LIMIT_MESSAGE
-                : "I couldn’t gather my thoughts on that chapter. Try again?",
+                : "I couldn’t gather my thoughts on that chapter. Try again?"),
         });
       })
       .finally(() => {
@@ -1178,7 +1181,7 @@ export function AskTheBook({
                   error && (
                     <>
                       <span>{error}</span>
-                      {error !== BOOK_USAGE_LIMIT_MESSAGE && error !== REQUEST_TOO_LARGE_MESSAGE && error !== CLEAR_FAILED && (
+                      {error !== BOOK_USAGE_LIMIT_MESSAGE && error !== REQUEST_TOO_LARGE_MESSAGE && error !== CLEAR_FAILED && !isAllowanceLine(error) && (
                         <button type="button" onClick={() => void send()}>
                           Retry
                         </button>
