@@ -17,6 +17,7 @@ import { activeOfflineOwner } from "../pwa/offline";
 import { keepTabFocusInside } from "./focusTrap";
 import type { ReaderSelection } from "./ReaderMarksPanel";
 import { CountAsRead } from "./CountAsRead";
+import { untilNotesReady } from "./closeoutWait";
 import "./mothli-conversation.css";
 import "./companion.css";
 
@@ -740,8 +741,8 @@ export function AskTheBook({
     const requestToken = session.getSnapshot().requestToken + 1;
     session.update({ busy: true, error: "", pendingQuestion: null, requestToken });
     const isCurrentRequest = () => isCurrent() && session.getSnapshot().requestToken === requestToken;
-    void api
-      .chapterCloseout(bookId, seed.chapter)
+    // Notes on a just-finished chapter are still being taken: wait for them quietly (closeoutWait).
+    void untilNotesReady(() => api.chapterCloseout(bookId, seed.chapter), isCurrentRequest)
       .then((result) => {
         if (!isCurrentRequest()) return;
         if (result.as_of_chapter > bookmark || result.citations.some((citation) => citation.ordinal > bookmark))

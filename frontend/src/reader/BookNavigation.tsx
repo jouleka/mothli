@@ -3,6 +3,7 @@ import type { Atom } from "../api";
 import { Icon } from "../ui/Icon";
 import { Button } from "../ui/Button";
 import { useReaderPopover } from "../ui/useReaderPopover";
+import { chapterNumber } from "./chapterPlace";
 import {
   type ReaderSearchResult,
   type ReaderTocItem,
@@ -51,7 +52,8 @@ function TocBranch({
             ) : (
               <span className="toc-group">{safeTocLabel(item, atoms)}</span>
             )}
-            {item.href && item.atom != null && onMarkRead && (
+            {/* No "read" label for a piece in no chapter (a cover, Project Gutenberg's own page). */}
+            {item.href && item.atom != null && onMarkRead && chapterNumber(atoms, item.atom) != null && (
               <button
                 type="button"
                 className="plain toc-read"
@@ -286,7 +288,9 @@ export function ReaderNavigation({
                   >
                     <span>
                       {atoms[result.atom]?.title ||
-                        `Chapter ${result.atom + 1}`}
+                        (chapterNumber(atoms, result.atom) == null
+                          ? "Section"
+                          : `Chapter ${chapterNumber(atoms, result.atom)}`)}
                     </span>
                     <q>
                       {result.excerpt.pre}

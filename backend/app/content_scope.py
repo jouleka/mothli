@@ -12,7 +12,16 @@ _PARATEXT = re.compile(
     r"the .+ family trees?|notes(?: and references)?)", re.I,
 )
 _MAP = re.compile(r"map\s*:", re.I)
-
+# Project Gutenberg's own pages, when one is a piece of its own: its header with the title page and
+# contents ("The Project Gutenberg eBook of Alice's Adventures in Wonderland", older files
+# "Project Gutenberg's Alice's Adventures in Wonderland, by Lewis Carroll"), and its licence at the
+# end. Gutenberg's wording at the START of the title, the same words the server looks for in a
+# file's head (chapter_text._PG_FRONT); a chapter that merely mentions a project or Gutenberg stays.
+_GUTENBERG = re.compile(
+    r"(?:the\s+)?project\s+gutenberg(?:['’]s)?(?:\s+e-?book|\s+e-?text)\b.*"
+    r"|project\s+gutenberg['’]s\s+.+"
+    r"|(?:the\s+)?full\s+project\s+gutenberg(?:™|\s*-?\s*tm)?\s+licen[cs]e.*"
+    r"|end\s+of\s+(?:the\s+|this\s+)?project\s+gutenberg.*", re.I)
 
 
 def is_content(atom):
@@ -21,7 +30,7 @@ def is_content(atom):
     if atom.get("char_len") == 1 or ("text" in atom and not (atom["text"] or "").strip()):
         return False
     title = " ".join(str(atom.get("title", "")).split()).strip(" .:")
-    return not bool(_PARATEXT.fullmatch(title) or _MAP.match(title))
+    return not bool(_PARATEXT.fullmatch(title) or _MAP.match(title) or _GUTENBERG.fullmatch(title))
 
 
 def excluded_ordinals(manifest):

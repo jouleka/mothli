@@ -97,7 +97,9 @@ export type BookProfile = {
   detector_version: string;
   signals: string[];
 };
-export type Atom = { ordinal: number; href: string; title: string; part_label: string; char_len: number; chapter_number?: number | null; content_role?: string | null };
+export type Atom = { ordinal: number; href: string; title: string; part_label: string; char_len: number; chapter_number?: number | null; content_role?: string | null;
+  /** The book's own chapter number (as Mothli counts them); null for a piece in no chapter. */
+  content_number?: number | null };
 export type Manifest = {
   book_id: string;
   atom_set_version: string;
@@ -106,6 +108,7 @@ export type Manifest = {
   book_profile: BookProfile;
   atoms: Atom[];
   content_chapters?: number;
+  content_count?: number;
 };
 export type Position = {
   bookmark: number; cfi: string | null; ingest_progress?: number; position_epoch: number; atoms?: number;

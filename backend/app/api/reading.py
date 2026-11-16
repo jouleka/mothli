@@ -133,11 +133,17 @@ def put_read_page(book_id: str, body: ReadPage, request: Request, catalog=Depend
     """
     _map_enabled(settings)
     try:
+        before = catalog.get_state(book_id)
         finished = record_page(book_id, body.start, body.end, catalog, settings, worker,
                                skimmed=body.skimmed)
-        if body.skimmed:
+        if body.skimmed or finished is None:          # skimmed, or a page in no chapter
             return sync_counter(book_id, catalog, settings, worker)
         point, place = sync_counter(book_id, catalog, settings, worker, with_place=True)
+        bookmark = catalog.get_state(book_id)["bookmark"]
+        if bookmark > (before or {}).get("bookmark", 0) and settings.reader_memory_ingest:
+            # A chapter was just finished: extract it now, as PUT /read-chapters does, so its
+            # closeout ("Tell me") and cast need not wait for a later page turn to start it.
+            worker.enqueue(book_id, bookmark)
         # The reader has settled on a page here. If chapters before it were gone past, the app
         # may ask once whether they have been read.
         point = {**point, "skipped": skipped_before(place)}
