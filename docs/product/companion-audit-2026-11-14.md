@@ -1753,6 +1753,17 @@ Seen in a browser (the in-app pane, Chromium), against a backend of this branch 
 - With no book in hand, a note tied to a book reaches a home reply only when it shares a word with the reader's message (`select_recollections`). Unchanged.
 - `RECOLLECTION_RULE` says the notes prove nothing about "the book"; in the home chat there are several. The rule was left as it is, as asked.
 - The button shows wherever the home chat does, also where the server keeps no notes; there the sheet says so.
+### 6af, tried with real models (one home conversation, $0.008 of Jev)
+
+The home chat with the Karamazov fixture on the shelf (chapters 1 to 4 read, part of 5), the free library on. Terra through `codex-local`, Jev 1.14.0. The same seven messages as in 6ae, then the home conversation cleared, then four questions.
+
+- **Kept:** the same four notes as in the book chat, in slightly different words, from two writer calls and four checks. They survived the clear.
+- **"What do you remember about me?"** brought back three of the four. The sentence about the monk sent away from Athos was written and removed by the checks. **"Do you remember which part got to me?"** lost its whole answer the same way and showed only "That one stayed with you." A note that names something in a book is only the reader's word; the sentence repeating it needs the book's own passage, and the home chat fetches passages for the reader's message, not for the note. The chat inside a book answered both (6ae).
+- **"Who my favourite author is"** (never said): "I don't remember you telling me who your favourite author is. Who is it?" Nothing invented.
+- **"Any new book you would suggest for me?"** got a suggestion with a reason and the add button. It did not use the note that the reader was considering Jane Eyre: the six candidates are chosen without looking at what the reader has named, and Jane Eyre was not among them.
+- Seen in passing, not from this change: the home chat is weaker than the book chat on plain book questions. "What's an elder?" got "we haven't yet read an explanation", though chapter 5 gives one, and the first sentence of "who is Alyosha again?" was removed.
+- **Not verified:** one conversation. The screen was not tried against real notes in this run.
+
 ## 6ag. The chat inside a book keeps every check inside the size limit (16 November)
 
 6ad found that the chat inside a book built its sentence checks the way the home chat did before its fix: ten passages of read text, the chapter notes, the place line and the app help, and since 6ae what Mothli remembers about the reader, with nothing holding the total to the 30,000 bytes `budgeted_jev` accepts. A refused check drops its sentence without a word. 6ae's notes were fitted on their own and were left out whenever the rest left no room.
