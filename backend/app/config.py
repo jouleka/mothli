@@ -18,7 +18,9 @@ ENV_FILE = str(Path(__file__).resolve().parents[2] / ".env")
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore")
+    # A refused setting is reported by name only: the message reaches the log, and values are secrets.
+    model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore",
+                                      hide_input_in_errors=True)
 
     # LLM / embeddings (all optional — the client auto-detects; embed_* are independent, D19)
     openai_api_key: str | None = None
