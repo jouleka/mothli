@@ -162,6 +162,10 @@ Part one is in 6ae: the store, the distilling, the reader's API, and use in the 
 - [ ] A soft-deleted hosted book keeps its read-map rows (hidden, never shown); they go only if the book row is deleted. Waits for the deletion decision. (ADR 0041 part 1)
 - [ ] Hosted parses each book's EPUB from object storage once per process (cache of `SEGMENTATION_CACHE_MAX_ENTRIES`, 8 books) and again after eviction; the cost of that on a large shelf was not measured, nor were the read-map routes in a browser or with many readers at once. (ADR 0041 part 1)
 - [ ] CodeQL's path-injection check follows untyped `worker` calls across modes; a test stand-in once made it report hosted routes reaching the local file path. Any later test that hands `source_state` a stand-in calling `IngestWorker` methods will bring it back. (ADR 0041 part 1)
+- [ ] Hosted `clear_turns` deletes the turns only: there is no hosted recollection cursor yet. Part 7 (migration 0022) must add the cursor's delete to `store_turns.clear_turns`, as the local `Catalog.clear_turns` does. (ADR 0041 part 2)
+- [ ] Hosted turns are capped at 20,000 characters by the table; local turns have no cap. A longer reply would fail to store after it was shown. Part 5 must decide what the stream does then. (ADR 0041 part 2)
+- [ ] With no hosted "read it fresh" (part 1's item above), hosted turns are hidden by "I haven't read this" only; a new reading pass hides nothing in hosted mode yet. (ADR 0041 part 2)
+- [ ] A soft-deleted hosted book keeps its conversation rows (never shown: both routes answer 404); they go only if the book row is deleted. Waits for the deletion decision. (ADR 0041 part 2)
 
 ## Later
 

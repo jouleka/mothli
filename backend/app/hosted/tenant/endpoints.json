@@ -1,5 +1,5 @@
 {
-  "version": 13,
+  "version": 14,
   "required_surface_classes": [
     "list",
     "get",
@@ -382,6 +382,22 @@
       "access": "write",
       "repository_method": "HostedCompanionCatalog.set_bookmark",
       "cross_tenant_test": "test_second_reader_gets_first_readers_book_as_missing_on_every_read_map_route"
+    },
+    {
+      "method": "GET",
+      "path": "/api/books/{book_id}/conversation",
+      "surface": "get",
+      "access": "read",
+      "repository_method": "HostedCompanionCatalog.get_turns",
+      "cross_tenant_test": "test_second_reader_gets_first_readers_book_as_missing_on_conversation_routes"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/books/{book_id}/conversation",
+      "surface": "delete",
+      "access": "delete",
+      "repository_method": "HostedCompanionCatalog.clear_turns",
+      "cross_tenant_test": "test_second_reader_gets_first_readers_book_as_missing_on_conversation_routes"
     }
   ],
   "background": [
