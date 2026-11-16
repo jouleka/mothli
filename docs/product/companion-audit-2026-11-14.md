@@ -1812,6 +1812,28 @@ The same conversation as in 6af: seven messages, the home conversation cleared, 
 - Still seen: in the home chat the first sentence of "who is Alyosha again?" was removed in one run ("Alyosha is the youngest Karamazov son…, and Ivan is his older brother."), a true sentence.
 - **Not verified:** two runs of one conversation, one book on the shelf. The add button was not pressed.
 
+## 6ai. Does the chat inside a book lose passages to earlier messages? (17 November)
+
+6ah left open whether the chat inside a book, which builds its search words the same way (`conversation_retrieval_question`: the message, then the last two messages), loses the passage a plain question needs after an unrelated earlier message. Measured with stand-in models: the Karamazov fixture read to `inside-5` with `enter_by_map`, the earlier messages stored in the book's conversation as the app stores them (each with a short reply and a `drew_on` record), then the question; once with the earlier messages and once with the conversation cleared. "Present" means the passage that answers is among the passages of every sentence check and in the writer's prompt; the rank is its place among the last check's passages.
+
+| Earlier message(s) | Question | With earlier | Without |
+|---|---|---|---|
+| the five of 6ah, ending "maybe jane eyre" | what's an elder? | yes (3 of 12) | yes (2 of 12) |
+| that reminds me of my grandmother's house | who is Grigory? | yes (1 of 12) | yes (1 of 12) |
+| ok let's talk about something else, maybe pride and prejudice | why did Adelaida leave? | no | no |
+| the same | why did Adelaïda leave? | yes (5 of 12) | no |
+| my cat knocked my tea over this morning, ugh | who put up the tomb for Alyosha's mother? | yes (2 of 12) | yes (2 of 12) |
+| i read this in a cafe today and the coffee was awful honestly | how old is the elder Zossima? | yes (1 of 12) | yes (1 of 12) |
+| my dentist appointment got moved to friday, so annoying | why did Ivan leave the family of Yefim Petrovitch? | yes (5 of 12) | yes (5 of 12) |
+| my own father drank and shouted at the servants, the money went too | what's an elder? | yes (1 of 12) | yes (2 of 12) |
+| i visited a monastery once, the monks and the bells and the cells | what's an elder? | yes (4 of 12) | yes (2 of 12) |
+| wait, Adelaida just ran off and left the kid with Fyodor?? (a follow-up) | why did she do that? | yes (5 of 12) | no |
+
+- **Conclusion: sound; no pair loses its passage to the earlier message.** The book chat takes a larger pool from one book (six core passages with their neighbours, then up to four more) and favours the chapter just read, so the earlier words move a passage a place or two but did not push one out. The elder passage is in the chapter just read, which helps it; the passages in chapters 1 to 4 (Grigory, the tomb, Ivan) held too. The follow-up still needs the earlier words and gets them. No product code changed.
+- **Verified,** stand-in models only: `tests/test_book_chat_earlier_messages.py` (2 tests) pins the elder case after the five earlier messages (checker and writer both have the explanation) and the follow-up guard (found with the earlier message, not without). Whole backend suite and `ruff check app tests scripts` clean.
+- **Not verified:** nothing with real models; one book, one reading position, ten pairs. The rebuild had no chapter notes.
+- **Found, not fixed:** a name typed without its accent matches nothing: "Adelaida" is not "Adelaïda" to the search or to the read-word check (`word_tokens` folds case, not accents), so the passage is not found with or without earlier messages, and by reading the code the name counts as one the reader has not met (`unread_name`), so a reply with nothing shown would say we are not there yet. And "why did Adelaïda leave?" alone does not find "she left the house and ran away" ("leave" is not "left", and Adelaïda is named in many passages); it was found with the unrelated earlier message only by chance.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
