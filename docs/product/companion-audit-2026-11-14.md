@@ -1528,6 +1528,14 @@ The owner agreed to narrow the fixed foreshadowing pattern. This is a change to 
 - 22 new tests (`tests/eval/test_prolepsis_will.py`): 10 noun sentences that must not be hits, all failing on the old pattern, and 12 future-tense sentences that must stay hits, passing before and after. Of the five true sentences this check removed in 6ac's runs, three now pass it; "your own will" and the reported dream do not.
 - Not run with real models: the pattern involves none. What it changes in real replies will show in the next samples.
 
+### 6ac, again: "their own will" (17 November)
+
+The owner had agreed to narrow the pattern for the noun, with "own" among the words named. It was left out then because "left on their own will tear each other apart" is a future tense. It kept costing true sentences in a book about obedience: "an elder is a spiritual guide to whom someone voluntarily gives up their own will" was removed in three separate runs.
+
+- `PROLEPSIS_RE` no longer counts "will" after a possessive and "own" (`my`, `your`, `his`, `her`, `their`, `our`, `its`, `one's`), unless "on" or "of" comes before the possessive: "on their own will…" and "of his own will…" can be the future tense and stay hits. Everything else in the pattern is as it was.
+- 11 more tests in `tests/eval/test_prolepsis_will.py`: five noun sentences that failed on the old pattern, six future-tense sentences ("left on her own will she manage?", "a house of his own will cost more", "those who own will pay") that stay hits before and after. 33 in the file.
+- No model involved; not run with real models.
+
 ## 6ad. Mothli suggests books that are not on the shelf (16 November)
 
 The owner asked the home chat for something new to read. Mothli asked twice whether he wanted ideas, then said it had no titles to suggest. That was the design: it could only point at books on the shelf.

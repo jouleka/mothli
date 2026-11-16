@@ -69,6 +69,11 @@ def _match_tokens(text):
 # marries her will regret it", "the ill will recover"), so after those it stays a hit.
 _NOUN_WILL = "".join(rf"(?<!\b{word}\s)" for word in (
     "my", "your", "his", "their", "our", "its", "the", "a", "one['’]s"))
+# "Their own will" is the noun too, unless "on" or "of" comes first: "left on their own will tear
+# each other apart" and "a house of his own will cost more" are the future tense, so those stay hits.
+_NOUN_WILL += "".join(
+    rf"(?:(?<!\b{word} own\s)|(?<=\bon {word} own\s)|(?<=\bof {word} own\s))" for word in (
+        "my", "your", "his", "her", "their", "our", "its", "one['’]s"))
 PROLEPSIS_RE = re.compile(
     r"\b(" + _NOUN_WILL + r"will|shall|would (?:later|soon|eventually|one day|come to|be|become)|going to|"
     r"about to|is (?:destined|going) to|was to (?:be|become)|destined to|fated to|doomed to)\b", re.I)
