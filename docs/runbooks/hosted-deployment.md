@@ -42,8 +42,9 @@ step 2, never into an email, a chat or a document.
    - redirect (callback) address `https://YOURDOMAIN/api/auth/callback`
    - scopes `openid profile email`
    - Note its **issuer** address, **client ID** and **client secret**.
-7. **The AI accounts** (OpenAI or Anthropic, and TypeSafe for Jev). Not needed yet: no hosted
-   feature calls a model until the streamed companion is deployed. Keep the keys ready.
+7. **The AI accounts** (OpenAI or Anthropic, and TypeSafe for Jev), only to switch on Mothli's
+   chat inside a book. Mothli runs without them; the AI section of `deploy/app.env` says which
+   lines to fill in to switch the chat on.
 
 ## 2. First deployment
 
