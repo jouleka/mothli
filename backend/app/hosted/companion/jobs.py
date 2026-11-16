@@ -89,7 +89,7 @@ class _Lease:
                  lease_for: timedelta) -> None:
         self._repository, self._claim, self._lease_for = repository, claim, lease_for
         self._guard = threading.Lock()
-        self.lost = False
+        self.lost = self.cancelled = False
 
     def hold(self) -> None:
         if self.lost:
@@ -102,8 +102,17 @@ class _Lease:
             raise
         if cancelled:
             with self._guard:
-                self.lost = True
+                self.lost = self.cancelled = True
             raise LostLeaseError("job was cancelled")
+
+    def stopped(self) -> bool:
+        """After a failure: True when the job was cancelled (the worker then records that), a
+        ``LostLeaseError`` when the lease went to another worker, False otherwise."""
+        if self.cancelled:
+            return True
+        if self.lost:
+            raise LostLeaseError("job lease was lost")
+        return False
 
 
 class _LeasedCatalog(HostedCompanionCatalog):
@@ -175,10 +184,12 @@ class CompanionJobs:
         try:
             self._chapter_notes(claim, lease)
         except LostLeaseError:
+            if lease.stopped():
+                return          # cancelled (its book was removed): the worker records it
             raise
         except JevUnavailable as exc:
-            if lease.lost:
-                raise LostLeaseError("job lease was lost") from None
+            if lease.stopped():
+                return
             if exc.reason in NotesBuilder.PAUSE_FOR:
                 # The platform's checker account was refused: every reader's notes wait.
                 repository.pause_provider(
@@ -189,16 +200,15 @@ class CompanionJobs:
             raise HandledJobFailure(
                 SanitizedFailure("provider_unavailable", retryable=True)) from None
         except CostCeilingExceeded:
-            if lease.lost:
-                raise LostLeaseError("job lease was lost") from None
+            if lease.stopped():
+                return
             # A cap: the next claim moves a capped reader's jobs to the next UTC day.
             raise HandledJobFailure(SanitizedFailure("budget_exceeded", retryable=True)) from None
         except Exception:
-            if lease.lost:
-                raise LostLeaseError("job lease was lost") from None
+            if lease.stopped():
+                return
             raise
-        if lease.lost:
-            raise LostLeaseError("job lease was lost")
+        lease.stopped()
 
     def _chapter_notes(self, claim: ClaimedJob, lease: _Lease) -> None:
         owner = OwnerId(claim.owner_id)

@@ -630,6 +630,33 @@ def test_stream_events_are_unchanged_by_the_notes_queue(notes_app, readers, data
     assert len(jobs_of(database, a.owner)) == 1
 
 
+def test_a_deleted_books_notes_are_never_written(notes_app, readers, database, worker_dsn,
+                                                 monkeypatch) -> None:
+    """The break it catches: notes written (and paid for) for a book the reader has removed,
+    from a job that waited or one that was already running when the book went."""
+    _client, _tokens, app = notes_app
+    models = NotesModels(app.state.platform_client, monkeypatch)
+    a, book = opened(notes_app, readers)
+    assert a.call("DELETE", f"/api/books/{book}").status_code == 204
+    assert [row["state"] for row in jobs_of(database, a.owner)] == ["cancelled"]
+    assert drain(worker(app, worker_dsn)) == 0
+
+    # A job already running when its book goes stops at its next paid call or store.
+    other = upload(a.client, a.tokens, "a", lamp_book())
+    a.mark(other, [1])
+
+    def remove_the_book():
+        if not models.notes_prompts[1:]:
+            assert a.call("DELETE", f"/api/books/{other}").status_code == 204
+
+    models.notes_hook = remove_the_book
+    assert worker(app, worker_dsn).run_once()
+    assert notes_of(database, a.owner) == []
+    reservations, _ledger = spend_of(database, a.owner)
+    assert not [row for row in reservations if row["state"] == "reserved"]
+    assert [row["state"] for row in jobs_of(database, a.owner)] == ["cancelled", "cancelled"]
+
+
 def test_a_companion_worker_leaves_extraction_jobs_alone(notes_app, readers, database,
                                                         worker_dsn) -> None:
     """The break it catches: the companion dispatcher's worker claiming a waiting extraction job,
