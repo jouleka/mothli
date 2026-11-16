@@ -130,7 +130,6 @@ def test_source_replacement_invalidates_even_an_already_cached_parse(page_env, m
 
 def test_source_hashing_rejects_symlink_escape_before_opening_it(tmp_path, monkeypatch):
     from types import SimpleNamespace
-    import app.read_frontier as module
     data = tmp_path / "data"
     book_dir = data / "books" / "bksafe"
     book_dir.mkdir(parents=True)
@@ -141,20 +140,18 @@ def test_source_hashing_rejects_symlink_escape_before_opening_it(tmp_path, monke
     except OSError:
         pytest.skip("symlink creation not available")
     import app.ingest.worker as worker_module
-    # The source check lives in the worker (ADR 0041); a stand-in worker runs the real one.
+    # The source check moved from read_frontier.source_state into the worker (ADR 0041), so it is
+    # run there, on a stand-in worker whose parse must never be reached.
     monkeypatch.setattr(worker_module,"load_manifest",lambda *a: {})
-    catalog = SimpleNamespace(get_state=lambda _: {}, get_book=lambda _: {"book_id":"bksafe"})
     worker = SimpleNamespace(_settings=SimpleNamespace(data_dir=str(data)),
                              source_chapters=lambda _:pytest.fail("escaped source was parsed"))
-    worker.verified_source = lambda book_id, book: worker_module.IngestWorker.verified_source(
-        worker, book_id, book)
     original_open = Path.open
     def checked_open(path, *args, **kwargs):
         assert path != outside, "escaped source was opened before containment check"
         return original_open(path,*args,**kwargs)
     monkeypatch.setattr(Path,"open",checked_open)
     with pytest.raises(ValueError,match="source is unavailable"):
-        module.source_state("bksafe",catalog,SimpleNamespace(data_dir=str(data)),worker)
+        worker_module.IngestWorker.verified_source(worker,"bksafe",{"book_id":"bksafe"})
 
 
 def test_source_storage_identity_cannot_differ_from_requested_book(monkeypatch):
