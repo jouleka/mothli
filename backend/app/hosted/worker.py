@@ -41,7 +41,14 @@ class DurableWorker:
     retry_after: timedelta = timedelta(seconds=15)
 
     def run_once(self) -> bool:
-        claim = self.repository.claim_next(worker_id=self.worker_id, lease_for=self.lease_for)
+        # A handler that runs only some kinds says which (``kinds``); this worker claims no other.
+        kinds = getattr(self.handler, "kinds", None)
+        if kinds is None:
+            claim = self.repository.claim_next(worker_id=self.worker_id, lease_for=self.lease_for)
+        else:
+            claim = self.repository.claim_next(
+                worker_id=self.worker_id, lease_for=self.lease_for, kinds=frozenset(kinds)
+            )
         if claim is None:
             return False
         try:
@@ -132,9 +139,17 @@ def main(argv: list[str] | None = None) -> int:
         dsn, build_credential_cipher_from_environment(os.environ)
     )
     repository.check_runtime_role()
+    handler = _load_handler(args.handler)
+    # A handler that works for owners through other settings builds itself from this process's
+    # environment once, at startup, so a missing or refused setting stops the worker here. The
+    # companion dispatcher (ADR 0041 part 6) reads HOSTED_TENANT_DSN and the platform's model
+    # settings this way and checks the tenant role before any job is claimed.
+    from_environment = getattr(handler, "from_environment", None)
+    if from_environment is not None:
+        handler = from_environment()
     worker = DurableWorker(
         repository=repository,
-        handler=_load_handler(args.handler),
+        handler=handler,
         worker_id=args.worker_id,
         lease_for=timedelta(seconds=args.lease_seconds),
         retry_after=timedelta(seconds=args.retry_seconds),

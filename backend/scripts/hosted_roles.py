@@ -1,9 +1,9 @@
 """The hosted database roles and their grants, as one script (ADR 0041 part 9).
 
-The tenant role's privileges are read from ``app/hosted/tenant/grants.py``, the list the app's own
-startup check reads, so the two cannot drift. The auth and worker lists are the ones their
-repositories check at startup (``app/hosted/auth/repository.py``, ``app/hosted/jobs.py``); the
-``verify`` step runs those very checks, so a difference stops the deployment.
+The tenant and worker roles' privileges are read from ``app/hosted/tenant/grants.py``, the lists
+the app's own startup checks read, so they cannot drift. The auth list is the one its repository
+checks at startup (``app/hosted/auth/repository.py``); the ``verify`` step runs those very checks,
+so a difference stops the deployment.
 
 Run as the database superuser, by the deployment's one-shot ``migrate`` service:
 
@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.hosted.tenant.grants import (  # noqa: E402
     TENANT_FUNCTION_PRIVILEGES,
     TENANT_TABLE_PRIVILEGES,
+    WORKER_TABLE_PRIVILEGES,
 )
 
 # ADR 0020: the sign-in role (app/hosted/auth/repository.py check_runtime_role).
@@ -43,21 +44,6 @@ AUTH_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "external_identities": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "sessions": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "oidc_login_attempts": frozenset({"SELECT", "INSERT", "DELETE"}),
-    "audit_events": frozenset({"INSERT"}),
-}
-
-# ADR 0024: the job worker (app/hosted/jobs.py PostgresWorkerRepository.check_runtime_role).
-WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
-    "jobs": frozenset({"SELECT", "UPDATE"}),
-    "job_attempts": frozenset({"SELECT", "INSERT", "UPDATE"}),
-    "chapters": frozenset({"SELECT", "INSERT"}),
-    "chapter_summaries": frozenset({"INSERT"}),
-    "cost_ledger": frozenset({"SELECT", "INSERT"}),
-    "ingested_chapters": frozenset({"SELECT", "INSERT"}),
-    "provider_credentials": frozenset({"SELECT"}),
-    "provider_model_settings": frozenset({"SELECT"}),
-    "owner_limits": frozenset({"SELECT"}),
-    "cost_reservations": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "audit_events": frozenset({"INSERT"}),
 }
 

@@ -21,6 +21,7 @@ from app.hosted.jobs import (
 )
 from app.hosted.credentials import CredentialCipher, CredentialUnavailableError
 from app.hosted.limits import LimitExceededError, update_limits
+from app.hosted.tenant.grants import worker_grants
 from app.hosted.tenant.models import OwnerId
 from app.hosted.migrations import apply_migrations
 
@@ -68,20 +69,15 @@ def worker_dsn(database: str, admin_dsn: str):
         )
     with psycopg.connect(database, autocommit=True) as conn:
         conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(role)))
-        conn.execute(
-            sql.SQL(
-                "GRANT SELECT,UPDATE ON jobs TO {}; "
-                "GRANT SELECT,INSERT,UPDATE ON job_attempts TO {}; "
-                "GRANT SELECT,INSERT ON chapters TO {}; "
-                "GRANT INSERT ON chapter_summaries TO {}; "
-                "GRANT SELECT,INSERT ON cost_ledger TO {}; "
-                "GRANT SELECT,INSERT ON ingested_chapters TO {}"
-                "; GRANT SELECT ON provider_credentials,provider_model_settings TO {}"
-                "; GRANT SELECT ON owner_limits TO {}"
-                "; GRANT SELECT,INSERT,UPDATE ON cost_reservations TO {}"
-            ).format(*(sql.Identifier(role) for _ in range(9)))
-        )
-        conn.execute(sql.SQL("GRANT INSERT ON audit_events TO {}").format(sql.Identifier(role)))
+        # Exactly the reviewed allow-list the worker checks at startup (grants.py).
+        for table, privileges in worker_grants():
+            conn.execute(
+                sql.SQL("GRANT {} ON {} TO {}").format(
+                    sql.SQL(", ").join(sql.SQL(privilege) for privilege in privileges),
+                    sql.Identifier(table),
+                    sql.Identifier(role),
+                )
+            )
     runtime_dsn = conninfo.make_conninfo(database, user=role)
     try:
         yield runtime_dsn
