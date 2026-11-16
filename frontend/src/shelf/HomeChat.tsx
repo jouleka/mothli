@@ -16,6 +16,10 @@ import "./home-chat.css";
 
 const NOTHING_SHOWN = "We haven’t got there yet, or I don’t have enough from what we’ve read to say.";
 const STARTERS = ["Where did I leave off?", "What should I read tonight?"];
+const INTRO = "Ask me about any book on your shelf: where you left off, who someone was, what to read next.";
+/** For a reader with nothing on the shelf yet, where "Where did I leave off?" means nothing. */
+const FIRST_STARTERS = ["What can you do?", "What should I read first?"];
+const FIRST_INTRO = "Nothing on your shelf yet? Ask me what I can do, or for a good first book to start with.";
 /** How many exchanges are drawn at first, and how many more each "Show earlier" adds. */
 const LATEST = 6;
 const EARLIER_STEP = 10;
@@ -52,7 +56,11 @@ function exchangesOf(turns: HomeTurn[]): Exchange[] {
   return out;
 }
 
-export function HomeChat({ onShelfChanged }: { onShelfChanged?: () => void } = {}) {
+export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
+  onShelfChanged?: () => void;
+  /** Nothing on the shelf: the first question and the line above it fit a new reader. */
+  shelfEmpty?: boolean;
+} = {}) {
   const [turns, setTurns] = useState<HomeTurn[] | null>(null); // null until the server says it exists
   const [start, setStart] = useState(0); // first exchange drawn; earlier ones wait behind "Show earlier"
   const [question, setQuestion] = useState("");
@@ -349,11 +357,9 @@ export function HomeChat({ onShelfChanged }: { onShelfChanged?: () => void } = {
 
       {empty ? (
         <div className="ml-hc-hello">
-          <p className="ml-hc-hand">
-            Ask me about any book on your shelf: where you left off, who someone was, what to read next.
-          </p>
+          <p className="ml-hc-hand">{shelfEmpty ? FIRST_INTRO : INTRO}</p>
           <div className="ml-hc-starters">
-            {STARTERS.map((starter) => (
+            {(shelfEmpty ? FIRST_STARTERS : STARTERS).map((starter) => (
               <button key={starter} type="button" className="ml-hc-starter" onClick={() => void send(starter, false)}>
                 {starter}
               </button>

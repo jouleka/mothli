@@ -30,11 +30,23 @@ type Filters = { q: string; language: string; genre: string; mood: string };
 
 const count = (n: number) => n.toLocaleString("en");
 
-function languageName(code: string) {
+/** Names for the catalogue's rarer languages, which a browser may not know and then gives back as
+ * the bare code ("enm", "arp"). */
+const LANGUAGE_NAMES: Record<string, string> = {
+  enm: "Middle English", arp: "Arapaho", gla: "Scottish Gaelic", ceb: "Cebuano", ilo: "Iloko",
+  sco: "Scots", oji: "Ojibwa", nah: "Nahuatl", nap: "Neapolitan", fur: "Friulian", myn: "Mayan languages",
+  rmq: "Caló", ang: "Old English", grc: "Ancient Greek",
+};
+
+/** The language's name, or null when neither this list nor the browser has one: a raw code is
+ * never shown to the reader. */
+function languageName(code: string): string | null {
+  if (LANGUAGE_NAMES[code]) return LANGUAGE_NAMES[code];
   try {
-    return new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code;
+    const name = new Intl.DisplayNames(["en"], { type: "language" }).of(code);
+    return name && name.toLowerCase() !== code.toLowerCase() ? name : null;
   } catch {
-    return code;
+    return null;
   }
 }
 
@@ -606,7 +618,12 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
   const moodLabel = summary?.moods.find((mood) => mood.id === filters.mood)?.label;
   const genreLabel = summary?.genres.find((genre) => genre.id === filters.genre)?.label;
   const heading = [moodLabel, genreLabel, needle ? `“${needle}”` : null].filter(Boolean).join(" · ") || "Everything";
-  const languages = (summary?.languages ?? []).slice(0, LANGUAGE_CHOICES);
+  // A language with no name to give it is left out of the list (its books are under "Any language").
+  const languages = (summary?.languages ?? []).slice(0, LANGUAGE_CHOICES)
+    .flatMap((item) => {
+      const name = languageName(item.code);
+      return name ? [{ ...item, name }] : [];
+    });
   const shownShelves = shelves && shelves.language === filters.language ? shelves.shelves : null;
 
   return (
@@ -665,7 +682,7 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
                   <option value="">Any language</option>
                   {languages.map((item) => (
                     <option key={item.code} value={item.code}>
-                      {languageName(item.code)}
+                      {item.name}
                     </option>
                   ))}
                 </select>

@@ -28,6 +28,20 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+# The home conversation's spend while it belongs to no book (an empty shelf). The ledger keys every
+# entry by book, and a book id is always "bk…", so this reserved id can never be one. It has a
+# ledger of its own (``home_cost_ledger`` and ``home_cost_reservations``: no book to refer to) and
+# is held to the same per-book ceilings, as if it were one book.
+HOME_SPEND = "home"
+
+
+def _spend_tables(book_id):
+    """(ledger, reservations) that hold ``book_id``'s spend."""
+    if book_id == HOME_SPEND:
+        return "home_cost_ledger", "home_cost_reservations"
+    return "cost_ledger", "cost_reservations"
+
+
 def _baseline_sql():
     with open(os.path.join(_HERE, "schema", "catalog.sql"), encoding="utf-8") as f:
         return f.read()
@@ -682,10 +696,12 @@ class Catalog:
         if max_preparation_usd is not None:
             self._check_usd(max_preparation_usd, "max_preparation_usd")
         reservation_id = uuid.uuid4().hex
+        ledger_table, held_table = _spend_tables(book_id)
         with self._lock:
             try:
                 self._conn.execute("BEGIN IMMEDIATE")
-                if self._conn.execute("SELECT 1 FROM books WHERE book_id=?", (book_id,)).fetchone() is None:
+                if (book_id != HOME_SPEND and
+                        self._conn.execute("SELECT 1 FROM books WHERE book_id=?", (book_id,)).fetchone() is None):
                     raise ValueError(f"unknown book {book_id!r}")
                 if expected_reading_scope is not None:
                     current = self._conn.execute(
@@ -711,12 +727,12 @@ class Catalog:
                         raise RuntimeError("reader preparation cost ceiling reached")
                 ledger = self._conn.execute(
                     "SELECT COALESCE(SUM(input_tokens),0),COALESCE(SUM(output_tokens),0),"
-                    "COALESCE(SUM(usd),0.0) FROM cost_ledger WHERE book_id=?", (book_id,)
+                    f"COALESCE(SUM(usd),0.0) FROM {ledger_table} WHERE book_id=?", (book_id,)
                 ).fetchone()
                 pending = self._conn.execute(
                     "SELECT COALESCE(SUM(reserved_input_tokens),0),"
                     "COALESCE(SUM(reserved_output_tokens),0),COALESCE(SUM(reserved_usd),0.0) "
-                    "FROM cost_reservations WHERE book_id=?", (book_id,)
+                    f"FROM {held_table} WHERE book_id=?", (book_id,)
                 ).fetchone()
                 projected = (ledger[0] + pending[0] + input_tokens,
                              ledger[1] + pending[1] + output_tokens,
@@ -729,7 +745,7 @@ class Catalog:
                             f"book {name} cost ceiling reached ({value:g} projected > {limit:g})"
                         )
                 self._conn.execute(
-                    "INSERT INTO cost_reservations(reservation_id,book_id,chapter_ordinal,phase,model,"
+                    f"INSERT INTO {held_table}(reservation_id,book_id,chapter_ordinal,phase,model,"
                     "reserved_input_tokens,reserved_output_tokens,reserved_usd,at) "
                     "VALUES (?,?,?,?,?,?,?,?,?)",
                     (reservation_id, book_id, chapter_ordinal, phase, model, input_tokens,
@@ -750,7 +766,7 @@ class Catalog:
             raise ValueError("actual billing model must be a nonempty string")
         with self._lock:
             cur = self._conn.execute(
-                "UPDATE cost_reservations SET reserved_input_tokens=?,reserved_output_tokens=?,"
+                f"UPDATE {_spend_tables(book_id)[1]} SET reserved_input_tokens=?,reserved_output_tokens=?,"
                 "reserved_usd=?,actual_input_tokens=?,actual_output_tokens=?,actual_usd=?,model=COALESCE(?,model) "
                 "WHERE reservation_id=? AND book_id=?",
                 (input_tokens, output_tokens, usd, input_tokens, output_tokens, usd, model,
@@ -763,23 +779,24 @@ class Catalog:
 
     def settle_cost(self, book_id, reservation_id, *, phase=None):
         """Move one completed/abandoned reservation into the ledger exactly once."""
+        ledger_table, held_table = _spend_tables(book_id)
         with self._lock:
             try:
                 self._conn.execute("BEGIN IMMEDIATE")
                 row = self._conn.execute(
-                    "SELECT * FROM cost_reservations WHERE reservation_id=? AND book_id=?",
+                    f"SELECT * FROM {held_table} WHERE reservation_id=? AND book_id=?",
                     (reservation_id, book_id),
                 ).fetchone()
                 if row is None:
                     raise ValueError(f"unknown cost reservation {reservation_id!r}")
                 self._conn.execute(
-                    "INSERT INTO cost_ledger(book_id,chapter_ordinal,phase,model,input_tokens,"
+                    f"INSERT INTO {ledger_table}(book_id,chapter_ordinal,phase,model,input_tokens,"
                     "output_tokens,usd,at) VALUES (?,?,?,?,?,?,?,?)",
                     (book_id, row["chapter_ordinal"], phase or row["phase"], row["model"],
                      row["reserved_input_tokens"], row["reserved_output_tokens"],
                      row["reserved_usd"], _now()),
                 )
-                self._conn.execute("DELETE FROM cost_reservations WHERE reservation_id=?",
+                self._conn.execute(f"DELETE FROM {held_table} WHERE reservation_id=?",
                                    (reservation_id,))
                 self._conn.commit()
             except Exception:
@@ -791,7 +808,7 @@ class Catalog:
         outright (a 4xx) before doing any work. Never for a failure whose spend is unknown."""
         with self._lock:
             cur = self._conn.execute(
-                "DELETE FROM cost_reservations WHERE reservation_id=? AND book_id=?",
+                f"DELETE FROM {_spend_tables(book_id)[1]} WHERE reservation_id=? AND book_id=?",
                 (reservation_id, book_id),
             )
             if cur.rowcount != 1:
@@ -813,7 +830,7 @@ class Catalog:
             rows = self._conn.execute(
                 "SELECT reservation_id,chapter_ordinal,phase,model,reserved_input_tokens,"
                 "reserved_output_tokens,reserved_usd,actual_input_tokens,actual_output_tokens,"
-                "actual_usd,at FROM cost_reservations WHERE book_id=? ORDER BY at,reservation_id",
+                f"actual_usd,at FROM {_spend_tables(book_id)[1]} WHERE book_id=? ORDER BY at,reservation_id",
                 (book_id,),
             ).fetchall()
         return [dict(row) for row in rows]
@@ -828,15 +845,15 @@ class Catalog:
             params.append(chapter_ordinal)
         with self._lock:
             rows = self._conn.execute(
-                "SELECT reservation_id FROM cost_reservations WHERE " + " AND ".join(clauses)
+                f"SELECT reservation_id FROM {_spend_tables(book_id)[1]} WHERE " + " AND ".join(clauses)
                 + " ORDER BY at,reservation_id", params
             ).fetchall()
         return [row[0] for row in rows]
 
     def total_cost(self, book_id):
         with self._lock:
-            r = self._conn.execute("SELECT COALESCE(SUM(usd), 0.0) FROM cost_ledger WHERE book_id=?",
-                                   (book_id,)).fetchone()
+            r = self._conn.execute(f"SELECT COALESCE(SUM(usd), 0.0) FROM {_spend_tables(book_id)[0]} "
+                                   "WHERE book_id=?", (book_id,)).fetchone()
         return r[0]
 
     def get_costs(self, book_id):
@@ -844,7 +861,7 @@ class Catalog:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT chapter_ordinal, phase, model, input_tokens, output_tokens, usd, at "
-                "FROM cost_ledger WHERE book_id=? ORDER BY entry_id", (book_id,)).fetchall()
+                f"FROM {_spend_tables(book_id)[0]} WHERE book_id=? ORDER BY entry_id", (book_id,)).fetchall()
         return [dict(r) for r in rows]
 
     def close(self):

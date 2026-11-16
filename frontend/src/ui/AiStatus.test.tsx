@@ -95,6 +95,34 @@ describe("AI runtime honesty", () => {
     expect(screen.getByRole("button", { name: "Check connection" })).toBeTruthy();
   });
 
+  test("the shelf's footer folds the developer's block away from a reader, and it opens on request", async () => {
+    // Break caught (6al): every reader saw "AI configured · gpt-6.1-terra · Not yet checked by a
+    // successful request · Local testing · ... · Search is using test embeddings ..." under the shelf.
+    mock.aiRuntime.mockResolvedValue({
+      ...live, provider: "codex-local", local_testing: true, embedding_mode: "demo",
+      reasoning: { extraction: "low", selection: "low", synthesis: "medium", review: "medium" },
+      models: { extraction: "gpt-6.1-terra", synthesis: "gpt-6.1-terra" },
+    });
+    render(<AiRuntimeProvider><AiStatus compact /></AiRuntimeProvider>);
+    const summary = await screen.findByText("AI configured");
+    const folded = summary.closest("details");
+    expect(folded?.open).toBe(false);
+    expect(screen.queryByRole("status")).toBeNull();
+    for (const line of [/gpt-6.1-terra/, /Using your ChatGPT account/, /Medium for answers and review/, /test embeddings/]) {
+      expect(screen.getByText(line).closest("details")).toBe(folded);
+    }
+    expect(screen.getByRole("button", { name: "Check connection" }).closest("details")).toBe(folded);
+    fireEvent.click(summary);
+    expect(folded?.open).toBe(true);
+  });
+
+  test("the shelf's footer folds a failed status check too", async () => {
+    mock.aiRuntime.mockRejectedValueOnce(new Error("offline"));
+    render(<AiRuntimeProvider><AiStatus compact /></AiRuntimeProvider>);
+    const summary = await screen.findByText("AI status unavailable");
+    expect(summary.closest("details")?.open).toBe(false);
+  });
+
   test("compact mode keeps demo warnings visible", async () => {
     mock.aiRuntime.mockResolvedValue({ ...live, mode: "demo", completion_status: "ready" });
     render(<AiRuntimeProvider><AiStatus compact /></AiRuntimeProvider>);
