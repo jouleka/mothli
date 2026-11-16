@@ -1,13 +1,11 @@
 """Exact, epoch-bound primary-text prefixes. No model receives the unread source suffix."""
 import hashlib
 import json
-from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from app.content_scope import is_content
 from app.ingest.extraction.chapter_text import content_hash_of
-from app.ingest.manifest import load_manifest, source_epub_path
 from app.retrieval_passages import normalize_source
 
 
@@ -53,21 +51,9 @@ def source_state(book_id, catalog, settings, worker):
     storage_id = book["book_id"]
     if storage_id != book_id:
         raise ValueError("source does not belong to the requested book")
-    manifest = load_manifest(settings.data_dir, book_id)
-    # A cached parse must never keep authorizing text after its source has changed on disk.
-    try:
-        books_root = (Path(settings.data_dir) / "books").resolve()
-        # The catalog owns storage identity. Never derive a filesystem path directly
-        # from the route parameter, even after separately checking its manifest.
-        source_path = Path(source_epub_path(settings.data_dir, storage_id)).resolve()
-        source_path.relative_to(books_root)
-        with source_path.open("rb") as source:
-            digest = hashlib.file_digest(source, "sha256").hexdigest()
-    except (OSError, ValueError) as exc:
-        raise ValueError("source is unavailable") from exc
-    if book.get("file_hash") and digest != book["file_hash"]:
-        raise ValueError("source no longer matches its import")
-    chapters = worker.source_chapters(book_id)
+    # The worker verifies the source against its import and returns its chapters: locally the
+    # EPUB under the data directory, in hosted mode the owner's stored object (ADR 0041).
+    manifest, chapters = worker.verified_source(book_id, book)
     return state, book, manifest, chapters
 
 

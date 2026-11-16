@@ -140,9 +140,14 @@ def test_source_hashing_rejects_symlink_escape_before_opening_it(tmp_path, monke
         (book_dir / "source.epub").symlink_to(outside)
     except OSError:
         pytest.skip("symlink creation not available")
-    monkeypatch.setattr(module,"load_manifest",lambda *a: {})
+    import app.ingest.worker as worker_module
+    # The source check lives in the worker (ADR 0041); a stand-in worker runs the real one.
+    monkeypatch.setattr(worker_module,"load_manifest",lambda *a: {})
     catalog = SimpleNamespace(get_state=lambda _: {}, get_book=lambda _: {"book_id":"bksafe"})
-    worker = SimpleNamespace(source_chapters=lambda _:pytest.fail("escaped source was parsed"))
+    worker = SimpleNamespace(_settings=SimpleNamespace(data_dir=str(data)),
+                             source_chapters=lambda _:pytest.fail("escaped source was parsed"))
+    worker.verified_source = lambda book_id, book: worker_module.IngestWorker.verified_source(
+        worker, book_id, book)
     original_open = Path.open
     def checked_open(path, *args, **kwargs):
         assert path != outside, "escaped source was opened before containment check"
@@ -155,8 +160,9 @@ def test_source_hashing_rejects_symlink_escape_before_opening_it(tmp_path, monke
 def test_source_storage_identity_cannot_differ_from_requested_book(monkeypatch):
     from types import SimpleNamespace
     import app.read_frontier as module
+    import app.ingest.worker as worker_module
     catalog = SimpleNamespace(get_state=lambda _: {}, get_book=lambda _: {"book_id":"bkother"})
-    monkeypatch.setattr(module,"load_manifest",lambda *a:pytest.fail("wrong book reached storage"))
+    monkeypatch.setattr(worker_module,"load_manifest",lambda *a:pytest.fail("wrong book reached storage"))
     with pytest.raises(ValueError,match="does not belong"):
         module.source_state("bkrequested",catalog,SimpleNamespace(data_dir="unused"),None)
 

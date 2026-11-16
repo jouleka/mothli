@@ -1,5 +1,5 @@
 {
-  "version": 12,
+  "version": 13,
   "required_surface_classes": [
     "list",
     "get",
@@ -342,6 +342,46 @@
       "access": "cost",
       "repository_method": "list_costs",
       "cross_tenant_test": "test_list_and_cost_surfaces_never_include_another_owner"
+    },
+    {
+      "method": "GET",
+      "path": "/api/books/{book_id}/read-map",
+      "surface": "get",
+      "access": "read",
+      "repository_method": "HostedCompanionCatalog.get_read_map",
+      "cross_tenant_test": "test_second_reader_gets_first_readers_book_as_missing_on_every_read_map_route"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/books/{book_id}/read-page",
+      "surface": "mutate",
+      "access": "write",
+      "repository_method": "HostedCompanionCatalog.add_read_range",
+      "cross_tenant_test": "test_second_reader_gets_first_readers_book_as_missing_on_every_read_map_route"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/books/{book_id}/read-chapters",
+      "surface": "mutate",
+      "access": "write",
+      "repository_method": "HostedCompanionCatalog.add_read_range",
+      "cross_tenant_test": "test_second_reader_gets_first_readers_book_as_missing_on_every_read_map_route"
+    },
+    {
+      "method": "GET",
+      "path": "/api/books/{book_id}/read-frontier",
+      "surface": "get",
+      "access": "read",
+      "repository_method": "HostedCompanionCatalog.set_bookmark",
+      "cross_tenant_test": "test_second_reader_gets_first_readers_book_as_missing_on_every_read_map_route"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/books/{book_id}/read-frontier",
+      "surface": "mutate",
+      "access": "write",
+      "repository_method": "HostedCompanionCatalog.set_bookmark",
+      "cross_tenant_test": "test_second_reader_gets_first_readers_book_as_missing_on_every_read_map_route"
     }
   ],
   "background": [
