@@ -10,6 +10,7 @@ from fastapi import Request
 from app.catalog.catalog import Catalog
 from app.config import Settings
 from app.llm.client import LLMClient
+from app.llm.factory import build_platform_clients
 from app.memory import migrations
 from app.memory.store import Store
 
@@ -18,20 +19,8 @@ def build_state(settings: Settings) -> dict:
     """Construct the service singletons. RAISES (refusing startup) if the LLM resolves to the stub
     without ALLOW_STUB — the D-A7 fail-loud predicate lives in the client's default-deny."""
     os.makedirs(settings.data_dir, exist_ok=True)
-    # A reservation covers one wire attempt. SDK retries after ambiguous timeouts can be
-    # billed again; the explicit application repair paths reserve each attempt separately.
-    client = LLMClient(env=settings.llm_env(), allow_stub=settings.allow_stub, max_retries=0)
-    if settings.jev_enabled:
-        from app.llm.jev import JevClient, JevUnavailable, windows_credential
-
-        if client.provider == "stub":
-            raise JevUnavailable("Jev requires a configured generative provider")
-        key = (settings.typesafe_api_key.get_secret_value() if settings.typesafe_api_key else
-               windows_credential() if settings.jev_windows_credential else None)
-        if not key:
-            raise JevUnavailable("Configure a server-side Jev credential")
-        client.jev = JevClient(api_key=key, model=settings.jev_model,
-                               timeout=settings.jev_timeout_seconds)
+    # The writer and Jev, built by the one construction both modes share (ADR 0041 section 1).
+    client = build_platform_clients(settings)
     reader = client
     if settings.reader_fast_mode:
         if (client.provider != "openai-compatible" or not client._is_native_openai

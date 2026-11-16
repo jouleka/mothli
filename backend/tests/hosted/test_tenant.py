@@ -115,7 +115,7 @@ def test_every_companion_adapter_is_bound_to_one_owner_at_construction() -> None
 
 def test_endpoint_inventory_names_cross_tenant_evidence_and_unavailable_surfaces() -> None:
     inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
-    assert inventory["version"] == 14
+    assert inventory["version"] == 15
     assert all(item["cross_tenant_test"] for item in inventory["enabled"])
     assert all(item["cross_tenant_test"] for item in inventory["unavailable"])
     assert all(item["cross_tenant_test"] for item in inventory["background"])
@@ -145,3 +145,27 @@ def test_endpoint_inventory_names_cross_tenant_evidence_and_unavailable_surfaces
     }
     unavailable = {item["access"] for item in inventory["unavailable"]}
     assert unavailable == {"export"}
+
+
+def test_inventory_marks_exactly_the_routes_hidden_without_reader_keys() -> None:
+    """The break it catches: a reader-key route mounted while HOSTED_READER_KEYS is false but not
+    marked in the inventory (or marked but still mounted), so the inventory would no longer say
+    what a signed-in reader can reach. Each marked route keeps its cross-tenant test, which runs
+    with the setting on (ADR 0041 section 6)."""
+    from app.hosted.tenant.api import READER_KEY_ROUTES, hosted_router, router
+
+    inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
+    marked = {(item["method"], item["path"]) for item in inventory["enabled"]
+              if item.get("mounted_only_with") == "HOSTED_READER_KEYS"}
+    assert marked == READER_KEY_ROUTES
+    assert all(item.get("mounted_only_with") in (None, "HOSTED_READER_KEYS")
+               for item in inventory["enabled"])
+
+    def mounted(chosen):
+        return {(method, route.path) for route in chosen.routes
+                for method in getattr(route, "methods", ()) or ()}
+
+    everything = mounted(router)
+    assert READER_KEY_ROUTES <= everything
+    assert mounted(hosted_router(reader_keys=True)) == everything
+    assert mounted(hosted_router(reader_keys=False)) == everything - READER_KEY_ROUTES

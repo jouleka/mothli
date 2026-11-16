@@ -157,6 +157,16 @@ class Settings(BaseSettings):
     # The most database connections the hosted companion adapters hold at once in one process
     # (ADR 0041 section 2): a burst of page reports cannot exceed Postgres max_connections.
     hosted_companion_db_connections: int = Field(default=20, ge=1, le=1000)
+    # The owner pays for the companion's AI in hosted mode (ADR 0041 section 6). The amounts are
+    # DEFAULTS TO BE CONFIRMED BY THE OWNER: per reader per UTC day and per UTC month (used where
+    # the reader's owner_limits row leaves its own cap NULL), and for the whole platform per UTC
+    # day, whatever any reader does.
+    hosted_reader_usd_per_day: float = Field(default=0.10, ge=0, le=1000, allow_inf_nan=False)
+    hosted_reader_usd_per_month: float = Field(default=2.00, ge=0, le=10000, allow_inf_nan=False)
+    hosted_platform_usd_per_day: float = Field(default=5.00, ge=0, le=100000, allow_inf_nan=False)
+    # The older "paste your own key" routes (/api/credentials, /api/provider-settings and the
+    # reader-key reply paths). Off: they answer as if they did not exist.
+    hosted_reader_keys: bool = False
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
@@ -212,6 +222,27 @@ class Settings(BaseSettings):
         missing = [name for name, value in required.items() if value is None or value == ""]
         if missing:
             raise ValueError("hosted mode requires " + ", ".join(missing))
+        # ADR 0041 section 7: the owner pays, so nothing but the owner's own paid API accounts,
+        # and nothing that writes one file shared by every reader under DATA_DIR.
+        refused = {
+            "ALLOW_STUB": self.allow_stub,
+            "JEV_WINDOWS_CREDENTIAL": self.jev_windows_credential,
+            "READER_ANSWER_CACHE": self.reader_answer_cache,
+            "RECAP_DISK_CACHE": self.recap_disk_cache,
+            "READER_PREPARE_ENABLED": self.reader_prepare_enabled,
+        }
+        on = [name for name, value in refused.items() if value]
+        if on:
+            raise ValueError("hosted mode refuses " + ", ".join(on))
+        if self.openai_base_url:
+            parsed = urlsplit(self.openai_base_url.strip())
+            allowed = {item.strip().rstrip("/").casefold()
+                       for item in self.hosted_provider_allowed_origins.split(",") if item.strip()}
+            if (parsed.scheme != "https" or not parsed.hostname or parsed.username
+                    or parsed.password or f"https://{parsed.netloc.casefold()}" not in allowed):
+                raise ValueError(
+                    "OPENAI_BASE_URL must be an HTTPS address whose origin is in "
+                    "HOSTED_PROVIDER_ALLOWED_ORIGINS")
 
         assert self.oidc_issuer is not None
         assert self.oidc_redirect_uri is not None

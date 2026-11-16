@@ -1655,3 +1655,34 @@ async def list_costs(
         if costs is None:
             raise HTTPException(404, "unknown book")
         return costs
+
+
+# The "paste your own key" routes and the older reply paths that run on a reader's own key
+# (ADR 0041 section 6). The platform pays for the companion, so with HOSTED_READER_KEYS=false
+# these are not mounted at all and answer exactly as a path that does not exist. The code is kept
+# for a later "bring your own key" option.
+READER_KEY_ROUTES = frozenset({
+    ("POST", "/api/credentials"),
+    ("GET", "/api/credentials"),
+    ("PUT", "/api/credentials/{credential_id}"),
+    ("DELETE", "/api/credentials/{credential_id}"),
+    ("GET", "/api/provider-settings"),
+    ("PUT", "/api/provider-settings/{capability}"),
+    ("POST", "/api/provider-settings/{capability}/validate"),
+    ("POST", "/api/books/{book_id}/ask"),
+    ("POST", "/api/books/{book_id}/selection-action"),
+    ("POST", "/api/books/{book_id}/chapter-closeout"),
+})
+
+
+def hosted_router(*, reader_keys: bool) -> APIRouter:
+    """The tenant routes to mount: all of them, or all but the reader-key routes."""
+    if reader_keys:
+        return router
+    kept = APIRouter()
+    kept.routes.extend(
+        route for route in router.routes
+        if not any((method, route.path) in READER_KEY_ROUTES
+                   for method in getattr(route, "methods", ()) or ())
+    )
+    return kept

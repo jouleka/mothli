@@ -28,7 +28,7 @@ from app.hosted.migrations import apply_migrations
 from app.hosted.limits import LimitExceededError, inspect_limits, update_limits
 from app.hosted.provider_settings import ProviderValidator
 from app.hosted.storage import EPUB_MEDIA_TYPE
-from app.hosted.tenant.grants import tenant_grants
+from app.hosted.tenant.grants import tenant_function_grants, tenant_grants
 from app.hosted.tenant.models import MissingTenantResourceError, OwnerId
 from app.hosted.tenant.repository import PostgresTenantRepository
 from app.main import create_app
@@ -85,6 +85,15 @@ def tenant_dsn(database: str, admin_dsn: str):
                 sql.SQL("GRANT {} ON {} TO {}").format(
                     sql.SQL(", ").join(sql.SQL(privilege) for privilege in privileges),
                     sql.Identifier(table),
+                    sql.Identifier(role),
+                )
+            )
+        # The platform day total, reached only through its functions (ADR 0041 part 3).
+        for function, privileges in tenant_function_grants():
+            conn.execute(
+                sql.SQL("GRANT {} ON FUNCTION {} TO {}").format(
+                    sql.SQL(", ").join(sql.SQL(privilege) for privilege in privileges),
+                    sql.SQL(function),
                     sql.Identifier(role),
                 )
             )
@@ -306,6 +315,8 @@ def tenant_app(tenant_dsn: str, corpus: dict, tmp_path):
         hosted_provider_allowed_origins=(
             "https://api.openai.com,https://api.anthropic.com,https://network.example"
         ),
+        # These gates test the reader-key routes, mounted only with this on (ADR 0041 part 3).
+        hosted_reader_keys=True,
     )
 
     def provider_response(request: httpx.Request) -> httpx.Response:

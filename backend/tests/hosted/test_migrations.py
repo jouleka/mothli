@@ -88,7 +88,8 @@ def test_applied_migration_checksum_and_history_are_immutable(database: str) -> 
 
 def test_every_tenant_table_has_non_null_owner_and_rls(database: str) -> None:
     apply_migrations(database)
-    service_tables = {"app_schema_migrations", "provider_capabilities", "oidc_login_attempts"}
+    service_tables = {"app_schema_migrations", "provider_capabilities", "oidc_login_attempts",
+                      "platform_spend_days"}
     expected_tables = {
         "users",
         "external_identities",
