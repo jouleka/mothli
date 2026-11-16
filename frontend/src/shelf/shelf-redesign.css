@@ -102,7 +102,6 @@
 .ml-utilities { display: grid; gap: 10px; justify-items: start; }
 .ml-utilities-title { font: 600 26px/1.1 var(--m-display); }
 .ml-utilities .account-name { font-size: 14px; color: var(--m-soft); }
-.ml-utilities .account-link { color: var(--m-accent); font-weight: 500; }
 
 /* ---------- main ---------- */
 .ml-main { min-width: 0; outline: none; }

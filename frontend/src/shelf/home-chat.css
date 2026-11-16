@@ -221,6 +221,13 @@
   font: 500 15px/1.4 var(--m-ui);
   color: var(--m-accent);
 }
+/* Mothli stopping for a while: a calm line in the book's type, not an error. */
+.ml-hc-pause {
+  margin: 0;
+  font: italic 400 18px/1.45 var(--m-book);
+  color: var(--m-body);
+}
+.ml-hc-pause[hidden] { display: none; }
 
 /* ---------- the line to write on ---------- */
 .ml-hc-composer {

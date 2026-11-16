@@ -9,6 +9,7 @@
 import { type FormEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError, type HomeTurn, type ReadSkipped, type SuggestedBook } from "../api";
 import { Button } from "../ui/Button";
+import { companionPause } from "../ui/companionPause";
 import { Icon } from "../ui/Icon";
 import { Moth } from "../ui/Moth";
 import { MothliRemembers } from "./MothliRemembers";
@@ -69,6 +70,9 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
   const [slow, setSlow] = useState(false);
   const [spoken, setSpoken] = useState<string[]>([]); // what the screen reader is told, once each
   const [error, setError] = useState<string | null>(null);
+  // Mothli stopping for a while (the day's talk used up, or still on the last question): said
+  // calmly, not as an error.
+  const [pause, setPause] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [unseen, setUnseen] = useState(false); // something newer arrived below where the reader is
   const [offers, setOffers] = useState<{ exchange: number; items: Offer[] } | null>(null);
@@ -175,6 +179,7 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
   const send = async (value: string, fromBox: boolean) => {
     if (value.length < 2 || busy) return;
     setError(null);
+    setPause(null);
     setConfirming(false);
     setAsked(value);
     setSentences([]);
@@ -212,7 +217,9 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
     } catch (reason) {
       setQuestion((current) => current || value);
       setSpoken([]);
-      setError(reason instanceof ApiError && reason.status === 503
+      const paused = companionPause(reason);
+      if (paused) setPause(paused.line);
+      else setError(reason instanceof ApiError && reason.status === 503
         ? "Mothli can’t check its reply right now, so it said nothing. Try again in a moment."
         : "That didn’t go through. Your question is still here.");
     } finally {
@@ -276,6 +283,7 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
     setSuggested(null);
     setStart(0);
     setError(null);
+    setPause(null);
     setConfirming(false);
     setUnseen(false);
     placed.current = false;
@@ -486,6 +494,7 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
       </div>
 
       {error && <p role="alert" className="ml-hc-error">{error}</p>}
+      <p role="status" className="ml-hc-pause" hidden={!pause}>{pause}</p>
 
       <form className="ml-hc-composer" onSubmit={submit}>
         <label className="sr-only" htmlFor={inputId}>Ask Mothli about your books</label>
