@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from app.hosted.companion import OwnerBoundAdapter, as_uuid, check_position
 from app.hosted.companion.store_read_map import ReadMapStore
+from app.hosted.companion.store_turns import TurnStore
 from app.hosted.storage import SourceObjectRef
 
 _BOOK_COLUMNS = """
@@ -156,7 +157,7 @@ class _BookStore(OwnerBoundAdapter):
 
 
 # The combining line: each part adds its feature's methods here.
-class HostedCompanionCatalog(_BookStore, ReadMapStore):
+class HostedCompanionCatalog(_BookStore, ReadMapStore, TurnStore):
     """The companion's catalog for one hosted reader. Construct per request or per job:
     ``HostedCompanionCatalog(dsn, owner_id)``."""
 

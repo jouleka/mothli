@@ -1,4 +1,5 @@
-"""The read-map routes in hosted mode, at the local paths (ADR 0041 part 1 and section 8).
+"""The read-map and conversation routes in hosted mode, at the local paths (ADR 0041 parts 1
+and 2, section 8).
 
 Each route runs the unchanged local ``app.read_map`` functions against a ``HostedCompanionCatalog``
 and a ``HostedBookSource`` bound to the signed-in reader. The owner comes from the session only
@@ -22,7 +23,14 @@ from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.tenant.api import _csrf_owner, _owner
 from app.hosted.tenant.models import OwnerId
 from app.read_frontier import ReadAnchor
-from app.read_map import chapter_fractions, mark_chapters, record_page, sync_counter
+from app.read_map import (
+    chapter_fractions,
+    mark_chapters,
+    read_snapshot,
+    record_page,
+    sync_counter,
+    visible_turns,
+)
 from app.reader_place import skipped_before
 
 router = APIRouter(prefix="/api/books/{book_id}", tags=["hosted-library"])
@@ -134,3 +142,44 @@ def put_read_frontier(book_id: uuid.UUID, body: ReadAnchor, request: Request,
         raise HTTPException(409, "reading pass changed; reload before continuing") from exc
     except ValueError as exc:
         raise HTTPException(422, "page anchor could not be verified against the source") from exc
+
+
+@router.get("/conversation")
+def stored_conversation(book_id: uuid.UUID, request: Request,
+                        owner_id: OwnerId = Depends(_owner)):
+    """What was said and shown in this book and may be shown again, oldest first: the local
+    route's body over the hosted adapters, through the unchanged ``visible_turns`` (ADR 0041
+    part 2). A turn is shown only while everything it was written from is still read."""
+    catalog, source, settings = _bound(request, owner_id)
+    book = str(book_id)
+    try:
+        point, _chapters, _state, _manifest, record, read_map = read_snapshot(
+            book, catalog, settings, source)
+        turns = visible_turns(book, record, read_map, catalog, limit=80)
+    except CompanionDatabaseBusy as exc:
+        raise _busy(exc) from exc
+    except LookupError as exc:
+        raise HTTPException(404, "unknown book") from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(409, "reading context changed; refresh before continuing") from exc
+    # The local response, field for field: no turn id, which orders the conversation and is
+    # never handed to the reader.
+    return {"read_frontier": point, "turns": [
+        {"role": turn["role"], "content": turn["content"], "atom": turn["atom"],
+         "reaction": bool(turn["reaction"]), "created_at": turn["created_at"]} for turn in turns]}
+
+
+@router.delete("/conversation", status_code=204)
+def clear_conversation(book_id: uuid.UUID, request: Request,
+                       owner_id: OwnerId = Depends(_csrf_owner)):
+    """Forget this book's conversation. Locally, with recollections on, what the reader said is
+    distilled first; hosted mode refuses recollections until part 7, and then clearing just
+    deletes (ADR 0041 section 5), so this stays a plain ``clear_turns``."""
+    catalog, _source, _settings = _bound(request, owner_id)
+    book = str(book_id)
+    try:
+        if catalog.get_book(book) is None:
+            raise HTTPException(404, "unknown book")
+        catalog.clear_turns(book)
+    except CompanionDatabaseBusy as exc:
+        raise _busy(exc) from exc

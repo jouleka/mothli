@@ -39,6 +39,8 @@ TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "read_ranges": frozenset({"SELECT", "INSERT", "DELETE"}),
     "skimmed_ranges": frozenset({"SELECT", "INSERT", "DELETE"}),
     "read_position": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
+    # ADR 0041 part 2: conversations (migration 0019).
+    "conversation_turns": frozenset({"SELECT", "INSERT", "DELETE"}),
 }
 
 ALL_TABLE_PRIVILEGES = frozenset(
