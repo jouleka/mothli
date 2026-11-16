@@ -1785,6 +1785,17 @@ The three home-chat faults 6af saw with real models. Only `home_conversation.py`
 - **Not verified:** nothing was run with real models. Whether the writer now says the moment back, suggests Jane Eyre, or explains an elder is for the next real run. The elder rebuild had no chapter notes (no notes cache, and the stand-in writes none); they are ranked after the read passages here and cannot have pushed the explanation out, but the real run's exact passages were not recovered.
 - **Found, not fixed:** the chat inside a book builds its search words the same way (`conversation_retrieval_question` in `stream_read_prefix`); whether earlier messages push out what a plain question asks about there was not measured, and it was not to be changed here. With two or more books the home chat still splits ten passages between them. A title is matched whole as the catalogue has it: "call of the wild" without "The" does not name "The call of the wild".
 
+### 6ah, rechecked with real models (two home conversations, $0.016 of Jev)
+
+The same conversation as in 6af: seven messages, the home conversation cleared, then four questions. Terra through `codex-local`, Jev 1.14.0, the Karamazov fixture on the shelf, the free library on.
+
+- **A remembered moment is said back.** "What do you remember about me?" now includes "The monk sent away from Athos in The Brothers Karamazov really got to you." "Do you remember which part got to me?" got "Yes, the monk sent away from Athos in The Brothers Karamazov really got to you. He loved it as a place of refuge, and being ordered to leave overwhelmed him with sorrow." Nothing removed, in both runs. In 6af both sentences were removed.
+- **"What's an elder?" after "maybe jane eyre"** got a right answer in both runs ("a spiritual guide whom someone chooses to obey completely, hoping to gain self-mastery"). In 6af it got "we haven't yet read an explanation".
+- **A named book is suggested.** "I think after this one I want something lighter, maybe jane eyre" was answered at once with Jane Eyre, by its catalogue line. But in the first run the later question "any new book you would suggest for me?" still got a different book: the named one was first in the list and the writer was not told that mattered. One instruction was added to `HOME_SYSTEM` (suggest first the book the reader named, and say you remember). Second run: "I remember you had Jane Eyre by Charlotte Brontë in mind. It might suit you if you want a change of pace after the monk's sorrow in The Brothers Karamazov. Jane Eyre follows Jane from childhood into adulthood, when she becomes a governess and falls in love."
+- **Nothing invented:** "who my favourite author is" (never said) got "I don't remember you telling me" in both runs.
+- Still seen: in the home chat the first sentence of "who is Alyosha again?" was removed in one run ("Alyosha is the youngest Karamazov son…, and Ivan is his older brother."), a true sentence.
+- **Not verified:** two runs of one conversation, one book on the shelf. The add button was not pressed.
+
 ## 7. Proposed target
 
 | | Today (page path) | Target |
