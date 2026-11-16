@@ -1528,6 +1528,14 @@ The owner agreed to narrow the fixed foreshadowing pattern. This is a change to 
 - 22 new tests (`tests/eval/test_prolepsis_will.py`): 10 noun sentences that must not be hits, all failing on the old pattern, and 12 future-tense sentences that must stay hits, passing before and after. Of the five true sentences this check removed in 6ac's runs, three now pass it; "your own will" and the reported dream do not.
 - Not run with real models: the pattern involves none. What it changes in real replies will show in the next samples.
 
+### 6ac, again: "their own will" (17 November)
+
+The owner had agreed to narrow the pattern for the noun, with "own" among the words named. It was left out then because "left on their own will tear each other apart" is a future tense. It kept costing true sentences in a book about obedience: "an elder is a spiritual guide to whom someone voluntarily gives up their own will" was removed in three separate runs.
+
+- `PROLEPSIS_RE` no longer counts "will" after a possessive and "own" (`my`, `your`, `his`, `her`, `their`, `our`, `its`, `one's`), unless "on" or "of" comes before the possessive: "on their own will…" and "of his own will…" can be the future tense and stay hits. Everything else in the pattern is as it was.
+- 11 more tests in `tests/eval/test_prolepsis_will.py`: five noun sentences that failed on the old pattern, six future-tense sentences ("left on her own will she manage?", "a house of his own will cost more", "those who own will pay") that stay hits before and after. 33 in the file.
+- No model involved; not run with real models.
+
 ## 6ad. Mothli suggests books that are not on the shelf (16 November)
 
 The owner asked the home chat for something new to read. Mothli asked twice whether he wanted ideas, then said it had no titles to suggest. That was the design: it could only point at books on the shelf.
@@ -1713,6 +1721,14 @@ The chat inside the Karamazov fixture, chapters 1 to 4 read and part of 5. Terra
 - **In a new conversation:** "what do you remember about me?" brought all four back, correctly, in three sentences. "Do you remember which part got to me?" named the monk of Athos, but hedged ("though I can't be sure that's the part that got to you"). "Do you remember who my favourite author is?", which was never said, got "I don't remember who your favourite author is. Who is it?": nothing invented. "What's an elder again?" was answered in three sentences, no shorter than before the reader asked for short answers.
 - **Not verified:** one conversation, one book, four notes. Not tried: a contradiction replacing a note, a note hidden by "read it fresh" with real models, a store of hundreds, a reader deep in a long book (where the passages may leave no room for the notes: see the open item on the book chat's check size), the home chat.
 
+### 6ae, afterwards: a wish about how to be spoken to is acted on (17 November)
+
+In 6ae's run "keep your answers short" was remembered and said back, and replies stayed three sentences long. One sentence was added to the instruction that goes with the notes (`RECOLLECTION_RULE`): a note on how the reader likes to be spoken to is their standing wish, to be followed in every reply without saying so; a reader who wants short answers gets one or two sentences. No check changed.
+
+- Tried once with real models ($0.009 of Jev), the same conversation as 6ae with two more questions at the end: once the note existed, all six replies in the new conversation were two sentences ("what is an elder again?", "why did adelaida leave?", "tell me more about zossima", and the three memory questions). In 6ae the same questions got three.
+- Not verified: one run; no wish other than short answers was tried; the home chat uses the same instruction and was not rerun.
+- Seen in the same run: "An elder is a spiritual guide to whom someone voluntarily gives up their own will in obedience." was removed by the fixed foreshadowing pattern, for "own will" (see the open item on that).
+
 ## 6af. What Mothli remembers: the home chat and the reader's screen (16 November)
 
 Part two of 6ae. The home chat now uses the notes the way the chat inside a book does, and the reader can see and delete them.
@@ -1822,6 +1838,27 @@ Two faults from 6z's "Found, and not fixed".
 - A reply the panel refuses when it arrives (past the reader's place, or the read position changed) was already finished, so the server stored it.
 - Kept replies are still a copy in one browser, and they follow the map by chapter, not by the exact pages they were written from. Where there is no read map (hosted mode, or the setting off) nothing hides them, and for the moment before the map loads on opening a book this pass's kept replies show as before.
 - Leaving the home screen mid-reply now loses that question and its reply; the home chat still has no Cancel of its own.
+## 6ai. Does the chat inside a book lose passages to earlier messages? (17 November)
+
+6ah left open whether the chat inside a book, which builds its search words the same way (`conversation_retrieval_question`: the message, then the last two messages), loses the passage a plain question needs after an unrelated earlier message. Measured with stand-in models: the Karamazov fixture read to `inside-5` with `enter_by_map`, the earlier messages stored in the book's conversation as the app stores them (each with a short reply and a `drew_on` record), then the question; once with the earlier messages and once with the conversation cleared. "Present" means the passage that answers is among the passages of every sentence check and in the writer's prompt; the rank is its place among the last check's passages.
+
+| Earlier message(s) | Question | With earlier | Without |
+|---|---|---|---|
+| the five of 6ah, ending "maybe jane eyre" | what's an elder? | yes (3 of 12) | yes (2 of 12) |
+| that reminds me of my grandmother's house | who is Grigory? | yes (1 of 12) | yes (1 of 12) |
+| ok let's talk about something else, maybe pride and prejudice | why did Adelaida leave? | no | no |
+| the same | why did Adelaïda leave? | yes (5 of 12) | no |
+| my cat knocked my tea over this morning, ugh | who put up the tomb for Alyosha's mother? | yes (2 of 12) | yes (2 of 12) |
+| i read this in a cafe today and the coffee was awful honestly | how old is the elder Zossima? | yes (1 of 12) | yes (1 of 12) |
+| my dentist appointment got moved to friday, so annoying | why did Ivan leave the family of Yefim Petrovitch? | yes (5 of 12) | yes (5 of 12) |
+| my own father drank and shouted at the servants, the money went too | what's an elder? | yes (1 of 12) | yes (2 of 12) |
+| i visited a monastery once, the monks and the bells and the cells | what's an elder? | yes (4 of 12) | yes (2 of 12) |
+| wait, Adelaida just ran off and left the kid with Fyodor?? (a follow-up) | why did she do that? | yes (5 of 12) | no |
+
+- **Conclusion: sound; no pair loses its passage to the earlier message.** The book chat takes a larger pool from one book (six core passages with their neighbours, then up to four more) and favours the chapter just read, so the earlier words move a passage a place or two but did not push one out. The elder passage is in the chapter just read, which helps it; the passages in chapters 1 to 4 (Grigory, the tomb, Ivan) held too. The follow-up still needs the earlier words and gets them. No product code changed.
+- **Verified,** stand-in models only: `tests/test_book_chat_earlier_messages.py` (2 tests) pins the elder case after the five earlier messages (checker and writer both have the explanation) and the follow-up guard (found with the earlier message, not without). Whole backend suite and `ruff check app tests scripts` clean.
+- **Not verified:** nothing with real models; one book, one reading position, ten pairs. The rebuild had no chapter notes.
+- **Found, not fixed:** a name typed without its accent matches nothing: "Adelaida" is not "Adelaïda" to the search or to the read-word check (`word_tokens` folds case, not accents), so the passage is not found with or without earlier messages, and by reading the code the name counts as one the reader has not met (`unread_name`), so a reply with nothing shown would say we are not there yet. And "why did Adelaïda leave?" alone does not find "she left the house and ran away" ("leave" is not "left", and Adelaïda is named in many passages); it was found with the unrelated earlier message only by chance.
 
 ## 7. Proposed target
 
