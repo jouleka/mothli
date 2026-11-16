@@ -180,8 +180,9 @@ class Settings(BaseSettings):
             raise ValueError("prose replies require the local conversation Jev pipeline")
         if self.reader_conversation_routing and not self.reader_conversation_jev:
             raise ValueError("turn routing requires the local conversation Jev pipeline")
-        if self.reader_conversation_jev and (self.deployment_mode != "local" or not self.reader_page_context
-                                             or not self.jev_enabled):
+        # Hosted mode may run the conversation with Jev for the streamed chat inside a book, on
+        # the conditions checked below with the rest of hosted mode (ADR 0041 part 5).
+        if self.reader_conversation_jev and (not self.reader_page_context or not self.jev_enabled):
             raise ValueError("conversation Jev experiment requires local page context and Jev")
         # After the Jev check, so a server missing page context is told that, not about the map.
         if self.reader_read_map is None:
@@ -234,6 +235,22 @@ class Settings(BaseSettings):
         on = [name for name, value in refused.items() if value]
         if on:
             raise ValueError("hosted mode refuses " + ", ".join(on))
+        # ADR 0041 part 5: the streamed chat inside a book, paid by the owner, only with the
+        # platform's own writer and Jev keys, the read map (hosted keeps no confirmed anchor), and
+        # caps the operator has set rather than inherited (no unbounded owner-paid AI).
+        if self.reader_conversation_jev:
+            needed = {
+                "READER_READ_MAP": self.reader_read_map,
+                "TYPESAFE_API_KEY": (self.typesafe_api_key is not None
+                                     and bool(self.typesafe_api_key.get_secret_value())),
+                "OPENAI_API_KEY or ANTHROPIC_API_KEY": bool(self.openai_api_key
+                                                            or self.anthropic_api_key),
+                "HOSTED_READER_USD_PER_DAY": "hosted_reader_usd_per_day" in self.model_fields_set,
+                "HOSTED_PLATFORM_USD_PER_DAY": "hosted_platform_usd_per_day" in self.model_fields_set,
+            }
+            missing = [name for name, value in needed.items() if not value]
+            if missing:
+                raise ValueError("the streamed chat in hosted mode requires " + ", ".join(missing))
         if self.openai_base_url:
             parsed = urlsplit(self.openai_base_url.strip())
             allowed = {item.strip().rstrip("/").casefold()
