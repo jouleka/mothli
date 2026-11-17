@@ -11,7 +11,9 @@ from datetime import timedelta
 from decimal import Decimal
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from app.hosted.audit import record_event
 from app.hosted.credentials import (
@@ -48,6 +50,15 @@ _FAILURE_CODES = frozenset(
 
 class LostLeaseError(RuntimeError):
     pass
+
+
+class ChapterAlreadyPublished(RuntimeError):
+    """A chapter's story memory is already published: a second publish changes nothing."""
+
+
+class StoryMemoryMoved(RuntimeError):
+    """A book's story memory changed after its working copy was taken (a reader's correction):
+    the chapter must be prepared again against the memory as it is now. Nothing was written."""
 
 
 class JobIdempotencyError(RuntimeError):
@@ -1001,3 +1012,141 @@ class PostgresWorkerRepository:
                 result="succeeded",
             )
         return True
+
+    def commit_chapter_memory(
+        self,
+        claim: ClaimedJob,
+        *,
+        book_id: uuid.UUID,
+        book_incarnation: uuid.UUID,
+        copied: str,
+        chapter: dict,
+        receipt: dict,
+        rows: dict,
+    ) -> uuid.UUID:
+        """Publish what one chapter added to a book's story memory, in one transaction fenced by
+        the job's lease (ADR 0042 section 1), the completion receipt last. Returns the chapter's id.
+
+        ``copied`` is the digest of the memory the chapter was extracted against
+        (``story_memory.copy_digest``); if the memory now reads differently (a reader's
+        correction arrived meanwhile) nothing is written and ``StoryMemoryMoved`` is raised. A
+        chapter already published raises ``ChapterAlreadyPublished`` and writes nothing. Every
+        row must be stamped with the chapter's own ordinal: anything else is refused. Raw text,
+        passages and vectors are never written here. The book's per-book lock (the one removing
+        a book and a reader's correction take) is held first, so neither can interleave.
+        """
+        from app.hosted.companion.story_memory import COPY_SQL, copy_digest
+
+        if claim.book_id != book_id or claim.book_incarnation != book_incarnation:
+            raise JobIdempotencyError("chapter memory does not match the claimed book")
+        ordinal = chapter["ordinal"]
+        stamped = [row["revealed_at"] for name in (
+            "summaries", "entities", "aliases", "states", "edges", "events", "participants",
+            "themes") for row in rows[name]]
+        stamped += [row["invalid_at"] for row in rows["closed_states"]]
+        if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1 or any(
+                value != ordinal for value in stamped):
+            raise ValueError("every published row must carry the chapter's own ordinal")
+        scope = (claim.owner_id, book_id, book_incarnation)
+        with self._connect() as conn, conn.transaction():
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s::text || ':' || %s::text, 48))",
+                (claim.owner_id, book_id),
+            )
+            lease = self._locked_lease(conn, claim)
+            if lease["state"] != "running" or lease["cancellation_requested_at"] is not None:
+                raise LostLeaseError("job is not eligible to publish")
+            published = conn.execute(
+                """
+                SELECT 1 FROM public.chapters AS chapter
+                JOIN public.ingested_chapters AS receipt
+                  ON (receipt.owner_id,receipt.book_id,receipt.book_incarnation,receipt.chapter_id)
+                   =(chapter.owner_id,chapter.book_id,chapter.book_incarnation,chapter.id)
+                WHERE chapter.owner_id=%s AND chapter.book_id=%s AND chapter.book_incarnation=%s
+                  AND (chapter.chapter_key=%s OR chapter.revealed_at=%s)
+                  AND chapter.retracted_at IS NULL
+                """,
+                (*scope, chapter["key"], ordinal),
+            ).fetchone()
+            if published is not None:
+                raise ChapterAlreadyPublished("this chapter's story memory is already published")
+            now = conn.execute(
+                COPY_SQL, {"owner": claim.owner_id, "book": book_id, "incarnation": book_incarnation}
+            ).fetchone()
+            if copy_digest(now) != copied:
+                raise StoryMemoryMoved("the story memory changed after it was copied")
+
+            # Rows first revealed at one chapter are read back in the order they were recorded:
+            # give each its own moment, in the order the chapter wrote them.
+            order = iter(range(1, 1_000_000_000))
+
+            def insert(table: str, values: dict) -> None:
+                columns = ["owner_id", "book_id", "book_incarnation", *values, "recorded_at"]
+                conn.execute(
+                    sql.SQL(
+                        "INSERT INTO public.{} ({}) VALUES ({}, now()+(%s*interval '1 microsecond'))"
+                    ).format(
+                        sql.Identifier(table),
+                        sql.SQL(",").join(sql.Identifier(name) for name in columns),
+                        sql.SQL(",").join(sql.Placeholder() for _ in range(len(columns) - 1)),
+                    ),
+                    (*scope, *values.values(), next(order)),
+                )
+
+            chapter_id = uuid.uuid4()
+            insert("chapters", {
+                "id": chapter_id, "chapter_key": chapter["key"], "revealed_at": ordinal,
+                "href": chapter["href"], "fragment": chapter["fragment"],
+                "title": chapter["title"], "part_label": chapter["part_label"],
+                "kind": chapter["kind"], "content_hash": chapter["content_hash"],
+                "extractor_version": chapter["extractor_version"]})
+            source = {"source_chapter_id": chapter_id}
+            for row in rows["summaries"]:
+                insert("chapter_summaries", {**source, **row})
+            for row in rows["entities"]:
+                insert("entities", {**source, **row})
+            for row in rows["aliases"]:
+                insert("aliases", {**source, **row})
+            for row in rows["states"]:
+                insert("entity_state", {**source, **row, "status": Jsonb(row["status"])})
+            for row in rows["closed_states"]:
+                closed = conn.execute(
+                    """
+                    UPDATE public.entity_state SET invalid_at=%s
+                    WHERE owner_id=%s AND book_id=%s AND book_incarnation=%s AND id=%s
+                      AND invalid_at IS NULL AND revealed_at<%s
+                    """,
+                    (ordinal, *scope, row["id"], ordinal),
+                )
+                if closed.rowcount != 1:
+                    raise StoryMemoryMoved("a state the chapter replaces is no longer open")
+            for row in rows["edges"]:
+                insert("edges", {**source, **row})
+            for row in rows["events"]:
+                insert("events", {**source, **row})
+            for row in rows["participants"]:
+                insert("event_participants", {**source, **row})
+            for row in rows["themes"]:
+                insert("themes", {**source, **row})
+            # The receipt is last; every row above refers to it through a deferred foreign key.
+            conn.execute(
+                """
+                INSERT INTO public.ingested_chapters
+                  (owner_id,book_id,book_incarnation,chapter_id,content_hash,extractor_model,
+                   input_tokens,output_tokens,usd,completed_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,now())
+                """,
+                (*scope, chapter_id, chapter["content_hash"], receipt["extractor_model"],
+                 receipt["input_tokens"], receipt["output_tokens"],
+                 None if receipt["usd"] is None else Decimal(str(receipt["usd"]))),
+            )
+            record_event(
+                conn,
+                owner_id=claim.owner_id,
+                actor_kind="worker",
+                action="memory.publish",
+                target_kind="chapter",
+                target_id=chapter_id,
+                result="succeeded",
+            )
+        return chapter_id

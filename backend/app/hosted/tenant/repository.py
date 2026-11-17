@@ -1555,6 +1555,13 @@ class PostgresTenantRepository:
     ) -> dict | None:
         """Atomically publish a reader correction without rewriting earlier story time."""
         async with self._transaction(owner_id) as conn:
+            # The book's companion lock, which a story memory publish also holds while it checks
+            # that the memory is as it was copied: a correction lands wholly before that check
+            # or wholly after the publish, never between (ADR 0042 section 1).
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s::text || ':' || %s::text, 48))",
+                (owner_id.value, book_id),
+            )
             scope = await (
                 await conn.execute(
                     """

@@ -56,7 +56,8 @@ TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
 
 # The job worker (ADR 0024): BYPASSRLS, because it schedules across owners. Every owner's
 # companion work after a claim goes through the tenant role instead (ADR 0041 section 5); the
-# worker itself only claims, leases, finishes and pauses jobs, and commits extraction chapters.
+# worker itself only claims, leases, finishes and pauses jobs, commits extraction chapters, and
+# publishes a chapter's story memory under the job's lease (ADR 0042 part 2).
 WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "jobs": frozenset({"SELECT", "UPDATE"}),
     "job_attempts": frozenset({"SELECT", "INSERT", "UPDATE"}),
@@ -71,6 +72,16 @@ WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "audit_events": frozenset({"INSERT"}),
     # ADR 0041 part 6: the platform-wide pause after the provider refused the account.
     "provider_pauses": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    # ADR 0042 part 2: publishing one chapter's story memory. INSERT for what a chapter adds;
+    # UPDATE on entity_state to close a state the chapter replaces; SELECT on what the working
+    # copy was built from, which the publish reads again to refuse a copy that moved meanwhile.
+    "entities": frozenset({"SELECT", "INSERT"}),
+    "aliases": frozenset({"SELECT", "INSERT"}),
+    "entity_state": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    "edges": frozenset({"INSERT"}),
+    "events": frozenset({"INSERT"}),
+    "event_participants": frozenset({"INSERT"}),
+    "themes": frozenset({"INSERT"}),
 }
 
 # ADR 0041 part 3 (migration 0020): the platform's day total is reached only through these two
