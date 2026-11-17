@@ -580,8 +580,8 @@ def test_second_reader_cannot_see_trigger_or_change_first_readers_notes_or_jobs(
         assert (hidden.status_code, hidden.json()) == (absent.status_code, absent.json()), suffix
         assert (hidden.status_code, hidden.json()) == (404, {"detail": "unknown book"}), suffix
     b.become()
-    listed = b.client.get("/api/jobs").json()
-    assert {str(job["book_id"]) for job in listed} == {book_b}
+    # B's own upload makes no extraction job while reader keys are off (ADR 0041 part 10).
+    assert b.client.get("/api/jobs").json() == []
     for job in jobs_a:
         assert b.client.get(f"/api/jobs/{job['id']}").status_code == 404
         assert b.call("POST", f"/api/jobs/{job['id']}/cancel").status_code == 404
@@ -636,15 +636,15 @@ def test_waiting_notes_neither_block_an_upload_nor_show_as_the_readers_jobs(note
     uploaded, or the server's own background jobs listed, shown or cancellable on the reader's
     extraction screen."""
     a, _book = opened(notes_app, readers)
-    update_limits(database, a.owner, {"max_active_jobs": 2})
+    update_limits(database, a.owner, {"max_active_jobs": 1})
     [notes_job] = jobs_of(database, a.owner)
-    assert len(jobs_of(database, a.owner, "ingest_book")) == 1
-    second = upload(a.client, a.tokens, "a", lamp_book())          # 2 extraction jobs, 1 notes
+    # No extraction job while reader keys are off (ADR 0041 part 10): only the notes job waits.
+    assert jobs_of(database, a.owner, "ingest_book") == []
+    second = upload(a.client, a.tokens, "a", lamp_book())
     assert second
     a.become()
-    listed = a.client.get("/api/jobs").json()
-    assert len(listed) == 2 and {job["kind"] for job in listed} == {"ingest_book"}
-    assert a.client.get("/api/limits").json()["active_jobs"] == 2
+    assert a.client.get("/api/jobs").json() == []
+    assert a.client.get("/api/limits").json()["active_jobs"] == 0
     assert a.client.get(f"/api/jobs/{notes_job['id']}").status_code == 404
     assert a.call("POST", f"/api/jobs/{notes_job['id']}/cancel").status_code == 404
     assert [row["state"] for row in jobs_of(database, a.owner)] == ["pending"]
@@ -775,9 +775,14 @@ def test_a_companion_worker_leaves_extraction_jobs_alone(notes_app, readers, dat
     """The break it catches: the companion dispatcher's worker claiming a waiting extraction job,
     which it cannot run and would fail."""
     a = reader(notes_app, readers)
-    upload(a.client, a.tokens, "a", lamp_book())
+    book = upload(a.client, a.tokens, "a", lamp_book())
+    # An extraction job as part 10 (or a reader key) would add it: uploads make none today.
     with psycopg.connect(database) as conn:
-        conn.execute("UPDATE jobs SET state='pending' WHERE kind='ingest_book'")
+        conn.execute("""INSERT INTO jobs (owner_id,book_id,book_incarnation,kind,state,
+                                          idempotency_key,payload_metadata)
+                        SELECT owner_id,id,incarnation,'ingest_book','pending','ingest:walk',
+                               '{"chapter_count": 3}'::jsonb
+                        FROM books WHERE id=%s""", (book,))
     repository = PostgresWorkerRepository(worker_dsn)
     assert repository.claim_next(worker_id="notes", lease_for=timedelta(seconds=30),
                                  kinds=frozenset({"chapter_notes"})) is None
