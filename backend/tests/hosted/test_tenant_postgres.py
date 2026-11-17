@@ -567,7 +567,7 @@ def test_reader_search_is_owner_scoped_spoiler_bounded_and_deletion_aware(
 
     repository = PostgresTenantRepository(database)
     assert asyncio.run(
-        repository.soft_delete_book(OwnerId(corpus["owner_a"]), corpus["book_a"])
+        repository.remove_book(OwnerId(corpus["owner_a"]), corpus["book_a"])
     )
     assert asyncio.run(
         repository.search_book(
@@ -667,7 +667,7 @@ def test_reader_marks_are_owner_scoped_frontier_bounded_and_exportable(
         headers={CSRF_HEADER: csrf_a},
     ).status_code == 204
     repository = PostgresTenantRepository(database)
-    assert asyncio.run(repository.soft_delete_book(OwnerId(corpus["owner_a"]), book))
+    assert asyncio.run(repository.remove_book(OwnerId(corpus["owner_a"]), book))
     with psycopg.connect(database) as conn:
         for table in ("highlights", "annotations", "bookmarks"):
             assert conn.execute(
@@ -1541,10 +1541,11 @@ def test_hosted_source_lifecycle_is_owner_scoped(tenant_app, corpus: dict, datab
     assert all(item["id"] != book_id for item in client.get("/api/books").json())
     assert not any(path.is_file() for path in app.state.object_storage._root.rglob("*"))
     with psycopg.connect(database) as conn:
+        # The record of the stored file goes with the file (ADR 0041 part 8).
         assert conn.execute(
-            "SELECT deleted_at IS NOT NULL FROM source_objects WHERE owner_id=%s AND book_id=%s",
+            "SELECT count(*) FROM source_objects WHERE owner_id=%s AND book_id=%s",
             (corpus["owner_a"], book_id),
-        ).fetchone() == (True,)
+        ).fetchone() == (0,)
         assert conn.execute(
             "SELECT count(*) FROM book_search_documents WHERE owner_id=%s AND book_id=%s",
             (corpus["owner_a"], book_id),
@@ -2015,7 +2016,7 @@ def test_repository_owner_predicates_hold_when_rls_is_bypassed(database: str, co
     assert asyncio.run(repository.memory_snapshot(owner_b, corpus["book_a"])) is None
     assert asyncio.run(repository.list_costs(owner_b, corpus["book_a"])) is None
     assert asyncio.run(repository.source_object(owner_b, corpus["book_a"])) is None
-    assert not asyncio.run(repository.soft_delete_book(owner_b, corpus["book_a"]))
+    assert not asyncio.run(repository.remove_book(owner_b, corpus["book_a"]))
     assert asyncio.run(repository.get_job(owner_b, uuid.uuid4())) is None
     assert asyncio.run(repository.cancel_job(owner_b, uuid.uuid4())) is None
     assert asyncio.run(repository.get_credential(owner_b, uuid.uuid4())) is None
@@ -2058,10 +2059,10 @@ def test_tenant_role_is_rls_enforced_and_privilege_allow_list_is_exact(
             conn.execute(sql.SQL("GRANT SELECT ON themes TO {}").format(sql.Identifier(role)))
 
     with psycopg.connect(database, autocommit=True) as conn:
-        conn.execute(sql.SQL("GRANT DELETE ON source_objects TO {}").format(sql.Identifier(role)))
+        conn.execute(sql.SQL("GRANT DELETE ON books TO {}").format(sql.Identifier(role)))
     try:
         with pytest.raises(AuthConfigurationError, match="allow-list"):
             asyncio.run(repository.check_runtime_role())
     finally:
         with psycopg.connect(database, autocommit=True) as conn:
-            conn.execute(sql.SQL("REVOKE DELETE ON source_objects FROM {}").format(sql.Identifier(role)))
+            conn.execute(sql.SQL("REVOKE DELETE ON books FROM {}").format(sql.Identifier(role)))

@@ -155,7 +155,7 @@
       "path": "/api/books/{book_id}",
       "surface": "delete",
       "access": "delete",
-      "repository_method": "soft_delete_book",
+      "repository_method": "remove_book",
       "cross_tenant_test": "test_hosted_source_lifecycle_is_owner_scoped"
     },
     {

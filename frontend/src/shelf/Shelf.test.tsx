@@ -679,20 +679,39 @@ describe("Removing a book from the shelf", () => {
     const local = render(<Shelf onOpen={() => {}} />);
     await user.click((await screen.findAllByRole("button", { name: "Remove from your shelf" }))[0]);
     let sheet = await screen.findByRole("alertdialog");
-    expect(within(sheet).getByText(/in Mothli’s folder on this computer/)).toBeTruthy();
-    expect(within(sheet).getByText(/highlights, notes, bookmarks and saved replies, which live on this device/)).toBeTruthy();
-    expect(within(sheet).queryByText("Kept out of sight")).toBeNull();
+    const said = (dialog: HTMLElement) =>
+      Array.from(dialog.querySelectorAll("h3, li")).map((item) => item.textContent);
+    // Local mode, word for word as before: nothing about it changed.
+    expect(said(sheet)).toEqual([
+      "What goes",
+      "Your place in it, and your chat with Mothli about it.",
+      "Mothli’s notes on its chapters, and what Mothli remembers from it.",
+      "Your highlights, notes, bookmarks and saved replies, which live on this device.",
+      "The copy saved for offline reading.",
+      "What stays",
+      "The book’s file, and what Mothli learned from its pages, in Mothli’s folder on this computer.",
+      "What Mothli remembers about you that isn’t about this book.",
+    ]);
     expect(within(sheet).getByText(/You can add it again any time/)).toBeTruthy();
     await user.keyboard("{Escape}");
     local.unmount();
 
+    // Hosted mode erases everything about the book's reading (repository.py remove_book): no
+    // "kept out of sight" any more, only what the reader would care about, said plainly.
     render(<Shelf onOpen={() => {}} session={hosted} />);
     await user.click((await screen.findAllByRole("button", { name: "Remove from your shelf" }))[0]);
     sheet = await screen.findByRole("alertdialog");
-    expect(within(sheet).getByText("The book’s file, from Mothli’s storage.")).toBeTruthy();
-    expect(within(sheet).getByText("Kept out of sight")).toBeTruthy();
-    expect(within(sheet).getByText(/Mothli never shows or uses them again/)).toBeTruthy();
-    expect(within(sheet).queryByText(/on this computer/)).toBeNull();
+    expect(said(sheet)).toEqual([
+      "What goes",
+      "The book’s file, from Mothli’s storage.",
+      "Your place in it, and your highlights, notes and bookmarks.",
+      "Your chat with Mothli about it, and what you said on your home page while you were reading it.",
+      "Mothli’s notes on its chapters, what it learned from its pages, and what it remembers from it.",
+      "The copy saved for offline reading, and the replies you saved from Mothli, on this device.",
+      "What stays",
+      "What Mothli remembers about you that isn’t about this book.",
+    ]);
+    expect(within(sheet).queryByText(/out of sight|never shows or uses/)).toBeNull();
     expect(await axeAA(sheet)).toHaveNoViolations();
   });
 });

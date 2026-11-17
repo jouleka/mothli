@@ -15,8 +15,9 @@ import "./account.css";
 export const REMOVE_FAILED = "I couldn’t remove it just now. Check your connection and try again.";
 
 /** What happens, as each mode's server does it (app/api/books.py and app/catalog/catalog.py
- * locally; app/hosted/tenant/api.py and repository.py soft_delete_book in hosted mode), and as
- * this device does it (api.deleteBook). */
+ * locally; app/hosted/tenant/api.py and repository.py remove_book in hosted mode, which erases
+ * every row about the book's reading and keeps only what its replies cost, as a bare record), and
+ * as this device does it (api.deleteBook). */
 export const REMOVAL = {
   local: {
     goes: [
@@ -25,7 +26,6 @@ export const REMOVAL = {
       "Your highlights, notes, bookmarks and saved replies, which live on this device.",
       "The copy saved for offline reading.",
     ],
-    hidden: [] as string[],
     stays: [
       "The book’s file, and what Mothli learned from its pages, in Mothli’s folder on this computer.",
       "What Mothli remembers about you that isn’t about this book.",
@@ -34,10 +34,10 @@ export const REMOVAL = {
   hosted: {
     goes: [
       "The book’s file, from Mothli’s storage.",
+      "Your place in it, and your highlights, notes and bookmarks.",
+      "Your chat with Mothli about it, and what you said on your home page while you were reading it.",
+      "Mothli’s notes on its chapters, what it learned from its pages, and what it remembers from it.",
       "The copy saved for offline reading, and the replies you saved from Mothli, on this device.",
-    ],
-    hidden: [
-      "Your place in it, your highlights, notes and bookmarks, your chat about it, and what Mothli noted and remembers from it. Mothli never shows or uses them again.",
     ],
     stays: ["What Mothli remembers about you that isn’t about this book."],
   },
@@ -126,14 +126,6 @@ export function RemoveBook({
           <ul className="ml-account-steps">
             {told.goes.map((line) => <li key={line}>{line}</li>)}
           </ul>
-          {told.hidden.length > 0 && (
-            <>
-              <h3 className="ml-mem-book">Kept out of sight</h3>
-              <ul className="ml-account-steps">
-                {told.hidden.map((line) => <li key={line}>{line}</li>)}
-              </ul>
-            </>
-          )}
           <h3 className="ml-mem-book">What stays</h3>
           <ul className="ml-account-steps">
             {told.stays.map((line) => <li key={line}>{line}</li>)}

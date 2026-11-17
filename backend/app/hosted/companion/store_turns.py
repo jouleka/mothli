@@ -74,6 +74,7 @@ class TurnStore(OwnerBoundAdapter):
                        FROM public.books AS book
                        WHERE book.owner_id=%s AND book.id=%s AND book.incarnation=%s
                          AND book.deleted_at IS NULL
+                       FOR SHARE OF book
                        RETURNING turn_id""",
                     (*values, self._owner.value, as_uuid(book_id),
                      as_uuid(incarnation))).fetchone()

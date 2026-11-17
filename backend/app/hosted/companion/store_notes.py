@@ -58,7 +58,8 @@ class NotesStore(OwnerBoundAdapter):
         with self._transaction() as conn:
             book = conn.execute(
                 """SELECT id,incarnation FROM public.books
-                   WHERE owner_id=%s AND id=%s AND deleted_at IS NULL""",
+                   WHERE owner_id=%s AND id=%s AND deleted_at IS NULL
+                   FOR SHARE""",
                 (self._owner.value, as_uuid(book_id))).fetchone()
             if book is None:
                 raise LookupError("unknown book")
