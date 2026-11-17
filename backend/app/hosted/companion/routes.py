@@ -30,7 +30,7 @@ from app.api.reading import ReadChapters, ReadPage
 from app.ask import AskRequest
 from app.home_conversation import HomeAsk, home_turns, read_maps, shelf_books, stream_home
 from app.hosted.companion import CompanionDatabaseBusy
-from app.hosted.companion.jobs import ChapterNotesQueue, RecollectQueue
+from app.hosted.companion.jobs import ChapterNotesQueue, RecollectQueue, StoryMemoryQueue
 from app.hosted.companion.memory import HostedBookStore
 from app.hosted.companion.source import HostedBookSource
 from app.hosted.companion.store import HostedCompanionCatalog, ReplyCatalog
@@ -66,6 +66,16 @@ def _notes_wanted(settings) -> bool:
 def _notes_queue(request: Request, owner_id: OwnerId) -> ChapterNotesQueue:
     """This reader's ``notes_builder``: ``ensure`` adds a durable ``chapter_notes`` job."""
     return ChapterNotesQueue(request.app.state.companion_dsn, owner_id)
+
+
+def _finished(request: Request, owner_id: OwnerId, book: str) -> None:
+    """A chapter was finished: ask for its notes and, while a reader's own story memory is on,
+    for the book's story memory (ADR 0042 section 2). Neither is waited for."""
+    settings = request.app.state.settings
+    if _notes_wanted(settings):
+        _notes_queue(request, owner_id).ensure(book)
+    if settings.hosted_story_memory and settings.hosted_reader_story_memory:
+        StoryMemoryQueue(request.app.state.companion_dsn, owner_id).ensure(book)
 
 
 def _bound(request: Request, owner_id: OwnerId, catalog_type=HostedCompanionCatalog):
@@ -124,8 +134,8 @@ def put_read_page(book_id: uuid.UUID, body: ReadPage, request: Request,
         raise HTTPException(409, "reading pass changed; reload before continuing") from exc
     except ValueError as exc:
         raise HTTPException(422, "page could not be verified against the source") from exc
-    if finished and _notes_wanted(settings):
-        _notes_queue(request, owner_id).ensure(book)
+    if finished:
+        _finished(request, owner_id, book)
     return point
 
 
@@ -145,8 +155,8 @@ def put_read_chapters(book_id: uuid.UUID, body: ReadChapters, request: Request,
         raise HTTPException(404, "unknown book") from exc
     except ValueError as exc:
         raise HTTPException(422, "chapters could not be verified against the source") from exc
-    if body.read and _notes_wanted(settings):
-        _notes_queue(request, owner_id).ensure(book)
+    if body.read:
+        _finished(request, owner_id, book)
     return point
 
 

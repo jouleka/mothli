@@ -169,6 +169,12 @@ class Settings(BaseSettings):
     # The older "paste your own key" routes (/api/credentials, /api/provider-settings and the
     # reader-key reply paths). Off: they answer as if they did not exist.
     hosted_reader_keys: bool = False
+    # ADR 0042 sections 3 and 6: story memory in hosted mode, built by the worker's story_memory
+    # jobs and paid by the owner. HOSTED_STORY_MEMORY turns the feature on at all;
+    # HOSTED_READER_STORY_MEMORY decides whether a reader's own book gets its own memory (off:
+    # no job is made for any reader's book and nothing is spent).
+    hosted_story_memory: bool = False
+    hosted_reader_story_memory: bool = False
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
@@ -211,6 +217,14 @@ class Settings(BaseSettings):
             raise ValueError("READER_RECOLLECTIONS requires READER_READ_MAP")
         if self.llm_transport == "codex-local" and self.deployment_mode != "local":
             raise ValueError("codex-local is only supported for local testing")
+        # ADR 0042: a reader's own story memory is part of hosted story memory, which local mode
+        # does not use (it builds story memory itself); the extraction is paid like the chat.
+        if self.hosted_reader_story_memory and not self.hosted_story_memory:
+            raise ValueError("HOSTED_READER_STORY_MEMORY requires HOSTED_STORY_MEMORY")
+        if self.hosted_story_memory and not hosted:
+            raise ValueError("HOSTED_STORY_MEMORY is a hosted-mode setting")
+        if self.hosted_story_memory and not self.reader_conversation_jev:
+            raise ValueError("story memory in hosted mode requires READER_CONVERSATION_JEV")
         if self.deployment_mode != "hosted":
             return self
 

@@ -13,7 +13,9 @@ both barriers hold in the background as on the request path.
 are fully read, writes from those chapters alone and keeps only sentences that pass every check.
 ``recollect`` (part 7) is ``Recollector.catch_up`` around the unchanged ``pending`` and ``distil``,
 which read only the reader's own messages and keep only notes Jev finds the reader said; its
-queue, ``RecollectQueue``, is the ``recollector`` the chats are given. Nothing here decides what a
+queue, ``RecollectQueue``, is the ``recollector`` the chats are given. ``story_memory`` (ADR 0042
+part 3) is ``remember_chapter`` for the next chapter the reader has finished, one chapter per run;
+its queue, ``StoryMemoryQueue``, is asked where the notes queue is. Nothing here decides what a
 reader may be shown.
 """
 
@@ -35,7 +37,11 @@ from app.hosted.companion.memory import HostedBookStore
 from app.hosted.companion.source import HostedBookSource
 from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.companion.store_recollections import RecollectionCursorMoved
+from app.hosted.companion.story_memory import SelfRelation, WorkingCopyMismatch, remember_chapter
 from app.hosted.jobs import (
+    CHAPTER_FAILURES,
+    PAUSABLE_PROVIDERS,
+    ChapterAlreadyPublished,
     ClaimedJob,
     LostLeaseError,
     PostgresWorkerRepository,
@@ -44,11 +50,18 @@ from app.hosted.jobs import (
 )
 from app.hosted.tenant.models import OwnerId
 from app.hosted.worker import HandledJobFailure
+from app.ingest.extraction.validation import ExtractionGroundingRejected, ExtractionSafetyError
+from app.llm.client import ProviderUnavailable
 from app.llm.jev import JevUnavailable
+from app.llm.versioning import ModelMigrationRequired
+from app.read_map import read_snapshot
 from app.recollections import BATCH_AFTER, RUN_MOST, STORE_CAP, distil, pending
 
 # Companion jobs are short next to extraction, so they are claimed first (ADR 0041 section 5).
 COMPANION_PRIORITY = 10
+# A chapter of story memory takes minutes: below notes and recollections, above the old
+# reader-key extraction (ADR 0042 section 6).
+STORY_MEMORY_PRIORITY = 5
 # The provider the checks are paid at: a refusal of the platform's account there pauses every
 # reader's companion jobs for the local pause's five minutes.
 CHECKER_PROVIDER = "typesafe"
@@ -58,9 +71,10 @@ class ChapterNotesQueue(OwnerBoundAdapter):
     """The ``notes_builder`` for one hosted reader: ``ensure`` asks for their notes to be written."""
 
     __slots__ = ()
+    KIND, KEY, PRIORITY = "chapter_notes", "chapter-notes", COMPANION_PRIORITY
 
     def ensure(self, book_id) -> bool:
-        """Insert a waiting ``chapter_notes`` job for this reader's live book; True if one was
+        """Insert a waiting job of this queue's kind for this reader's live book; True if one was
         added. A job already waiting for the book, a book that is not this reader's, or a
         database that cannot be reached adds nothing: as locally, the next page turn or reply
         asks again, and the caller's answer never depends on it."""
@@ -73,16 +87,24 @@ class ChapterNotesQueue(OwnerBoundAdapter):
                 row = conn.execute(
                     """INSERT INTO public.jobs
                          (owner_id,book_id,book_incarnation,kind,idempotency_key,priority)
-                       SELECT book.owner_id,book.id,book.incarnation,'chapter_notes',%s,%s
+                       SELECT book.owner_id,book.id,book.incarnation,%s,%s,%s
                        FROM public.books AS book
                        WHERE book.owner_id=%s AND book.id=%s AND book.deleted_at IS NULL
                        ON CONFLICT DO NOTHING
                        RETURNING id""",
-                    (f"chapter-notes:{uuid.uuid4().hex}", COMPANION_PRIORITY,
+                    (self.KIND, f"{self.KEY}:{uuid.uuid4().hex}", self.PRIORITY,
                      self._owner.value, book)).fetchone()
         except (psycopg.Error, CompanionDatabaseBusy):
             return False
         return row is not None
+
+
+class StoryMemoryQueue(ChapterNotesQueue):
+    """One hosted reader's story-memory queue (ADR 0042 part 3): ``ensure`` asks for the book's
+    memory to be carried on to the chapters they have finished, one chapter per run."""
+
+    __slots__ = ()
+    KIND, KEY, PRIORITY = "story_memory", "story-memory", STORY_MEMORY_PRIORITY
 
 
 def _conversation(catalog, book_id):
@@ -206,20 +228,78 @@ class _LeasedCatalog(HostedCompanionCatalog):
         return super().keep_recollections(changes, **batch)
 
 
-KINDS = frozenset({"chapter_notes", "recollect"})
+KINDS = frozenset({"chapter_notes", "recollect", "story_memory"})
+# Two runs that failed on a chapter for a reason the chapter causes make the next run keep it as
+# an unremembered chapter (ADR 0042 section 2).
+UNREMEMBERED_AFTER = 2
+
+
+def companion_kinds(settings) -> frozenset[str]:
+    """The kinds this process's settings turn on: notes and recollections as the chat's settings
+    say, story memory only with ``HOSTED_STORY_MEMORY``."""
+    return frozenset(kind for kind, on in (("chapter_notes", settings.reader_story_notes),
+                                           ("recollect", settings.reader_recollections),
+                                           ("story_memory", settings.hosted_story_memory))
+                     if on)
+
+
+def _provider_refusal(exc: BaseException | None) -> ProviderUnavailable | None:
+    """The writer's ``ProviderUnavailable`` behind a failure: raised by an extraction call, or
+    the cause of the review's ``ExtractionSafetyError`` when a review call failed."""
+    while exc is not None:
+        if isinstance(exc, ProviderUnavailable):
+            return exc
+        exc = exc.__cause__
+    return None
+
+
+def story_memory_failure(exc: Exception) -> SanitizedFailure | None:
+    """What one failed story-memory run becomes (ADR 0042 sections 2 and 6), or None to leave it
+    to the dispatcher's common handling (a lost lease or cancellation, a cap, Jev, and anything
+    else, which is retried within the job's attempts).
+
+    The chapter cannot be done, so the job does not retry it and two such runs make it an
+    unremembered chapter: the review rejected it after its repair (``grounding_rejected``); the
+    extraction or the review's verdict was malformed past its repair, the review could not cover
+    it, a call would pass a per-call ceiling, or the chapter ties a person to themselves
+    (``invalid_model_output``). The writer's account refused or unreachable is retried and never
+    counted against the chapter. Memory that no longer matches the book, or a book begun with
+    another extraction model, stops the book's memory (not retried; nothing was spent)."""
+    if isinstance(exc, ExtractionGroundingRejected):
+        return SanitizedFailure("grounding_rejected", retryable=False)
+    refusal = _provider_refusal(exc)
+    if refusal is not None:
+        return SanitizedFailure("provider_rejected" if refusal.kind == "authentication"
+                                else "provider_unavailable", retryable=True)
+    malformed = (type(exc) is ValueError and str(exc).startswith("malformed extraction")
+                 and isinstance(exc.__cause__, (TypeError, ValueError)))
+    unreviewable = isinstance(exc, ExtractionSafetyError) and (
+        exc.__cause__ is None or isinstance(exc.__cause__, (TypeError, ValueError)))
+    ceiling = isinstance(exc, CostCeilingExceeded) and exc.__cause__ is None
+    if malformed or unreviewable or ceiling or isinstance(exc, SelfRelation):
+        return SanitizedFailure("invalid_model_output", retryable=False)
+    if isinstance(exc, WorkingCopyMismatch):
+        return SanitizedFailure("source_integrity", retryable=False)
+    if isinstance(exc, ModelMigrationRequired):
+        return SanitizedFailure("internal_error", retryable=False)
+    return None
 
 
 class CompanionJobs:
     """The worker's handler for the companion's kinds: ``handler(claim, repository)``."""
 
     def __init__(self, *, tenant_dsn: str, settings, client, storage, sources,
-                 kinds: frozenset[str] = KINDS,
+                 kinds: frozenset[str] = frozenset({"chapter_notes", "recollect"}),
+                 extraction_client=None,
                  lease_for: timedelta = timedelta(minutes=2)) -> None:
         unknown = set(kinds) - KINDS
         if unknown or not kinds:
             raise WorkerConfigurationError(
-                "the companion dispatcher runs chapter notes and recollections only")
+                "the companion dispatcher runs chapter notes, recollections and story memory only")
+        if "story_memory" in kinds and extraction_client is None:
+            raise WorkerConfigurationError("story memory needs the platform's extraction client")
         self._dsn, self._settings, self._client = tenant_dsn, settings, client
+        self._extraction_client = extraction_client
         self._storage, self._sources = storage, sources
         self.kinds = frozenset(kinds)
         self._lease_for = lease_for
@@ -235,14 +315,12 @@ class CompanionJobs:
         from app.hosted.companion.spend import set_spend_limits
         from app.hosted.storage import build_object_storage
         from app.hosted.tenant.repository import PostgresTenantRepository
-        from app.llm.factory import build_platform_clients
+        from app.llm.factory import build_extraction_client, build_platform_clients
 
         settings = Settings()
         if settings.deployment_mode != "hosted":
             raise WorkerConfigurationError("the companion dispatcher runs in hosted mode only")
-        kinds = frozenset(kind for kind, on in (("chapter_notes", settings.reader_story_notes),
-                                                ("recollect", settings.reader_recollections))
-                          if on)
+        kinds = companion_kinds(settings)
         if not (kinds and settings.reader_conversation_jev):
             raise WorkerConfigurationError(
                 "the companion dispatcher needs READER_CONVERSATION_JEV and READER_STORY_NOTES "
@@ -257,16 +335,20 @@ class CompanionJobs:
                    client=build_platform_clients(settings),
                    storage=build_object_storage(settings),
                    sources=SourceParseCache(settings.segmentation_cache_max_entries),
-                   kinds=kinds)
+                   kinds=kinds,
+                   extraction_client=(build_extraction_client(settings)
+                                      if "story_memory" in kinds else None))
 
     def __call__(self, claim: ClaimedJob, repository: PostgresWorkerRepository) -> None:
-        if claim.kind not in self.kinds or (claim.kind == "chapter_notes"
+        if claim.kind not in self.kinds or (claim.kind in ("chapter_notes", "story_memory")
                                             and claim.book_id is None):
             raise HandledJobFailure(SanitizedFailure("internal_error", retryable=False))
         lease = _Lease(repository, claim, self._lease_for)
         try:
             if claim.kind == "recollect":
                 self._recollect(claim, lease)
+            elif claim.kind == "story_memory":
+                self._story_memory(claim, lease, repository)
             else:
                 self._chapter_notes(claim, lease)
         except RecollectionCursorMoved:
@@ -310,6 +392,58 @@ class CompanionJobs:
             return              # deleted, or uploaded again since: nothing of this job is left
         build_missing(book_id, catalog, HostedBookStore(self._dsn, owner), self._settings,
                       self._client, HostedBookSource(self._storage, catalog, self._sources))
+
+    def _story_memory(self, claim: ClaimedJob, lease: _Lease,
+                      repository: PostgresWorkerRepository) -> None:
+        """One chapter of the claimed book's story memory (ADR 0042 sections 2 and 6): the next
+        chapter without memory, only when the reader has finished it. The target is the read
+        map's ``finished_through``, read now through the tenant role, never the chapter counter
+        a device can push. After the chapter, the next run is asked for if the target lies
+        further on; a lowered target ("I haven't read this") stops the work at the next run."""
+        if not self._settings.hosted_reader_story_memory:
+            return              # a reader's own book gets no memory of its own while this is off
+        owner = OwnerId(claim.owner_id)
+        catalog = HostedCompanionCatalog(self._dsn, owner)
+        book_id = str(claim.book_id)
+
+        def gone() -> bool:
+            book = catalog.get_book(book_id)
+            return book is None or book["incarnation"] != str(claim.book_incarnation)
+
+        if gone():
+            return              # deleted, or uploaded again since: nothing of this job is left
+        try:
+            source = HostedBookSource(self._storage, catalog, self._sources)
+            _point, _read, state, *_rest = read_snapshot(book_id, catalog, self._settings, source)
+            target, ordinal = state["finished_through"], state["ingest_progress"] + 1
+            if ordinal > target:
+                return          # nothing finished past what is built: nothing to do or spend
+            failed = repository.begin_story_memory_chapter(claim, ordinal)
+            remember_chapter(claim, repository, hold=lease.hold, tenant_dsn=self._dsn,
+                             settings=self._settings, client=self._extraction_client,
+                             storage=self._storage, sources=self._sources, ordinal=ordinal,
+                             unremembered=failed >= UNREMEMBERED_AFTER)
+        except ChapterAlreadyPublished:
+            pass                # another run published it: carry on from there
+        except LookupError:
+            if gone():
+                return
+            raise
+        except Exception as exc:
+            failure = story_memory_failure(exc)
+            if failure is None or lease.stopped():
+                raise
+            if failure.code == "provider_rejected" and (
+                    self._extraction_client.provider in PAUSABLE_PROVIDERS):
+                # The platform's writer account was refused: every reader's companion jobs wait.
+                repository.pause_provider(
+                    claim, provider=self._extraction_client.provider, reason="unauthorized",
+                    pause_for=timedelta(seconds=NotesBuilder.PAUSE_SECONDS))
+            if failure.code in CHAPTER_FAILURES:
+                StoryMemoryQueue(self._dsn, owner).ensure(book_id)      # the chapter's next run
+            raise HandledJobFailure(failure) from None
+        if ordinal < target:
+            StoryMemoryQueue(self._dsn, owner).ensure(book_id)
 
     def _recollect(self, claim: ClaimedJob, lease: _Lease) -> None:
         """``Recollector.catch_up`` (``app/recollections.py``) for one conversation, around the

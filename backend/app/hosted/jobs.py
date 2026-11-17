@@ -27,10 +27,13 @@ from app.hosted.tenant.grants import ALL_TABLE_PRIVILEGES, WORKER_TABLE_PRIVILEG
 
 # ADR 0041 section 5: the companion's background kinds. At most one of an owner, kind and book
 # waits (a unique index) and at most one runs (the claim); they wait while the platform's provider
-# account is paused and while their owner is at a companion cap.
-COMPANION_KINDS = frozenset({"chapter_notes", "recollect"})
+# account is paused and while their owner is at a companion cap. ADR 0042 part 3 adds story memory.
+COMPANION_KINDS = frozenset({"chapter_notes", "recollect", "story_memory"})
 PAUSABLE_PROVIDERS = frozenset({"typesafe", "openai-compatible", "anthropic"})
 PAUSE_REASONS = frozenset({"no_credits", "unauthorized"})
+# The failures of a story-memory run that the chapter itself causes (ADR 0042 section 2): two
+# failed runs of the same chapter with one of these make the next run keep it unremembered.
+CHAPTER_FAILURES = frozenset({"grounding_rejected", "invalid_model_output"})
 
 _WORKER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _FAILURE_CODES = frozenset(
@@ -38,6 +41,7 @@ _FAILURE_CODES = frozenset(
         "attempts_exhausted",
         "budget_exceeded",
         "cancelled",
+        "grounding_rejected",
         "internal_error",
         "invalid_model_output",
         "provider_rejected",
@@ -701,6 +705,39 @@ class PostgresWorkerRepository:
                 result="failed",
                 reason_code=reason,
             )
+
+    def begin_story_memory_chapter(self, claim: ClaimedJob, ordinal: int) -> int:
+        """Name, on the running ``story_memory`` job, the chapter this run works on (its
+        ``payload_metadata``, ``{"chapter": n}``), and return how many earlier runs of this book
+        and incarnation failed on that chapter for a reason the chapter causes
+        (``CHAPTER_FAILURES``). Fenced by the job's lease, like every post-claim mutation."""
+        if claim.kind != "story_memory" or claim.book_id is None:
+            raise ValueError("only a story-memory job names a chapter")
+        if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1:
+            raise ValueError("a chapter ordinal is a positive integer")
+        with self._connect() as conn, conn.transaction():
+            lease = self._locked_lease(conn, claim)
+            if lease["state"] != "running":
+                raise LostLeaseError("job is not running")
+            conn.execute(
+                """
+                UPDATE public.jobs
+                SET payload_metadata=payload_metadata||jsonb_build_object('chapter',%s::integer),
+                    updated_at=now()
+                WHERE owner_id=%s AND id=%s
+                """,
+                (ordinal, claim.owner_id, claim.job_id),
+            )
+            return conn.execute(
+                """
+                SELECT count(*) AS failed FROM public.jobs
+                WHERE owner_id=%s AND kind='story_memory' AND book_id=%s AND book_incarnation=%s
+                  AND state='failed' AND sanitized_error->>'code'=ANY(%s)
+                  AND payload_metadata->'chapter'=to_jsonb(%s::integer)
+                """,
+                (claim.owner_id, claim.book_id, claim.book_incarnation,
+                 sorted(CHAPTER_FAILURES), ordinal),
+            ).fetchone()["failed"]
 
     def succeed(self, claim: ClaimedJob) -> bool:
         with self._connect() as conn, conn.transaction():

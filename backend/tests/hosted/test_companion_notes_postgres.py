@@ -798,7 +798,8 @@ def test_the_dispatcher_refuses_to_start_without_its_settings(monkeypatch, tmp_p
     with pytest.raises(WorkerConfigurationError, match="hosted mode only"):
         CompanionJobs.from_environment()
     for kinds in (frozenset({"ingest_book"}), frozenset()):
-        with pytest.raises(WorkerConfigurationError, match="chapter notes and recollections only"):
+        with pytest.raises(WorkerConfigurationError,
+                           match="chapter notes, recollections and story memory only"):
             CompanionJobs(tenant_dsn="postgresql://unused.invalid/db", settings=None, client=None,
                           storage=None, sources=None, kinds=kinds)
 

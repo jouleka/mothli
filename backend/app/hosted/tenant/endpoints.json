@@ -1,5 +1,5 @@
 {
-  "version": 21,
+  "version": 22,
   "required_surface_classes": [
     "list",
     "get",
@@ -562,6 +562,12 @@
       "operations": ["enqueue", "claim", "run-as-tenant", "store-notes", "store-recollections",
                      "pause"],
       "cross_tenant_test": "test_second_reader_cannot_see_trigger_or_change_first_readers_notes_or_jobs"
+    },
+    {
+      "resource": "story-memory",
+      "operations": ["enqueue", "claim", "read-target", "copy", "extract", "publish", "settle",
+                     "count-failed-runs", "pause"],
+      "cross_tenant_test": "test_two_readers_story_memory_jobs_memory_and_spend_never_touch"
     },
     {
       "resource": "account-purge",

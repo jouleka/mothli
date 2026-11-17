@@ -43,7 +43,7 @@ from app.hosted.companion.source import HostedBookSource
 from app.hosted.companion.store import ChapterCatalog
 from app.hosted.jobs import ClaimedJob, PostgresWorkerRepository, StoryMemoryMoved
 from app.hosted.tenant.models import OwnerId
-from app.ingest.chapter_extraction import ChapterExtraction
+from app.ingest.chapter_extraction import ChapterExtraction, _empty_extraction
 from app.ingest.extraction.chapter_text import content_hash_of
 from app.ingest.extraction.pipeline import StalePreparedRoster
 from app.ingest.manifest import assert_matches_store
@@ -119,6 +119,12 @@ class ChapterOutOfOrder(ValueError):
     Chapters are extracted in order (each against the roster of the ones before it)."""
 
 
+class SelfRelation(RuntimeError):
+    """The chapter ties a person to themselves (two of their names in one relationship), which
+    the local store keeps and the hosted schema refuses (``edges`` checks ``src <> dst``).
+    Nothing is published; the job counts it as a chapter that could not be done."""
+
+
 class WorkingCopyMismatch(ValueError):
     """The published memory does not match the book's text (a stale or foreign row), or the
     shared commit changed something it should not have. Nothing is published; the message names
@@ -157,7 +163,8 @@ class _WorkingCopy:
     """The ``store`` the shared extraction is given: one book's memory, held in memory only,
     rebuilt from Postgres, which publishes the one chapter it commits."""
 
-    def __init__(self, reader, repository, claim, book, manifest, chapters, client, ordinal):
+    def __init__(self, reader, repository, claim, book, manifest, chapters, client, ordinal,
+                 kind=None):
         self._reader, self._repository, self._claim = reader, repository, claim
         self._book_id, self._incarnation = book["book_id"], book["incarnation"]
         self._book = book
@@ -165,6 +172,7 @@ class _WorkingCopy:
         self._text = {chapter["ordinal"]: chapter for chapter in chapters}
         self._client = client
         self.ordinal = ordinal
+        self._kind = kind               # the published chapter's kind, when not the shared code's
         self.published = False
         self.copied_ordinals = frozenset()
         self._lock = threading.Lock()
@@ -330,6 +338,8 @@ class _WorkingCopy:
                 or completed["content_hash"] != written["content_hash"]
                 or any(row["chapter_key"] != source["key"] for row in new["chapter_summaries"])):
             raise WorkingCopyMismatch("the chapter's commit is not the chapter asked for")
+        if any(row["src_entity"] == row["dst_entity"] for row in new["edges"]):
+            raise SelfRelation("the chapter relates a person to themselves")
 
         entities = dict(self._uuids["entities"])
         for row in new["entities"]:
@@ -339,7 +349,7 @@ class _WorkingCopy:
         chapter = {"key": written["chapter_key"], "ordinal": written["revealed_at"],
                    "href": written["href"], "fragment": written["fragment"],
                    "title": written["title"], "part_label": written["part_label"],
-                   "kind": written["kind"], "content_hash": _sha256(text),
+                   "kind": self._kind or written["kind"], "content_hash": _sha256(text),
                    "extractor_version": written["extractor_version"]}
         pinned = memory.pinned_identity() or {}
         receipt = {"extractor_model": pinned.get("extractor_model"),
@@ -411,8 +421,22 @@ class _PublishingMemory(ContentMemory):
                 "story memory changed after it was copied; prepare the chapter again") from None
 
 
+UNREMEMBERED = "unremembered"
+
+
+class _Unremembered(ChapterExtraction):
+    """The shared extraction for a chapter that could not be done (ADR 0042 section 2): its
+    model extraction is replaced by the empty extraction local mode keeps for a page that is not
+    story, which asserts nothing, is cleared without a model call and costs nothing. Everything
+    after it (preparation, the commit that stamps the chapter, the publish) is unchanged."""
+
+    def _complete_extraction(self, book_id, ordinal, title, roster, text, **_profile):
+        return _empty_extraction(text)
+
+
 def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *, hold,
-                     tenant_dsn: str, settings, client, storage, sources, ordinal: int) -> bool:
+                     tenant_dsn: str, settings, client, storage, sources, ordinal: int,
+                     unremembered: bool = False) -> bool:
     """Extract chapter ``ordinal`` of the claimed book for the claimed reader and publish it.
 
     ``hold`` is the job's lease check (``_Lease.hold`` of ``app.hosted.companion.jobs``): it is
@@ -430,7 +454,11 @@ def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *,
     when the chapter fails its review after the one repair, ``StalePreparedRoster`` when
     corrections kept arriving through three preparations, ``ChapterAlreadyPublished`` when
     another run published it meanwhile, ``ModelMigrationRequired`` when the platform's extraction
-    model is not the one the book was begun with, and whatever the model calls raise.
+    model is not the one the book was begun with, ``SelfRelation`` when the chapter ties a person
+    to themselves, and whatever the model calls raise.
+
+    With ``unremembered`` the chapter is published as an unremembered chapter: no model call, the
+    empty extraction, and ``chapters.kind`` = ``UNREMEMBERED`` as its marker.
     """
     if claim.book_id is None or claim.book_incarnation is None:
         raise ValueError("story memory is made for one book")
@@ -450,7 +478,7 @@ def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *,
     if ordinal not in {chapter["ordinal"] for chapter in chapters}:
         raise ValueError("the book has no such chapter")
     copy = _WorkingCopy(_CopyReader(tenant_dsn, owner), repository, claim, book, manifest,
-                        chapters, client, ordinal)
+                        chapters, client, ordinal, kind=UNREMEMBERED if unremembered else None)
     try:
         if not set(range(1, ordinal)) <= copy.copied_ordinals:
             raise ChapterOutOfOrder("an earlier chapter has no story memory yet")
@@ -472,7 +500,8 @@ def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *,
 
         # The chapter before is passed too, so its deferred calls are settled if a crash after
         # its publish left them open; every earlier chapter's run did the same for its own.
-        ChapterExtraction(catalog, client, settings, hold, time.sleep).ingest_through(
+        extraction = _Unremembered if unremembered else ChapterExtraction
+        extraction(catalog, client, settings, hold, time.sleep).ingest_through(
             book_id, [chapter for chapter in chapters if ordinal - 1 <= chapter["ordinal"]
                       <= ordinal],
             ordinal, store=copy, incarnation=incarnation, generation=0,
