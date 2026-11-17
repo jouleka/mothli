@@ -18,6 +18,7 @@ from typing import AsyncIterator
 import psycopg
 from psycopg.rows import dict_row
 
+from app.content_scope import chapter_numbers, is_content
 from app.hosted.audit import record_event_async
 from app.hosted.auth.repository import AuthConfigurationError
 from app.hosted.credentials import (
@@ -29,6 +30,7 @@ from app.hosted.credentials import (
 from app.hosted.limits import LimitExceededError
 from app.hosted.provider_settings import ValidationResult
 from app.hosted.tenant.grants import ALL_TABLE_PRIVILEGES, TENANT_TABLE_PRIVILEGES
+from app.reader_place import content_numbers
 from app.hosted.tenant.models import (
     AlreadyOnShelfError,
     FuturePositionVersionError,
@@ -279,17 +281,34 @@ class PostgresTenantRepository:
                     (owner_id.value, book_id, book["incarnation"]),
                 )
             ).fetchall()
+            begun = {
+                row["atom"] for row in await (
+                    await conn.execute(
+                        """SELECT DISTINCT atom FROM public.read_ranges
+                           WHERE owner_id=%s AND book_id=%s AND book_incarnation=%s""",
+                        (owner_id.value, book_id, book["incarnation"]),
+                    )
+                ).fetchall()
+            }
+        # As the local manifest (app/api/books.py): titles up to the chapter being read, and of
+        # any chapter the reader has read some of; the chapter numbers are structural.
         released = book["bookmark"] + 1
-        atoms = [
-            {
+        full = {"atoms": [dict(row) for row in rows]}
+        numbers, places = chapter_numbers(full), content_numbers(full)
+        atoms = []
+        for row in full["atoms"]:
+            shown = row["ordinal"] <= released or row["ordinal"] in begun
+            atoms.append({
                 "ordinal": row["ordinal"],
                 "href": row["href"],
-                "title": row["title"] if row["ordinal"] <= released else "",
-                "part_label": row["part_label"] if row["ordinal"] <= released else "",
+                "title": row["title"] if shown else "",
+                "part_label": row["part_label"] if shown else "",
                 "char_len": row["char_len"],
-            }
-            for row in rows
-        ]
+                "chapter_number": numbers.get(row["ordinal"]),
+                "content_number": places.get(row["ordinal"]),
+                "content_role": ("content" if is_content(row) else "supplementary")
+                if shown else None,
+            })
         identity = "|".join(
             f"{atom['ordinal']}:{atom['href']}:{atom['char_len']}" for atom in atoms
         )
@@ -304,6 +323,8 @@ class PostgresTenantRepository:
                 "detector_version": "hosted-import-v1",
                 "signals": [],
             },
+            "content_chapters": max(numbers.values(), default=0),
+            "content_count": len(places),
             "atoms": atoms,
         }
 
@@ -1112,13 +1133,18 @@ class PostgresTenantRepository:
                 raise StalePositionEpochError
             if base_version > state["position_version"]:
                 raise FuturePositionVersionError
+            # The book's chapters as its manifest lists them (written at import), or as
+            # extraction has recorded them: a book with no story memory yet is still readable.
             maximum = await (
                 await conn.execute(
-                    """SELECT COALESCE(max(revealed_at),0) AS maximum
-                       FROM public.chapters
-                       WHERE owner_id=%s AND book_id=%s AND book_incarnation=%s
-                         AND retracted_at IS NULL""",
-                    (owner_id.value, book_id, state["book_incarnation"]),
+                    """SELECT GREATEST(
+                         (SELECT COALESCE(max(revealed_at),0) FROM public.chapters
+                          WHERE owner_id=%(o)s AND book_id=%(b)s AND book_incarnation=%(i)s
+                            AND retracted_at IS NULL),
+                         (SELECT COALESCE(max(ordinal),0) FROM public.book_search_documents
+                          WHERE owner_id=%(o)s AND book_id=%(b)s AND book_incarnation=%(i)s)
+                       ) AS maximum""",
+                    {"o": owner_id.value, "b": book_id, "i": state["book_incarnation"]},
                 )
             ).fetchone()
             if completed_chapter > maximum["maximum"]:
@@ -1873,8 +1899,11 @@ class PostgresTenantRepository:
         chapter_count: int,
         search_documents: list[dict] | None = None,
         source_kind: str = "upload",
+        extraction_job: bool = True,
     ) -> dict:
-        """Store one book's metadata, search text, source object row and extraction job.
+        """Store one book's metadata, search text, source object row and, when
+        ``extraction_job``, its extraction job (``job`` in the answer, else None). Without one the
+        book is readable and chattable on an empty story memory and counts against no job limit.
 
         ``source_kind`` is ``upload`` for a reader's own file, or the free-library entry's tag
         (``gutenberg:<number>``, the local catalog's ``source``) for a book added from the library;
@@ -1985,32 +2014,34 @@ class PostgresTenantRepository:
                         psycopg.types.json.Jsonb(search_documents),
                     ),
                 )
-            job_row = await (
-                await conn.execute(
-                    """
-                    INSERT INTO public.jobs
-                      (owner_id,id,book_id,book_incarnation,credential_id,kind,state,
-                       idempotency_key,payload_metadata)
-                    VALUES (%s,%s,%s,%s,%s,'ingest_book',%s,%s,
-                            jsonb_build_object('chapter_count',%s))
-                    RETURNING id,book_id,kind,state,attempt_count,max_attempts,run_after,
-                              cancellation_requested_at,sanitized_error,created_at,updated_at,
-                              completed_at
-                    """,
-                    (
-                        owner_id.value,
-                        job_id,
-                        book_id,
-                        incarnation,
-                        ready_credential,
-                        initial_job_state,
-                        f"ingest:{book_id.hex}:{incarnation.hex}",
-                        chapter_count,
-                    ),
-                )
-            ).fetchone()
-            job_row["completed_chapters"] = 0
-            job_row["total_chapters"] = chapter_count
+            job_row = None
+            if extraction_job:
+                job_row = await (
+                    await conn.execute(
+                        """
+                        INSERT INTO public.jobs
+                          (owner_id,id,book_id,book_incarnation,credential_id,kind,state,
+                           idempotency_key,payload_metadata)
+                        VALUES (%s,%s,%s,%s,%s,'ingest_book',%s,%s,
+                                jsonb_build_object('chapter_count',%s))
+                        RETURNING id,book_id,kind,state,attempt_count,max_attempts,run_after,
+                                  cancellation_requested_at,sanitized_error,created_at,
+                                  updated_at,completed_at
+                        """,
+                        (
+                            owner_id.value,
+                            job_id,
+                            book_id,
+                            incarnation,
+                            ready_credential,
+                            initial_job_state,
+                            f"ingest:{book_id.hex}:{incarnation.hex}",
+                            chapter_count,
+                        ),
+                    )
+                ).fetchone()
+                job_row["completed_chapters"] = 0
+                job_row["total_chapters"] = chapter_count
             await record_event_async(
                 conn,
                 owner_id=owner_id.value,
@@ -2022,7 +2053,7 @@ class PostgresTenantRepository:
             )
         payload = self._book_payload(row)
         payload.update(bookmark=0, position_epoch=0)
-        payload["job"] = self._job_payload(job_row)
+        payload["job"] = self._job_payload(job_row) if job_row is not None else None
         return payload
 
     async def list_jobs(self, owner_id: OwnerId) -> list[dict]:
@@ -2669,8 +2700,10 @@ class PostgresTenantRepository:
 
     @staticmethod
     def _book_payload(row: dict) -> dict:
+        """A book as the shelf reads it: ``book_id``, the name local mode and the app use for it,
+        beside ``id``, which hosted callers already read."""
         payload = dict(row)
-        payload["id"] = str(payload["id"])
+        payload["id"] = payload["book_id"] = str(payload["id"])
         payload["created_at"] = payload["created_at"].isoformat()
         if payload.get("last_opened_at") is not None:
             payload["last_opened_at"] = payload["last_opened_at"].isoformat()

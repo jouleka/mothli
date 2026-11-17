@@ -553,8 +553,9 @@ async def store_epub(
     source_kind: str = "upload",
 ) -> dict:
     """The hosted import of one EPUB for this owner: validated and segmented, stored encrypted
-    under the owner's own object, then its rows, search text and extraction job written in one
-    transaction under the owner's limits; the object is removed again if that transaction fails.
+    under the owner's own object, then its rows, search text and (with reader keys) extraction job
+    written in one transaction under the owner's limits; the object is removed again if that
+    transaction fails.
     The upload route and the free library's add both come here, so a book from either is
     imported the same way (ADR 0041 part 11)."""
     book_id = uuid.uuid4()
@@ -626,6 +627,9 @@ async def store_epub(
                 chapter_count=len(chapters),
                 search_documents=search_documents,
                 source_kind=source_kind,
+                # Extraction runs on a reader's own key; while there are none, nothing could
+                # run a job, so none is made (ADR 0041 part 10).
+                extraction_job=request.app.state.settings.hosted_reader_keys,
             )
         except BaseException as exc:
             try:
