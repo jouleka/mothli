@@ -244,7 +244,7 @@ def listed(catalog):
     titles = {book["book_id"]: book["title"] for book in catalog.list_books()}
     shown = [r for r in held if usable(r, read)]
     return {"hidden": len(held) - len(shown), "recollections": [{
-        "id": r["recollection_id"], "kind": r["kind"], "text": r["text"], "said_at": r["said_at"],
+        "id": r.get("public_id", r["recollection_id"]), "kind": r["kind"], "text": r["text"], "said_at": r["said_at"],
         "book": ({"book_id": r["book_id"], "title": titles[r["book_id"]]}
                  if r["tied"] and r["book_id"] in titles else None),
         "message": r["said"] if written_from_read(r, read) else None}

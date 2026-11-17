@@ -107,12 +107,12 @@ class TurnStore(OwnerBoundAdapter):
         return [_turn(row) for row in rows]
 
     def clear_turns(self, book_id):
-        """Forget one conversation of this owner, in every shelf lifetime of the book.
-
-        Locally this also forgets how far the conversation was looked at for recollections; the
-        hosted cursor table arrives with part 7 (migration 0022), which adds its delete here.
-        """
+        """Forget one conversation of this owner, in every shelf lifetime of the book, and with it
+        how far it was looked at for recollections, as locally. Taken under the owner's notes
+        lock, so a batch read from it before is never stored after (``keep_recollections``)."""
+        conversation = "" if book_id is None else str(as_uuid(book_id))
         with self._transaction() as conn:
+            self._lock_recollections(conn)
             if book_id is None:
                 conn.execute(
                     "DELETE FROM public.conversation_turns WHERE owner_id=%s AND book_id IS NULL",
@@ -121,3 +121,6 @@ class TurnStore(OwnerBoundAdapter):
                 conn.execute(
                     "DELETE FROM public.conversation_turns WHERE owner_id=%s AND book_id=%s",
                     (self._owner.value, as_uuid(book_id)))
+            conn.execute(
+                "DELETE FROM public.recollection_cursors WHERE owner_id=%s AND conversation=%s",
+                (self._owner.value, conversation))

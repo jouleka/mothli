@@ -81,6 +81,20 @@ describe("Reader navigation reads", () => {
 });
 
 describe("Hosted writes", () => {
+  test("forgetting a note sends its id as the server gave it: a row number locally, a UUID hosted", async () => {
+    vi.spyOn(document, "cookie", "get").mockReturnValue("__Host-litlet-csrf=csrf-token");
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(null, { status: 204 }));
+    await api.forgetRecollection(7);
+    await api.forgetRecollection("0b6f1c2e-5d4a-4c3b-9e8f-1a2b3c4d5e6f");
+    expect(fetch.mock.calls.map(([url, options]) => [url, options?.method])).toEqual([
+      ["/api/reader/recollections/7", "DELETE"],
+      ["/api/reader/recollections/0b6f1c2e-5d4a-4c3b-9e8f-1a2b3c4d5e6f", "DELETE"],
+    ]);
+    // A note already gone (or another reader's: the same 404) is what was asked.
+    fetch.mockImplementationOnce(async () => new Response(JSON.stringify({ detail: "unknown recollection" }), { status: 404 }));
+    await expect(api.forgetRecollection("0b6f1c2e-5d4a-4c3b-9e8f-1a2b3c4d5e6f")).resolves.toBeUndefined();
+  });
+
   test("outbox replay waits for a live completion and preserves the later cursor with its acknowledged version", async () => {
     localStorage.setItem("litlet.offline.owner", "05dbebd1-e9e8-4be8-8172-eb65ca8d2a67");
     vi.spyOn(document, "cookie", "get").mockReturnValue("__Host-litlet-csrf=csrf-token");
