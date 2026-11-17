@@ -356,11 +356,15 @@ def spend_on_ledger(database: str, owner: uuid.UUID, book: str, usd: str) -> Non
 
 
 def test_the_claim_and_reserve_cost_agree_on_who_is_capped(notes_app, readers, database,
-                                                           worker_dsn) -> None:
+                                                           worker_dsn, monkeypatch) -> None:
     """The break it catches: the claim's idea of a capped reader drifting from the cap rule in
     ``spend.py``, so a job is claimed and refused at its first call, or a reader with allowance
     left waits a day. Same owner, same ledger: the claim says capped exactly when
-    ``reserve_cost`` refuses for the day or the month."""
+    ``reserve_cost`` refuses for the day or the month.
+
+    A reservation is aged by moving the rule's own bound, not by writing one "20 minutes ago":
+    in the first minutes of a UTC day that would be yesterday's and rightly not counted."""
+    import app.hosted.companion.spend as spend_rules
     from app.hosted.companion.spend import ReaderAllowanceReached
 
     a, book = opened(notes_app, readers)
@@ -381,17 +385,16 @@ def test_the_claim_and_reserve_cost_agree_on_who_is_capped(notes_app, readers, d
         catalog.discard_cost_reservation(book, held)
         return False
 
-    def open_reservation(usd: str, minutes_ago: int) -> None:
+    def open_reservation(usd: str) -> None:
         with psycopg.connect(database) as conn:
             conn.execute(
                 """INSERT INTO cost_reservations
                      (owner_id,id,book_id,book_incarnation,phase,model,reserved_input_tokens,
-                      reserved_output_tokens,reserved_usd,idempotency_key,purpose,created_at)
+                      reserved_output_tokens,reserved_usd,idempotency_key,purpose)
                    SELECT owner_id,%s,id,incarnation,'synthesis','gpt-6.1-terra',10,10,%s,%s,
-                          'notes-write',now()-%s*interval '1 minute'
+                          'notes-write'
                    FROM books WHERE owner_id=%s AND id=%s""",
-                (uuid.uuid4(), Decimal(usd), f"companion:{uuid.uuid4().hex}", minutes_ago,
-                 a.owner, book))
+                (uuid.uuid4(), Decimal(usd), f"companion:{uuid.uuid4().hex}", a.owner, book))
 
     seen = []
 
@@ -404,18 +407,21 @@ def test_the_claim_and_reserve_cost_agree_on_who_is_capped(notes_app, readers, d
     both(False)                                            # nothing spent
     spend_on_ledger(database, a.owner, book, "0.049")
     both(False)                                            # just under the day cap
-    open_reservation("0.5", minutes_ago=1)
+    open_reservation("0.5")
     both(False)                                            # in flight: not counted in dollars
-    open_reservation("0.001", minutes_ago=20)
+    in_flight_since = spend_rules._IN_FLIGHT_SINCE
+    monkeypatch.setattr(spend_rules, "_IN_FLIGHT_SINCE", "now()")
     both(True)                                             # left by a dead process: counted
+    monkeypatch.setattr(spend_rules, "_IN_FLIGHT_SINCE", in_flight_since)
+    both(False)                                            # in flight again
     update_limits(database, a.owner, {"max_spend_usd_per_day": Decimal("1")})
     both(False)
-    spend_on_ledger(database, a.owner, book, "0.03")
+    spend_on_ledger(database, a.owner, book, "0.031")
     both(True)                                             # the month: 0.08 of 0.08
     update_limits(database, a.owner, {"max_spend_usd_per_day": None,
                                       "max_spend_usd_per_month": None})
     both(False)                                            # the defaults: $1 a day, $5 a month
-    assert seen == [False, False, False, True, False, True, False]
+    assert seen == [False, False, False, True, False, False, True, False]
 
 
 def test_a_notes_job_stopped_by_the_cap_keeps_what_it_wrote_and_waits_for_tomorrow(
