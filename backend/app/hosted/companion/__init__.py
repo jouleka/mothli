@@ -98,3 +98,8 @@ class OwnerBoundAdapter:
             "SELECT pg_advisory_xact_lock(hashtextextended(%s::text || ':' || %s::text, 48))",
             (self._owner.value, book_id),
         )
+
+    def _lock_recollections(self, conn: psycopg.Connection) -> None:
+        """Serialize this owner's notes, their cursors and the clearing of a conversation: a batch
+        is stored only while its messages and its cursor are as they were read (part 7)."""
+        self._lock_book(conn, "recollections")

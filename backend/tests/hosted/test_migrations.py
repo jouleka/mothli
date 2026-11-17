@@ -123,6 +123,8 @@ def test_every_tenant_table_has_non_null_owner_and_rls(database: str) -> None:
         "bookmarks",
         "audit_events",
         "chapter_notes",
+        "recollections",
+        "recollection_cursors",
     }
 
     with psycopg.connect(database) as conn:

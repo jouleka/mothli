@@ -786,15 +786,16 @@ def test_a_companion_worker_leaves_extraction_jobs_alone(notes_app, readers, dat
 
 
 def test_the_dispatcher_refuses_to_start_without_its_settings(monkeypatch, tmp_path) -> None:
-    """The break it catches: a worker started in local mode, or with chapter notes off, that
-    would claim companion jobs it cannot run."""
+    """The break it catches: a worker started in local mode, or asked for a kind it cannot run,
+    that would claim companion jobs and fail them."""
     monkeypatch.setenv("DEPLOYMENT_MODE", "local")
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     with pytest.raises(WorkerConfigurationError, match="hosted mode only"):
         CompanionJobs.from_environment()
-    with pytest.raises(WorkerConfigurationError, match="chapter notes only"):
-        CompanionJobs(tenant_dsn="postgresql://unused.invalid/db", settings=None, client=None,
-                      storage=None, sources=None, kinds=frozenset({"recollect"}))
+    for kinds in (frozenset({"ingest_book"}), frozenset()):
+        with pytest.raises(WorkerConfigurationError, match="chapter notes and recollections only"):
+            CompanionJobs(tenant_dsn="postgresql://unused.invalid/db", settings=None, client=None,
+                          storage=None, sources=None, kinds=kinds)
 
 
 def test_queue_ensure_is_safe_from_many_threads(notes_app, readers, database) -> None:

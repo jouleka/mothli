@@ -11,7 +11,10 @@ both barriers hold in the background as on the request path.
 
 ``chapter_notes`` runs the unchanged ``app.chapter_notes.build_missing``: it decides which chapters
 are fully read, writes from those chapters alone and keeps only sentences that pass every check.
-Nothing here decides what a reader may be shown. ``recollect`` is part 7's.
+``recollect`` (part 7) is ``Recollector.catch_up`` around the unchanged ``pending`` and ``distil``,
+which read only the reader's own messages and keep only notes Jev finds the reader said; its
+queue, ``RecollectQueue``, is the ``recollector`` the chats are given. Nothing here decides what a
+reader may be shown.
 """
 
 from __future__ import annotations
@@ -23,12 +26,15 @@ from datetime import timedelta
 
 import psycopg
 
+from app.catalog.catalog import HOME_SPEND
 from app.chapter_notes import NotesBuilder, build_missing
 from app.cost.limits import CostCeilingExceeded
+from app.home_conversation import HOME
 from app.hosted.companion import CompanionDatabaseBusy, OwnerBoundAdapter, as_uuid
 from app.hosted.companion.memory import HostedBookStore
 from app.hosted.companion.source import HostedBookSource
 from app.hosted.companion.store import HostedCompanionCatalog
+from app.hosted.companion.store_recollections import RecollectionCursorMoved
 from app.hosted.jobs import (
     ClaimedJob,
     LostLeaseError,
@@ -39,6 +45,7 @@ from app.hosted.jobs import (
 from app.hosted.tenant.models import OwnerId
 from app.hosted.worker import HandledJobFailure
 from app.llm.jev import JevUnavailable
+from app.recollections import BATCH_AFTER, RUN_MOST, STORE_CAP, distil, pending
 
 # Companion jobs are short next to extraction, so they are claimed first (ADR 0041 section 5).
 COMPANION_PRIORITY = 10
@@ -74,6 +81,68 @@ class ChapterNotesQueue(OwnerBoundAdapter):
                     (f"chapter-notes:{uuid.uuid4().hex}", COMPANION_PRIORITY,
                      self._owner.value, book)).fetchone()
         except (psycopg.Error, CompanionDatabaseBusy):
+            return False
+        return row is not None
+
+
+def _conversation(catalog, book_id):
+    """(incarnation, title, the book its spend is recorded against) of one conversation, or None:
+    ``Recollector._conversation`` (``app/recollections.py``), over the hosted catalog."""
+    if book_id is None:
+        books = catalog.list_books()
+        # Spend is recorded against the first book on the shelf, as the reply's is; with an empty
+        # shelf, in the home conversation's own ledger (book NULL here).
+        return (HOME, None, books[0]["book_id"] if books else HOME_SPEND)
+    book = catalog.get_book(book_id)
+    return (book["incarnation"], book["title"], book_id) if book else None
+
+
+class RecollectQueue(OwnerBoundAdapter):
+    """The ``recollector`` for one hosted reader: ``ensure`` asks for one conversation (a book's,
+    or ``None``: the home conversation) to be distilled into notes."""
+
+    __slots__ = ()
+
+    def ensure(self, book_id) -> bool:
+        """Insert a waiting ``recollect`` job for this conversation once enough of the reader's
+        messages wait to be looked at (``BATCH_AFTER``, counted by the unchanged ``pending``, as
+        ``Recollector.catch_up`` counts them); True if one was added. Fewer messages, a job
+        already waiting, a book that is not this reader's, or a database that cannot be reached
+        add nothing: the next reply asks again, and the reply never depends on it."""
+        try:
+            book = None if book_id is None else as_uuid(book_id)
+        except LookupError:
+            return False
+        try:
+            catalog = HostedCompanionCatalog(self._dsn, self._owner)
+            conversation = _conversation(catalog, None if book is None else str(book))
+            if conversation is None:
+                return False
+            _batch, waiting = pending(catalog, None if book is None else str(book),
+                                      conversation[0])
+            if waiting < BATCH_AFTER:
+                return False
+            with self._transaction() as conn:
+                if book is None:
+                    row = conn.execute(
+                        """INSERT INTO public.jobs (owner_id,kind,idempotency_key,priority)
+                           VALUES (%s,'recollect',%s,%s)
+                           ON CONFLICT DO NOTHING
+                           RETURNING id""",
+                        (self._owner.value, f"recollect:{uuid.uuid4().hex}",
+                         COMPANION_PRIORITY)).fetchone()
+                else:
+                    row = conn.execute(
+                        """INSERT INTO public.jobs
+                             (owner_id,book_id,book_incarnation,kind,idempotency_key,priority)
+                           SELECT book.owner_id,book.id,book.incarnation,'recollect',%s,%s
+                           FROM public.books AS book
+                           WHERE book.owner_id=%s AND book.id=%s AND book.deleted_at IS NULL
+                           ON CONFLICT DO NOTHING
+                           RETURNING id""",
+                        (f"recollect:{uuid.uuid4().hex}", COMPANION_PRIORITY,
+                         self._owner.value, book)).fetchone()
+        except (psycopg.Error, CompanionDatabaseBusy, LookupError, ValueError):
             return False
         return row is not None
 
@@ -132,16 +201,24 @@ class _LeasedCatalog(HostedCompanionCatalog):
         self._lease.hold()
         return super().set_chapter_notes(book_id, atom, **notes)
 
+    def keep_recollections(self, changes, **batch):
+        self._lease.hold()
+        return super().keep_recollections(changes, **batch)
+
+
+KINDS = frozenset({"chapter_notes", "recollect"})
+
 
 class CompanionJobs:
     """The worker's handler for the companion's kinds: ``handler(claim, repository)``."""
 
     def __init__(self, *, tenant_dsn: str, settings, client, storage, sources,
-                 kinds: frozenset[str] = frozenset({"chapter_notes"}),
+                 kinds: frozenset[str] = KINDS,
                  lease_for: timedelta = timedelta(minutes=2)) -> None:
-        unknown = set(kinds) - {"chapter_notes"}
+        unknown = set(kinds) - KINDS
         if unknown or not kinds:
-            raise WorkerConfigurationError("the companion dispatcher runs chapter notes only")
+            raise WorkerConfigurationError(
+                "the companion dispatcher runs chapter notes and recollections only")
         self._dsn, self._settings, self._client = tenant_dsn, settings, client
         self._storage, self._sources = storage, sources
         self.kinds = frozenset(kinds)
@@ -163,9 +240,13 @@ class CompanionJobs:
         settings = Settings()
         if settings.deployment_mode != "hosted":
             raise WorkerConfigurationError("the companion dispatcher runs in hosted mode only")
-        if not (settings.reader_story_notes and settings.reader_conversation_jev):
+        kinds = frozenset(kind for kind, on in (("chapter_notes", settings.reader_story_notes),
+                                                ("recollect", settings.reader_recollections))
+                          if on)
+        if not (kinds and settings.reader_conversation_jev):
             raise WorkerConfigurationError(
-                "the companion dispatcher needs READER_STORY_NOTES and READER_CONVERSATION_JEV")
+                "the companion dispatcher needs READER_CONVERSATION_JEV and READER_STORY_NOTES "
+                "or READER_RECOLLECTIONS")
         tenant_dsn = settings.hosted_tenant_dsn.get_secret_value()
         asyncio.run(PostgresTenantRepository(tenant_dsn).check_runtime_role())
         set_connection_limit(settings.hosted_companion_db_connections)
@@ -175,14 +256,24 @@ class CompanionJobs:
         return cls(tenant_dsn=tenant_dsn, settings=settings,
                    client=build_platform_clients(settings),
                    storage=build_object_storage(settings),
-                   sources=SourceParseCache(settings.segmentation_cache_max_entries))
+                   sources=SourceParseCache(settings.segmentation_cache_max_entries),
+                   kinds=kinds)
 
     def __call__(self, claim: ClaimedJob, repository: PostgresWorkerRepository) -> None:
-        if claim.kind not in self.kinds or claim.book_id is None:
+        if claim.kind not in self.kinds or (claim.kind == "chapter_notes"
+                                            and claim.book_id is None):
             raise HandledJobFailure(SanitizedFailure("internal_error", retryable=False))
         lease = _Lease(repository, claim, self._lease_for)
         try:
-            self._chapter_notes(claim, lease)
+            if claim.kind == "recollect":
+                self._recollect(claim, lease)
+            else:
+                self._chapter_notes(claim, lease)
+        except RecollectionCursorMoved:
+            if lease.stopped():
+                return
+            # Another run stored this batch, or the reader cleared the conversation or forgot
+            # everything meanwhile: nothing is left for this run to do.
         except LostLeaseError:
             if lease.stopped():
                 return          # cancelled (its book was removed): the worker records it
@@ -219,3 +310,28 @@ class CompanionJobs:
             return              # deleted, or uploaded again since: nothing of this job is left
         build_missing(book_id, catalog, HostedBookStore(self._dsn, owner), self._settings,
                       self._client, HostedBookSource(self._storage, catalog, self._sources))
+
+    def _recollect(self, claim: ClaimedJob, lease: _Lease) -> None:
+        """``Recollector.catch_up`` (``app/recollections.py``) for one conversation, around the
+        unchanged ``pending`` and ``distil``: at most ``RUN_MOST`` batches, each read after its
+        cursor and stored only if that cursor has not moved since (a compare-and-set in
+        ``keep_recollections``, in place of the local in-process guard)."""
+        catalog = _LeasedCatalog(self._dsn, OwnerId(claim.owner_id), lease)
+        book_id = None if claim.book_id is None else str(claim.book_id)
+        for _ in range(RUN_MOST):
+            conversation = _conversation(catalog, book_id)
+            if conversation is None or (book_id is not None
+                                        and conversation[0] != str(claim.book_incarnation)):
+                return          # deleted, or uploaded again since: nothing of this job is left
+            incarnation, title, spend_book = conversation
+            # Read before the batch, so a cursor moved meanwhile can only refuse the store.
+            seen = catalog.get_recollection_cursor(book_id, incarnation=incarnation)
+            batch, waiting = pending(catalog, book_id, incarnation)
+            if waiting < BATCH_AFTER:
+                return
+            held = catalog.get_recollections()
+            changes = distil(batch, held, catalog=catalog, settings=self._settings,
+                             client=self._client, spend_book=spend_book, book_id=book_id,
+                             title=title)
+            catalog.keep_recollections(changes, cap=STORE_CAP, expected=seen,
+                                       cursor=(book_id, incarnation, batch[-1]["turn_id"]))

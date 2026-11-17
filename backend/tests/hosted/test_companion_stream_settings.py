@@ -50,11 +50,11 @@ def without(*names: str) -> dict:
 
 def test_the_streamed_chat_is_allowed_in_hosted_mode_on_the_part_5_conditions(tmp_path) -> None:
     """The break it catches: hosted mode still refusing the chat it now serves, or turning on with
-    it something parts 6 and 7 have not built (chapter notes, recollections)."""
+    it something the operator turned off (chapter notes here)."""
     settings = hosted_settings(tmp_path, **CHAT)
     assert settings.reader_conversation_jev and settings.reader_conversation_stream
     assert settings.reader_read_map and settings.reader_page_context
-    assert settings.reader_story_notes is False and settings.reader_recollections is False
+    assert settings.reader_story_notes is False and settings.reader_recollections is True
     # The same with the caps given in the environment, as an operator sets them.
     values = without("hosted_reader_usd_per_day", "hosted_platform_usd_per_day")
     with pytest.MonkeyPatch.context() as env:
@@ -97,7 +97,7 @@ def test_the_chat_is_refused_without_each_part_5_condition(values, named, tmp_pa
 @pytest.mark.parametrize("values, match", [
     (without("jev_enabled"), "requires local page context and Jev"),
     ({**CHAT, "reader_page_context": False}, "requires local page context and Jev"),
-    ({**CHAT, "reader_recollections": True}, "recollections are not available in hosted mode"),
+    ({"reader_recollections": True}, "recollections in hosted mode require READER_CONVERSATION_JEV"),
     ({"reader_story_notes": True}, "chapter notes in hosted mode require READER_CONVERSATION_JEV"),
     ({**CHAT, "llm_transport": "codex-local"}, "codex-local"),
     ({**CHAT, "allow_stub": True}, "ALLOW_STUB"),
@@ -112,8 +112,8 @@ def test_the_chat_is_refused_without_each_part_5_condition(values, named, tmp_pa
 def test_what_hosted_mode_still_refuses_with_the_chat_on(values, match, tmp_path) -> None:
     """The break it catches: the chat's settings opening a door section 7 keeps shut: the
     owner's subscription CLI, the stub, a Windows credential store, files shared by every reader,
-    deferred memory, a writer address nobody allowed, recollections before part 7, or chapter
-    notes without the chat's conditions (keys and caps)."""
+    deferred memory, a writer address nobody allowed, or chapter notes or recollections without
+    the chat's conditions (keys and caps)."""
     with pytest.raises(ValueError, match=match):
         hosted_settings(tmp_path, **values)
 
@@ -123,8 +123,22 @@ def test_chapter_notes_are_allowed_in_hosted_mode_with_the_chat(tmp_path) -> Non
     streamed chat, as locally, and only on the chat's conditions."""
     assert hosted_settings(tmp_path, **without("reader_story_notes")).reader_story_notes is True
     settings = hosted_settings(tmp_path, **{**CHAT, "reader_story_notes": True})
-    assert settings.reader_story_notes and settings.reader_recollections is False
+    assert settings.reader_story_notes and settings.reader_recollections
     assert hosted_settings(tmp_path).reader_story_notes is False
+
+
+def test_recollections_are_allowed_in_hosted_mode_with_the_chat(tmp_path) -> None:
+    """ADR 0041 part 7 lifts the hosted refusal of recollections, on the notes rule's conditions:
+    on by default with the streamed chat, off with the read map alone (it calls no model), and
+    refused without the chat's keys and caps."""
+    assert hosted_settings(tmp_path, **CHAT).reader_recollections is True
+    assert hosted_settings(tmp_path, **{**CHAT, "reader_recollections": False}
+                           ).reader_recollections is False
+    assert hosted_settings(tmp_path).reader_recollections is False
+    with pytest.raises(ValueError, match="recollections in hosted mode require"):
+        hosted_settings(tmp_path, reader_recollections=True)
+    with pytest.raises(ValueError, match="the streamed chat in hosted mode requires"):
+        hosted_settings(tmp_path, **{**without("typesafe_api_key"), "reader_recollections": True})
 
 
 def test_local_rules_for_the_conversation_are_unchanged(tmp_path) -> None:
