@@ -1,8 +1,9 @@
 # ADR 0042 — Story memory in hosted mode
 
 **Status:** Proposed (2026-11-17). Accepted when merged. Replaces the sketch of ADR 0041 section 4
-("What builds it") and ADR 0041 part 10. Amends ADR 0024 (the extraction job) and, only if the
-owner chooses the shared library memory of section 3, ADR 0017 section 3.
+("What builds it") and ADR 0041 part 10. Amends ADR 0024 (the extraction job) and, for library
+editions built by the operator (section 3, the owner's decision of 17 November 2026), ADR 0017
+section 3.
 
 File and line references are to `main` at b51f786 (PR #100). Nothing in this record was run against a
 database, a server or a model; every claim about behaviour comes from reading the code cited next to
@@ -238,61 +239,158 @@ story as `ingest_progress` grows (`frontend/src/reader/memoryCatchUp.ts:9-38`,
 allowance answers `status: "waiting"`, and the panels say once, in Mothli's voice, that Mothli will
 catch up on the rest tomorrow. The chat never waits for memory.
 
-### 3. May readers of the same book share one story memory? (the owner's decision)
+### 3. Library books: built once, handed out only up to each reader's place (decided)
 
-At the measured $7.30 a novel per reader (section 4), this is not a side question: per-reader memory
-does not fit caps of the order of today's. Both designs are set out; the rest of this record works
-with either answer.
+**The owner's decision (17 November 2026):** "build once and hand it out only up to each reader's
+place." His test: "Shouldn't Mothli mostly know only about the current user and what they've read?"
+Ten readers of one book, at chapters 2, 5 and 10: whatever answers the reader at chapter 2 must not
+hold chapters 5 or 10.
 
-**(A) Per reader (what the parts build first, and needed in any case).** Every row carries the
-reader's `owner_id` and book; row-level security, the two-readers tests, erasure, removal and export
-all work as they do for every other hosted row. Nothing is learnt by one reader about another. Cost:
-every reader pays, in the owner's money, for every chapter they read: about $0.09 a chapter, $7.30 for
-this novel, again for each reader.
+**What the part of Mothli answering one reader can hold, under each design.** "Holds" means: is
+loaded into the web process for that reader's request.
 
-**(B) A shared library memory for chosen free-library titles, built ahead of time.** How it would
-work:
+| | Per reader (A) | The door (decided) | Unclamped sharing (rejected) |
+|---|---|---|---|
+| Who pays for a chapter | that reader, once for each reader | the platform, once for everyone | the platform, once |
+| Memory of chapters past the reader's place | none in the usual case; some after "I haven't read this" (built while the reader had read them) | none, ever: it never leaves the database | the whole book, on every request |
+| What keeps it from the reader | it was never computed for them, and every view clamps | the database hands out only the reader's prefix, and every view clamps | the view's clamp alone |
+| Reveals one reader to another | nothing | nothing (built ahead of time, see below) | nothing |
 
-- *Keyed by* the exact EPUB bytes (`books.file_hash`, SHA-256, `0002:25`) of a free-library entry
-  (`books.source_kind = 'gutenberg:<number>'`, hosted part 11). A free-library add fetches the same
-  file for everyone while Project Gutenberg does not change it; a reader whose file differs gets (A).
-  Uploads always get (A): matching a private upload to someone else's would reveal what a person owns.
-- *Built by the operator, not by readers.* An operator command builds the whole book's memory for a
-  fixed list of titles, as the **library account** (one reserved user row that never signs in), with
-  the same job, handler and publish as (A). Its spend is the platform's, not a reader's.
-- *Read through one narrow door.* The library account's rows sit in the same tables under its own
-  `owner_id`, so row-level security hides them from every reader. A `SECURITY DEFINER` SQL function
-  (the pattern of the two spend functions, `0020_companion_spend.sql`, `grants.py:76-79`) returns the
-  memory payload for a book id only when the calling reader owns that live book and its `file_hash`
-  and `source_kind` match a built edition; `HostedBookStore` uses it in place of its own load for such
-  a book. Everything after that is unchanged: `view(bm)` and every screen clamp to the reader's own
-  position.
-- *What it reveals between readers: nothing, if and only if it is built ahead of time.* Whether a title
-  has memory is the operator's choice, the same for everyone before anyone reads it, so it tells no
-  reader anything about any other. The variant where the first reader to read a chapter pays and the
-  rest reuse it is **not recommended**: a cast appearing at once tells a reader someone else got there
-  first, which is the existence signal ADR 0017 section 3 forbids.
-- *Spoilers.* The shared rows reach the end of the book, as local memory does for a reader who read
-  ahead and then marked chapters not read. Every reader-facing read goes through the bookmark-bounded
-  view, and `score_recap` already reads future names on purpose, only to block them (`memory.py:242-251`).
-  Two clamps must be added and tested: `GET /ingest` and `get_state` report progress no further than
-  the reader's own position (the lesson of ADR 0021, "an unbounded count could reveal future
-  processing progress"), and export (section 7) gives the view, never rows. Nothing about future
-  chapters reaches the reader; nothing beyond the reader's position is computed on their account.
-- *Corrections.* A reader's correction cannot change shared rows. The correction route answers that
-  this book's memory cannot be corrected (a reader-specific layer on top is possible later, not built).
-- *Deleting an account or removing a book* removes the reader's own rows and their link (the book row);
-  the shared rows, derived by the operator from a public-domain text, are not the reader's data and stay.
-  The purge finds no reader rows among them, because they are the library account's.
-- *ADR 0017 section 3* ("no shared derived memory") must be amended, and the privacy text must say
-  that library books' notes are prepared once for everyone.
-- *Cost:* once per title, about $7.30 for a book of this length at terra's list price (so roughly
-  $730 for a hundred titles of similar length, by arithmetic), then nothing per reader.
+**(A) Per reader.** Built first (parts 1 to 3), and used for uploads and for any library title not
+built ahead. Every row carries the reader's `owner_id`; row-level security, the two-readers tests,
+erasure, removal and export work as for every other hosted row. About $0.09 a chapter, $7.30 for this
+novel, again for each reader. **Whether it is switched on, and with what allowance, is still the
+owner's open question** (section 4). It is a setting, `HOSTED_READER_STORY_MEMORY`, **off unless set**.
+While it is off, a book with no library memory (every upload, and any library title not built) has
+none: the chat runs on an empty memory with the checks ADR 0041 section 4 describes, the cast and story
+routes answer 404 for that book, and the panels show the lines they show today ("I don't keep a list of
+who's who for this book yet. Ask me about anyone you've met in the chat.",
+`frontend/src/reader/StoryMemory.tsx:193-194,261-262`; "who was that?" says the same,
+`AskTheBook.tsx:674-678`). No job is made and nothing is spent.
 
-**Recommendation (the owner's to accept or refuse): both, split by where the book came from.** Shared
-library memory, built ahead of time, for the free-library titles readers are likely to open; per-reader
-memory for uploads and for any title not yet built, within the reader's allowance. Build (A) first; (B)
-is one later part on top (part 5 below) and changes nothing in (A).
+**(B) The door: library memory built once.**
+
+- *Built by the operator, never by a reader.* An operator command builds the whole book for a fixed
+  list of free-library titles, as the **library account** (one reserved user row that never signs in),
+  with the same job, handler and publish as (A). Its spend is the platform's. Because whether a title
+  has memory is the operator's choice, made before anyone reads it and the same for everyone, it tells no
+  reader anything about another. Building on demand when the first reader gets there is rejected: a
+  cast appearing at once would tell a reader someone else got there first, the existence signal ADR 0017
+  section 3 forbids.
+- *Keyed by the exact file.* A reader's book uses the library memory only when it came from the free
+  library (`books.source_kind = 'gutenberg:<number>'`, hosted part 11) and its `file_hash` (SHA-256 of
+  the EPUB, `0002:25`) equals the built edition's. A reader whose file differs (Project Gutenberg changed
+  it) gets (A) or nothing. Uploads are never matched to it: matching a private file to someone else's
+  would reveal what a person owns.
+- *The door hands out the reader's prefix, decided in the database.* The library account's rows sit in
+  the ordinary memory tables under its own `owner_id`, so row-level security hides all of them from every
+  reader. One `SECURITY DEFINER` SQL function (the pattern of the two spend functions,
+  `schema/0020_companion_spend.sql`, `grants.py:76-79`), `library_story_memory(book uuid)`, is the only
+  way in. It takes **the book and nothing else**; there is no position argument. It:
+  1. finds the calling reader from the transaction's owner setting (`app_current_owner_id()`, the
+     same setting row-level security uses, set by the tenant adapter in every transaction, ADR 0041
+     section 2), and that reader's live book with that id; refuses unless its `source_kind` and
+     `file_hash` match a built edition;
+  2. works out the reader's place from the reader's own rows: **`reading_state.memory_through`**, a new
+     column (migration 0026) that holds the read map's `finished_through` and nothing else, capped by
+     the highest chapter in which the reader has any `read_ranges` row (a backstop the database can check
+     on its own: the place can never be past every chapter the reader has a recorded page in);
+  3. returns, in the payload shape `HostedBookStore` already reads (`memory.py:42-109`), only rows whose
+     chapter stamp is at or before that place: chapters, receipts, entities, aliases, themes, events,
+     summaries, and (section 9) edges and entity state. An `invalid_at` past the place is returned as
+     empty, because "this state ends at chapter 7" is itself news about chapter 7; an earlier state's
+     end is handed out only when the chapter that ended it is within the place. The same holds for
+     entities, edges, themes and summaries, which also carry `invalid_at`.
+
+  Rows of later chapters never leave the database for that reader's request.
+- *Why the place cannot be pushed ahead by a stale device (fact 11).* The device position route raises
+  `reading_state.bookmark` (`tenant/repository.py:1189`, `SET bookmark=GREATEST(bookmark,%s)`), which is
+  why the counter can run ahead. `memory_through` is written by no route a device calls: only the hosted
+  adapter's `set_bookmark` writes it, and its only caller is the read map's `sync_counter`
+  (`read_map.py:107-108`, `hosted/companion/store.py:104-118`), which writes `finished_through`
+  computed from pages checked against the source (`read_map.py:56-72`). One thing makes this harder than
+  it sounds: `sync_counter` writes only when the counter it reads differs from `finished_through`
+  (`read_map.py:107`), so if the hosted adapter kept reading the device-raised column, a stale device could
+  leave `memory_through` behind (stricter, but stuck). The part therefore makes the hosted adapter's
+  `bookmark` (in `get_state` and `set_bookmark`) be `memory_through`, leaving the device-raised column to
+  the device position route alone. That also closes open item 159 for the companion. To be proved by a
+  test, since it changes what the companion reads as the counter.
+- *Why not recompute `finished_through` in SQL.* It depends on the read share and the pages that are not
+  part of the book proper (`read_map.py:60-72`, `FINISHED_SHARE`, `is_content`): a second copy of the
+  read-map rule in another language, which is what this design keeps out. The column holds the one
+  computed value; the database adds only the coarse backstop of step 2.
+- *Moving back and forward.* "I haven't read this" lowers `finished_through`; `sync_counter` writes it;
+  the next request gets less. Reading on, more. There is no per-reader copy to keep in step.
+- *A reader ahead of what has been built* (a title still being built, or stopped at an unremembered
+  chapter): the door returns what exists up to their place; the views and the chat treat the rest as
+  unbuilt, as for (A).
+- *Progress is the reader's prefix too.* For such a book, `get_state`'s `ingest_progress`
+  (`store.py:83-99`, today read from the reader's own receipts, which a shared book does not have) and
+  `completion_frontier` (`memory.py:224-231`) are computed from the receipts the door returns, so they
+  stop at the reader's place; `GET /ingest` reports the same, with `status: "done"` once the edition is
+  built. Without this change the chat would see progress 0 and use no memory at all
+  (`stream_conversation.py:587-588`).
+- *What the door costs.* It is the same single statement as today's load (`memory.py:19-21`: every table
+  at one database moment) with a `revealed_at <= place` predicate added to each part, so a reader at
+  chapter 2 loads less than today's whole-book load, never more. The memory tables already have indexes
+  that start with owner, book, incarnation and the chapter stamp (`0002:180-182,205-207,237-239,263-265,
+  315-317`, partial on live rows); the load also reads retracted rows for `_audit_all`, which those
+  partial indexes do not cover. Whether the planner uses them for the library account's rows was not
+  verified; part 5 checks it with `EXPLAIN` on a built novel and adds an index only if it must. The
+  door runs once per request (as the load does today).
+- *Corrections.* A reader cannot change shared rows: the correction route answers that this book's
+  memory cannot be corrected. The hosted `GET /memory` and `GET /memory-corrections` routes read the
+  reader's own rows (`tenant/repository.py:1270,1435`) and so show nothing for such a book.
+- *Deleting an account or removing a book* removes the reader's own rows and their book row; the
+  library's rows hang from the library account's chapters (migration 0024 cascades every memory row from
+  its chapter's receipt) and are not touched. The purge finds nothing of the reader among them.
+- *Amendments.* ADR 0017 section 3 ("no shared derived memory") is amended for library editions built by
+  the operator. The privacy text says that notes on free-library books are prepared once for everyone.
+- *Cost.* Once per title: about $7.30 for a book of this length at terra's list price (roughly $730 for a
+  hundred titles of similar length, by arithmetic), then nothing per reader.
+
+**What the door changes for the checks, and the question of later names.** Read from the code:
+
+- The fixed check `score_recap` splits every name in memory into "met" (stamped at or before the
+  checking point) and "forbidden" (stamped later), reading every row on purpose
+  (`eval/spoiler_gate/synthesis.py:437-473`); the chat drops a sentence with a forbidden name the reader
+  has not read (`stream_conversation.py:383-391`). `same_person_names` uses met names only
+  (`known_names.py:16-41`). The chat's other unread-name guard looks at the reader's question against
+  the read text, not memory (`stream_conversation.py:579-581`).
+- The checking point is `min(counter, built chapters, read_through, completion frontier)`
+  (`stream_conversation.py:587-588`). Per-reader memory is built only up to `finished_through`
+  (section 2), so in the usual case **it holds no names past the checking point either**: the forbidden
+  list is empty, and a later name is caught by Jev and the second look, exactly as with an empty memory
+  (open items, line 193). Per-reader memory holds later names only after a reader marks chapters not
+  read (it keeps what was built while they were read).
+- So the door is **as strong as per-reader memory** for the fixed name check in the usual case, and
+  weaker in one case: after "I haven't read this", per-reader memory still blocks names first met in the
+  un-marked chapters; the door no longer hands them out. Those chapters' text is also no longer given
+  to the writer (the read map removes it), so such a name could reach a reply only from the model's own
+  knowledge, and Jev and the second look still judge every sentence.
+- The unclamped design was **stronger** than both: it would block, deterministically, a later name the
+  writer knows from its own reading of a famous novel. That is the real gap for library classics, and
+  per-reader memory has it too.
+
+Two versions for the owner, plainly:
+
+1. **No later data at all (recommended).** The door returns the prefix and nothing else. It passes the
+   owner's test exactly; it is as protective as per-reader memory except in the "I haven't read this"
+   case above.
+2. **The prefix plus a bare list of later names, only for blocking.** The door would also return the name
+   forms (canonical names and aliases) stamped after the place, with no chapter, no fact, no relation,
+   no theme, as a list the fixed check uses only as "forbidden". It would close the gap for names the
+   model remembers. What it would reveal if it leaked into a prompt, a log or an error: who appears later
+   in the book, which is itself a spoiler (the code's own example is a future alias, "Siberia",
+   `synthesis.py:413-414`). Today nothing sends the forbidden list to a model (`names_note` and the
+   identities use met names only, `known_names.py:44-51`, `stream_conversation.py:589-591`), and hosted
+   logs allow reviewed static messages only (ADR 0041 part 6, item 11); but the list would sit in the
+   web process for every request, against the owner's test.
+
+Recommendation: **version 1**, and measure. Part 5 runs the chat's spoiler probes on library classics
+with a stand-in writer that names a later character the way a model remembering the novel would; if Jev
+and the second look let such names through, version 2 comes back to the owner as its own decision with
+those results.
 
 ### 4. Money
 
@@ -333,7 +431,7 @@ the job to the next UTC day (`jobs.py:387-402`, once the new kind is a companion
 | | Per chapter | Reader reading 5 chapters a day | One novel of this length |
 |---|---|---|---|
 | Per reader (A) | about $0.09 | about $0.43 a day, about $13 a month | about $7.30 |
-| Shared (B), library title | $0 to the reader | $0 | about $7.30 once, for everyone |
+| Library title through the door (B) | $0 to the reader | $0 | about $7.30 once, for everyone |
 | With prompt caching (a guess, unmeasured) | | | the owner's guess: $5 to $7.50 |
 
 By arithmetic, the floor if every review input token were billed at terra's cached price ($0.05 per
@@ -341,9 +439,16 @@ million, `limits.py:38`) is about $4.05 a novel: output alone is $2.85. Caching 
 the subscription. Today's caps ($0.10 a day, $2.00 a month, `config.py:166-168`) cover about one
 chapter a day and about 23 chapters a month of per-reader memory with no chat at all. The platform day
 ($5.00) covers about 57 chapters across all readers, about two thirds of this novel. **So the caps and
-(A) do not fit together**: either the caps rise for readers with uploads (about $0.50 a day and $10 a
-month for a reader of one such novel a month, plus chat), or uploads get memory only up to an allowance
-and library titles get (B). That is the owner's choice; the code is the same.
+(A) do not fit together.** Library titles go through the door (decided) and cost readers nothing. For
+uploads the owner still chooses: leave `HOSTED_READER_STORY_MEMORY` off (uploads have no story memory;
+section 3 says what the reader sees), or turn it on with caps that fit (about $0.50 a day and $10 a
+month for a reader of one such novel a month, plus chat), or turn it on and let the day cap pace it
+(about one chapter a day at today's caps). The code is the same in every case. Library editions are
+built under the library account, which is an owner like any other to the spend code: it has its own
+`owner_limits` row, whose day and month caps the operator sets for the build with the existing tool
+(`python -m app.hosted.limits set`, ADR 0027), so no reader's allowance is touched and no new rule is
+added. The platform's day cap still applies to it, so a build of many titles is spread over days or run
+with that cap raised on purpose.
 
 **What must be measured before the numbers are settled**, all on the subscription, overhead removed:
 three more books of different lengths and kinds, all chapters, to see later chapters' cost as the roster
@@ -422,9 +527,19 @@ accepts an in-memory database (not verified), otherwise in a directory only the 
 emptied at worker start.
 
 **Where it runs.** The companion dispatcher (`CompanionJobs`) gains the kind, behind a new setting
-`HOSTED_STORY_MEMORY` (default off until this lands), so one handler and one image serve all
-background work; the deployment runs two worker processes so a chapter of two or three minutes does not
-hold up notes (the claim is safe across processes, ADR 0024).
+`HOSTED_STORY_MEMORY` (default off until this lands; it turns on the job kind, the routes of section 9
+and the door), so one handler and one image serve all background work; the deployment runs two worker
+processes so a chapter of two or three minutes does not hold up notes (the claim is safe across
+processes, ADR 0024). A second setting, `HOSTED_READER_STORY_MEMORY` (off unless set, section 3), decides
+whether readers' own books (uploads, and library titles with no built edition) get jobs at all; with it
+off, the triggers of section 2 add nothing for such a book. A reader's book that matches a built edition
+never gets a job.
+
+**Library builds.** The operator command creates the library account once, adds an edition as that
+account's book (the same import path as a free-library add, `store_epub`), and inserts one
+`story_memory` job for it whose target is the book's last chapter instead of a read map (the library
+account reads nothing). The job then runs chapter by chapter like any other, at the claim's turn, within
+the library account's own caps.
 
 **The reader-key path is retired for extraction.** No `ingest_book` handler ever existed (fact 8). With
 story memory on, `store_epub` creates no `ingest_book` job in either mode; the hidden credential and
@@ -436,9 +551,9 @@ running path.
 
 | What | What the builders must do |
 |---|---|
-| Account erasure after 30 days (`hosted/purge.py`) | Nothing in the code: it erases every row of every table with `owner_id`, found in the catalogue, children first by foreign key (`purge.py:43-84`), and this design adds no table (B adds rows under the library account, which is never erased). Add one test: a reader with story memory is erased entirely (the memory tables' foreign keys to receipts have no cascade, `0002:174-176`, so order matters and the test proves it). |
-| Removing a book (the other builder's 0024) | Their catalogue-driven erase covers these tables, which all carry `owner_id` and `book_id`. Their test must seed story memory rows; the job is already cancelled by the existing update. |
-| "Take a copy of my data" (being built) | Export story memory only as the reader's view at their current position (the payloads of section 9), never raw rows: rows include chapters past the position and the future-name list. For (B), the same view. |
+| Account erasure after 30 days (`hosted/purge.py`) | Nothing in the code: it erases every row of every table with `owner_id`, found in the catalogue, children first by foreign key (`purge.py:43-84`). The one table this design adds, `library_account` (part 5), names the library account in a column deliberately not called `owner_id`, so the purge neither lists it nor gains a privilege on it; the library account itself is never erased. Add one test: a reader with story memory is erased entirely. |
+| Removing a book (migration `0024_erase_a_removed_book.sql`, PR #102, about to merge) | It makes every memory table cascade from its chapter's receipt, and the receipt already cascades from the chapter, so deleting a removed book's `chapters` erases its story memory; the tenant role gains `DELETE` on `chapters`. Checked against this design: the publish keeps the receipt last and every foreign key stays deferred, so the order of section 1 still holds; an unremembered chapter is a chapter and a receipt like any other; a row that `replace_state` closes hangs from its own earlier chapter. Rows that point at an entity (aliases, edges, participants, state, `0002:197-198,226-229,280-283,334-335`) do not cascade from the entity, so deleting **one** chapter whose entity a later chapter's rows name would fail: nothing deletes one chapter (removal deletes them all; an edition rebuild deletes the whole library book), and the test must keep it so. The library account's rows hang from the library account's chapters, which a reader's removal (owner predicate plus forced row-level security) cannot reach. The removal test must seed story memory rows. |
+| "Take a copy of my data" (being built) | Export story memory only as the reader's view at their current place (the payloads of section 9), never rows: a per-reader book's rows can include chapters past the place (after "I haven't read this"). For a library book, the view through the door, which holds nothing past the place anyway. |
 | Route inventory and the walk that refuses an account waiting to be erased | Each new route goes into `endpoints.json` with its two-readers test and the version is bumped (20 today, `endpoints.json:2`, `tests/hosted/test_tenant.py:118`). The walk tries every enabled route (`tests/hosted/test_account_deletion_postgres.py:358-387`), so the new routes are covered by using `_owner` like the others. A background resource `story-memory` is listed with its test. |
 | Grants | Worker role: `INSERT` on `entities`, `aliases`, `edges`, `events`, `event_participants`, `themes`, `entity_state`, and `UPDATE` on `entity_state`, in `WORKER_TABLE_PRIVILEGES` (`grants.py:57-71`), which the startup check, fixtures and role script read. Tenant role: nothing new (it reads memory already). Purge: nothing. (B): `EXECUTE` on one function in `TENANT_FUNCTION_PRIVILEGES`. |
 | Two-readers tests | A's job never reads or writes B's rows (hydration and publish bound to the claimed owner); B's routes answer A's book as missing; A's correction during B's job changes nothing of B's. |
@@ -471,7 +586,10 @@ verbatim into `app/memory_views.py`, which both modes call over a view. The clam
 (`api/views.py:181-195`) with the hosted manifest and `finished_through`. `HostedBookStore`'s snapshot
 gains edges and entity state with the parity adapter's predicates (`tests/parity/_adapters.py:871-1076`:
 `relationships`, `bio`, `current_state`), which the cast and person cards need and the checks did not.
-`HostedBookSource` gains the store cross-check it lacks (open items, lines 161 and 170).
+`HostedBookSource` gains the store cross-check it lacks (open items, lines 161 and 170). For a book
+that matches a library edition, the same routes read through the door (section 3); for a book with no
+memory at all (per-reader memory off), they answer `404` with the detail "no story memory for this
+book", which the panels already show as their "I don't keep … yet" lines (any 404, `StoryMemory.tsx:49-50`).
 
 Turned on by this: the cast (`PeoplePanel`), the person card, the story so far (`StoryPanel`, from
 `/notes`), "Who was that?" (it reads `/graph` first, `AskTheBook.tsx:660-663`), and the name groups the
@@ -486,8 +604,8 @@ story memory off.
 ### 10. The parts
 
 Paths are under `backend/` unless they start with `frontend/` or `docs/`. Migrations are numbered from
-**0025**, because another builder may take 0024 for erasing a removed book's rows; if they do not, the
-first of these to merge renames to the next free number (ADR 0041 section 3's rule). Every part: tests
+**0025**: `0024_erase_a_removed_book.sql` is about to merge (PR #102). If it does not, the first of these
+to merge renames to the next free number (ADR 0041 section 3's rule). Every part: tests
 that fail without it, the two-readers test where it touches owner data, stand-in models only, `ruff
 check app tests scripts`, and the Postgres suite locally (stacked pull requests get no CI).
 
@@ -522,12 +640,35 @@ hosted on the corpus at every bookmark; a future person's card answers 404 in bo
 pending-deletion walk passes; frontend tests with UUID ids. Waits for nothing to build (seeded rows);
 merges after 2. No migration. Medium.
 
-**Part 5 — Shared library memory (only if the owner chooses it).** Creates
-`app/hosted/schema/0026_shared_library_memory.sql` (the library account, the read function), an operator
-command `app/hosted/library_memory.py`; changes `memory.py`, `grants.py`, the corrections route, and ADR
-0017. Proves: a reader who owns the edition gets the view at their position; one who does not, or whose
-file differs, gets their own; progress never reported past the reader's position; erasing a reader
-leaves the library rows; corrections refused. Waits for 3, 4 and the decision. Medium.
+**Part 5 — Library memory through the door (decided).** Creates
+`app/hosted/schema/0026_library_story_memory.sql`: `reading_state.memory_through` (integer, at least 0,
+default 0); a one-row service table `library_account (account_id UUID PRIMARY KEY REFERENCES users(id))`
+added to the service-table list of `tests/hosted/test_migrations.py`; the `SECURITY DEFINER` function
+`library_story_memory(book uuid)` of section 3, with `EXECUTE` revoked from `PUBLIC`. Creates the
+operator command `app/hosted/library_memory.py` (create the account, add and build an edition, rebuild
+one). Changes `app/hosted/companion/memory.py` (load through the door for a matching book),
+`app/hosted/companion/store.py` (`get_state` and `set_bookmark` use `memory_through`; progress from the
+door's receipts), `app/hosted/tenant/grants.py` (`EXECUTE`), the correction route, ADR 0017 section 3,
+and the privacy text's list. Must prove, with stand-in models:
+- for a built book and three readers at chapters 2, 5 and 10, the door's result for each holds no row
+  stamped after that reader's place and no `invalid_at` past it, checked on the raw function result,
+  through the hosted adapter on the RLS-enforced tenant role, and through a superuser connection
+  calling the function with that reader's owner set;
+- a reader cannot make the door use any place but their own: no argument exists, a device's position
+  report that raises `bookmark` does not move `memory_through`, and a `memory_through` written past every
+  chapter the reader has a read range in is capped by the backstop;
+- moving the place back ("I haven't read this") shrinks the result; reading on grows it;
+- a reader whose book is not a library add, or whose file differs, or who owns no live copy, gets
+  nothing from the door (the same answer as for a missing book);
+- the full local-versus-hosted parity of the views and of `score_recap`, `same_person_names` and
+  `completion_frontier` at every bookmark still holds through the door (the local side being a local
+  memory built only to that bookmark);
+- the chat's spoiler probes pass with the door in place, including the probe of section 3 for a later
+  name the writer remembers (its result decides whether version 2 goes back to the owner);
+- progress (`get_state`, `/ingest`, the completion frontier) never passes the reader's place;
+- erasing a reader or removing their book leaves the library's rows; corrections are refused;
+- two readers of one edition see nothing of each other (positions, conversations, notes).
+Waits for 3 and 4. Migration 0026. Medium to large.
 
 **Part 6 — Cost proposals of section 5**, each on its own, after the measurements of section 4. Changes
 `app/ingest/extraction/validation.py` (shared code: the local suite must stay green). Small each.
@@ -540,11 +681,14 @@ leaves the library rows; corrections refused. Waits for 3, 4 and the decision. M
 | `app/hosted/tenant/grants.py` | 2, 5 |
 | `app/hosted/companion/routes.py`, `endpoints.json`, `test_tenant.py` | 3, 4 |
 | `app/hosted/companion/memory.py` | 4, 5 |
-| `app/hosted/companion/store.py` | 2 |
+| `app/hosted/companion/store.py` | 2, 5 |
+| `app/config.py` | 3 |
 | `app/ingest/worker.py` | 1 |
 
 Part 1 first. Part 4 can be built beside 1 to 3 and merges after 2, rebasing on 3 for `routes.py`.
-Part 5 waits for the owner.
+Part 5's door function and its tests can be written beside 3 and 4 against seeded library rows; it
+merges after both. For launch, parts 1 to 5 are needed even if per-reader memory stays off, because the
+library editions are built by the same pipeline.
 
 ## Consequences
 
@@ -557,8 +701,13 @@ Part 5 waits for the owner.
   retired path. ADR 0026: no running path waits for a reader's extraction setting.
 - Hosted mode differs from local mode in one place: a chapter rejected twice is kept as an
   unremembered chapter and extraction goes on, where local mode stops (and pays again).
-- Per-reader memory costs about $7.30 for a novel of this length at terra's list price; the caps must be
-  reset for it, or library titles shared (owner's decision).
+- Library titles are built once by the operator and handed out through a database door that returns
+  only what is at or before each reader's place; ADR 0017 section 3 is amended for them. Per-reader
+  memory (about $7.30 for a novel of this length at terra's list price) is built but off unless the owner
+  sets it, with caps to match.
+- With no later data handed out, the fixed name check protects a library reader as per-reader memory
+  does, not as the unclamped sharing would have; names the writer remembers from a famous novel are
+  left to Jev and the second look, as today.
 - Extraction runs on terra and the stub embedder, pinned per book from the first chapter; changing
   either later is a paid re-extraction or a pin rewrite.
 
@@ -571,7 +720,10 @@ Part 5 waits for the owner.
 3. **Rebuilding the working copy for each chapter.** Correct by construction, but the time and memory
    to hydrate a long book's rows for every chapter were not measured; nor whether `MemoryDB` can live
    in memory.
-4. **The shared library memory.** Whether Project Gutenberg's files stay byte-identical long enough
-   to make an edition worth building, and whether the owner accepts the amendment to ADR 0017.
+4. **The library door.** Whether Project Gutenberg's files stay byte-identical long enough to make an
+   edition worth building; whether `memory_through` stays in step with the read map in every path (it
+   moves the companion's notion of the counter off the device-raised column); and whether Jev and the
+   second look catch a later name the writer remembers, which decides whether the bare list of later
+   names comes back to the owner.
 5. **Paid-API speed.** Two to three minutes a chapter on the subscription; a paid call longer than the
    two-minute lease would let another worker repeat the chapter (paid, published once).
