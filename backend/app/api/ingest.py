@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.deps import book_lifecycle, get_catalog, get_settings, get_store, get_worker
 from app.ingest.manifest import AtomSetMismatch, assert_matches_store, load_manifest
+from app.memory_views import ingest_payload
 
 router = APIRouter(prefix="/api/books/{book_id}", tags=["ingest"])
 
@@ -32,6 +33,4 @@ def ingest_status(book_id: str, catalog=Depends(get_catalog), worker=Depends(get
             durable = mem.completion_frontier(manifest["atoms"])
     except AtomSetMismatch as e:
         raise HTTPException(409, "atom-set mismatch (re-import the book)") from e
-    return {"ingest_progress": min(st["ingest_progress"], durable),
-            "status": w["status"],
-            "flags": w.get("flags") or [], "error": w.get("error")}
+    return ingest_payload(st["ingest_progress"], durable, w)
