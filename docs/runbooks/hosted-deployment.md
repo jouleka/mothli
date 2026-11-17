@@ -123,6 +123,43 @@ To make one every night at 03:00, run `crontab -e` and add this line:
 How many to keep, and where the copies live, is your decision (see the list at the end).
 Delete old ones with `rm -r deploy/backups/FOLDERNAME`.
 
+**Backups still hold deleted accounts.** When a reader's account is erased (next section), it is
+gone from the server, but every backup made before that day still holds it, books included,
+until that backup is deleted. So a reader's data really disappears only once the last backup
+holding it is gone. The privacy text has to say this, with how long backups are kept.
+
+## 4a. Erasing deleted accounts (every day)
+
+When a reader deletes their account, Mothli signs them out everywhere at once and keeps
+everything for 30 days in case they change their mind (signing in again lets them keep it).
+After that a daily step erases it: their book files, then every row of theirs. What is left is
+the account's bare id and a few audit lines saying when it was asked for and when it was erased,
+with no name, no email and no content.
+
+Run it every day at 04:00 with `crontab -e`:
+
+```
+0 4 * * * cd ~/mothli && docker compose -f deploy/compose.yaml run --rm purge >> deploy/backups/purge.log 2>&1
+```
+
+It uses its own database role (`MOTHLI_DB_PURGE_PASSWORD` in `deploy/.env`), which only this step
+has. Run it by hand the same way:
+
+```
+docker compose -f deploy/compose.yaml run --rm purge
+```
+
+**Checking it ran.** Each run prints one line, for example `erased 1, unfinished 0, waiting 3`:
+accounts erased in this run, accounts it could not finish (it ends with an error then), and
+accounts still inside their 30 days. `tail deploy/backups/purge.log` shows the last runs. An
+account it could not finish (book storage unreachable, the database restarted) is finished by the
+next run; nothing of it is shown to anyone meanwhile. The audit log of an erased account ends with
+`account.purge`:
+
+```
+docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.audit show --owner READER_ID
+```
+
 ## 5. Restoring
 
 Only into an empty Mothli (a new server, or after removing everything). You need the backup
@@ -203,5 +240,6 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
 - The AI accounts and keys, once the companion is switched on (names in `deploy/app.env`).
 - The spending caps: $0.10 per reader per day, $2.00 per reader per month and $5.00 per day for
   the whole platform are placeholders to confirm or change.
-- How long backups are kept, and where the off-server copies go.
+- How long backups are kept, and where the off-server copies go. That is also how long a deleted
+  account's data lives on in backups (step 4).
 - Where the offline copy of `deploy/.env` and `deploy/app.env` is kept.

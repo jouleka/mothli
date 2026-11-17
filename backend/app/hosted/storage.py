@@ -278,6 +278,25 @@ class EncryptedFilesystemStorage:
         except OSError as exc:
             raise ObjectStorageUnavailableError("filesystem object deletion failed") from exc
 
+    def delete_owner(self, owner_id: OwnerId) -> None:
+        """Every file under one owner's folder, whether or not a row still names it (an upload
+        whose row was never written included), then the folder. Safe to repeat."""
+        if not isinstance(owner_id, OwnerId):
+            raise TypeError("owner_id must be an OwnerId")
+        owner_dir = self._root / owner_id.value.hex
+        try:
+            if not owner_dir.is_dir():
+                return
+            for path in owner_dir.iterdir():
+                if path.is_dir() and not path.is_symlink():
+                    raise ObjectStorageUnavailableError("owner object folder holds a folder")
+                path.unlink(missing_ok=True)
+            owner_dir.rmdir()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise ObjectStorageUnavailableError("filesystem owner deletion failed") from exc
+
     def close(self) -> None:
         return None
 
@@ -455,6 +474,33 @@ class S3ObjectStorage:
             self._client.delete_object(**self._base(ref))
         except ClientError as exc:
             raise ObjectStorageUnavailableError("S3 object deletion failed") from exc
+
+    def delete_owner(self, owner_id: OwnerId) -> None:
+        """Every object under one owner's prefix, listed from the bucket itself (so an upload
+        whose row was never written goes too). Safe to repeat."""
+        if not isinstance(owner_id, OwnerId):
+            raise TypeError("owner_id must be an OwnerId")
+        prefix = f"owners/{owner_id.value.hex}/"
+        listing: dict[str, Any] = {"Bucket": self._bucket, "Prefix": prefix}
+        if self._expected_bucket_owner:
+            listing["ExpectedBucketOwner"] = self._expected_bucket_owner
+        try:
+            while True:
+                page = self._client.list_objects_v2(**listing)
+                for item in page.get("Contents", []) or []:
+                    key = item.get("Key")
+                    if not isinstance(key, str) or not key.startswith(prefix):
+                        raise ObjectStorageUnavailableError("S3 listing left the owner prefix")
+                    values: dict[str, Any] = {"Bucket": self._bucket, "Key": key}
+                    if self._expected_bucket_owner:
+                        values["ExpectedBucketOwner"] = self._expected_bucket_owner
+                    self._client.delete_object(**values)
+                token = page.get("NextContinuationToken")
+                if not page.get("IsTruncated") or not token:
+                    return
+                listing["ContinuationToken"] = token
+        except ClientError as exc:
+            raise ObjectStorageUnavailableError("S3 owner deletion failed") from exc
 
     def close(self) -> None:
         close = getattr(self._client, "close", None)

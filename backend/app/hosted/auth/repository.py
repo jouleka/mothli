@@ -67,6 +67,19 @@ class AuthRepository(Protocol):
 
     async def revoke_session(self, *, session_digest: bytes, now: datetime) -> bool: ...
 
+    async def request_deletion(self, *, owner_id: uuid.UUID, now: datetime) -> datetime | None: ...
+
+    async def restore_account(self, *, owner_id: uuid.UUID) -> bool: ...
+
+
+# The reader asked to delete their account: kept at least 30 days, then erased by the daily purge
+# (app/hosted/purge.py). The moment is the start of a UTC day, and the reader is told the day
+# before it (frontend SignIn.tsx ``erasureDay``): wherever they live, the erasure then never comes
+# before the day they were told, whatever hour the purge runs.
+ERASE_AFTER_SQL = (
+    "(date_trunc('day', now() AT TIME ZONE 'UTC') + interval '32 days') AT TIME ZONE 'UTC'"
+)
+
 
 @dataclass(slots=True)
 class PostgresAuthRepository:
@@ -277,7 +290,8 @@ class PostgresAuthRepository:
                       (owner_id, id, session_digest, csrf_digest, oidc_issuer,
                        created_at, last_seen_at, expires_at)
                     SELECT id, %s, %s, %s, %s, %s, %s, %s
-                    FROM public.users WHERE id = %s AND status = 'active' AND deleted_at IS NULL
+                    FROM public.users
+                    WHERE id = %s AND status IN ('active', 'deleting') AND deleted_at IS NULL
                     RETURNING id
                     """,
                     (
@@ -313,7 +327,8 @@ class PostgresAuthRepository:
                 await conn.execute(
                     """
                     SELECT s.owner_id, s.id, u.display_name, u.email, s.csrf_digest,
-                           s.expires_at, s.last_seen_at, s.revoked_at, u.status, u.deleted_at
+                           s.expires_at, s.last_seen_at, s.revoked_at, u.status, u.deleted_at,
+                           u.erase_after
                     FROM public.sessions AS s
                     JOIN public.users AS u ON u.id = s.owner_id
                     WHERE s.session_digest = %s
@@ -327,7 +342,9 @@ class PostgresAuthRepository:
                 row[7] is not None
                 or row[5] <= now
                 or row[6] <= now - idle_ttl
-                or row[8] != "active"
+                # A reader whose deletion is pending still signs in, to keep the account or leave;
+                # every other route refuses them (tenant/api.py ``_session``).
+                or row[8] not in ("active", "deleting")
                 or row[9] is not None
             )
             if invalid:
@@ -349,6 +366,7 @@ class PostgresAuthRepository:
             email=row[3],
             csrf_digest=bytes(row[4]),
             expires_at=row[5],
+            erase_after=row[10] if row[8] == "deleting" else None,
         )
 
     async def revoke_session(self, *, session_digest: bytes, now: datetime) -> bool:
@@ -371,3 +389,59 @@ class PostgresAuthRepository:
                     result="succeeded",
                 )
             return row is not None
+
+    async def request_deletion(self, *, owner_id: uuid.UUID, now: datetime) -> datetime | None:
+        """Mark an active account to be erased and sign it out on every device, in one
+        transaction. The moment it will be erased, or None when it was not active."""
+        async with await self._connect() as conn:
+            row = await (
+                await conn.execute(
+                    "UPDATE public.users SET status = 'deleting', erase_after = "
+                    + ERASE_AFTER_SQL
+                    + ", updated_at = %s "
+                    "WHERE id = %s AND status = 'active' AND deleted_at IS NULL "
+                    "RETURNING erase_after",
+                    (now, owner_id),
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            await conn.execute(
+                "UPDATE public.sessions SET revoked_at = %s "
+                "WHERE owner_id = %s AND revoked_at IS NULL",
+                (now, owner_id),
+            )
+            await record_event_async(
+                conn,
+                owner_id=owner_id,
+                actor_kind="owner",
+                action="account.delete",
+                target_kind="account",
+                target_id=None,
+                result="succeeded",
+            )
+        return row[0]
+
+    async def restore_account(self, *, owner_id: uuid.UUID) -> bool:
+        """Undo a pending deletion: an ordinary account again, everything as it was. False when
+        there was nothing pending (or the erasure has already begun)."""
+        async with await self._connect() as conn:
+            row = await (
+                await conn.execute(
+                    "UPDATE public.users SET status = 'active', erase_after = NULL, "
+                    "updated_at = now() "
+                    "WHERE id = %s AND status = 'deleting' AND deleted_at IS NULL RETURNING id",
+                    (owner_id,),
+                )
+            ).fetchone()
+            if row is not None:
+                await record_event_async(
+                    conn,
+                    owner_id=owner_id,
+                    actor_kind="owner",
+                    action="account.restore",
+                    target_kind="account",
+                    target_id=None,
+                    result="succeeded",
+                )
+        return row is not None

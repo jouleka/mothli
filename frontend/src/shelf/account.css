@@ -12,6 +12,11 @@
   color: var(--m-body);
 }
 
+/* ---------- waiting to be erased ---------- */
+.ml-pending-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.ml-welcome h1[tabindex="-1"]:focus { outline: none; }
+.ml-welcome h1[tabindex="-1"]:focus-visible { outline: 2px solid var(--m-accent); outline-offset: 4px; }
+
 /* ---------- the account sheet ---------- */
 .fl-sheet.ml-account { width: min(520px, 100%); }
 .ml-account-who { margin: 0; font: 400 19px/1.45 var(--m-book); color: var(--m-body); overflow-wrap: anywhere; }
@@ -24,3 +29,24 @@
   border-top: 1px solid var(--m-line);
 }
 .ml-account-remember { font-size: 16px; }
+
+/* Deleting the account: a quiet door, then a plain second step. */
+.ml-account-delete { color: var(--m-soft); }
+.ml-account-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 22px;
+  font: 400 17px/1.45 var(--m-book);
+  color: var(--m-body);
+}
+.ml-account-understood {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 44px;
+  font: 500 15px/1.4 var(--m-ui);
+  color: var(--m-ink);
+  cursor: pointer;
+}
+.ml-account-understood input { width: 20px; height: 20px; margin: 1px 0 0; flex: none; accent-color: var(--m-accent); }

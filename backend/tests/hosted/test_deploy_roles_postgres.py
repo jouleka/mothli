@@ -19,6 +19,7 @@ from psycopg import conninfo, sql
 from app.config import Settings
 from app.hosted.auth.repository import AuthConfigurationError, PostgresAuthRepository
 from app.hosted.jobs import PostgresWorkerRepository, WorkerConfigurationError
+from app.hosted.purge import PostgresAccountPurge, PurgeConfigurationError
 from app.hosted.tenant.repository import PostgresTenantRepository
 from app.main import _read_schema_marker, create_app, expected_schema_marker
 from tests.hosted.test_deploy import load_roles
@@ -71,6 +72,7 @@ def test_the_provisioned_roles_pass_the_apps_own_startup_checks(provisioned) -> 
     asyncio.run(PostgresAuthRepository(dsn["auth"]).check_runtime_role())
     asyncio.run(PostgresTenantRepository(dsn["tenant"]).check_runtime_role())
     PostgresWorkerRepository(dsn["worker"]).check_runtime_role()
+    PostgresAccountPurge(dsn["purge"]).check_runtime_role()
     # The tables belong to the migration owner, not the superuser.
     with psycopg.connect(database) as conn:
         owners = {row[0] for row in conn.execute(
@@ -88,6 +90,10 @@ def test_one_grant_more_or_less_refuses_and_the_script_restores_exactly(provisio
     tenant = roles.role_name(prefix, next(r for r in roles.RUNTIME_ROLES if r.key == "tenant"))
     worker = roles.role_name(prefix, next(r for r in roles.RUNTIME_ROLES if r.key == "worker"))
     auth = roles.role_name(prefix, next(r for r in roles.RUNTIME_ROLES if r.key == "auth"))
+    purge = roles.role_name(prefix, next(r for r in roles.RUNTIME_ROLES if r.key == "purge"))
+
+    def check_purge() -> None:
+        PostgresAccountPurge(dsn["purge"]).check_runtime_role()
     cases = [
         ("GRANT SELECT ON platform_spend_days TO {}", tenant,
          lambda: asyncio.run(PostgresTenantRepository(dsn["tenant"]).check_runtime_role()),
@@ -101,6 +107,9 @@ def test_one_grant_more_or_less_refuses_and_the_script_restores_exactly(provisio
         ("GRANT SELECT ON books TO {}", auth,
          lambda: asyncio.run(PostgresAuthRepository(dsn["auth"]).check_runtime_role()),
          AuthConfigurationError),
+        ("GRANT UPDATE ON books TO {}", purge, check_purge, PurgeConfigurationError),
+        ("GRANT SELECT ON platform_spend_days TO {}", purge, check_purge, PurgeConfigurationError),
+        ("REVOKE DELETE ON chapter_notes FROM {}", purge, check_purge, PurgeConfigurationError),
         ("REVOKE EXECUTE ON FUNCTION companion_platform_reserve(numeric,numeric) FROM {}", tenant,
          lambda: roles.verify(database, env, prefix), roles.ProvisioningError),
     ]

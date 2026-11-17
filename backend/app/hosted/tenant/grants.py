@@ -78,6 +78,18 @@ TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
     "companion_platform_adjust(date,numeric,numeric)": frozenset({"EXECUTE"}),
 }
 
+# ADR 0041 part 8: the account purge, run once a day from the command line, never by web or
+# worker. It erases a reader 30 days after they asked, so it may read and delete every row that
+# carries an ``owner_id``: those tables are found in the database's own catalogue when the grants
+# are made and when the role is checked, so a table a later migration adds is covered without
+# anyone listing it. Beyond them it reads and updates ``users`` (to find who is due and leave a
+# bare id behind) and writes one content-free audit event.
+PURGE_OWNER_TABLE_PRIVILEGES = frozenset({"SELECT", "DELETE"})
+PURGE_OTHER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
+    "users": frozenset({"SELECT", "UPDATE"}),
+    "audit_events": frozenset({"INSERT"}),
+}
+
 ALL_TABLE_PRIVILEGES = frozenset(
     {"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"}
 )
@@ -104,4 +116,20 @@ def worker_grants() -> list[tuple[str, tuple[str, ...]]]:
     return [
         (table, tuple(sorted(privileges)))
         for table, privileges in sorted(WORKER_TABLE_PRIVILEGES.items())
+    ]
+
+
+def purge_table_privileges(owner_tables) -> dict[str, frozenset[str]]:
+    """The purge role's exact privileges, given the tables that have an ``owner_id`` column."""
+    privileges = {table: PURGE_OWNER_TABLE_PRIVILEGES for table in owner_tables}
+    for table, extra in PURGE_OTHER_TABLE_PRIVILEGES.items():
+        privileges[table] = privileges.get(table, frozenset()) | extra
+    return privileges
+
+
+def purge_grants(owner_tables) -> list[tuple[str, tuple[str, ...]]]:
+    """(table, privileges) pairs of the purge role in a stable order."""
+    return [
+        (table, tuple(sorted(privileges)))
+        for table, privileges in sorted(purge_table_privileges(owner_tables).items())
     ]

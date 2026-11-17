@@ -33,9 +33,11 @@ from psycopg import conninfo, sql
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.hosted.tenant.grants import (  # noqa: E402
+    PURGE_OTHER_TABLE_PRIVILEGES,
     TENANT_FUNCTION_PRIVILEGES,
     TENANT_TABLE_PRIVILEGES,
     WORKER_TABLE_PRIVILEGES,
+    purge_table_privileges,
 )
 
 # ADR 0020: the sign-in role (app/hosted/auth/repository.py check_runtime_role).
@@ -70,6 +72,9 @@ class Role:
     bypass_rls: bool
     tables: dict[str, frozenset[str]]
     functions: dict[str, frozenset[str]]
+    # The purge role (ADR 0041 part 8) also gets SELECT and DELETE on every table that has an
+    # ``owner_id`` column, read from the database's catalogue when the grants are made.
+    owner_tables: bool = False
 
 
 # The migration owner owns every table and function and is a runtime role of nothing. It bypasses
@@ -83,6 +88,10 @@ RUNTIME_ROLES: tuple[Role, ...] = (
     Role("worker", "MOTHLI_DB_WORKER_PASSWORD", True, WORKER_TABLE_PRIVILEGES, {}),
     Role("audit", "MOTHLI_DB_AUDIT_PASSWORD", True, AUDIT_TABLE_PRIVILEGES, {}),
     Role("operator", "MOTHLI_DB_OPERATOR_PASSWORD", True, OPERATOR_TABLE_PRIVILEGES, {}),
+    # ADR 0041 part 8: erases accounts 30 days after the reader asked (python -m app.hosted.purge).
+    # Never in web or worker.
+    Role("purge", "MOTHLI_DB_PURGE_PASSWORD", True, PURGE_OTHER_TABLE_PRIVILEGES, {},
+         owner_tables=True),
 )
 ALL_ROLES: tuple[Role, ...] = (OWNER, *RUNTIME_ROLES)
 EXTENSIONS = ("pgcrypto", "vector")
@@ -101,9 +110,11 @@ def role_name(prefix: str, role: Role) -> str:
     return f"{prefix}_{role.key}"
 
 
-def grant_statements(prefix: str, role: Role) -> list[sql.Composable]:
-    """Exactly this role's privileges: revoke everything on the schema's tables, then grant."""
+def grant_statements(prefix: str, role: Role, owner_tables=()) -> list[sql.Composable]:
+    """Exactly this role's privileges: revoke everything on the schema's tables, then grant.
+    ``owner_tables`` are the tables with an ``owner_id`` column, for the purge role."""
     name = sql.Identifier(role_name(prefix, role))
+    tables = purge_table_privileges(owner_tables) if role.owner_tables else role.tables
     statements: list[sql.Composable] = [
         sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {}").format(name),
         sql.SQL("REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {}").format(name),
@@ -111,7 +122,7 @@ def grant_statements(prefix: str, role: Role) -> list[sql.Composable]:
         sql.SQL("REVOKE CREATE ON SCHEMA public FROM {}").format(name),
         sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(name),
     ]
-    for table, privileges in sorted(role.tables.items()):
+    for table, privileges in sorted(tables.items()):
         statements.append(sql.SQL("GRANT {} ON TABLE {} TO {}").format(
             sql.SQL(", ").join(sql.SQL(item) for item in sorted(privileges)),
             sql.Identifier("public", table), name))
@@ -199,9 +210,12 @@ def migrate(owner_dsn: str) -> None:
 
 
 def grant(admin_dsn: str, prefix: str) -> None:
+    from app.hosted.purge import owner_tables
+
     with psycopg.connect(admin_dsn, autocommit=True) as conn, conn.transaction():
+        tables = owner_tables(conn)
         for role in RUNTIME_ROLES:
-            for statement in grant_statements(prefix, role):
+            for statement in grant_statements(prefix, role, tables):
                 conn.execute(statement)
 
 
@@ -224,6 +238,7 @@ def verify(admin_dsn: str, env: dict[str, str], prefix: str) -> None:
     """Run the app's own startup checks against the roles just granted."""
     from app.hosted.auth.repository import PostgresAuthRepository
     from app.hosted.jobs import PostgresWorkerRepository
+    from app.hosted.purge import PostgresAccountPurge
     from app.hosted.tenant.repository import PostgresTenantRepository
 
     roles = {role.key: role for role in RUNTIME_ROLES}
@@ -231,6 +246,7 @@ def verify(admin_dsn: str, env: dict[str, str], prefix: str) -> None:
     asyncio.run(
         PostgresTenantRepository(role_dsn(env, prefix, roles["tenant"])).check_runtime_role())
     PostgresWorkerRepository(role_dsn(env, prefix, roles["worker"])).check_runtime_role()
+    PostgresAccountPurge(role_dsn(env, prefix, roles["purge"])).check_runtime_role()
     # The tenant startup check reads tables only: the functions are checked here, both ways.
     tenant = role_name(prefix, roles["tenant"])
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
@@ -270,6 +286,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "sql":
             for role in RUNTIME_ROLES:
                 print(f"-- {role_name(args.prefix, role)}")
+                if role.owner_tables:
+                    print("-- and SELECT, DELETE on every table with an owner_id column")
                 print(render(grant_statements(args.prefix, role)))
         elif args.command == "prepare":
             prepare(_admin_dsn(env), env, args.prefix)

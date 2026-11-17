@@ -63,6 +63,7 @@ services:
       MOTHLI_DB_WORKER_PASSWORD: ${MOTHLI_DB_WORKER_PASSWORD:?set MOTHLI_DB_WORKER_PASSWORD in deploy/.env}
       MOTHLI_DB_AUDIT_PASSWORD: ${MOTHLI_DB_AUDIT_PASSWORD:?set MOTHLI_DB_AUDIT_PASSWORD in deploy/.env}
       MOTHLI_DB_OPERATOR_PASSWORD: ${MOTHLI_DB_OPERATOR_PASSWORD:?set MOTHLI_DB_OPERATOR_PASSWORD in deploy/.env}
+      MOTHLI_DB_PURGE_PASSWORD: ${MOTHLI_DB_PURGE_PASSWORD:?set MOTHLI_DB_PURGE_PASSWORD in deploy/.env}
     networks: [data]
     depends_on:
       db: {condition: service_healthy}
@@ -146,6 +147,33 @@ services:
     environment:
       DATABASE_URL: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_operator:${MOTHLI_DB_OPERATOR_PASSWORD:?set MOTHLI_DB_OPERATOR_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
       HOSTED_AUDIT_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_audit:${MOTHLI_DB_AUDIT_PASSWORD:?set MOTHLI_DB_AUDIT_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
+    networks: [data]
+    depends_on:
+      db: {condition: service_healthy}
+
+  # The daily erasure of accounts whose 30 days have passed (ADR 0041 part 8), started by the
+  # server's crontab (`docker compose run --rm purge`; runbook step 4). Its role may delete any
+  # reader's rows, so it is never given to web or worker; it needs the book files (to delete a
+  # reader's) and app.env for the storage settings. Like the worker, it signs no one in.
+  purge:
+    <<: *backend
+    profiles: [tools]
+    restart: "no"
+    command: ["python", "-m", "app.hosted.purge"]
+    env_file:
+      - path: ${MOTHLI_APP_ENV_FILE:-app.env}
+        required: true
+    environment:
+      DEPLOYMENT_MODE: hosted
+      TRUSTED_HOSTS: ${MOTHLI_DOMAIN:?set MOTHLI_DOMAIN in deploy/.env}
+      OIDC_REDIRECT_URI: https://${MOTHLI_DOMAIN}/api/auth/callback
+      HOSTED_AUTH_DSN: postgresql://unused.invalid/the-purge-signs-no-one-in
+      HOSTED_TENANT_DSN: postgresql://unused.invalid/the-purge-reads-as-no-reader
+      HOSTED_PURGE_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_purge:${MOTHLI_DB_PURGE_PASSWORD:?set MOTHLI_DB_PURGE_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
+      HOSTED_STORAGE_BACKEND: filesystem
+      HOSTED_STORAGE_FILESYSTEM_ROOT: /var/lib/mothli/books
+    volumes:
+      - books:/var/lib/mothli/books
     networks: [data]
     depends_on:
       db: {condition: service_healthy}

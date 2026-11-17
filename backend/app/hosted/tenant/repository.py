@@ -2094,6 +2094,27 @@ class PostgresTenantRepository:
             )
         return self._job_payload(result)
 
+    async def cancel_owner_jobs(self, owner_id: OwnerId) -> int:
+        """Every job of this reader that waits or runs, of every kind, as removing a book does
+        for one book: waiting ones end now, running ones are asked to stop and the worker records
+        them cancelled (ADR 0041 part 8, asking to delete the account)."""
+        async with self._transaction(owner_id) as conn:
+            cursor = await conn.execute(
+                """
+                UPDATE public.jobs
+                SET cancellation_requested_at=COALESCE(cancellation_requested_at,now()),
+                    state=CASE WHEN state IN ('waiting_configuration','pending')
+                               THEN 'cancelled' ELSE state END,
+                    completed_at=CASE WHEN state IN ('waiting_configuration','pending')
+                                      THEN now() ELSE completed_at END,
+                    updated_at=now()
+                WHERE owner_id=%s
+                  AND state IN ('waiting_configuration','pending','leased','running')
+                """,
+                (owner_id.value,),
+            )
+            return cursor.rowcount
+
     async def create_credential(
         self, owner_id: OwnerId, envelope: EncryptedCredential
     ) -> dict:

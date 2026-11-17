@@ -402,4 +402,22 @@ describe("tenant-scoped offline outbox", () => {
     expect(await initialized).toEqual({ ...saved, offline: true });
     expect(activeOfflineOwner()).toBe(owner);
   });
+
+  // Catches: an account waiting to be erased still opening from this device's saved session, or
+  // its offline books left here.
+  test("a session waiting to be erased clears this device and is not kept for offline", async () => {
+    localStorage.setItem("litlet.offline.session", JSON.stringify({
+      user: { id: owner, display_name: "Offline reader" }, expires_at: "2099-01-01T00:00:00Z" }));
+    localStorage.setItem(`litlet.offline.outbox:${owner}`, "[]");
+    const session = {
+      user: { id: owner, display_name: "Wren Example" },
+      expires_at: "2099-01-01T00:00:00+00:00",
+      erase_after: "2099-12-18T00:00:00+00:00",
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(session), { status: 200 }));
+    expect(await initializeOfflineSupport()).toEqual(session);
+    expect(localStorage.getItem("litlet.offline.session")).toBeNull();
+    expect(localStorage.getItem(`litlet.offline.outbox:${owner}`)).toBeNull();
+    expect(localStorage.getItem("litlet.offline.owner")).toBeNull();
+  });
 });

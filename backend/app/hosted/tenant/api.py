@@ -31,7 +31,12 @@ from app.ask import (
 )
 from app.cost import CostCeilingExceeded, pricing_known
 from app.eval.spoiler_gate.judge import JUDGE_SYSTEM, JudgeVerdict, judge_prompt
-from app.hosted.auth.api import AuthenticatedSession, authenticated_session, csrf_valid
+from app.hosted.auth.api import (
+    AuthenticatedSession,
+    authenticated_session,
+    csrf_valid,
+    pending_deletion_detail,
+)
 from app.hosted.credentials import normalize_provider
 from app.hosted.credentials import CredentialUnavailableError
 from app.hosted.limits import LimitExceededError
@@ -227,6 +232,11 @@ async def _session(request: Request) -> AuthenticatedSession:
     value = await authenticated_session(request)
     if value is None:
         raise HTTPException(401, "Authentication required")
+    # A reader who asked to delete their account may sign in again only to keep it or sign out
+    # (ADR 0041 part 8). Every reader route refuses them here, before anything of theirs is read
+    # or any model is called, with a code the app recognises.
+    if value.principal.erase_after is not None:
+        raise HTTPException(403, pending_deletion_detail(value.principal.erase_after))
     return value
 
 

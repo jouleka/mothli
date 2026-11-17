@@ -4,6 +4,7 @@
 import {
   acknowledgePosition,
   activeOfflineOwner,
+  announcePendingDeletion,
   announceSignedOut,
   applyPendingMarks,
   discardPositionBeforeEpoch,
@@ -330,6 +331,9 @@ export type ProviderValidation = {
   setting: ProviderSetting;
 };
 
+/** What every hosted route answers while the reader's account waits to be erased. */
+export const PENDING_DELETION = "account_pending_deletion";
+
 export class ApiError extends Error {
   status: number;
   code: string | null;
@@ -354,9 +358,12 @@ async function j<T>(res: Response): Promise<T> {
       const detail = (JSON.parse(text) as { detail?: unknown }).detail;
       if (typeof detail === "string" && detail) msg = detail;
       if (detail && typeof detail === "object") {
-        const structured = detail as { code?: unknown; message?: unknown };
+        const structured = detail as { code?: unknown; message?: unknown; erase_after?: unknown };
         if (typeof structured.message === "string" && structured.message) msg = structured.message;
         if (typeof structured.code === "string" && structured.code) code = structured.code;
+        // Hosted mode: the account waits to be erased. The app shows the choice to keep it.
+        if (res.status === 403 && code === PENDING_DELETION && typeof structured.erase_after === "string")
+          announcePendingDeletion(structured.erase_after);
       }
     } catch {
       if (text) msg = text;
@@ -916,4 +923,16 @@ export const api = {
       await purgeOfflineTenant();
     }
   },
+  /** Hosted: ask for the account to be erased after 30 days. Signs out on every device at once;
+   * the books saved on this one for offline reading go too. Answers the moment of erasure. */
+  deleteAccount: async () => {
+    const value = await fetch("/api/account/delete", { method: "POST", headers: csrfHeaders() }).then(
+      (r) => j<{ erase_after: string }>(r),
+    );
+    await purgeOfflineTenant();
+    return value;
+  },
+  /** Hosted: undo a pending deletion; an ordinary account again, everything as it was. */
+  keepAccount: () =>
+    fetch("/api/account/keep", { method: "POST", headers: csrfHeaders() }).then((r) => j<void>(r)),
 };

@@ -1,5 +1,5 @@
 {
-  "version": 18,
+  "version": 19,
   "required_surface_classes": [
     "list",
     "get",
@@ -419,6 +419,22 @@
     },
     {
       "method": "POST",
+      "path": "/api/account/delete",
+      "surface": "delete",
+      "access": "account-delete",
+      "repository_method": "PostgresAuthRepository.request_deletion",
+      "cross_tenant_test": "test_one_reader_cannot_delete_keep_or_erase_another"
+    },
+    {
+      "method": "POST",
+      "path": "/api/account/keep",
+      "surface": "mutate",
+      "access": "account-keep",
+      "repository_method": "PostgresAuthRepository.restore_account",
+      "cross_tenant_test": "test_one_reader_cannot_delete_keep_or_erase_another"
+    },
+    {
+      "method": "POST",
       "path": "/api/reader/ask/stream",
       "surface": "answer",
       "access": "streamed-answer",
@@ -505,6 +521,11 @@
       "operations": ["enqueue", "claim", "run-as-tenant", "store-notes", "store-recollections",
                      "pause"],
       "cross_tenant_test": "test_second_reader_cannot_see_trigger_or_change_first_readers_notes_or_jobs"
+    },
+    {
+      "resource": "account-purge",
+      "operations": ["find-due", "begin", "delete-files", "delete-rows", "keep-deletion-audit"],
+      "cross_tenant_test": "test_purge_erases_one_reader_entirely_and_leaves_the_other_untouched"
     }
   ],
   "unavailable": [
