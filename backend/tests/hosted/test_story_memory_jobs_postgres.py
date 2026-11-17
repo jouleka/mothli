@@ -664,7 +664,7 @@ def test_removing_the_book_mid_chapter_cancels_the_job_and_leaves_nothing(
     assert [row["state"] for row in jobs_of(database, a.owner)] == ["cancelled"]
     assert all(found == [] for found in memory_of(database, a.owner).values())
     assert models.calls == [("Extraction", 1)]            # nothing after the removal
-    assert not [row for row in spend_of(database, a.owner)[0] if row["state"] == "reserved"]
+    settled_once(database, a.owner)                       # the call made is charged once
     assert drain(worker(app, extraction, worker_dsn)) == 0
 
 
@@ -827,7 +827,9 @@ def test_with_a_readers_own_story_memory_off_nothing_is_made_or_spent(
         # no worker of this deployment takes it.
         assert StoryMemoryQueue(app.state.companion_dsn, OwnerId(a.owner)).ensure(book)
         if settings.get("hosted_story_memory"):
-            assert drain(worker(app, extraction, worker_dsn)) == 1
+            assert drain(worker(app, extraction, worker_dsn)) == 1, (
+                jobs_of(database, a.owner), rows(database, "SELECT * FROM provider_pauses"),
+                rows(database, "SELECT now() AS now"))
             assert [row["state"] for row in jobs_of(database, a.owner)] == ["succeeded"]
         else:
             notes = CompanionJobs(tenant_dsn=app.state.companion_dsn, settings=app.state.settings,
