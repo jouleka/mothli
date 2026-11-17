@@ -5,9 +5,9 @@ nothing about any reader), and adds a book to their shelf: the server fetches th
 entry's EPUB with the local module's own guarded fetch (``app.classics.fetch_classic``: a URL built
 from the entry's number on Project Gutenberg's fixed hosts, HTTPS only, redirects followed only
 within those hosts, the upload limit read as it streams) and hands it to ``store_epub``, the one
-hosted import an uploaded file goes through: the same validation, encryption, object storage,
-limits and extraction job. The book is then the reader's own like any upload; nothing fetched is
-kept for, or shared with, another reader.
+hosted import an uploaded file goes through: the same validation, encryption, object storage and
+limits (and, while reader keys are off, no extraction job). The book is then the reader's own like
+any upload; nothing fetched is kept for, or shared with, another reader.
 
 Fenced in further than locally: one fetch in flight per reader and ``MAX_FETCHES`` in this
 process; a full shelf, or a book already on it, is refused before anything is fetched; the whole
@@ -216,7 +216,7 @@ async def add_classic(classic_id: str, request: Request, response: Response,
             raise _refusal(503, "not_saved", NOT_SAVED) from exc
     finally:
         _fetching.discard(owner_id.value)
-    return {**book, "book_id": book["id"]}
+    return book
 
 
 # ---- the fetch ----------------------------------------------------------------------------------

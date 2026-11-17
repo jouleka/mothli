@@ -19,6 +19,7 @@ import { keepTabFocusInside } from "./focusTrap";
 import type { ReaderSelection } from "./ReaderMarksPanel";
 import { CountAsRead } from "./CountAsRead";
 import { untilNotesReady } from "./closeoutWait";
+import { PASSAGE_HELP_ABSENT } from "./SelectionAssistant";
 import "./mothli-conversation.css";
 import "./companion.css";
 
@@ -635,6 +636,8 @@ export function AskTheBook({
               : "I couldn’t back that up from your pages, so I’d rather not guess. Try naming the person or moment you mean."
             : reason instanceof ApiError && reason.status === 409
             ? "Your reading position changed. Please try again from this page."
+            : scopeSelection && reason instanceof ApiError && reason.status === 404
+            ? PASSAGE_HELP_ABSENT
             : reason instanceof ApiError && reason.code === "ask_timeout"
             ? "That took too long, so I stopped. Try again?"
             : "I couldn’t get a reply. Try again?");
@@ -667,8 +670,12 @@ export function AskTheBook({
         if(currentPeople() && result.read_frontier.id===point.id)
           setPeople(result.names.map((name,index)=>({name,entity_id:-(index+1)})));
       } else setPeople([]);
-    } catch {
-      if (currentPeople()) setPeopleError("Couldn’t find the names. Try again?");
+    } catch (reason) {
+      // A 404: this server keeps no names for the book (hosted mode, for now).
+      if (currentPeople())
+        setPeopleError(reason instanceof ApiError && reason.status === 404
+          ? "I don’t keep a list of names for this book yet. Ask me about anyone in your own words."
+          : "Couldn’t find the names. Try again?");
     } finally {
       if (currentPeople()) setPeopleBusy(false);
     }
@@ -743,6 +750,9 @@ export function AskTheBook({
     const requestToken = session.getSnapshot().requestToken + 1;
     session.update({ busy: true, error: "", pendingQuestion: null, requestToken });
     const isCurrentRequest = () => isCurrent() && session.getSnapshot().requestToken === requestToken;
+    // A server with no chapter closeout (hosted mode, where Mothli's notes go into the chat
+    // instead): ask the chat about the chapter, as the reader would have.
+    let askInstead = false;
     // Notes on a just-finished chapter are still being taken: wait for them quietly (closeoutWait).
     void untilNotesReady(() => api.chapterCloseout(bookId, seed.chapter), isCurrentRequest)
       .then((result) => {
@@ -758,6 +768,10 @@ export function AskTheBook({
       })
       .catch((reason: unknown) => {
         if (!isCurrentRequest()) return;
+        if (reason instanceof ApiError && reason.status === 404) {
+          askInstead = true;
+          return;
+        }
         session.update({
           error:
             companionPause(reason)?.line ??
@@ -769,7 +783,9 @@ export function AskTheBook({
         });
       })
       .finally(() => {
-        if (isCurrentRequest()) session.update({ busy: false });
+        if (!isCurrentRequest()) return;
+        session.update({ busy: false });
+        if (askInstead) void send(`What did you notice in ${seed.label.replace(/^After /, "")}?`, true);
       });
   }, [seed?.id]);
 

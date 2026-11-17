@@ -71,11 +71,13 @@ function App({ session }: { session?: OfflineSession | null }) {
     setBrowsing(true);
     window.scrollTo(0, 0);
   };
+  // Hosted mode (a session, even a signed-out one) has no reading history from other apps yet.
+  const withHistory = session === undefined;
   // key: a book->book transition must fully unmount the old reader (its view/reporter must never
   // route a stale offset into ANOTHER book's permanent bookmark ratchet — pass-2 F4)
   return bookId ? (
     <ReaderPage key={bookId} bookId={bookId} onBack={back} />
-  ) : recalling ? (
+  ) : recalling && withHistory ? (
     <ReadingHistory onBack={back} onOpen={open} />
   ) : browsing ? (
     <FreeLibrary onBack={back} onOpen={open} />

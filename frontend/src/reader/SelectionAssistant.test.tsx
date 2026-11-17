@@ -4,7 +4,12 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { axeAA } from "../test-a11y";
 
 const mocks = vi.hoisted(() => ({ selectionAction: vi.fn() }));
-vi.mock("../api", () => ({ api: { selectionAction: mocks.selectionAction } }));
+vi.mock("../api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api")>()),
+  api: { selectionAction: mocks.selectionAction },
+}));
+
+import { ApiError } from "../api";
 
 import { SelectionAssistant } from "./SelectionAssistant";
 
@@ -137,5 +142,15 @@ describe("SelectionAssistant", () => {
       "Your passage help is ready.",
     );
     expect(mocks.selectionAction).toHaveBeenCalledTimes(2);
+  });
+
+  test("a server with no passage help (hosted mode) says so, with no retry that cannot work", async () => {
+    mocks.selectionAction.mockRejectedValue(new ApiError("Not Found", 404));
+    render(
+      <SelectionAssistant bookId="b" action="explain" selection={selection} onNavigate={vi.fn()} onClose={vi.fn()} />,
+    );
+    await screen.findByText(/I can’t help with a picked passage here yet/);
+    expect(screen.queryByText("Not Found")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Try passage help again/ })).toBeNull();
   });
 });

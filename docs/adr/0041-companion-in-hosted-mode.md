@@ -612,9 +612,11 @@ answers 404. Removing it would delete tested encryption, rotation and validation
 0026) that a later "bring your own key for more" option would want back. The older reader-key reply
 paths (`POST /ask`, `/selection-action`, `/chapter-closeout`, `tenant/api.py:937,1055,1162`) are off
 with it; selection help and chapter wrap-up return in hosted only when moved onto the platform client,
-which is not in this plan. Note for part 10: upload creates `waiting_configuration` jobs when the
-reader has no ready key (`tenant/repository.py:1890`, ADR 0026); in platform mode it must create
-`pending` jobs.
+which is not in this plan. Note for part 10: while reader keys are off, adding a book (an upload or
+a free-library add) creates no extraction job at all (`create_uploaded_book(extraction_job=...)`,
+decided 17 November 2026): nothing could run one, and a job left waiting counted against the
+reader's `max_active_jobs` for good. The book is readable and chattable on an empty story memory.
+Part 10 adds its own jobs, for books added before it too.
 
 **Rough cost per active reader per month — an estimate, not a measurement.** Measured: Jev costs
 $0.0006 to $0.0012 per streamed reply (`companion-audit-2026-11-14.md:685,714,756,852`) and about

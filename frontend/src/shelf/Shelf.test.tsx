@@ -257,6 +257,19 @@ describe("Library interactions", () => {
     await waitFor(() => expect(document.activeElement).toBe(toggle));
   });
 
+  test("reading history from other apps is offered locally, never to a hosted reader", async () => {
+    const session = {
+      user: { id: "05dbebd1-e9e8-4be8-8172-eb65ca8d2a67", display_name: "Wren Example" },
+      expires_at: "2099-01-01T00:00:00+00:00",
+    };
+    const local = render(<Shelf onOpen={() => {}} onHistory={() => {}} />);
+    expect(screen.getByRole("button", { name: "Reading history" })).toBeTruthy();
+    local.unmount();
+    render(<Shelf onOpen={() => {}} onHistory={() => {}} session={session} />);
+    await screen.findByRole("button", { name: "Library settings and account" });
+    expect(screen.queryByRole("button", { name: "Reading history" })).toBeNull();
+  });
+
   test("shows loading before books arrive and offers a working retry after an error", async () => {
     const user = userEvent.setup();
     let reject!: (error: Error) => void;

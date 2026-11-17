@@ -2,7 +2,7 @@
  * served by bookmark-clamped routes (graph, character, notes, catch-me-up), so nothing past the
  * reader's frontier can appear. Read-only; asking about something hands off to the conversation. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type ChapterNote, type Character, type GraphNode } from "../api";
+import { api, ApiError, type ChapterNote, type Character, type GraphNode } from "../api";
 import { Icon } from "../ui/Icon";
 import { Moth } from "../ui/Moth";
 
@@ -43,6 +43,12 @@ function groupLabel(relType: string) {
   return TIE_GROUPS.find((group) => group.key === relType)?.label ?? "Also connected";
 }
 
+/** "absent" when the server keeps no story memory for this book (a 404: hosted mode, where none
+ * is built yet), so the panel says so instead of asking the reader to try again. */
+type Failure = false | true | "absent";
+const failure = (reason: unknown): Failure =>
+  reason instanceof ApiError && reason.status === 404 ? "absent" : true;
+
 function MemoryState({ mood, children }: { mood: "thinking" | "sleepy" | "curious"; children: React.ReactNode }) {
   return (
     <div className="memory-state">
@@ -67,7 +73,7 @@ export function PeoplePanel({
   onAsk: (name: string) => void;
 }) {
   const [people, setPeople] = useState<GraphNode[] | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<Failure>(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<number | null>(focusId ?? null);
   const [detail, setDetail] = useState<Character | null>(null);
@@ -86,7 +92,7 @@ export function PeoplePanel({
         if (live && graph.as_of_chapter <= bookmark)
           setPeople(graph.characters.filter((node) => node.type === "character" || !node.type));
       })
-      .catch(() => live && setFailed(true));
+      .catch((reason: unknown) => live && setFailed(failure(reason)));
     return () => {
       live = false;
     };
@@ -184,7 +190,9 @@ export function PeoplePanel({
         <span className="sr-only">Find a person</span>
         <input value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Find someone" />
       </label>
-      {failed ? (
+      {failed === "absent" ? (
+        <MemoryState mood="curious">I don’t keep a list of who’s who for this book yet. Ask me about anyone you’ve met in the chat.</MemoryState>
+      ) : failed ? (
         <MemoryState mood="sleepy">I couldn’t gather the cast right now. Try again in a moment.</MemoryState>
       ) : people == null ? (
         <MemoryState mood="thinking">Gathering everyone you’ve met…</MemoryState>
@@ -229,7 +237,7 @@ export function StoryPanel({
   onAskChapter: (title: string) => void;
 }) {
   const [chapters, setChapters] = useState<ChapterNote[] | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<Failure>(false);
   const [open, setOpen] = useState<string | null>(null);
 
   const shownFor = useRef("");
@@ -244,12 +252,14 @@ export function StoryPanel({
         if (live && notes.as_of_chapter <= bookmark)
           setChapters([...notes.chapters].filter((chapter) => chapter.revealed_at <= bookmark).reverse());
       })
-      .catch(() => live && setFailed(true));
+      .catch((reason: unknown) => live && setFailed(failure(reason)));
     return () => {
       live = false;
     };
   }, [bookId, bookmark, refresh]);
 
+  if (failed === "absent")
+    return <MemoryState mood="curious">I don’t keep chapter-by-chapter notes for this book yet. Ask me about any chapter you’ve read in the chat.</MemoryState>;
   if (failed) return <MemoryState mood="sleepy">I couldn’t open my notes right now. Try again in a moment.</MemoryState>;
   if (!chapters) return <MemoryState mood="thinking">Flipping back through my notes…</MemoryState>;
   if (!chapters.length)

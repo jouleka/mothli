@@ -2,7 +2,7 @@
 filesystem store, through the hosted HTTP app on the RLS-enforced tenant role.
 
 Adding a book goes through the hosted upload's own import, so it is checked against an upload of
-the same file: the same rows, the same stored object, the same job, the same limits. The network
+the same file: the same rows, the same stored object, no job for either, the same limits. The network
 is never reached: the source is an in-memory transport serving a tiny made-up EPUB, and a test
 that forgot to give one fails instead of fetching.
 """
@@ -205,9 +205,8 @@ def test_adding_a_classic_puts_it_on_the_readers_shelf_through_the_upload_path(
     assert library["source_kind"] == f"gutenberg:{PRIDE}" and own["source_kind"] == "upload"
     assert {key: library[key] for key in ("title", "author", "file_hash")} == {
         key: own[key] for key in ("title", "author", "file_hash")}
-    jobs = {str(row["book_id"]): row for row in rows_a["jobs"]}
-    assert {key: value for key, value in jobs[book["id"]].items() if key != "book_id"} == {
-        key: value for key, value in jobs[uploaded.json()["id"]].items() if key != "book_id"}
+    # Neither makes an extraction job while reader keys are off (ADR 0041 part 10).
+    assert rows_a["jobs"] == [] and book["job"] is None and uploaded.json()["job"] is None
     assert len([row for row in rows_a["search"] if str(row["book_id"]) == book["id"]]) == 2
     stored = {str(row["book_id"]): row for row in rows_a["objects"]}[book["id"]]
     assert stored["byte_size"] == len(BOOK)
@@ -370,16 +369,49 @@ def test_the_limits_on_books_and_bytes_refuse_an_add_exactly_as_they_refuse_an_u
     assert refusal(by_add) == refusal(by_upload)
     assert refusal(by_add)[0] == 413 and refusal(by_add)[1]["code"] == "upload_size_exceeded"
 
-    # Books waiting to be taken in: the upload's own count, refused before any fetch.
-    update_limits(database, a, {"max_upload_bytes": 10**8, "max_active_jobs": 1})
-    fetched = len(source.seen)
-    by_upload, by_add = upload(library_app, "a", BOOK), add(library_app, "a")
-    assert refusal(by_add) == refusal(by_upload)
-    assert refusal(by_add)[0] == 429 and refusal(by_add)[1]["code"] == "active_job_limit_exceeded"
-    assert len(source.seen) == fetched
-
     assert held(database, a) == before
     assert len(files(objects, a)) == 1
+
+
+def test_without_reader_keys_a_book_makes_no_extraction_job_and_the_shelf_has_no_job_limit(
+        library_app, readers, database, source):
+    """The break it catches: every upload or add making an extraction job that nothing can run
+    while reader keys are off (ADR 0041 part 10), so the default three "active" jobs refuse the
+    reader's fourth book for good."""
+    a = readers["a"]
+    assert not library_app[2].state.settings.hosted_reader_keys
+    for number in range(1, 5):
+        uploaded = upload(library_app, "a", made_up_book(f"OWN{number}"))
+        assert uploaded.status_code == 201, uploaded.text
+        assert uploaded.json()["job"] is None
+    added = add(library_app, "a")
+    assert added.status_code == 201, added.text
+    assert added.json()["job"] is None
+    assert held(database, a)["jobs"] == []
+    assert get(library_app, "a", "/api/jobs").json() == []
+    limits = get(library_app, "a", "/api/limits").json()
+    assert limits["books"] == 5 and limits["active_jobs"] == 0 and limits["max_active_jobs"] == 3
+    # Each is readable as it is.
+    for book in get(library_app, "a", "/api/books").json():
+        assert get(library_app, "a", f"/api/books/{book['book_id']}/epub").status_code == 200
+        assert get(library_app, "a", f"/api/books/{book['book_id']}/manifest").status_code == 200
+
+
+def test_the_shelf_names_each_book_book_id_as_the_app_and_local_mode_do(library_app, source):
+    """The break it catches: hosted answering a book's id only as ``id`` where the app reads
+    ``book_id`` (``Book`` in frontend/src/api.ts, as local ``GET /api/books`` answers), so a hosted
+    reader's click on a book on the shelf, or the app after an upload, opens ``?book=undefined``."""
+    uploaded = upload(library_app, "a", BOOK)
+    assert uploaded.status_code == 201, uploaded.text
+    book_id = uploaded.json()["book_id"]
+    assert book_id == uploaded.json()["id"]
+    added = add(library_app, "a").json()
+    shelf = get(library_app, "a", "/api/books").json()
+    assert {item["book_id"] for item in shelf} == {book_id, added["book_id"]}
+    for item in shelf:
+        assert {"book_id", "title", "author"} <= set(item)
+        assert item["book_id"] == item["id"]
+    assert get(library_app, "a", f"/api/books/{book_id}").json()["book_id"] == book_id
 
 
 # ---- the source is not hammered -----------------------------------------------------------------
