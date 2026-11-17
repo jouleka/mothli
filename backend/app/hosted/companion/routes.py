@@ -1,6 +1,6 @@
-"""The read-map, conversation and streamed chat routes in hosted mode, at the local paths (ADR
-0041 parts 1, 2, 5 and 7, section 8): inside a book (``router``) and across the reader's books
-(``reader_router``: the home chat, the profile, what Mothli remembers).
+"""The read-map, conversation, streamed chat and story memory routes in hosted mode, at the local
+paths (ADR 0041 parts 1, 2, 5 and 7, section 8; ADR 0042 part 4): inside a book (``router``) and
+across the reader's books (``reader_router``: the home chat, the profile, what Mothli remembers).
 
 Each route runs the unchanged local modules (``app.read_map``, ``app.stream_conversation``,
 ``app.home_conversation``, ``app.recollections``) against a ``HostedCompanionCatalog``, a
@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.api.profile import reader_profile
@@ -31,11 +31,19 @@ from app.ask import AskRequest
 from app.home_conversation import HomeAsk, home_turns, read_maps, shelf_books, stream_home
 from app.hosted.companion import CompanionDatabaseBusy
 from app.hosted.companion.jobs import ChapterNotesQueue, RecollectQueue, StoryMemoryQueue
-from app.hosted.companion.memory import HostedBookStore
+from app.hosted.companion.memory import ContentSnapshot, HostedBookStore, StoryMemoryUnavailable
 from app.hosted.companion.source import HostedBookSource
 from app.hosted.companion.store import HostedCompanionCatalog, ReplyCatalog
 from app.hosted.tenant.api import _csrf_owner, _owner
 from app.hosted.tenant.models import OwnerId
+from app.ingest.manifest import AtomSetMismatch
+from app.memory_views import (
+    character_payload,
+    clamp,
+    graph_payload,
+    ingest_payload,
+    notes_payload,
+)
 from app.read_frontier import ReadAnchor
 from app.read_map import (
     chapter_fractions,
@@ -78,14 +86,15 @@ def _finished(request: Request, owner_id: OwnerId, book: str) -> None:
         StoryMemoryQueue(request.app.state.companion_dsn, owner_id).ensure(book)
 
 
-def _bound(request: Request, owner_id: OwnerId, catalog_type=HostedCompanionCatalog):
-    """(catalog, source, settings) for this reader, or 404 while the read map is off."""
+def _bound(request: Request, owner_id: OwnerId, catalog_type=HostedCompanionCatalog, store=None):
+    """(catalog, source, settings) for this reader, or 404 while the read map is off. With the
+    reader's story memory (``store``), the source is checked against it too."""
     settings = request.app.state.settings
     if not (settings.reader_page_context and settings.reader_read_map):
         raise HTTPException(404, "the read map is not enabled")
     catalog = catalog_type(request.app.state.companion_dsn, owner_id)
     source = HostedBookSource(request.app.state.object_storage, catalog,
-                              request.app.state.companion_sources)
+                              request.app.state.companion_sources, store)
     return catalog, source, settings
 
 
@@ -265,6 +274,91 @@ def clear_conversation(book_id: uuid.UUID, request: Request,
         catalog.clear_turns(book)
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc
+
+
+# ---- the story memory screens: the cast, a person's card, the story so far, progress (ADR 0042
+# part 4). The bodies are the local ones (``app.memory_views``), over this reader's story memory.
+
+_BOOKMARK = Query(default=None, ge=0, description="explicit bookmark; clamped to the reader's place")
+
+
+def _place(state) -> int:
+    """The last chapter the views may show of this reader's book: the read map's
+    ``finished_through``, and never past the chapter counter. Locally the counter follows the map
+    (``sync_counter``); here a device's position report can raise it (open items), so the map
+    decides. ADR 0042 part 5 replaces the counter with ``memory_through``; nothing below changes."""
+    return min(state["bookmark"], state["finished_through"])
+
+
+def _remembered(request: Request, owner_id: OwnerId, book: str):
+    """The local views' route-boundary prologue (``_effective``) over the hosted adapters: a book
+    of this reader's, its source checked against its story memory, then the place, how much
+    memory is complete and how building it goes. ``(state, memory, place, durable, job)``.
+
+    A book that is not this reader's is the same 404 as one that does not exist; a book of
+    theirs with no story memory (none built and none being built) answers 404 too, which the
+    panels show as their "not yet" lines."""
+    store = HostedBookStore(request.app.state.companion_dsn, owner_id)
+    catalog, source, settings = _bound(request, owner_id, store=store)
+    try:
+        _point, _read, state, manifest, _book, _held = read_snapshot(book, catalog, settings,
+                                                                     source)
+        with store.book(book) as mem:
+            durable = mem.completion_frontier(manifest["atoms"])
+            built = mem.has_rows()
+        job = store.memory_job(book)
+    except (CompanionDatabaseBusy, StoryMemoryUnavailable) as exc:
+        raise HTTPException(503, "the reading service is busy; try again shortly") from exc
+    except LookupError as exc:
+        raise HTTPException(404, "unknown book") from exc
+    except AtomSetMismatch as exc:
+        raise HTTPException(409, "atom-set mismatch (re-import the book)") from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(409, "story memory could not be verified against the source") from exc
+    if not built and job is None:
+        raise HTTPException(404, "no story memory for this book")
+    return state, ContentSnapshot(mem, manifest), _place(state), durable, job
+
+
+@router.get("/graph")
+def story_graph(book_id: uuid.UUID, request: Request, bookmark: int | None = _BOOKMARK,
+                owner_id: OwnerId = Depends(_owner)):
+    """The people met so far, and how they are tied: the local ``/graph``."""
+    _state, memory, place, durable, _job = _remembered(request, owner_id, str(book_id))
+    return graph_payload(memory, clamp(bookmark, place, durable))
+
+
+@router.get("/character/{entity_id}")
+def story_character(book_id: uuid.UUID, entity_id: str, request: Request,
+                    bookmark: int | None = _BOOKMARK, owner_id: OwnerId = Depends(_owner)):
+    """One person's card: the local ``/character/{id}``. A person not met yet, a malformed id
+    and an id of no one are the same 404."""
+    _state, memory, place, durable, _job = _remembered(request, owner_id, str(book_id))
+    try:
+        person = str(uuid.UUID(entity_id))
+    except ValueError:
+        person = None
+    card = person and character_payload(memory, clamp(bookmark, place, durable), person)
+    if not card:
+        raise HTTPException(404, "unknown character")
+    return card
+
+
+@router.get("/notes")
+def story_notes(book_id: uuid.UUID, request: Request, bookmark: int | None = _BOOKMARK,
+                owner_id: OwnerId = Depends(_owner)):
+    """The story so far, chapter by chapter: the local ``/notes``."""
+    _state, memory, place, durable, _job = _remembered(request, owner_id, str(book_id))
+    return notes_payload(memory, clamp(bookmark, place, durable))
+
+
+@router.get("/ingest")
+def story_progress(book_id: uuid.UUID, request: Request, owner_id: OwnerId = Depends(_owner)):
+    """How many chapters' story memory is complete, and whether more is on its way (``running``)
+    or waits for the reader's next day (``waiting``): the local ``/ingest``."""
+    state, _memory, _place_, durable, job = _remembered(request, owner_id, str(book_id))
+    return ingest_payload(state["ingest_progress"], durable,
+                          {"status": job or "idle", "flags": [], "error": None})
 
 
 # ---- the reader across their books: the home chat, the profile, what Mothli remembers (part 7) ----

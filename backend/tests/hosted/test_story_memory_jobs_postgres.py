@@ -888,3 +888,53 @@ def test_with_story_memory_on_an_upload_makes_no_reader_key_extraction_job(
     with client:
         upload(client, tokens, "b", lamps())
     assert len(jobs_of(database, readers["b"], "ingest_book")) == 1     # as before, story memory off
+
+
+# ---- the screens show what the jobs build (parts 3 and 4 together) -----------------------------
+
+def test_the_story_screens_show_what_the_jobs_built_and_only_up_to_the_readers_place(
+        memory_app, readers, database, worker_dsn, monkeypatch):
+    """The break it catches: the screens of part 4 working on hand-written rows but not on the
+    rows the jobs really publish; a person of a chapter the reader has not finished on the cast;
+    a cast that stays when a chapter is marked not read; or one reader seeing another's."""
+    _client, _tokens, app = memory_app
+    extraction = extraction_client()
+    Lamps(extraction, monkeypatch)
+    a, book = opened(memory_app, readers)
+
+    def screen(reader, path):
+        return reader.call("GET", f"/api/books/{book}/{path}")
+
+    # Nothing built and nothing asked for yet: the panels' "not yet" answer.
+    assert screen(a, "graph").status_code == 404
+
+    a.mark(book, [1, 2])                                  # parts 1 and 2 read; part 3 is not
+    assert drain(worker(app, extraction, worker_dsn)) == 2
+    assert built(database, a.owner) == [(1, "body"), (2, "body")]
+
+    graph = screen(a, "graph").json()
+    assert graph["as_of_chapter"] == 2
+    assert sorted(person["canonical_name"] for person in graph["characters"]) == ["Corvus", "Mara"]
+    notes = screen(a, "notes").json()
+    assert sorted((chapter["revealed_at"], chapter["summary"]) for chapter in notes["chapters"]) == [
+        (1, "Mara moved the lamps."), (2, "Corvus moved the lamps.")]
+    progress = screen(a, "ingest").json()
+    assert (progress["ingest_progress"], progress["status"]) == (2, "idle")
+    # Part 3's people are nowhere: not built, and asking for a later chapter changes nothing.
+    assert "Vex" not in screen(a, "graph?bookmark=99").text
+    assert "Lamplighter" not in screen(a, "notes?bookmark=99").text
+    corvus = next(p for p in graph["characters"] if p["canonical_name"] == "Corvus")
+    assert screen(a, f"character/{corvus['entity_id']}").status_code == 200
+
+    # "I haven't read part 2": the built memory stays in the database, the screens show less.
+    a.mark(book, [2], read=False)
+    shrunk = screen(a, "graph").json()
+    assert [person["canonical_name"] for person in shrunk["characters"]] == ["Mara"]
+    assert screen(a, f"character/{corvus['entity_id']}").status_code == 404
+    assert "Corvus" not in screen(a, "notes").text
+    assert built(database, a.owner) == [(1, "body"), (2, "body")]
+
+    # The second reader has nothing of it, by any route.
+    b = Reader(_client, _tokens, "b", readers["b"])
+    for path in ("graph", "notes", "ingest", f"character/{corvus['entity_id']}"):
+        assert screen(b, path).status_code == 404

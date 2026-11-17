@@ -70,7 +70,7 @@ import { useCompactReaderShell } from "./mobileShell";
 import { NameCard } from "./NameCard";
 import { forgetLastPassage, minutesLeftLabel, saveLastPassage } from "./lastPassage";
 import { buildNameMatcher, markNames, nameAtPoint, rectInTopWindow, type NameIndex, type NameMatcher, type TapRect } from "./nameTaps";
-import type { GraphNode } from "../api";
+import type { EntityId, GraphNode } from "../api";
 import {
   HIGHLIGHT_COLORS,
   localAnnotation,
@@ -231,7 +231,7 @@ export function ReaderPage({
   const [askOpen, setAskOpen] = useState(false);
   const [initialAction, setInitialAction] = useState<"recap" | null>(null);
   const [companionSeed, setCompanionSeed] = useState<CompanionSeed | null>(null);
-  const [companionNav, setCompanionNav] = useState<{ tab: CompanionTab; personId: number | null; nonce: number } | null>(null);
+  const [companionNav, setCompanionNav] = useState<{ tab: CompanionTab; personId: EntityId | null; nonce: number } | null>(null);
   const [cornerNotes, setCornerNotes] = useState<CornerNote[]>([]);
   const [streak, setStreak] = useState(0);
   const [replySnapshot, setReplySnapshot] = useState<{scope:string;kept:{pass:string;reply:SavedCompanionReply}[]}>({scope:"",kept:[]});
@@ -1559,7 +1559,7 @@ export function ReaderPage({
     action: "recap" | null = null,
     seed: CompanionSeed | null = null,
     tab: CompanionTab = "talk",
-    personId: number | null = null,
+    personId: EntityId | null = null,
   ) => {
     setInitialAction(action);
     if (seed) setCompanionSeed(seed);

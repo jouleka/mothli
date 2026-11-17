@@ -2,7 +2,7 @@
  * Everything on it comes from bookmark-clamped routes, so it can only say what the reader has
  * already been told. No AI call is made until the reader asks Mothli for more. */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, type Character, type GraphNode } from "../api";
+import { api, type Character, type EntityId, type GraphNode } from "../api";
 import type { TapRect } from "./nameTaps";
 import "./name-card.css";
 
@@ -26,7 +26,7 @@ export function NameCard({
   calledAs?: string;
   anchor: TapRect;
   onAsk: (name: string) => void;
-  onMore: (entityId: number) => void;
+  onMore: (entityId: EntityId) => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);

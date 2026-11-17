@@ -6,7 +6,8 @@ comes from object storage (the storage adapter checks its checksum), is segmente
 (ordinal, file and length) or nothing is served, as locally a source that no longer matches its
 manifest serves nothing. The parse is cached per process, bounded, and keyed by the owner's object
 reference, the book, its incarnation and the file's checksum (ADR 0022): one reader's parse can
-never answer for another's, nor for a re-uploaded book.
+never answer for another's, nor for a re-uploaded book. Given the reader's story memory, the source
+is also checked against it (ADR 0042 part 4), which the story memory screens ask for.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from collections import OrderedDict
 
 from app.hosted.storage import ObjectStorageError
 from app.ingest.extraction.chapter_text import segment_for_ingest
-from app.ingest.manifest import build_manifest, position_length
+from app.ingest.manifest import assert_matches_store, build_manifest, position_length
 
 # The local worker's fail-closed segmentation gates (``app.ingest.worker._GATING``).
 _GATING = ("coverage gap", "anchor resolution")
@@ -57,15 +58,23 @@ class SourceParseCache:
 class HostedBookSource:
     """The ``worker`` the companion modules are given in hosted mode, for one owner's catalog."""
 
-    __slots__ = ("_storage", "_catalog", "_cache")
+    __slots__ = ("_storage", "_catalog", "_cache", "_store")
 
-    def __init__(self, storage, catalog, cache: SourceParseCache) -> None:
+    def __init__(self, storage, catalog, cache: SourceParseCache, store=None) -> None:
         self._storage = storage
         self._catalog = catalog
         self._cache = cache
+        # With the reader's ``HostedBookStore``, the source is also checked against the story
+        # memory, as the local worker's ``source_chapters`` is: every chapter the memory holds
+        # must be the source's chapter at the same ordinal and key (``assert_matches_store``).
+        self._store = store
 
     def verified_source(self, book_id, book):
-        """(manifest, chapters) of a live book whose stored EPUB still matches its upload."""
+        """(manifest, chapters) of a live book whose stored EPUB still matches its upload.
+
+        With a store, raises ``AtomSetMismatch`` when the story memory was built from another
+        split of the book (the views then answer 409, as locally).
+        """
         record = self._catalog.source_record(book_id)
         if record is None or record["provider"] != self._storage.provider:
             raise ValueError("source is unavailable")
@@ -79,6 +88,9 @@ class HostedBookSource:
             verified = self._parse(book_id, book, record)
             self._cache.put(key, verified)
         manifest, chapters = verified
+        if self._store is not None:
+            with self._store.book(book_id) as mem:
+                assert_matches_store(manifest, mem)
         return copy.deepcopy(manifest), copy.deepcopy(chapters)
 
     def source_chapters(self, book_id):

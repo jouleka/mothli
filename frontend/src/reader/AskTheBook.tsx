@@ -8,7 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { api, ApiError, type AskAnswer, type AskCitation, type BookTurn, type ReadFrontier, type ReadSkipped } from "../api";
+import { api, ApiError, type AskAnswer, type AskCitation, type BookTurn, type EntityId, type ReadFrontier, type ReadSkipped } from "../api";
 import { Button } from "../ui/Button";
 import { companionPause, isAllowanceLine } from "../ui/companionPause";
 import { Icon } from "../ui/Icon";
@@ -327,7 +327,7 @@ export function AskTheBook({
   seed?: CompanionSeed | null;
   chapterLabel?: string;
   initialTab?: CompanionTab;
-  navigate?: { tab: CompanionTab; personId: number | null; nonce: number } | null;
+  navigate?: { tab: CompanionTab; personId: EntityId | null; nonce: number } | null;
 }) {
   const localSessionRef = useRef<AskSession | null>(null);
   const retainedSession = sessionRef ?? localSessionRef;
@@ -367,7 +367,7 @@ export function AskTheBook({
   const [saveError, setSaveError] = useState("");
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [peopleOpen, setPeopleOpen] = useState(false);
-  const [people, setPeople] = useState<{ name: string; entity_id: number }[]>(
+  const [people, setPeople] = useState<{ name: string; entity_id: EntityId }[]>(
     [],
   );
   const [peopleBusy, setPeopleBusy] = useState(false);
@@ -380,7 +380,7 @@ export function AskTheBook({
     }
   });
   const [tab, setTab] = useState<CompanionTab>(initialTab);
-  const [focusPerson, setFocusPerson] = useState<number | null>(null);
+  const [focusPerson, setFocusPerson] = useState<EntityId | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   useEffect(() => setTab(initialTab), [initialTab]);
   useEffect(() => {
