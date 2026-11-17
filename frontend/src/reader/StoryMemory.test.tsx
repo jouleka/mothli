@@ -70,6 +70,29 @@ describe("the cast and the story with hosted ids", () => {
   });
 });
 
+describe("a chapter Mothli could not make notes on", () => {
+  const UNREMEMBERED = "This chapter slipped past me, so I couldn’t make notes on it. You can still ask me about it in the chat.";
+
+  test("the story says so kindly in place of its empty summary, and only for that chapter", async () => {
+    mocks.notes.mockResolvedValue({ as_of_chapter: 3, cast: [], chapters: [
+      { chapter_key: "k2", revealed_at: 2, title: "Two", summary: "Mara sails.", new_characters: [], events: [] },
+      { chapter_key: "k3", revealed_at: 3, title: "Three", summary: "", new_characters: [], events: [],
+        unremembered: true }] });
+    render(<StoryPanel bookId="b" bookmark={3} onOpenPerson={() => {}} onAskChapter={() => {}} />);
+    await screen.findByText(UNREMEMBERED);
+    expect(screen.getAllByText(UNREMEMBERED)).toHaveLength(1);
+    expect(screen.getByText("Mara sails.")).toBeTruthy();
+  });
+
+  test("a chapter that is not marked keeps its summary, as local mode always does", async () => {
+    mocks.notes.mockResolvedValue({ as_of_chapter: 1, cast: [], chapters: [
+      { chapter_key: "k1", revealed_at: 1, title: "One", summary: "", new_characters: [], events: [] }] });
+    render(<StoryPanel bookId="b" bookmark={1} onOpenPerson={() => {}} onAskChapter={() => {}} />);
+    await screen.findByRole("heading", { name: "One" });
+    expect(screen.queryByText(UNREMEMBERED)).toBeNull();
+  });
+});
+
 describe("a book with no story memory", () => {
   test("the cast and the story keep their kind “not yet” lines on a 404", async () => {
     mocks.graph.mockRejectedValue(missing());

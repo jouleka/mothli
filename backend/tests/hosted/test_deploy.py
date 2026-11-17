@@ -88,7 +88,8 @@ def test_the_role_script_matches_every_startup_check_as_written() -> None:
         tables, functions = granted(roles.render(roles.grant_statements("mothli", by_key[key])))
         assert tables == by_key[key].tables
         assert functions == {}
-    assert [role.bypass_rls for role in roles.RUNTIME_ROLES] == [True, False, True, True, True, True]
+    assert [role.bypass_rls for role in roles.RUNTIME_ROLES] == [
+        True, False, True, True, True, True, False]
     assert [role.key for role in roles.RUNTIME_ROLES if role.owner_tables] == ["purge"]
 
 

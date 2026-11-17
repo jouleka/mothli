@@ -284,9 +284,8 @@ _BOOKMARK = Query(default=None, ge=0, description="explicit bookmark; clamped to
 
 def _place(state) -> int:
     """The last chapter the views may show of this reader's book: the read map's
-    ``finished_through``, and never past the chapter counter. Locally the counter follows the map
-    (``sync_counter``); here a device's position report can raise it (open items), so the map
-    decides. ADR 0042 part 5 replaces the counter with ``memory_through``; nothing below changes."""
+    ``finished_through``, and never past the chapter counter, which is ``memory_through``
+    (ADR 0042 part 5): only the map writes it, and the library door reads it as the place."""
     return min(state["bookmark"], state["finished_through"])
 
 
@@ -347,9 +346,17 @@ def story_character(book_id: uuid.UUID, entity_id: str, request: Request,
 @router.get("/notes")
 def story_notes(book_id: uuid.UUID, request: Request, bookmark: int | None = _BOOKMARK,
                 owner_id: OwnerId = Depends(_owner)):
-    """The story so far, chapter by chapter: the local ``/notes``."""
+    """The story so far, chapter by chapter: the local ``/notes``. A chapter Mothli could not
+    make notes on (ADR 0042 section 2) is marked ``unremembered``, so the panel says so in
+    place of its empty summary; local mode never keeps such a chapter."""
     _state, memory, place, durable, _job = _remembered(request, owner_id, str(book_id))
-    return notes_payload(memory, clamp(bookmark, place, durable))
+    eff = clamp(bookmark, place, durable)
+    notes = notes_payload(memory, eff)
+    unremembered = set(memory.view(eff).unremembered())
+    for chapter in notes["chapters"]:
+        if chapter["revealed_at"] in unremembered:
+            chapter["unremembered"] = True
+    return notes
 
 
 @router.get("/ingest")

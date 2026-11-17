@@ -33,6 +33,7 @@ from psycopg import conninfo, sql
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.hosted.tenant.grants import (  # noqa: E402
+    LIBRARY_TABLE_PRIVILEGES,
     PURGE_OTHER_TABLE_PRIVILEGES,
     TENANT_FUNCTION_PRIVILEGES,
     TENANT_TABLE_PRIVILEGES,
@@ -92,6 +93,9 @@ RUNTIME_ROLES: tuple[Role, ...] = (
     # Never in web or worker.
     Role("purge", "MOTHLI_DB_PURGE_PASSWORD", True, PURGE_OTHER_TABLE_PRIVILEGES, {},
          owner_tables=True),
+    # ADR 0042 part 5: makes the library account and reads it (python -m
+    # app.hosted.library_memory), with row security on. Never in web or worker.
+    Role("library", "MOTHLI_DB_LIBRARY_PASSWORD", False, LIBRARY_TABLE_PRIVILEGES, {}),
 )
 ALL_ROLES: tuple[Role, ...] = (OWNER, *RUNTIME_ROLES)
 EXTENSIONS = ("pgcrypto", "vector")
@@ -238,6 +242,7 @@ def verify(admin_dsn: str, env: dict[str, str], prefix: str) -> None:
     """Run the app's own startup checks against the roles just granted."""
     from app.hosted.auth.repository import PostgresAuthRepository
     from app.hosted.jobs import PostgresWorkerRepository
+    from app.hosted.library_memory import PostgresLibraryAccount
     from app.hosted.purge import PostgresAccountPurge
     from app.hosted.tenant.repository import PostgresTenantRepository
 
@@ -247,6 +252,7 @@ def verify(admin_dsn: str, env: dict[str, str], prefix: str) -> None:
         PostgresTenantRepository(role_dsn(env, prefix, roles["tenant"])).check_runtime_role())
     PostgresWorkerRepository(role_dsn(env, prefix, roles["worker"])).check_runtime_role()
     PostgresAccountPurge(role_dsn(env, prefix, roles["purge"])).check_runtime_role()
+    PostgresLibraryAccount(role_dsn(env, prefix, roles["library"])).check_runtime_role()
     # The tenant startup check reads tables only: the functions are checked here, both ways.
     tenant = role_name(prefix, roles["tenant"])
     with psycopg.connect(admin_dsn, autocommit=True) as conn:

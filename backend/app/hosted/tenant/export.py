@@ -35,9 +35,11 @@ from datetime import UTC, datetime
 from app.catalog.catalog import Catalog
 from app.chapter_notes import VERSION, usable_notes
 from app.home_conversation import HOME, home_turns
+from app.hosted.companion.memory import ContentSnapshot, HostedBookStore, StoryMemoryUnavailable
 from app.hosted.companion.source import HostedBookSource, SourceParseCache
 from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.tenant.models import OwnerId
+from app.memory_views import clamp, graph_payload, notes_payload
 from app.read_map import chapter_fractions, read_snapshot, visible_turns
 from app.recollections import listed
 
@@ -110,7 +112,8 @@ books/
     One file for each book: where you are in it and how much of each chapter
     you have read; your highlights, notes and bookmarks, with the words they
     are on; your chat with Mothli about it; Mothli's notes on the chapters you
-    finished; and how you like the page to look.
+    finished; who you have met and the story so far, as Mothli keeps them up to
+    where you are; and how you like the page to look.
 home chat.json
     Your chat with Mothli on your home page.
 what Mothli remembers.json
@@ -261,6 +264,7 @@ class _Copy:
                  looks_of: Callable[[str], dict | None]) -> None:
         self._settings = settings
         self._catalog = HostedCompanionCatalog(dsn, owner_id)
+        self._store = HostedBookStore(dsn, owner_id)
         self._look = _LookOnly(self._catalog)
         # A cache of this copy's own: a copy reads every book once and must not push other
         # readers' books out of the shared one.
@@ -334,7 +338,9 @@ class _Copy:
         notes = usable_notes(book_id, chapters, self._look)
         kept = [note for note in self._look.get_chapter_notes(book_id)
                 if note["version"] == VERSION and note["sentences"]]
+        story = self._story(book_id, state, _manifest)
         return {
+            **story,
             "where_you_are": {
                 "chapter": point["atom"],
                 "every_chapter_read_through": state["read_through"],
@@ -348,6 +354,35 @@ class _Copy:
                 "chat_lines": len(stored) - len(turns),
                 "chapter_notes": max(0, len(kept) - len(notes))},
         }
+
+
+    def _story(self, book_id: str, state: dict, manifest: dict) -> dict:
+        """Who Mothli knows and the story so far, as the story screens show them now: the view
+        at the reader's place (ADR 0042 section 7), never rows. For a free-library book that is
+        what the door hands this reader, which holds nothing past their place anyway. Nothing
+        when the book has no story memory."""
+        try:
+            with self._store.book(book_id) as mem:
+                if not mem.has_rows():
+                    return {}
+                memory = ContentSnapshot(mem, manifest)
+                eff = clamp(None, min(state["bookmark"], state["finished_through"]),
+                            mem.completion_frontier(manifest["atoms"]))
+        except (LookupError, StoryMemoryUnavailable):
+            return {}
+        cast = graph_payload(memory, eff)
+        notes = notes_payload(memory, eff)
+        quiet = set(memory.view(eff).unremembered())
+        return {"what_mothli_keeps_about_the_story": {
+            "as_of_chapter": eff,
+            "people_you_have_met": [
+                {"name": person["canonical_name"], "also_called": person["aliases"],
+                 "first_met_in_chapter": person["revealed_at"]}
+                for person in cast["characters"]],
+            "the_story_so_far": [
+                {"chapter": chapter["revealed_at"], "title": chapter["title"],
+                 "what_happened": None if chapter["revealed_at"] in quiet else chapter["summary"]}
+                for chapter in notes["chapters"]]}}
 
 
 def build_copy(out, **parts) -> None:
