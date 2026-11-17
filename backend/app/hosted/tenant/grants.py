@@ -10,14 +10,17 @@ from __future__ import annotations
 
 TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "books": frozenset({"SELECT", "INSERT", "UPDATE"}),
-    "source_objects": frozenset({"SELECT", "INSERT", "UPDATE"}),
-    "reading_state": frozenset({"SELECT", "INSERT", "UPDATE"}),
-    "reader_preferences": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    # DELETE on source_objects, reading_state, reader_preferences, the three marks and chapters:
+    # removing a book erases what was about it (ADR 0041 part 8). Deleting a book's chapters
+    # takes its whole story memory with them (migration 0024).
+    "source_objects": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
+    "reading_state": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
+    "reader_preferences": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
     "book_search_documents": frozenset({"SELECT", "INSERT", "DELETE"}),
-    "highlights": frozenset({"SELECT", "INSERT", "UPDATE"}),
-    "annotations": frozenset({"SELECT", "INSERT", "UPDATE"}),
-    "bookmarks": frozenset({"SELECT", "INSERT", "UPDATE"}),
-    "chapters": frozenset({"SELECT"}),
+    "highlights": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
+    "annotations": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
+    "bookmarks": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
+    "chapters": frozenset({"SELECT", "DELETE"}),
     "ingested_chapters": frozenset({"SELECT"}),
     "chapter_summaries": frozenset({"SELECT"}),
     "entities": frozenset({"SELECT", "INSERT", "UPDATE"}),

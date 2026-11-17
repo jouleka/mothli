@@ -41,6 +41,27 @@ from app.hosted.tenant.models import (
     StalePositionEpochError,
 )
 
+# What removing a book erases, keyed by the book (ADR 0041 part 8), children before parents.
+# ``chapters`` takes the book's whole story memory with it (migration 0024). The test in
+# tests/hosted/test_removing_a_book_postgres.py fails for a table with an owner and a book that
+# is neither here nor kept there with its reason.
+ERASED_WITH_THE_BOOK = (
+    "book_search_documents",
+    "annotations",
+    "highlights",
+    "bookmarks",
+    "reading_state",
+    "reader_preferences",
+    "read_ranges",
+    "skimmed_ranges",
+    "read_position",
+    "conversation_turns",
+    "chapter_notes",
+    "recollections",
+    "chapters",
+    "source_objects",
+)
+
 
 @dataclass(slots=True)
 class PostgresTenantRepository:
@@ -2205,6 +2226,19 @@ class PostgresTenantRepository:
             )
             return cursor.rowcount
 
+    async def record_account_export(self, owner_id: OwnerId) -> None:
+        """A content-free audit line: this reader took a copy of their data."""
+        async with self._transaction(owner_id) as conn:
+            await record_event_async(
+                conn,
+                owner_id=owner_id.value,
+                actor_kind="owner",
+                action="account.export",
+                target_kind="account",
+                target_id=None,
+                result="succeeded",
+            )
+
     async def create_credential(
         self, owner_id: OwnerId, envelope: EncryptedCredential
     ) -> dict:
@@ -2625,8 +2659,24 @@ class PostgresTenantRepository:
             encryption=row["encryption_key_id"],
         )
 
-    async def soft_delete_book(self, owner_id: OwnerId, book_id: uuid.UUID) -> bool:
+    async def remove_book(self, owner_id: OwnerId, book_id: uuid.UUID) -> bool:
+        """Take a book off the reader's shelf and erase what was about it, in one transaction:
+        their place and read map, highlights, notes and bookmarks, their conversation in it and
+        how far it was looked at for notes, Mothli's chapter notes, what Mothli remembers from it,
+        the home chat's messages that leaned on it, its search text and story memory, and the
+        record of its stored file (the route deletes the file itself first). What stays is the
+        book's row as a bare id, its cancelled jobs, what its replies cost and the audit trail
+        (ADR 0041 part 8). False when it is not this reader's live book."""
         async with self._transaction(owner_id) as conn:
+            # The companion's locks for this book and for the reader's notes, before the book's
+            # row: a read-map write or a batch of notes under way finishes before this erases,
+            # never after, and neither waits on the row while holding its lock.
+            for key in (str(book_id), "recollections"):
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock("
+                    "hashtextextended(%s::text || ':' || %s::text, 48))",
+                    (owner_id.value, key),
+                )
             row = await (
                 await conn.execute(
                     """
@@ -2672,32 +2722,38 @@ class PostgresTenantRepository:
                 target_id=book_id,
                 result="succeeded",
             )
-            await conn.execute(
-                """
-                DELETE FROM public.book_search_documents
-                WHERE owner_id=%s AND book_id=%s AND book_incarnation=%s
-                """,
-                (owner_id.value, book_id, row["incarnation"]),
-            )
-            for table in ("highlights", "annotations", "bookmarks"):
+            # Every shelf lifetime of this book id: a book id is never reused.
+            scope = (owner_id.value, book_id)
+            for table in ERASED_WITH_THE_BOOK:
                 await conn.execute(
-                    f"""UPDATE public.{table} SET deleted_at=now(),updated_at=now(),
-                               version=version+1
-                        WHERE owner_id=%s AND book_id=%s AND book_incarnation=%s
-                          AND deleted_at IS NULL""",
-                    (owner_id.value, book_id, row["incarnation"]),
+                    f"DELETE FROM public.{table} WHERE owner_id=%s AND book_id=%s", scope
                 )
+            # What Mothli remembers from this book's chat goes (above); a note about the reader
+            # stays, but not the message it came from when that message leaned on this book: it
+            # can never be shown again (``written_from_read``), like the conversation it was in.
+            # The home chat's messages that leaned on this book cannot be shown again either.
+            book_key = str(book_id)
             await conn.execute(
-                """
-                UPDATE public.source_objects
-                SET deleted_at=now()
-                WHERE owner_id=%s AND book_id=%s AND book_incarnation=%s AND deleted_at IS NULL
-                """,
-                (owner_id.value, book_id, row["incarnation"]),
+                """UPDATE public.recollections SET said='',drew_on=NULL
+                   WHERE owner_id=%s AND book_id IS NULL AND drew_on ? %s""",
+                (owner_id.value, book_key),
             )
             await conn.execute(
+                """DELETE FROM public.conversation_turns
+                   WHERE owner_id=%s AND book_id IS NULL AND drew_on ? %s""",
+                (owner_id.value, book_key),
+            )
+            await conn.execute(
+                "DELETE FROM public.recollection_cursors WHERE owner_id=%s AND conversation=%s",
+                (owner_id.value, book_key),
+            )
+            # The book's row stays, as a bare id: what its replies cost (cost_ledger,
+            # cost_reservations) and its cancelled jobs still refer to it.
+            await conn.execute(
                 """
-                UPDATE public.books SET deleted_at=now(),updated_at=now()
+                UPDATE public.books
+                SET deleted_at=now(),updated_at=now(),title='',author=NULL,source_kind=NULL,
+                    source_id=NULL,file_hash=NULL
                 WHERE owner_id=%s AND id=%s AND incarnation=%s AND deleted_at IS NULL
                 """,
                 (owner_id.value, book_id, row["incarnation"]),

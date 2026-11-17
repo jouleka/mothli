@@ -441,6 +441,24 @@ describe("Hosted writes", () => {
     expect(localStorage.getItem(`litlet.offline.outbox:${owner}`)).toBeNull();
   });
 
+  // Catches: a copy saved under no name or the wrong one, or a refusal whose kind line is lost.
+  test("taking a copy of one's data answers the file and its name, or the server's line", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("zip", {
+      status: 200,
+      headers: { "content-disposition": 'attachment; filename="mothli-my-data-2026-11-17.zip"' },
+    }));
+    const copy = await api.exportAccount();
+    expect(copy.name).toBe("mothli-my-data-2026-11-17.zip");
+    expect(await copy.blob.text()).toBe("zip");
+    expect(fetch).toHaveBeenCalledWith("/api/account/export", expect.objectContaining({ cache: "no-store" }));
+    fetch.mockResolvedValueOnce(new Response(JSON.stringify({ detail: {
+      code: "export_too_soon", message: "You just took a copy. Give it a few minutes, then try again." } }),
+    { status: 429 }));
+    await expect(api.exportAccount()).rejects.toMatchObject({
+      status: 429, code: "export_too_soon",
+      message: "You just took a copy. Give it a few minutes, then try again." });
+  });
+
   // Catches: the reader's last page being lost when the sign-in ends mid-read. The place is kept
   // like an offline one and sent once they are signed in again.
   test("a position refused with 401 is kept for after signing in again", async () => {

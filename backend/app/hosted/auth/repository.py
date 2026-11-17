@@ -71,6 +71,8 @@ class AuthRepository(Protocol):
 
     async def restore_account(self, *, owner_id: uuid.UUID) -> bool: ...
 
+    async def account_joined(self, *, owner_id: uuid.UUID) -> datetime | None: ...
+
 
 # The reader asked to delete their account: kept at least 30 days, then erased by the daily purge
 # (app/hosted/purge.py). The moment is the start of a UTC day, and the reader is told the day
@@ -421,6 +423,18 @@ class PostgresAuthRepository:
                 result="succeeded",
             )
         return row[0]
+
+    async def account_joined(self, *, owner_id: uuid.UUID) -> datetime | None:
+        """When this reader's account was made, for their copy of their data; None once it is
+        being erased."""
+        async with await self._connect() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT created_at FROM public.users WHERE id = %s AND deleted_at IS NULL",
+                    (owner_id,),
+                )
+            ).fetchone()
+        return None if row is None else row[0]
 
     async def restore_account(self, *, owner_id: uuid.UUID) -> bool:
         """Undo a pending deletion: an ordinary account again, everything as it was. False when

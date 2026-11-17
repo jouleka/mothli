@@ -806,7 +806,7 @@ async def delete_book(
             )
         except ObjectStorageUnavailableError as exc:
             raise _storage_failure(exc) from exc
-        if not await request.app.state.tenant_repository.soft_delete_book(owner_id, book_id):
+        if not await request.app.state.tenant_repository.remove_book(owner_id, book_id):
             raise HTTPException(404, "unknown book")
         await request.app.state.hosted_runtime.cache_invalidate_resource(resource)
     return Response(status_code=204)

@@ -9,6 +9,7 @@ import { PENDING_DELETION_EVENT, SIGNED_OUT_EVENT, type OfflineSession } from ".
 import { Button } from "../ui/Button";
 import { Moth } from "../ui/Moth";
 import { MothliMark } from "../ui/MothliMark";
+import { TakeACopy } from "./TakeACopy";
 import "./shelf-redesign.css";
 import "./account.css";
 
@@ -181,7 +182,8 @@ export function SignIn({ ended = false }: { ended?: boolean }) {
 const KEEP_FAILED = "That didn’t work just now. Check your connection and try again.";
 
 /** Hosted mode: a reader who asked to delete their account and signed in again within the 30
- * days. Nothing else of the app is open to them (the server refuses it too) until they choose. */
+ * days. Nothing else of the app is open to them (the server refuses it too) until they choose,
+ * except taking a copy of their data first. */
 export function PendingDeletion({ eraseAfter }: { eraseAfter: string }) {
   const [working, setWorking] = useState<"keep" | "leave" | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -255,6 +257,7 @@ export function PendingDeletion({ eraseAfter }: { eraseAfter: string }) {
               <p className="ml-progress-where">
                 If you sign out and don’t come back, it will all be erased for good on that day.
               </p>
+              <TakeACopy what="Leaving anyway? Take everything that’s yours with you first, in one file. The books themselves aren’t in it." />
             </div>
           </div>
           <div className="ml-page ml-page--right">
