@@ -1,0 +1,577 @@
+# ADR 0042 — Story memory in hosted mode
+
+**Status:** Proposed (2026-11-17). Accepted when merged. Replaces the sketch of ADR 0041 section 4
+("What builds it") and ADR 0041 part 10. Amends ADR 0024 (the extraction job) and, only if the
+owner chooses the shared library memory of section 3, ADR 0017 section 3.
+
+File and line references are to `main` at b51f786 (PR #100). Nothing in this record was run against a
+database, a server or a model; every claim about behaviour comes from reading the code cited next to
+it. The figures in "What was measured" come from the owner's runs and are labelled as such.
+
+## Context
+
+**Story memory** is what Mothli keeps about a book as it is read: the people and places (entities),
+their other names (aliases), how they are tied (edges), what happened (events), themes, how a person
+stands at a chapter (entity state) and a summary of each chapter. A language model extracts it one
+chapter at a time, a second model call reviews every extracted statement against that chapter's text,
+and only a chapter that passes is kept, with a **receipt** (a row saying "this chapter's memory is
+complete") written last. It feeds the cast list, the story so far, "who was that?", and the fixed name
+check (`score_recap`) that removes a sentence naming someone the reader has not met.
+
+Local mode builds it (`backend/app/ingest/worker.py`, `backend/app/ingest/extraction/`). Hosted mode
+does not: hosted chats run on an empty memory with the checks local mode applies to an unbuilt memory
+(ADR 0041 section 4), the cast and story screens say they keep nothing for this book
+(`frontend/src/reader/StoryMemory.tsx:46-50,193-194,261-262`, `AskTheBook.tsx:674-678`), and adding a
+book makes no extraction job while `HOSTED_READER_KEYS` is off (`hosted/tenant/api.py:632`). The owner
+has decided to build it before launch, so no reader's data has to be migrated later. This record is
+the design the builders follow.
+
+### What was measured (the owner's runs, 17 November 2026)
+
+The first eight chapters of *Pride and Prejudice* (65,021 of the book's 685,566 characters), local
+mode, one chapter at a time, writer `gpt-6.1-terra` through the owner's ChatGPT subscription,
+embeddings stubbed, the optional Jev screen of extraction off (its default, `config.py:48`). Dollars
+are the app's own price list (`cost/limits.py:21-39`: terra $1.00 per million input tokens and $5.00
+per million output; `gpt-6-luna` $0.10 and $0.50) applied to measured tokens.
+
+The subscription's command-line tool adds about 7,780 input tokens of its own to every call (measured
+by the owner: a ten-token prompt reports 7,781 input tokens on terra and 7,777 on luna). That overhead
+does not exist on a paid API, so it is taken out below: 63 calls × about 7,780 = about 490,000 of the
+912,609 input tokens the run reported.
+
+| Phase (63 calls in all) | Calls | Input tokens | Output tokens | At terra's price |
+|---|---|---|---|---|
+| `extraction` | 8 | about 81,300 | 15,671 | $0.16 |
+| `extraction-partial` (extractions rejected and repaired) | 5 | about 16,000 | 5,888 | $0.05 |
+| `extraction-review` | 50 | about 325,200 (about 6,500 a call) | 32,515 (about 650 a call) | $0.49 |
+| **Total** | 63 | **about 422,500** | **54,074** | **about $0.69** |
+
+So: about 53,000 input and 6,800 output tokens per chapter, about 6.5 input tokens per character of
+book text, **about $0.09 a chapter**, and, scaled on characters (× 10.54), **about $7.30 for the
+novel** (4.46 million input tokens, $4.46; 0.57 million output, $2.85). Output is 39% of the cost, so
+no input discount can remove it. The review is 70% of the cost. A chapter's text is sent about eight
+times: once to extract, then once with every review batch (below). These are the book's first, short
+chapters; the roster of known people is sent with every call and grows through a book, so scaling on
+characters probably understates later chapters (not measured). 21 minutes for the eight chapters
+through the subscription's slow transport; speed on a paid API is not measured.
+
+A second run set `LLM_CHEAP_MODEL=gpt-6-luna` and left the large model at terra. Chapter 1 was accepted
+(6 calls). Chapter 2 ended with `ExtractionGroundingRejected` after one extraction and two repairs on
+luna (reviews on terra), and the book's extraction stopped there. One book, two chapters: a small
+sample, but a hard stop. (Mothli's own subscription transport refuses every model but terra,
+`llm/codex_local.py:44-45`; the owner ran luna outside that check. Not repeated here.)
+
+No prompt caching was counted (the subscription reports none). Caching and speed stay unmeasured
+without a paid account, which the owner does not want; the rule is tokens measured on the
+subscription, overhead removed, times the public price list.
+
+### What the code says, read for this record
+
+1. **The review is on the large tier, not the cheap one.** The extraction call asks for
+   `tier="cheap"` (`ingest/worker.py:544`); every review batch asks for `tier="large"`
+   (`ingest/extraction/validation.py:379-382`), and the identity review too (`identity.py:149`). The
+   large tier is also the chat writer's (`stream_conversation.py:452`) and the notes writer's
+   (`chapter_notes.py:221`). Both tiers default to terra (`llm/client.py:46`). A cheaper "cheap"
+   model therefore cheapens only the 30% of the cost that is extraction and repairs.
+2. **Why a chapter is sent about eight times.** `review_extraction` splits the fields to check into
+   batches of at most 24 segments (`validation.py:351`: `max(8, min(24, (4096 - 512) // 128))` at the
+   default 4,096-token output ceiling, `config.py:113`), at most 16 batches (`:373`), and each batch's
+   prompt carries the whole chapter, the roster and the whole extraction again (`:352-354`).
+3. **Extraction is strictly in order.** Chapter *n* is extracted against the roster of chapters
+   1 to *n*−1 (`worker.py:658-664`, `pipeline.py:37-46`), and the commit refuses a roster that changed
+   meanwhile (`pipeline.py:159-160`). A chapter cannot be skipped and done later without redoing what
+   follows it.
+4. **A rejected chapter stops the book's memory there, and locally is paid for again.** A grounding
+   rejection after the one allowed repair (`worker.py:446-459`) propagates out of `_ingest_upto`; the
+   worker records an error (`worker.py:353-358`) and later chapters are never reached. Every later
+   enqueue (each page turn that finishes a chapter, `api/reading.py:143-146`; every position report,
+   `:243-246`; "I've read this", `:176-180`) starts again at the same chapter and pays for it again.
+   This is local behaviour today; hosted mode must not copy it (section 2).
+5. **Changing the extraction model stops a book.** The first chapter pins the extractor
+   (`provider:cheap model`) and the embedder (`pipeline.py:49-57`); a later client with another
+   extractor or embedder raises `ModelMigrationRequired` before any paid call (`worker.py:685`,
+   `llm/versioning.py:90-112`), meaning "extract the whole book again". The extraction model chosen at
+   launch is the one every hosted book keeps.
+6. **Local defaults would stop this novel.** The local per-book ceilings are $5.00 and 500,000 output
+   tokens (`config.py:116-118`); at terra this novel needs about $7.30 and 570,000 output tokens. The
+   eight-chapter run did not reach them. Hosted mode ignores the per-book ceilings
+   (`hosted/companion/spend.py:28-30`).
+7. **The hosted pieces that exist.** `PostgresWorkerRepository.commit_chapter` (`hosted/jobs.py:795-1003`)
+   writes, in one fenced transaction, the chapter row, its summary, one cost-ledger row and the
+   receipt last, and nothing else: no entities, aliases, edges, events, participants, themes or
+   entity state. It stores the chapter key as the chapter's title (`:906`), and writes its own
+   `extraction` ledger row (`:936-957`) and expects an `extraction`-phase reservation (`:858-864`),
+   while the companion's spend adapter records every writer call as phase `synthesis`
+   (`spend.py:272`): the two spend paths do not agree. The memory tables exist with owner-composite
+   keys and receipt-last deferred foreign keys (`schema/0002_library_memory_and_vectors.sql:85-373`).
+   `HostedBookStore` reads chapters, receipts, entities, aliases, themes, events and summaries
+   (`hosted/companion/memory.py:42-109`), not edges or entity state.
+8. **No extraction handler exists at all.** `ingest_book` appears only in the schema and the tenant
+   repository; the worker's one dispatcher refuses it (`hosted/companion/jobs.py:209,263-265`). The
+   reader-key extraction path of ADR 0024/0026 (`waiting_configuration`, `tenant/repository.py:1938-1953`)
+   never ran in any build.
+9. **Hosted memory can already be changed by the reader.** `POST /api/books/{id}/memory-corrections`
+   (`tenant/api.py:1655-1679`) writes entities, aliases, edges, state and corrections in Postgres
+   (`tenant/repository.py:1667-1739`), which is why the tenant role holds `INSERT` on those tables
+   (`tenant/grants.py:23-29`). Any working copy of memory kept outside Postgres would miss them.
+10. **Content hashes differ in length.** Local chapters are fingerprinted with the first 16 hex
+    characters of SHA-256 (`ingest/extraction/chapter_text.py:54-57`); hosted `chapters.content_hash`
+    must be 64 (`0002:97`); the local-archive importer hashes the raw text in full
+    (`hosted/local_migration.py:311-314`).
+11. **The hosted chapter counter can run ahead of the read map** (open items, line 159: a stale
+    device's position report raises it). The cast and story views follow the counter locally
+    (`read_map.py:103-104`); in hosted mode the extraction target must not.
+
+## Decision
+
+### 1. The seam: the unchanged extraction runs on a throw-away working copy; one fenced publish
+
+**What must run unchanged.** Everything that decides what is extracted, what passes review and at
+which chapter a fact becomes visible: the extraction and its repair (`worker.py:432-617`), the review
+(`validation.py`), identity resolution and preparation (`pipeline.prepare_chapter`, `:67-131`), and the
+write that stamps every row with its chapter (`pipeline.ingest_chapter` and `_write_chapter`,
+`:134-294`). The modules that decide what a reader is shown (`score_recap`, `same_person_names`,
+`completion_frontier`, the bookmark-bounded views) also run unchanged, over `HostedBookStore`.
+
+**Options considered.**
+
+- (a) **A persistent SQLite memory file per book on the worker's disk** (ADR 0041's sketch), published
+  to Postgres after each chapter. Rejected: reader corrections are written in Postgres (fact 9) and
+  would never reach the file, so the next chapter would be extracted against a roster the reader has
+  corrected; account erasure and book removal find rows from the database catalogue
+  (`hosted/purge.py:43-84`) and would not know the file exists; a second worker process or a lost
+  disk would have a different or no file. It is a second home for memory.
+- (b) **A Postgres implementation of the ~20 `MemoryDB` write methods** `_write_chapter` calls.
+  Rejected: it rewrites, in a second language, the code that stamps `revealed_at` and closes earlier
+  states (`pipeline.py:258-263`), which is spoiler logic.
+- (c) **A throw-away working copy rebuilt from Postgres for each chapter.** Chosen.
+
+**Decision (c).** For each chapter the handler:
+
+1. builds an empty local `MemoryDB` for the book in a private working location and copies into it,
+   from this owner's Postgres rows (read through the tenant role, which can already `SELECT` them,
+   `grants.py:20-30`), what extraction of chapter *n* reads: the live chapters and receipts 1 to
+   *n*−1, entities, aliases, entity state and corrections, and the pinned identity. Postgres UUIDs map
+   to local integer ids and back. The hydrator checks each copied chapter's 64-hex hash against
+   SHA-256 of the chapter text from `HostedBookSource`, so a stale row fails closed;
+2. runs the unchanged extraction, review, preparation and `ingest_chapter` for chapter *n* against it;
+3. reads back exactly what that chapter added (rows stamped *n*, and the `invalid_at` that
+   `replace_state` set on an earlier state) and **publishes** them through one new worker-role method,
+   `PostgresWorkerRepository.commit_chapter_memory`, in one transaction fenced by the job's lease (the
+   `_locked_lease` check of `jobs.py:465-489`), rows in extraction order with distinct `recorded_at`
+   (open items, line 166), the receipt last (deferred foreign keys, `0002:149-151` and the like). The
+   same transaction refuses if any memory row of this book was recorded after the copy was taken (a
+   correction arrived meanwhile): the job then rebuilds and prepares again, as local mode does on
+   `StalePreparedRoster` (`worker.py:768-800`);
+4. deletes the working copy.
+
+**What is never written twice, and never half.** The receipt has a primary key on the chapter
+(`0002:124`) and the chapter row is unique per key (`0002:103`), so a second publish for the same
+chapter fails and rolls back whole; a publish is one transaction with the receipt last, so nothing is
+seen before it is complete (`HostedBookStore` loads every table in one statement, `memory.py:19-21`).
+Raw chapter text, which `_write_chapter` stores in the working copy (`pipeline.py:213`), is never
+published (ADR 0019, reviewed difference 1); nor are passages or vectors (section 8). Chapter rows
+carry the manifest keys `<book id>:<file>` that `HostedBookSource` produces (open items, line 167), and
+the real title, file and part label, not the key as title (fact 7).
+
+**The one shared-code change, behaviour-free.** The per-chapter body of `IngestWorker._ingest_upto`
+(`worker.py:646-814`) and the three extraction methods it calls (`:432-617`) move verbatim into a new
+`app/ingest/chapter_extraction.py` (`ChapterExtraction(catalog, client, settings, check_stopping,
+sleep)`), which `IngestWorker` calls. The local suite must pass unchanged. The hosted handler calls the
+same class with the hosted catalog, the platform's extraction client and `check_stopping` = the lease
+check. The local worker's file path for the source (`worker.py:370`) and its per-book thread state stay
+local.
+
+**What the hosted catalog must add** for the moved code: `cost_reservation_ids(book_id, phase=,
+chapter_ordinal=)` (`worker.py:673-679`) over this owner's open companion reservations, and
+`finalize_ingest` (`:666,809`), which in hosted mode only settles the chapter's deferred extraction
+reservations (the receipt is already published). `get_state()["ingest_progress"]` already counts
+contiguous receipts (`hosted/companion/store.py:61-102`).
+
+**Costs settle once.** The extraction call's reservation is deferred (`worker.py:547`) and its review
+calls settle at once (`cost/limits.py:266-267`). After the publish, the handler settles the deferred
+ones through the tenant spend adapter, exactly as local mode settles after its memory commit
+(`worker.py:809-811`). A crash between the two leaves them open; the next run finds the receipt and
+settles them at their noted size (`spend.py:333-354` has already replaced the estimate with the
+actual). `commit_chapter_memory` writes no ledger row of its own; `commit_chapter` stays, unused by
+this path, for the retired reader-key path (section 6).
+
+### 2. When a chapter is processed, and for whom
+
+**Only what this reader has read, in order, never ahead.** The target is the read map's
+`finished_through` (the last chapter up to which every chapter is finished, `read_map.py:97-108`),
+taken from `read_snapshot` through the hosted adapters at the start of each chapter, not the chapter
+counter (fact 11). An unread book costs nothing and nothing about its unread chapters is computed for
+this reader. A skipped chapter holds everything after it, as locally: chapters are extracted in order
+(fact 3), and the read map's own "were these read?" question (`skipped_before`,
+`hosted/companion/routes.py:116-118`) is how a reader fills the gap.
+
+**Triggers.** Where hosted routes already ask for chapter notes (`routes.py:127-128,148-149`), they also
+ask for story memory: a page that finishes a chapter, and "I've read this". The shared stand-in in the
+streamed chat needs nothing. Books added before this lands get their first job from the first finished
+chapter.
+
+**A reader who jumps ahead or marks chapters read** raises `finished_through`; the job works through
+every chapter up to it, one per run, each paid within the allowance (section 4). **Marking chapters not
+read** lowers the target; work already queued stops at the next chapter boundary, and memory already
+built stays (it is shown only up to the reader's position, as locally after a re-read).
+
+**A chapter that is rejected.** Local mode stops the book's memory at that chapter and pays for it
+again on every enqueue (fact 4). Hosted mode: a chapter rejected on two separate runs (each run is one
+extraction plus one repair, as locally) is published as an **unremembered chapter**: the existing empty
+extraction (`worker.py:135-140`, which `review_extraction` clears without a model call,
+`validation.py:338-340`), with a marker the story view shows ("I couldn't make notes on chapter 9").
+Extraction then continues. Why this is never looser than local mode: an empty chapter asserts nothing;
+a person first met in it is created when next named, stamped at that later chapter, so for a reader
+between the two the name counts as not yet met and the fixed check removes it (stricter, not looser);
+and local mode in the same state has no memory at all from that chapter on, so it blocks fewer names
+than this. What is lost: that chapter's summary and facts, and "met in chapter" is late for its
+people. The count of rejections is kept in the job rows (a new failure code, section 6), so it needs no
+new table. Which column carries the marker (`chapters.kind`, `0002:96`, is the candidate) is the
+builder's; whether anything reads `kind` today was not verified.
+
+**What the reader sees meanwhile.** The views show memory through the last processed chapter
+(`min(finished_through, completion frontier)`, as the local clamp `api/views.py:181-195`). The app
+already polls `GET /api/books/{id}/ingest` while `status` is `running` and refreshes the cast and
+story as `ingest_progress` grows (`frontend/src/reader/memoryCatchUp.ts:9-38`,
+`ReaderPage.tsx:358-388`); hosted mode serves that route (section 9). A chapter waiting for tomorrow's
+allowance answers `status: "waiting"`, and the panels say once, in Mothli's voice, that Mothli will
+catch up on the rest tomorrow. The chat never waits for memory.
+
+### 3. May readers of the same book share one story memory? (the owner's decision)
+
+At the measured $7.30 a novel per reader (section 4), this is not a side question: per-reader memory
+does not fit caps of the order of today's. Both designs are set out; the rest of this record works
+with either answer.
+
+**(A) Per reader (what the parts build first, and needed in any case).** Every row carries the
+reader's `owner_id` and book; row-level security, the two-readers tests, erasure, removal and export
+all work as they do for every other hosted row. Nothing is learnt by one reader about another. Cost:
+every reader pays, in the owner's money, for every chapter they read: about $0.09 a chapter, $7.30 for
+this novel, again for each reader.
+
+**(B) A shared library memory for chosen free-library titles, built ahead of time.** How it would
+work:
+
+- *Keyed by* the exact EPUB bytes (`books.file_hash`, SHA-256, `0002:25`) of a free-library entry
+  (`books.source_kind = 'gutenberg:<number>'`, hosted part 11). A free-library add fetches the same
+  file for everyone while Project Gutenberg does not change it; a reader whose file differs gets (A).
+  Uploads always get (A): matching a private upload to someone else's would reveal what a person owns.
+- *Built by the operator, not by readers.* An operator command builds the whole book's memory for a
+  fixed list of titles, as the **library account** (one reserved user row that never signs in), with
+  the same job, handler and publish as (A). Its spend is the platform's, not a reader's.
+- *Read through one narrow door.* The library account's rows sit in the same tables under its own
+  `owner_id`, so row-level security hides them from every reader. A `SECURITY DEFINER` SQL function
+  (the pattern of the two spend functions, `0020_companion_spend.sql`, `grants.py:76-79`) returns the
+  memory payload for a book id only when the calling reader owns that live book and its `file_hash`
+  and `source_kind` match a built edition; `HostedBookStore` uses it in place of its own load for such
+  a book. Everything after that is unchanged: `view(bm)` and every screen clamp to the reader's own
+  position.
+- *What it reveals between readers: nothing, if and only if it is built ahead of time.* Whether a title
+  has memory is the operator's choice, the same for everyone before anyone reads it, so it tells no
+  reader anything about any other. The variant where the first reader to read a chapter pays and the
+  rest reuse it is **not recommended**: a cast appearing at once tells a reader someone else got there
+  first, which is the existence signal ADR 0017 section 3 forbids.
+- *Spoilers.* The shared rows reach the end of the book, as local memory does for a reader who read
+  ahead and then marked chapters not read. Every reader-facing read goes through the bookmark-bounded
+  view, and `score_recap` already reads future names on purpose, only to block them (`memory.py:242-251`).
+  Two clamps must be added and tested: `GET /ingest` and `get_state` report progress no further than
+  the reader's own position (the lesson of ADR 0021, "an unbounded count could reveal future
+  processing progress"), and export (section 7) gives the view, never rows. Nothing about future
+  chapters reaches the reader; nothing beyond the reader's position is computed on their account.
+- *Corrections.* A reader's correction cannot change shared rows. The correction route answers that
+  this book's memory cannot be corrected (a reader-specific layer on top is possible later, not built).
+- *Deleting an account or removing a book* removes the reader's own rows and their link (the book row);
+  the shared rows, derived by the operator from a public-domain text, are not the reader's data and stay.
+  The purge finds no reader rows among them, because they are the library account's.
+- *ADR 0017 section 3* ("no shared derived memory") must be amended, and the privacy text must say
+  that library books' notes are prepared once for everyone.
+- *Cost:* once per title, about $7.30 for a book of this length at terra's list price (so roughly
+  $730 for a hundred titles of similar length, by arithmetic), then nothing per reader.
+
+**Recommendation (the owner's to accept or refuse): both, split by where the book came from.** Shared
+library memory, built ahead of time, for the free-library titles readers are likely to open; per-reader
+memory for uploads and for any title not yet built, within the reader's allowance. Build (A) first; (B)
+is one later part on top (part 5 below) and changes nothing in (A).
+
+### 4. Money
+
+**Model.** Extraction and review both on **terra**, as measured; no Jev screen, no identity review
+(`config.py:48-49`, their defaults; what was measured). Luna is not used for extraction: it stopped the
+one book it was tried on at chapter 2, and the extractor is pinned per book, so a later change means
+paying for every book again (fact 5). Luna on extraction alone would have saved about a quarter (the
+extraction and repair calls are $0.21 of the $0.69; at luna's prices they would be about $0.02, so
+about $0.51 for the eight chapters and $5.40 for the novel, list arithmetic), which is not worth a
+hard stop. Moving the **review** to a cheaper model is not proposed: the review is what catches an
+extraction that imports later plot from the model's own knowledge of a famous novel (`validation.py:96-99`,
+`:134`), and its summaries are shown verbatim in the story view, so a weaker reviewer is a spoiler risk,
+not only an accuracy one. The extraction worker builds its own client (cheap and large both terra,
+`llm/client.py:107-118`, Standard processing, the stub embedder, section 8), so the chat's writer
+setting never changes extraction and the reverse.
+
+**One allowance, one rule.** Extraction spend goes through the same `reserve_cost` with its local phase
+names as `purpose` (`extraction`, `extraction-review`, `extraction-partial`, ...), so it is counted by
+the one definition of a reader's spent day and month that both `reserve_cost` and the worker's claim
+read (`spend.py:55-75,114-139`; `hosted/jobs.py:319-329`). No second rule, no second sum.
+
+**A chapter is admitted whole, like a reply.** Background calls are checked one by one today
+(`spend.py:21-22`). A chapter costs about $0.09, close to the whole $0.10 day: checked call by call,
+a chapter started with a few cents spent would be refused half-way, its paid calls thrown away
+(settled as `extraction-partial`, `worker.py:613-617`), and tried again the next day the same way. So
+the handler uses a catalog like `ReplyCatalog` (`hosted/companion/store.py:177-190`): the chapter's
+first call is checked against the caps; once admitted, its later calls are not refused for a dollar
+cap. No change to `spend.py`: it already reads `_admitted` (`spend.py:274-275,300-320`). A reader can
+end a day past the cap by at most one chapter (one job runs per reader and book, section 6). The
+platform's day is still charged with every call; its check is skipped only for a chapter already
+admitted, as for a reply.
+
+**At a cap** the book stays readable and chattable, the screens show what is built, and the claim moves
+the job to the next UTC day (`jobs.py:387-402`, once the new kind is a companion kind).
+
+**What the choices mean, by the measured figures** (terra list price; unmeasured where said):
+
+| | Per chapter | Reader reading 5 chapters a day | One novel of this length |
+|---|---|---|---|
+| Per reader (A) | about $0.09 | about $0.43 a day, about $13 a month | about $7.30 |
+| Shared (B), library title | $0 to the reader | $0 | about $7.30 once, for everyone |
+| With prompt caching (a guess, unmeasured) | | | the owner's guess: $5 to $7.50 |
+
+By arithmetic, the floor if every review input token were billed at terra's cached price ($0.05 per
+million, `limits.py:38`) is about $4.05 a novel: output alone is $2.85. Caching cannot be measured on
+the subscription. Today's caps ($0.10 a day, $2.00 a month, `config.py:166-168`) cover about one
+chapter a day and about 23 chapters a month of per-reader memory with no chat at all. The platform day
+($5.00) covers about 57 chapters across all readers, about two thirds of this novel. **So the caps and
+(A) do not fit together**: either the caps rise for readers with uploads (about $0.50 a day and $10 a
+month for a reader of one such novel a month, plus chat), or uploads get memory only up to an allowance
+and library titles get (B). That is the owner's choice; the code is the same.
+
+**What must be measured before the numbers are settled**, all on the subscription, overhead removed:
+three more books of different lengths and kinds, all chapters, to see later chapters' cost as the roster
+grows and how often terra rejects a chapter; the same with the real embedder if section 8 is ever
+reconsidered. Unmeasurable without a paid account: caching and speed. **The first week's real
+figures** are in the ledger: cost per chapter and per thousand characters, by purpose, from
+`cost_ledger` rows with `purpose LIKE 'extraction%'` grouped by owner, book and `chapter_ordinal`, and
+time per chapter from `job_attempts`. The operator records them in the open items within the first
+week, and the caps are reset from them.
+
+### 5. Cutting the cost of the pipeline itself (proposals, each to be proved before it replaces anything)
+
+None of these makes memory less checked than local mode's; each changes how the same checks are paid.
+None is part of the first build.
+
+1. **Larger review batches.** Today at most 24 segments a batch (`validation.py:351`), so a chapter's
+   text goes out about seven times for review. Doubling the batch to 48 would send it about four times:
+   review input falls by roughly 40% (about $0.13 of the $0.69, arithmetic), output stays. Risk: long
+   audits are why batches exist ("exceeded the output ceiling or omitted fields", `:348-350`); the
+   coverage check (`_validate_field_evidence`, `:207-230`) still refuses an incomplete audit, so the
+   risk is more refused-and-repaid batches, not less checking. Proof: the structural coverage tests
+   with stand-in models, then the same books measured on the subscription, comparing calls, repairs and
+   rejections. Needs the output ceiling raised for review calls only.
+2. **Keep the review prompt a cacheable prefix.** It already almost is: the system text is the same for
+   every batch and the user JSON puts the chapter, the roster and the extraction before the batch's
+   fields (`validation.py:313-328,352-354`). Two things break the shared prefix: the format repair
+   appends to the system text (`:380`), and `source_id_rules` follows the fields. Moving the repair line
+   to the end of the user text and the rules before the fields keeps the prefix for every call. The app
+   already prices cached reads on the native API (`llm/client.py:308-313`, `limits.py:69-87`). Saving:
+   unmeasured; the floor is above. Risk: none to checking (same text, same order of meaning); proof: a
+   test that every batch's prompt shares the prefix byte for byte, and the review tests unchanged.
+3. **Keep a cleared chunk's clearance across a crash.** Cleared chunks are reused within one run
+   (`worker.py:436-438`) but lost if the run dies mid-chapter, and the whole chapter is paid again.
+   Saving: at most one chapter per crash. Risk: low (a clearance binds exact bytes, `validation.py:241-249`);
+   needs a table of derived content per owner, which erasure covers by its `owner_id`. Not worth it
+   until crashes are seen.
+
+Rejected: reviewing a sample of fields, skipping review of "simple" chapters, and reusing a review
+across readers outside design (B). Each lets an unchecked statement into memory.
+
+### 6. Jobs
+
+**Kind.** A new kind, `story_memory`, on the existing table and worker; not `ingest_book`. `ingest_book`
+is one whole-book job with a per-incarnation idempotency key (`tenant/repository.py:2044`, unique per
+owner, `0003:72`), counted by the upload quota and listed by `GET /api/jobs` (`repository.py:1829-1831`);
+it belongs to the reader-key path.
+
+**One waiting, one running, one chapter per run.** `story_memory` joins `COMPANION_KINDS`
+(`hosted/jobs.py:29`) and the pending-job unique index (`0021:37-39`), so at most one waits and one runs
+per owner and book (`jobs.py:362-370`), and the claim skips paused providers and capped readers
+(`:387-402`). A run does one chapter, then asks for the next job if the target is not reached. One
+chapter per run lets the claim's order (`priority`, then `run_after`, `:371`) take turns between
+readers on one worker. Priority 5: below chapter notes and recollections (10,
+`hosted/companion/jobs.py:51`), above the old `ingest_book` (0). The owner's `max_provider_concurrency`
+(2) counts it beside notes (`jobs.py:403-417`).
+
+**Leases.** The dispatcher's `_Lease` renews the two-minute lease before every paid call
+(`hosted/companion/jobs.py:150-206`); `commit_chapter_memory` checks the lease in its own transaction.
+A run that lost its lease reserves nothing more and cannot publish; the most it can waste is the calls
+of one chapter. A cancelled job (its book removed: `repository.py:2652-2665` already cancels every job
+of the book) stops the same way.
+
+**Provider pauses.** Only the checker's refusals pause today (open items, line 201). Extraction calls the
+writer only, so the handler also pauses `openai-compatible` (`provider_pauses` allows it, `0021:45`) on
+the writer's refusals of the platform's account. Which `ProviderUnavailable` kinds mean "refused
+account" was not verified; the part must find them in `llm/client.py`.
+
+**Failures.** A grounding rejection gets its own failure code, `grounding_rejected`, non-retryable, so
+two of them for the same book and chapter (the chapter is in `payload_metadata`, which forbids only
+credential-shaped keys, `0008:24-29`) make the next run publish the unremembered chapter (section 2).
+Other failures are as for notes (`hosted/companion/jobs.py:272-302`).
+
+**Restarts.** Nothing is held in memory: waiting work is rows, a running job's lease expires and it
+returns to waiting (ADR 0024). The working copy holds chapter text; it lives in memory if `MemoryDB`
+accepts an in-memory database (not verified), otherwise in a directory only the worker's user can read,
+emptied at worker start.
+
+**Where it runs.** The companion dispatcher (`CompanionJobs`) gains the kind, behind a new setting
+`HOSTED_STORY_MEMORY` (default off until this lands), so one handler and one image serve all
+background work; the deployment runs two worker processes so a chapter of two or three minutes does not
+hold up notes (the claim is safe across processes, ADR 0024).
+
+**The reader-key path is retired for extraction.** No `ingest_book` handler ever existed (fact 8). With
+story memory on, `store_epub` creates no `ingest_book` job in either mode; the hidden credential and
+provider-settings code stays as ADR 0041 decided, and old `ingest_book` rows remain listable and
+cancellable. ADR 0026's "ingestion waits for a validated extraction selection" no longer describes any
+running path.
+
+### 7. What already exists must cover the new rows without anyone remembering
+
+| What | What the builders must do |
+|---|---|
+| Account erasure after 30 days (`hosted/purge.py`) | Nothing in the code: it erases every row of every table with `owner_id`, found in the catalogue, children first by foreign key (`purge.py:43-84`), and this design adds no table (B adds rows under the library account, which is never erased). Add one test: a reader with story memory is erased entirely (the memory tables' foreign keys to receipts have no cascade, `0002:174-176`, so order matters and the test proves it). |
+| Removing a book (the other builder's 0024) | Their catalogue-driven erase covers these tables, which all carry `owner_id` and `book_id`. Their test must seed story memory rows; the job is already cancelled by the existing update. |
+| "Take a copy of my data" (being built) | Export story memory only as the reader's view at their current position (the payloads of section 9), never raw rows: rows include chapters past the position and the future-name list. For (B), the same view. |
+| Route inventory and the walk that refuses an account waiting to be erased | Each new route goes into `endpoints.json` with its two-readers test and the version is bumped (20 today, `endpoints.json:2`, `tests/hosted/test_tenant.py:118`). The walk tries every enabled route (`tests/hosted/test_account_deletion_postgres.py:358-387`), so the new routes are covered by using `_owner` like the others. A background resource `story-memory` is listed with its test. |
+| Grants | Worker role: `INSERT` on `entities`, `aliases`, `edges`, `events`, `event_participants`, `themes`, `entity_state`, and `UPDATE` on `entity_state`, in `WORKER_TABLE_PRIVILEGES` (`grants.py:57-71`), which the startup check, fixtures and role script read. Tenant role: nothing new (it reads memory already). Purge: nothing. (B): `EXECUTE` on one function in `TENANT_FUNCTION_PRIVILEGES`. |
+| Two-readers tests | A's job never reads or writes B's rows (hydration and publish bound to the claimed owner); B's routes answer A's book as missing; A's correction during B's job changes nothing of B's. |
+| Parity tests | New: the same fixture chapters, a stand-in extractor and reviewer, through local `IngestWorker` and through the hosted handler, compared on logical rows and on `score_recap`, `same_person_names`, `completion_frontier` and the view payloads at every bookmark (the method of `tests/parity/test_companion_memory_parity.py`). |
+
+### 8. Embeddings and search
+
+Hosted extraction runs with the **stub embedder**, as measured and as the parity corpus does, and
+publishes **no passages and no vectors**. Why: no hosted reader feature reads them (the chat reads the
+read text, ADR 0041 section 4; hosted search uses `book_search_documents`); storing chunk text and
+vectors adds copies of the book to Postgres, to export and to erasure; and the real embedder's only
+effect on extraction is the semantic merge of names (`pipeline.py:90-93`, `worker.py:695-696`), which
+was not part of the measured run. The extraction client is built with `embed_provider="stub"`
+explicitly, because a plain OpenAI key on the default endpoint turns real embeddings on by itself
+(`llm/client.py:163-172`). Cost if reconsidered: the app's own upper bound (one token per byte,
+`limits.py:271-279`) is about 0.69 million tokens for this novel, about $0.014 at `text-embedding-3-small`'s
+$0.02 per million (`limits.py:33`). Because hosted stores no vectors, turning the real embedder on later
+changes only how later chapters merge names; but it changes the pin (fact 5), so it would need a
+one-time rewrite of each book's pin, which is why it is decided now. The pin lives on the receipts
+(`ingested_chapters.extractor_model`, written by the publish) and the platform's fixed stub identity;
+no migration.
+
+### 9. The screens
+
+Hosted mode serves, at the local paths the app already calls (`frontend/src/api.ts:939-950,967-970`):
+`GET /api/books/{id}/graph`, `GET /api/books/{id}/character/{entity_id}`, `GET /api/books/{id}/notes`
+and `GET /api/books/{id}/ingest`. Their bodies are the local ones: `_coalesce_honorific_characters`,
+`_character_card`, `_visible_cast` and the route bodies (`api/views.py:201-254,290-308,367-420,1365-1412`) move
+verbatim into `app/memory_views.py`, which both modes call over a view. The clamp is the local one
+(`api/views.py:181-195`) with the hosted manifest and `finished_through`. `HostedBookStore`'s snapshot
+gains edges and entity state with the parity adapter's predicates (`tests/parity/_adapters.py:871-1076`:
+`relationships`, `bio`, `current_state`), which the cast and person cards need and the checks did not.
+`HostedBookSource` gains the store cross-check it lacks (open items, lines 161 and 170).
+
+Turned on by this: the cast (`PeoplePanel`), the person card, the story so far (`StoryPanel`, from
+`/notes`), "Who was that?" (it reads `/graph` first, `AskTheBook.tsx:660-663`), and the name groups the
+chat's checks use. Stays off: `/catch-me-up`, the generated recap, which calls models on the request,
+reads raw chapter text (`api/views.py:1647`) and caches in process (`:1509`); it keeps answering 404,
+which the app already handles where it asks (not verified for `MothMoments.tsx:134`). The frontend
+changes: hosted entity ids are UUIDs, so `entity_id` becomes `number | string` (`api.ts:133,240-247,271`,
+the `character` call at `:939`) and `PersonAvatar` picks its colour from a hash of the id
+(`StoryMemory.tsx:10-12`); the "waiting" line of section 2. The "absent" lines stay for a server with
+story memory off.
+
+### 10. The parts
+
+Paths are under `backend/` unless they start with `frontend/` or `docs/`. Migrations are numbered from
+**0025**, because another builder may take 0024 for erasing a removed book's rows; if they do not, the
+first of these to merge renames to the next free number (ADR 0041 section 3's rule). Every part: tests
+that fail without it, the two-readers test where it touches owner data, stand-in models only, `ruff
+check app tests scripts`, and the Postgres suite locally (stacked pull requests get no CI).
+
+**Part 1 — The extraction, moved behaviour-free.** Changes `app/ingest/worker.py`; creates
+`app/ingest/chapter_extraction.py`. Proves: the whole local suite unchanged, local extraction tests
+untouched. Waits for nothing. No migration. Small.
+
+**Part 2 — Working copy and publish.** Creates `app/hosted/companion/story_memory.py` (hydrate, run one
+chapter, read back, publish, settle) and its tests; changes `app/hosted/jobs.py`
+(`commit_chapter_memory`), `app/hosted/tenant/grants.py` (worker), `app/hosted/companion/store.py`
+(`cost_reservation_ids`, `finalize_ingest`, the chapter-admitting catalog). Proves: parity of section 7
+on the fixture corpus; a crash between publish and settle settles once; a publish after a correction is
+refused and redone; a second publish of a chapter changes nothing; no raw text or passage reaches
+Postgres; two owners. Waits for 1. No migration. Large.
+
+**Part 3 — Jobs, triggers, money, rejections.** Creates `app/hosted/schema/0025_story_memory_jobs.sql`
+(kind `story_memory` in `jobs_kind_ck`, the pending index, the companion shape check, failure code
+`grounding_rejected` in both checks of `0008`). Changes `app/hosted/jobs.py` (`COMPANION_KINDS`, writer
+pause), `app/hosted/companion/jobs.py` (the kind, the queue), `app/hosted/companion/routes.py`
+(triggers), `app/hosted/tenant/api.py` (no `ingest_book` job), `app/config.py`
+(`HOSTED_STORY_MEMORY`), `endpoints.json`, `tests/hosted/test_tenant.py`. Proves: one waiting and one
+running per owner and book; the target never passes the read map even when the counter does; a capped
+reader's chapter waits whole to the next day and a chapter once admitted finishes; two rejections
+publish an unremembered chapter and extraction continues, never looser than local on the spoiler
+probes; lost lease, cancel and restart; two owners. Waits for 2. Migration 0025. Large.
+
+**Part 4 — The screens.** Creates `app/memory_views.py`; changes `app/api/views.py` (the move),
+`app/hosted/companion/memory.py` (edges, entity state), `app/hosted/companion/source.py` (store
+cross-check), `app/hosted/companion/routes.py` (four routes), `endpoints.json`, `test_tenant.py`,
+`frontend/src/api.ts`, `frontend/src/reader/StoryMemory.tsx`. Proves: the payloads equal locally and
+hosted on the corpus at every bookmark; a future person's card answers 404 in both; two readers; the
+pending-deletion walk passes; frontend tests with UUID ids. Waits for nothing to build (seeded rows);
+merges after 2. No migration. Medium.
+
+**Part 5 — Shared library memory (only if the owner chooses it).** Creates
+`app/hosted/schema/0026_shared_library_memory.sql` (the library account, the read function), an operator
+command `app/hosted/library_memory.py`; changes `memory.py`, `grants.py`, the corrections route, and ADR
+0017. Proves: a reader who owns the edition gets the view at their position; one who does not, or whose
+file differs, gets their own; progress never reported past the reader's position; erasing a reader
+leaves the library rows; corrections refused. Waits for 3, 4 and the decision. Medium.
+
+**Part 6 — Cost proposals of section 5**, each on its own, after the measurements of section 4. Changes
+`app/ingest/extraction/validation.py` (shared code: the local suite must stay green). Small each.
+
+**Side by side, and where they collide.**
+
+| Shared file | Parts, in order |
+|---|---|
+| `app/hosted/jobs.py` | 2, 3 |
+| `app/hosted/tenant/grants.py` | 2, 5 |
+| `app/hosted/companion/routes.py`, `endpoints.json`, `test_tenant.py` | 3, 4 |
+| `app/hosted/companion/memory.py` | 4, 5 |
+| `app/hosted/companion/store.py` | 2 |
+| `app/ingest/worker.py` | 1 |
+
+Part 1 first. Part 4 can be built beside 1 to 3 and merges after 2, rebasing on 3 for `routes.py`.
+Part 5 waits for the owner.
+
+## Consequences
+
+- Hosted readers get the cast, the story so far, "who was that?" and the name groups, from the same code
+  as local mode; the spoiler rules exist once. One behaviour-free move in shared code (part 1), and one
+  in the views (part 4).
+- ADR 0041 section 4's sketch (a persistent working file) is replaced by a working copy rebuilt per
+  chapter; ADR 0041 part 10 is replaced by parts 1 to 5 here.
+- ADR 0024: hosted extraction publishes through a new fenced method; `commit_chapter` stays for the
+  retired path. ADR 0026: no running path waits for a reader's extraction setting.
+- Hosted mode differs from local mode in one place: a chapter rejected twice is kept as an
+  unremembered chapter and extraction goes on, where local mode stops (and pays again).
+- Per-reader memory costs about $7.30 for a novel of this length at terra's list price; the caps must be
+  reset for it, or library titles shared (owner's decision).
+- Extraction runs on terra and the stub embedder, pinned per book from the first chapter; changing
+  either later is a paid re-extraction or a pin rewrite.
+
+## What this record is least sure of
+
+1. **The cost of a whole book.** Eight short chapters of one novel; later chapters carry a larger
+   roster; caching unmeasured. The $7.30 may be low.
+2. **How often terra rejects a chapter.** Zero in eight chapters; luna one in two. The unremembered
+   chapter keeps a book going, but a book that loses many chapters would show a story with holes.
+3. **Rebuilding the working copy for each chapter.** Correct by construction, but the time and memory
+   to hydrate a long book's rows for every chapter were not measured; nor whether `MemoryDB` can live
+   in memory.
+4. **The shared library memory.** Whether Project Gutenberg's files stay byte-identical long enough
+   to make an edition worth building, and whether the owner accepts the amendment to ADR 0017.
+5. **Paid-API speed.** Two to three minutes a chapter on the subscription; a paid call longer than the
+   two-minute lease would let another worker repeat the chapter (paid, published once).
