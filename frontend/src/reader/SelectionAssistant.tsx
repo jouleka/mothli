@@ -1,11 +1,15 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { api, type SelectionAction, type SelectionAssistAnswer } from "../api";
+import { api, ApiError, type SelectionAction, type SelectionAssistAnswer } from "../api";
 import { Button } from "../ui/Button";
 import { useDialogMotion } from "../ui/useDialogMotion";
 import { keepTabFocusInside } from "./focusTrap";
 import { ProviderCost } from "./ProviderCost";
 import type { ReaderSelection } from "./ReaderMarksPanel";
 import { assistRequest } from "./assistRequests";
+
+/** Said when the server has no help for a picked passage (a 404: hosted mode, for now). */
+export const PASSAGE_HELP_ABSENT =
+  "I can’t help with a picked passage here yet. Ask me about it in the chat, in your own words.";
 
 const LABELS: Record<SelectionAction, string> = {
   explain: "Explain this passage",
@@ -30,6 +34,7 @@ export function SelectionAssistant({
   const [answer, setAnswer] = useState<SelectionAssistAnswer | null>(null);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
+  const [absent, setAbsent] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const triggerRef = useRef<HTMLElement | null>(
@@ -73,7 +78,11 @@ export function SelectionAssistant({
         if (!cancelled) setAnswer(value);
       })
       .catch((reason: unknown) => {
-        if (!cancelled)
+        if (cancelled) return;
+        if (reason instanceof ApiError && reason.status === 404) {
+          setAbsent(true);
+          setError(PASSAGE_HELP_ABSENT);
+        } else
           setError(
             reason instanceof Error
               ? reason.message
@@ -129,7 +138,7 @@ export function SelectionAssistant({
                 ? "The selected passage does not provide enough evidence yet."
                 : "Your passage help is ready.")}
         </div>
-        {error && (
+        {error && !absent && (
           <Button icon="refresh" onClick={() => setRetry((value) => value + 1)}>
             Try passage help again
           </Button>

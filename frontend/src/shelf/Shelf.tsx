@@ -438,7 +438,8 @@ export function Shelf({
         </a>
         <h1 className="sr-only">Your library</h1>
         <div className="ml-top-tools">
-          {onHistory && (
+          {/* Hosted mode (any session) has no reading history from other apps yet. */}
+          {onHistory && session === undefined && (
             <button className="ml-guide-toggle" onClick={onHistory}>
               Reading history
             </button>

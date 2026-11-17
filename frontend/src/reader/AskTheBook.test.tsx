@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   catchMeUp: vi.fn(),
   graph: vi.fn(),
   visiblePeople: vi.fn(),
+  chapterCloseout: vi.fn(),
+  notes: vi.fn(),
   owner: vi.fn(),
 }));
 vi.mock("../api", async (importOriginal) => ({
@@ -832,5 +834,55 @@ describe("the server's conversation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
     await screen.findByText("I couldn’t clear our conversation just now, so it is still here.");
     expect(screen.getByText("Fyodor’s eldest son.")).toBeTruthy();
+  });
+});
+
+// Hosted mode has no story memory yet (no extraction) and no reader-key routes: the server answers
+// 404 for the cast, the chapter notes, the closeout, the names and passage help. The reader is
+// told something true, and "Tell me" still gets an answer from the chat.
+describe("a server without story memory (hosted mode)", () => {
+  const missing = () => new ApiError("Not Found", 404);
+
+  test("“Tell me” after a chapter asks the chat when there is no closeout", async () => {
+    mocks.chapterCloseout.mockRejectedValue(missing());
+    mocks.askBookStream.mockImplementation(async (_id, _q, _b, _p, onSentence) => {
+      onSentence("Tobias walked the middle rows.");
+      return { ...answer, claims: [{ text: "Tobias walked the middle rows.", citation_ids: [] }], citations: [], style: "prose" };
+    });
+    render(<AskTheBook {...props} prepareReadContext={vi.fn(async () => point)}
+      seed={{ id: "closeout-2", kind: "closeout", chapter: 2, label: "After The Keeper" }} />);
+    await screen.findByText("What did you notice in The Keeper?");
+    await waitFor(() => expect(mocks.askBookStream).toHaveBeenCalled());
+    expect(mocks.askBookStream.mock.calls[0][1]).toBe("What did you notice in The Keeper?");
+    expect(screen.queryByText("I couldn’t gather my thoughts on that chapter. Try again?")).toBeNull();
+  });
+
+  test("the cast and the story say there is no memory instead of “try again”", async () => {
+    mocks.graph.mockRejectedValue(missing());
+    mocks.notes.mockRejectedValue(missing());
+    render(<AskTheBook {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Cast" }));
+    await screen.findByText(/I don’t keep a list of who’s who for this book yet/);
+    fireEvent.click(screen.getByRole("button", { name: "Story so far" }));
+    await screen.findByText(/I don’t keep chapter-by-chapter notes for this book yet/);
+    expect(screen.queryByText(/Try again in a moment/)).toBeNull();
+  });
+
+  test("“Who was that?” and a question about a picked passage say what is missing", async () => {
+    mocks.graph.mockRejectedValue(missing());
+    mocks.selectionAction.mockRejectedValue(missing());
+    render(<AskTheBook {...props} selection={{ text: "Wren counted the apples.", anchor: { atom: 2, cfi: "cfi" } }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Who was that?" }));
+    await screen.findByText(/I don’t keep a list of names for this book yet/);
+    submit("What does this mean?");
+    await screen.findByText(/I can’t help with a picked passage here yet/);
+    expect(screen.queryByText("I couldn’t get a reply. Try again?")).toBeNull();
+  });
+
+  test("a closeout that is not ready yet still says so (local mode, unchanged)", async () => {
+    mocks.chapterCloseout.mockRejectedValue(new ApiError("not yet", 500));
+    render(<AskTheBook {...props} seed={{ id: "closeout-3", kind: "closeout", chapter: 2, label: "After The Keeper" }} />);
+    await screen.findByText("I couldn’t gather my thoughts on that chapter. Try again?");
+    expect(mocks.askBookStream).not.toHaveBeenCalled();
   });
 });
