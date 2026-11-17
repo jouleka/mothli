@@ -15,6 +15,9 @@ export type OfflineSession = {
   user: OfflineUser;
   expires_at: string;
   offline?: boolean;
+  /** Hosted: set while the reader's account waits to be erased (they asked to delete it). The
+   * app then shows only the choice to keep it or sign out. */
+  erase_after?: string;
 };
 
 type PositionMutation = {
@@ -49,6 +52,14 @@ export const SIGNED_OUT_EVENT = "mothli:signed-out";
 
 export function announceSignedOut(): void {
   globalThis.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+}
+
+/** Fired when the server answers that this account waits to be erased (code
+ * `account_pending_deletion`), with the moment as `detail`. Only hosted mode listens. */
+export const PENDING_DELETION_EVENT = "mothli:account-pending-deletion";
+
+export function announcePendingDeletion(eraseAfter: string): void {
+  globalThis.dispatchEvent(new CustomEvent(PENDING_DELETION_EVENT, { detail: eraseAfter }));
 }
 
 let flushPromise: Promise<void> | null = null;
@@ -263,6 +274,12 @@ export async function initializeOfflineSupport(): Promise<
       if (!validOwner(session.user.id) || session.user.id === LOCAL_OWNER) {
         await purgeOfflineTenant();
         return null;
+      }
+      if (session.erase_after) {
+        // Waiting to be erased: nothing of the account stays on this device, and it is not
+        // remembered for opening offline. Keeping the account brings it all back from the server.
+        await purgeOfflineTenant();
+        return session;
       }
       await setOwner(session.user.id);
       storage()?.setItem(

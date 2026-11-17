@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { api } from "./api";
-import { flushOfflineMutations, pendingPosition, queuePosition, SIGNED_OUT_EVENT } from "./pwa/offline";
+import {
+  flushOfflineMutations,
+  PENDING_DELETION_EVENT,
+  pendingPosition,
+  queuePosition,
+  SIGNED_OUT_EVENT,
+} from "./pwa/offline";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -383,6 +389,40 @@ describe("Hosted writes", () => {
     } finally {
       window.removeEventListener(SIGNED_OUT_EVENT, heard);
     }
+  });
+
+  // Catches: a reader whose account waits to be erased left on failing screens instead of the
+  // choice to keep it, or another 403 taken for that.
+  test("the waiting-to-be-erased refusal tells the app, with the moment; other 403s do not", async () => {
+    const heard = vi.fn();
+    const listener = (event: Event) => heard((event as CustomEvent).detail);
+    window.addEventListener(PENDING_DELETION_EVENT, listener);
+    try {
+      const erase = "2026-12-18T00:00:00+00:00";
+      vi.spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(new Response(JSON.stringify(
+          { detail: { code: "account_pending_deletion", erase_after: erase } }), { status: 403 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "CSRF validation failed" }), { status: 403 }));
+      await expect(api.books()).rejects.toMatchObject({ status: 403, code: "account_pending_deletion" });
+      expect(heard).toHaveBeenCalledWith(erase);
+      await expect(api.books()).rejects.toMatchObject({ status: 403 });
+      expect(heard).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(PENDING_DELETION_EVENT, listener);
+    }
+  });
+
+  // Catches: books saved for offline reading left on the device after the account is deleted.
+  test("deleting the account clears this device's offline books and answers the day", async () => {
+    const owner = "05dbebd1-e9e8-4be8-8172-eb65ca8d2a67";
+    localStorage.setItem("litlet.offline.owner", owner);
+    localStorage.setItem(`litlet.offline.outbox:${owner}`, "[]");
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ erase_after: "2026-12-18T00:00:00+00:00" }), { status: 200 }));
+    await expect(api.deleteAccount()).resolves.toEqual({ erase_after: "2026-12-18T00:00:00+00:00" });
+    expect(fetch).toHaveBeenCalledWith("/api/account/delete", expect.objectContaining({ method: "POST" }));
+    expect(localStorage.getItem("litlet.offline.owner")).toBeNull();
+    expect(localStorage.getItem(`litlet.offline.outbox:${owner}`)).toBeNull();
   });
 
   // Catches: the reader's last page being lost when the sign-in ends mid-read. The place is kept
