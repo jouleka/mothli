@@ -1,5 +1,5 @@
 {
-  "version": 21,
+  "version": 22,
   "required_surface_classes": [
     "list",
     "get",
@@ -416,6 +416,38 @@
       "access": "streamed-answer",
       "repository_method": "HostedCompanionCatalog.add_turn",
       "cross_tenant_test": "test_second_reader_cannot_stream_from_first_readers_book"
+    },
+    {
+      "method": "GET",
+      "path": "/api/books/{book_id}/graph",
+      "surface": "memory",
+      "access": "read",
+      "repository_method": "HostedBookStore.book",
+      "cross_tenant_test": "test_second_reader_gets_first_readers_story_memory_as_missing_on_every_route"
+    },
+    {
+      "method": "GET",
+      "path": "/api/books/{book_id}/character/{entity_id}",
+      "surface": "memory",
+      "access": "read",
+      "repository_method": "HostedBookStore.book",
+      "cross_tenant_test": "test_second_reader_gets_first_readers_story_memory_as_missing_on_every_route"
+    },
+    {
+      "method": "GET",
+      "path": "/api/books/{book_id}/notes",
+      "surface": "memory",
+      "access": "read",
+      "repository_method": "HostedBookStore.book",
+      "cross_tenant_test": "test_second_reader_gets_first_readers_story_memory_as_missing_on_every_route"
+    },
+    {
+      "method": "GET",
+      "path": "/api/books/{book_id}/ingest",
+      "surface": "memory",
+      "access": "read",
+      "repository_method": "HostedBookStore.memory_job",
+      "cross_tenant_test": "test_second_reader_gets_first_readers_story_memory_as_missing_on_every_route"
     },
     {
       "method": "POST",

@@ -1,7 +1,8 @@
-"""``HostedBookStore``: a hosted reader's per-book story memory, read-only, for the checks.
+"""``HostedBookStore``: a hosted reader's per-book story memory, read-only, for the checks and
+the story memory screens.
 
-ADR 0041 section 4 (part 4). The companion modules use ``store.book(book_id)`` for one thing:
-``completion_frontier``, the name groups (``known_names.same_person_names``) and the fixed check
+ADR 0041 section 4 (part 4) and ADR 0042 part 4. The companion modules use ``store.book(book_id)``
+for ``completion_frontier``, the name groups (``known_names.same_person_names``) and the fixed check
 ``score_recap`` that removes a sentence naming someone the reader has not met. Locally that is a
 ``MemoryDB``; here it is an immutable snapshot of this owner's Postgres memory rows for the book's
 live incarnation, offering exactly the calls those modules make, with the local semantics:
@@ -15,6 +16,10 @@ live incarnation, offering exactly the calls those modules make, with the local 
 - ``_audit_all("entities" | "aliases" | "themes")``: every row, future and retracted ones
   included, as locally: ``score_recap`` needs the future names to know what to forbid.
 - ``content_language()``, as locally.
+- for the screens (``app.memory_views``, through ``ContentSnapshot``, which leaves out the
+  chapters that are not part of the book proper as the local ``ContentMemory`` does):
+  ``view(bm).relationships``, ``current_state`` and ``bio``, with the parity suite's predicates
+  for edges and entity state; an end (``invalid_at``) is never handed out.
 
 Loading is one statement in one short transaction, so every table is read at one moment (a
 receipt can never be seen without the rows published before it). One store is built per request;
@@ -25,6 +30,7 @@ cannot be loaded raises ``StoryMemoryUnavailable``: an empty snapshot would let 
 
 from __future__ import annotations
 
+import json
 import threading
 from contextlib import contextmanager
 from types import MappingProxyType
@@ -32,6 +38,7 @@ from types import MappingProxyType
 import psycopg
 
 from app.hosted.companion import CompanionDatabaseBusy, OwnerBoundAdapter, as_uuid
+from app.content_scope import excluded_ordinals
 from app.hosted.tenant.models import OwnerId
 from app.language import normalize_content_language
 
@@ -103,7 +110,24 @@ SELECT book.content_language,
                = (summary.owner_id, summary.book_id, summary.book_incarnation,
                   summary.source_chapter_id)
             WHERE summary.owner_id=%(owner)s AND summary.book_id=book.id
-              AND summary.book_incarnation=book.incarnation), '[]'::json) AS summaries
+              AND summary.book_incarnation=book.incarnation), '[]'::json) AS summaries,
+  COALESCE((SELECT json_agg(json_build_object(
+              'id', edge.id, 'src', edge.src_entity_id, 'dst', edge.dst_entity_id,
+              'type', edge.relationship_type, 'label', edge.label,
+              'revealed_at', edge.revealed_at, 'invalid_at', edge.invalid_at,
+              'live', edge.retracted_at IS NULL)
+            ORDER BY edge.recorded_at, edge.id)
+            FROM public.edges AS edge
+            WHERE edge.owner_id=%(owner)s AND edge.book_id=book.id
+              AND edge.book_incarnation=book.incarnation), '[]'::json) AS edges,
+  COALESCE((SELECT json_agg(json_build_object(
+              'id', state.id, 'entity_id', state.entity_id, 'status', state.status,
+              'revealed_at', state.revealed_at, 'invalid_at', state.invalid_at,
+              'live', state.retracted_at IS NULL)
+            ORDER BY state.recorded_at, state.id)
+            FROM public.entity_state AS state
+            WHERE state.owner_id=%(owner)s AND state.book_id=book.id
+              AND state.book_incarnation=book.incarnation), '[]'::json) AS states
 FROM public.books AS book
 WHERE book.owner_id=%(owner)s AND book.id=%(book)s AND book.deleted_at IS NULL
 """
@@ -140,6 +164,14 @@ def _flag(value):
     return value
 
 
+def _status(value):
+    """How a person stands, as the local ``status_json`` decodes: a JSON object (the schema's own
+    check). Copied, so a caller's change never reaches the snapshot."""
+    if not isinstance(value, dict):
+        raise ValueError("a story memory state is malformed")
+    return json.loads(json.dumps(value))
+
+
 def _rows(value):
     if not isinstance(value, list) or not all(isinstance(row, dict) for row in value):
         raise ValueError("a story memory table is malformed")
@@ -154,7 +186,7 @@ class StoryMemorySnapshot:
     """One book's story memory as of one moment, immutable, safe to share between threads."""
 
     __slots__ = ("_language", "_chapters", "_completed", "_entities", "_aliases", "_themes",
-                 "_events", "_summaries")
+                 "_events", "_summaries", "_edges", "_states")
 
     def __init__(self, payload) -> None:
         values = {}
@@ -209,6 +241,18 @@ class StoryMemorySnapshot:
              "chapter_ordinal": _ordinal(row["chapter_ordinal"]),
              "chapter_live": _flag(row["chapter_live"])}
             for row in _rows(payload["summaries"]))
+        values["_edges"] = _frozen(
+            {"edge_id": _text(row["id"]), "src_entity": _text(row["src"]),
+             "dst_entity": _text(row["dst"]), "rel_type": _text(row["type"]),
+             "label": _text(row["label"], optional=True),
+             "revealed_at": _ordinal(row["revealed_at"]),
+             "invalid_at": _optional_ordinal(row["invalid_at"]), "live": _flag(row["live"])}
+            for row in _rows(payload["edges"]))
+        values["_states"] = _frozen(
+            {"state_id": _text(row["id"]), "entity_id": _text(row["entity_id"]),
+             "status": _status(row["status"]), "revealed_at": _ordinal(row["revealed_at"]),
+             "invalid_at": _optional_ordinal(row["invalid_at"]), "live": _flag(row["live"])}
+            for row in _rows(payload["states"]))
         for name, value in values.items():
             object.__setattr__(self, name, value)
 
@@ -239,6 +283,10 @@ class StoryMemorySnapshot:
     def view(self, bookmark):
         return SnapshotView(self, bookmark)
 
+    def has_rows(self):
+        """Whether anything of this book's story memory was ever written (a chapter of it)."""
+        return bool(self._chapters)
+
     def _audit_all(self, table):
         """Every row of one of the three tables ``score_recap`` reads, future ones included.
 
@@ -261,29 +309,38 @@ def _ordered(rows, *keys):
 
 
 class SnapshotView:
-    """The snapshot as of a chapter ordinal: the reads of a local ``BookmarkView`` the modules use."""
+    """The snapshot as of a chapter ordinal: the reads of a local ``BookmarkView`` the modules use.
 
-    __slots__ = ("_memory", "bookmark")
+    ``excluded_ordinals`` is the local ``BookmarkView``'s presentation scope (``ContentMemory``):
+    rows stamped at a chapter that is not part of the book proper (a contents page, Project
+    Gutenberg's own pages) are left out of every read, and so are the entities and chapters the
+    reads close over. The checks pass none, as locally.
+    """
 
-    def __init__(self, memory: StoryMemorySnapshot, bookmark) -> None:
+    __slots__ = ("_memory", "bookmark", "_excluded")
+
+    def __init__(self, memory: StoryMemorySnapshot, bookmark, *, excluded_ordinals=()) -> None:
         # As locally: an int ordinal only, or a malformed counter would show the whole book.
         if not isinstance(bookmark, int) or isinstance(bookmark, bool):
             raise ValueError(f"bookmark must be an int chapter ordinal, got {bookmark!r}")
         object.__setattr__(self, "_memory", memory)
         object.__setattr__(self, "bookmark", bookmark)
+        object.__setattr__(self, "_excluded", frozenset(excluded_ordinals))
 
     def __setattr__(self, name, value):
         raise AttributeError("a story memory view cannot be changed")
 
+    def _shown(self, row):
+        """The funnel every read passes: revealed by the bookmark and not an excluded chapter."""
+        return row["revealed_at"] <= self.bookmark and row["revealed_at"] not in self._excluded
+
     def _visible_entities(self):
         bookmark = self.bookmark
         return [row for row in self._memory._entities
-                if row["revealed_at"] <= bookmark and row["retracted_at"] is None
-                and _valid(row, bookmark)]
+                if self._shown(row) and row["retracted_at"] is None and _valid(row, bookmark)]
 
     def chapters(self):
-        rows = [row for row in self._memory._chapters
-                if row["revealed_at"] <= self.bookmark and row["live"]]
+        rows = [row for row in self._memory._chapters if self._shown(row) and row["live"]]
         return [{key: row[key] for key in ("chapter_key", "revealed_at", "title", "part_label")}
                 for row in _ordered(rows, "revealed_at", "chapter_key")]
 
@@ -299,27 +356,102 @@ class SnapshotView:
         if entity_id not in {row["entity_id"] for row in self._visible_entities()}:
             return []
         rows = [row for row in self._memory._aliases
-                if row["entity_id"] == entity_id and row["revealed_at"] <= self.bookmark
+                if row["entity_id"] == entity_id and self._shown(row)
                 and row["retracted_at"] is None]
         return [{"surface_form": row["surface_form"], "revealed_at": row["revealed_at"]}
                 for row in _ordered(rows, "revealed_at")]
 
+    def relationships(self):
+        """Edges valid at the bookmark between two visible entities. As locally, an edge's
+        ``invalid_at`` is never handed out: when a tie ends is news about that later chapter."""
+        bookmark = self.bookmark
+        visible = {row["entity_id"] for row in self._visible_entities()}
+        rows = [row for row in self._memory._edges
+                if self._shown(row) and row["live"] and _valid(row, bookmark)
+                and row["src_entity"] in visible and row["dst_entity"] in visible]
+        return [{**{key: row[key] for key in ("edge_id", "src_entity", "dst_entity", "rel_type",
+                                              "label", "revealed_at")}, "invalid_at": None}
+                for row in _ordered(rows, "revealed_at")]
+
+    def current_state(self, entity_id):
+        """How a visible entity stands at the bookmark: its latest state still valid there (the
+        last recorded among those revealed at the same chapter, as the local highest id), with no
+        word of when it ends."""
+        if entity_id not in {row["entity_id"] for row in self._visible_entities()}:
+            return None
+        bookmark = self.bookmark
+        latest = None
+        for row in self._memory._states:
+            if (row["entity_id"] == entity_id and self._shown(row) and row["live"]
+                    and _valid(row, bookmark)
+                    and (latest is None or row["revealed_at"] >= latest["revealed_at"])):
+                latest = row
+        if latest is None:
+            return None
+        return {"state_id": latest["state_id"], "revealed_at": latest["revealed_at"],
+                "status": json.loads(json.dumps(latest["status"]))}
+
+    def bio(self, entity_id):
+        """A visible entity's identity at the bookmark, or None: the fields of the local ``bio``
+        that a person's card reads (not ``appears_in_events``: the snapshot loads no event
+        participants, and nothing hosted asks for them)."""
+        entity = next((row for row in self._visible_entities() if row["entity_id"] == entity_id),
+                      None)
+        if entity is None:
+            return None
+        state = self.current_state(entity_id)
+        return {"name": entity["canonical_name"], "type": entity["type"],
+                "first_seen": entity["revealed_at"],
+                "aliases": [row["surface_form"] for row in self.aliases_of(entity_id)],
+                "state": state["status"] if state else None}
+
     def chapter_summaries(self):
         bookmark = self.bookmark
         rows = [row for row in self._memory._summaries
-                if row["kind"] == "chapter" and row["revealed_at"] <= bookmark and row["live"]
+                if row["kind"] == "chapter" and self._shown(row) and row["live"]
                 and _valid(row, bookmark) and row["chapter_live"]
-                and row["chapter_ordinal"] <= bookmark]
+                and row["chapter_ordinal"] <= bookmark
+                and row["chapter_ordinal"] not in self._excluded]
         return [{key: row[key] for key in ("chapter_key", "revealed_at", "summary")}
                 for row in _ordered(rows, "revealed_at")]
 
     def timeline(self):
         bookmark = self.bookmark
         rows = [row for row in self._memory._events
-                if row["revealed_at"] <= bookmark and row["live"] and _valid(row, bookmark)]
+                if self._shown(row) and row["live"] and _valid(row, bookmark)]
         return [{key: row[key] for key in ("event_id", "revealed_at", "order_idx", "summary",
                                             "kind")}
                 for row in _ordered(rows, "revealed_at", "order_idx")]
+
+
+class ContentSnapshot:
+    """The hosted ``ContentMemory`` (``app/content_scope.py``): what the story memory screens
+    read, with the chapters that are not part of the book proper left out, as locally."""
+
+    __slots__ = ("_memory", "_excluded")
+
+    def __init__(self, memory: StoryMemorySnapshot, manifest) -> None:
+        self._memory = memory
+        self._excluded = excluded_ordinals(manifest)
+
+    def view(self, bookmark):
+        return SnapshotView(self._memory, bookmark, excluded_ordinals=self._excluded)
+
+
+# A ``story_memory`` job of this book still to run (ADR 0042 section 6). A capped reader's job is
+# moved to the next UTC midnight by the claim (``app/hosted/jobs.py``): that one is waiting for
+# tomorrow; any other is under way or about to be.
+_MEMORY_JOBS = """
+SELECT job.state,
+       job.run_after >= (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day')
+                        AT TIME ZONE 'UTC' AS tomorrow
+FROM public.jobs AS job
+JOIN public.books AS book
+  ON (book.owner_id, book.id, book.incarnation)
+   = (job.owner_id, job.book_id, job.book_incarnation)
+WHERE job.owner_id=%s AND job.book_id=%s AND job.kind='story_memory'
+  AND job.state IN ('pending', 'leased', 'running') AND book.deleted_at IS NULL
+"""
 
 
 class HostedBookStore(OwnerBoundAdapter):
@@ -341,6 +473,21 @@ class HostedBookStore(OwnerBoundAdapter):
         ``StoryMemoryUnavailable`` when it cannot be read; never an empty stand-in.
         """
         yield self._snapshot(book_id)
+
+    def memory_job(self, book_id):
+        """How building this book's story memory stands: ``"running"`` while a job is under way
+        or about to be, ``"waiting"`` when the only one waits for the reader's next day, None
+        when there is none. A book that is not this reader's has none."""
+        try:
+            book = as_uuid(book_id)
+        except LookupError:
+            return None
+        with self._transaction() as conn:
+            jobs = conn.execute(_MEMORY_JOBS, (self._owner.value, book)).fetchall()
+        if not jobs:
+            return None
+        return "waiting" if all(job["state"] == "pending" and job["tomorrow"] for job in jobs) \
+            else "running"
 
     def _snapshot(self, book_id) -> StoryMemorySnapshot:
         book = as_uuid(book_id)
