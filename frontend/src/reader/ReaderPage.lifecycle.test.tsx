@@ -719,8 +719,11 @@ describe("a book that is not on the shelf", () => {
     mocks.position.mockRejectedValue(new ApiError("unknown book", 404));
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "unknown book" }), { status: 404 })));
     const onBack = vi.fn();
+    localStorage.setItem("rc:reader-marks:b", "[]");
     render(<ReaderPage bookId="b" onBack={onBack} />);
     const alert = await screen.findByRole("alert");
+    // Removed on another device: what this one kept of it goes too.
+    await waitFor(() => expect(localStorage.getItem("rc:reader-marks:b")).toBeNull());
     expect(alert.textContent).toContain("I can’t find this book on your shelf.");
     expect(alert.textContent).toContain("It may have been removed, here or on another device.");
     expect(alert.textContent).not.toMatch(/EPUB|404|could not be opened/);

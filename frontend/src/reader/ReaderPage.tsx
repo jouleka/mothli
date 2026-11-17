@@ -89,6 +89,7 @@ import {
   BOOK_GONE_EVENT,
   BOOK_REMOVED_KEY,
   flushOfflineMutations,
+  forgetBookOnDevice,
   queuePosition,
 } from "../pwa/offline";
 
@@ -177,8 +178,11 @@ export function ReaderPage({
   const [gone, setGone] = useState(false);
   const goneBackRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (gone) goneBackRef.current?.focus();
-  }, [gone]);
+    if (!gone) return;
+    goneBackRef.current?.focus();
+    // Removed on another device: what this one kept of the book (its offline copy) goes too.
+    void forgetBookOnDevice(bookId);
+  }, [gone, bookId]);
   // Help with a picked passage: always in local mode; in hosted mode once the server says so.
   // Where it has none, the selection tools offer only what works (highlight, note), the chat is
   // never about the picked passage, and nothing dead is shown.
