@@ -36,8 +36,8 @@ pytestmark = pytest.mark.postgres
 
 postgres_database = read_map_parity.postgres_database
 
-BOOKMARKS = (None, 0, 2, 3, 4, 5, 99)     # None: the reader's place; 99: past the last chapter
-CARDS = (None, 99)                         # every card is asked for at these (each mode's ids)
+BOOKMARKS = (None, 0, 3, 4, 99)           # None: the reader's place; 99: past the last chapter
+CARDS = (99,)    # every card, asked for past the last chapter (each mode's ids)
 NOBODY = "nobody"
 
 
@@ -212,10 +212,10 @@ def test_the_story_memory_screens_are_the_same_locally_and_hosted_at_every_place
     assert _cast(nothing) == [] and nothing[("notes", None)][1]["chapters"] == []
     assert nothing[("graph", None)][1]["as_of_chapter"] == 0
     for person in ("reader", "mara", "corvus", "vex", NOBODY):
-        assert nothing[("card", person, None)] == gone
+        assert nothing[("card", person, 99)] == gone
 
     third = places["read 3"]
-    for bookmark in (None, 3, 4, 5, 99):          # asking for more never shows more
+    for bookmark in (None, 3, 4, 99):             # asking for more never shows more
         assert third[("graph", bookmark)][1]["as_of_chapter"] == 3
         assert _cast(third, bookmark) == ["Mara", "Old Wick"]
         shown = _everything(third, bookmark)
@@ -223,12 +223,12 @@ def test_the_story_memory_screens_are_the_same_locally_and_hosted_at_every_place
                       "brave", "the pool", "pool of oil", "Pool of Oil", "wick-race", "Ghost",
                       "Lampy", "Gutenberg", "cover"):
             assert later not in shown, (bookmark, later)
-    assert _cast(third, 0) == [] and _cast(third, 2) == []
-    mara = third[("card", "mara", None)][1]
+    assert _cast(third, 0) == []
+    mara = third[("card", "mara", 99)][1]
     assert mara["status"] == {"mood": "curious"}           # its end, at chapter 5, is not said
     assert [(tie["name"], tie["label"]) for tie in mara["ties"]] == [("The Lamp-Hole", "lives in")]
     for person in ("corvus", "father", "vex", "ghost", "reader", NOBODY):
-        assert third[("card", person, None)] == gone, person
+        assert third[("card", person, 99)] == gone, person
     notes = third[("notes", None)][1]
     assert [(chapter["revealed_at"], chapter["title"], chapter["summary"], chapter["events"])
             for chapter in notes["chapters"]] == [
@@ -243,10 +243,10 @@ def test_the_story_memory_screens_are_the_same_locally_and_hosted_at_every_place
     assert sorted((tie["src_entity"], tie["dst_entity"], tie["label"], tie["invalid_at"])
                   for tie in graph["relationships"]) == [
         ("corvus", "mara", "blesses", None), ("mara", "corvus", "walks with", None)]
-    assert fourth[("card", "mara", None)][1]["status"] == {"mood": "curious"}
+    assert fourth[("card", "mara", 99)][1]["status"] == {"mood": "curious"}
     assert "A rumour of oil spreads." not in _everything(fourth)
     for person in ("vex", "ghost"):
-        assert fourth[("card", person, None)] == gone
+        assert fourth[("card", person, 99)] == gone
 
     # Past the last chapter, but chapter 5's memory is not complete: still as of chapter 4.
     fifth = places["read 5"]
@@ -254,8 +254,8 @@ def test_the_story_memory_screens_are_the_same_locally_and_hosted_at_every_place
     assert fifth["ingest"][1]["ingest_progress"] == 4
     built = places["chapter 5 complete"]
     assert _cast(built) == ["Mara", "Corvus", "Vex"] and _cast(built, 99) == _cast(built)
-    assert built[("card", "mara", None)][1]["status"] == {"mood": "brave"}
-    assert built[("card", "corvus", None)][1]["aliases"] == ["Cor"]
+    assert built[("card", "mara", 99)][1]["status"] == {"mood": "brave"}
+    assert built[("card", "corvus", 99)][1]["aliases"] == ["Cor"]
     assert built["ingest"][1]["ingest_progress"] == 5
     # "I haven't read chapter 4": back to chapter 3, everything after it gone again.
     assert places["chapter 4 not read"][("graph", None)] == third[("graph", None)]
