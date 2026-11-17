@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.ingest.extraction.schema import Extraction
 from app.ingest.extraction.validation import ExtractionVerdict
-from app.ingest import worker as worker_module
+from app.ingest import chapter_extraction as extraction_module
 from app.main import create_app
 from tests.api._epub import three_chapter_book
 
@@ -130,7 +130,7 @@ def test_a_missing_middle_receipt_clamps_later_facts_despite_catalog_progress(au
 def test_worker_reprepares_a_corrected_roster_without_a_second_completion(audit_book, monkeypatch):
     client, app, book_id, atoms = audit_book
     _advance(client, book_id, atoms, 2)
-    original_prepare = worker_module.prepare_chapter
+    original_prepare = extraction_module.prepare_chapter
     targets, completion_calls = [], []
 
     def extracted(_system, user, **kwargs):
@@ -162,7 +162,7 @@ def test_worker_reprepares_a_corrected_roster_without_a_second_completion(audit_
         return prepared
 
     monkeypatch.setattr(app.state.client, "complete", extracted)
-    monkeypatch.setattr(worker_module, "prepare_chapter", correct_after_preparation)
+    monkeypatch.setattr(extraction_module, "prepare_chapter", correct_after_preparation)
     _advance(client, book_id, atoms, 3)
     assert completion_calls == [1]
     assert app.state.worker.status(book_id)["status"] == "done"
@@ -194,7 +194,7 @@ def test_last_visible_page_remains_pending_until_an_explicit_end_report(audit_bo
 def test_continuous_roster_churn_is_bounded_and_never_publishes_a_partial_chapter(audit_book, monkeypatch):
     client, app, book_id, atoms = audit_book
     _advance(client, book_id, atoms, 2)
-    original_prepare, original_complete = worker_module.prepare_chapter, app.state.client.complete
+    original_prepare, original_complete = extraction_module.prepare_chapter, app.state.client.complete
     attempts, completion_calls = [], []
 
     def counted(*args, **kwargs):
@@ -212,7 +212,7 @@ def test_continuous_roster_churn_is_bounded_and_never_publishes_a_partial_chapte
         return prepared
 
     monkeypatch.setattr(app.state.client, "complete", counted)
-    monkeypatch.setattr(worker_module, "prepare_chapter", keep_changing)
+    monkeypatch.setattr(extraction_module, "prepare_chapter", keep_changing)
     _advance(client, book_id, atoms, 3)
     assert 1 < len(attempts) <= 3 and completion_calls == [1]
     assert app.state.worker.status(book_id)["status"] == "error"

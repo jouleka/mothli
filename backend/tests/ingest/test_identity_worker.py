@@ -83,7 +83,7 @@ def test_identity_review_is_budgeted_atomic_frontier_bounded_and_independent(run
     if mode == "budget":
         def exhausted(*a, **k):
             raise CostCeilingExceeded("book budget")
-        monkeypatch.setattr("app.ingest.worker.budgeted_jev", exhausted)
+        monkeypatch.setattr("app.ingest.chapter_extraction.budgeted_jev", exhausted)
     status = _advance(runtime)
     if mode in {"budget", "shutdown"}:
         assert _memory(runtime) == baseline
@@ -108,7 +108,7 @@ def test_identity_review_is_budgeted_atomic_frontier_bounded_and_independent(run
 
 
 def test_roster_correction_repeats_identity_review_outside_lock_without_reextracting(runtime, monkeypatch):
-    from app.ingest import worker as module
+    from app.ingest import chapter_extraction as module
     runtime.settings.jev_identity_enabled = True
     observed, calls = [], []
     def evaluate(state, questions):
@@ -144,7 +144,7 @@ def test_roster_correction_repeats_identity_review_outside_lock_without_reextrac
 
 
 def test_optional_paid_identity_attempts_are_capped_across_preparation_retries(runtime, monkeypatch):
-    from app.ingest import worker as module
+    from app.ingest import chapter_extraction as module
     runtime.settings.jev_identity_enabled = True
     calls = []
     def evaluate(state, questions):

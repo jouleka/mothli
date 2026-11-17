@@ -640,11 +640,11 @@ def test_queued_request_gate_is_event_loop_native_cancellable_and_reusable(env):
 
 def test_delete_waits_for_the_commit_lifecycle_lease(env, monkeypatch):
     import threading
-    import app.ingest.worker as worker_mod
+    import app.ingest.chapter_extraction as extraction_mod
 
     c, settings, bid, app = env
     started, release = threading.Event(), threading.Event()
-    original_ingest = worker_mod.ingest_chapter
+    original_ingest = extraction_mod.ingest_chapter
 
     class Threaded:
         def submit(self, fn, *args):
@@ -659,7 +659,7 @@ def test_delete_waits_for_the_commit_lifecycle_lease(env, monkeypatch):
         return original_ingest(*args, **kwargs)
 
     app.state.worker._executor = Threaded()
-    monkeypatch.setattr(worker_mod, "ingest_chapter", blocked_ingest)
+    monkeypatch.setattr(extraction_mod, "ingest_chapter", blocked_ingest)
     c.put(
         f"/api/books/{bid}/position",
         json={"cfi": "commit", "offset": _mlen(settings, bid, 0) + 5},
@@ -1224,12 +1224,12 @@ def test_catalog_progress_failure_after_memory_commit_resumes_without_duplicates
     reviews_before = catalog.get_costs(bid)
     assert len(reviews_before) == 1 and reviews_before[0]["phase"] == "extraction-review"
 
-    import app.ingest.worker as worker_mod
+    import app.ingest.chapter_extraction as extraction_mod
 
     def unavailable_identity(_client):
         raise RuntimeError("identity provider unavailable")
 
-    monkeypatch.setattr(worker_mod.versioning, "current_identity", unavailable_identity)
+    monkeypatch.setattr(extraction_mod.versioning, "current_identity", unavailable_identity)
 
     c.put(
         f"/api/books/{bid}/position",

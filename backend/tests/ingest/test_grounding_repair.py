@@ -18,6 +18,7 @@ from app.ingest.extraction.prompts import extract_system_for, extract_user_promp
 from app.ingest.extraction.schema import Extraction
 from app.ingest.extraction.validation import ExtractionGroundingRejected, ExtractionVerdict
 from app.ingest import worker as worker_module
+from app.ingest import chapter_extraction as extraction_module
 from app.llm.client import ProviderUnavailable
 from app.main import create_app
 
@@ -296,7 +297,7 @@ def test_operational_or_invalid_failures_do_not_start_grounding_repair(
         runtime, monkeypatch, stage, kind):
     baseline, calls = _memory(runtime), []
     admission_calls = []
-    original_budgeted = worker_module.budgeted_completion
+    original_budgeted = extraction_module.budgeted_completion
 
     def budgeted(*args, **kwargs):
         admission_calls.append(kwargs["schema"])
@@ -318,7 +319,7 @@ def test_operational_or_invalid_failures_do_not_start_grounding_repair(
             return _extraction(), {"in": 11, "out": 3}
         return _verdict(user=user), {"in": 13, "out": 2}
 
-    monkeypatch.setattr(worker_module, "budgeted_completion", budgeted)
+    monkeypatch.setattr(extraction_module, "budgeted_completion", budgeted)
     monkeypatch.setattr(runtime.client, "complete", complete)
     monkeypatch.setattr(runtime.worker, "_sleep", lambda _delay: None)
     status = _advance(runtime)

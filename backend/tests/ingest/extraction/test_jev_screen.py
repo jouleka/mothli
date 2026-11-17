@@ -160,7 +160,7 @@ def test_worker_screen_preserves_atomicity_full_review_frontier_and_separate_cha
     if mode == "budget":
         def exhausted(*args, **kwargs):
             raise CostCeilingExceeded("screen book budget exhausted")
-        monkeypatch.setattr("app.ingest.worker.budgeted_jev", exhausted)
+        monkeypatch.setattr("app.ingest.chapter_extraction.budgeted_jev", exhausted)
     result = _advance(runtime)
     failed = mode in {"reject_always", "gpt_rejects", "budget", "shutdown"}
     if failed:
