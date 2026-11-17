@@ -152,7 +152,8 @@ export type HomeTurn = { role: "user" | "assistant"; content: string; created_at
 /** One thing Mothli remembers about the reader, from something the reader said. ``book`` is set
  * when it is about one book; ``message`` is the reader's own words, when the server may show them. */
 export type Recollection = {
-  id: number;
+  /** A row number in local mode; in hosted mode a UUID, the only id a hosted URL carries. */
+  id: number | string;
   kind: "about" | "taste" | "plan" | "feeling";
   text: string;
   said_at: string;
@@ -732,8 +733,8 @@ export const api = {
    * their pages are read again. 404 where the server does not keep any. */
   recollections: () =>
     fetch("/api/reader/recollections", { cache: "no-store" }).then((r) => j<RecollectionList>(r)),
-  forgetRecollection: (id: number) =>
-    fetch(`/api/reader/recollections/${id}`, { method: "DELETE", headers: csrfHeaders() }).then((r) => {
+  forgetRecollection: (id: Recollection["id"]) =>
+    fetch(`/api/reader/recollections/${encodeURIComponent(String(id))}`, { method: "DELETE", headers: csrfHeaders() }).then((r) => {
       if (!r.ok && r.status !== 404) throw new ApiError("Couldn’t forget that.", r.status);
     }),
   forgetRecollections: () =>

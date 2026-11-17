@@ -45,6 +45,10 @@ TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     # ADR 0041 part 6: chapter notes (migration 0021). Companion jobs are inserted through the
     # existing grant on ``jobs``; the tenant role holds nothing on ``provider_pauses``.
     "chapter_notes": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
+    # ADR 0041 part 7: what Mothli remembers about the reader (migration 0022). Recollect jobs
+    # are inserted through the existing grant on ``jobs``.
+    "recollections": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
+    "recollection_cursors": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
 }
 
 # The job worker (ADR 0024): BYPASSRLS, because it schedules across owners. Every owner's

@@ -1,9 +1,10 @@
 """The read-map, conversation and streamed chat routes in hosted mode, at the local paths (ADR
-0041 parts 1, 2 and 5, section 8).
+0041 parts 1, 2, 5 and 7, section 8): inside a book (``router``) and across the reader's books
+(``reader_router``: the home chat, the profile, what Mothli remembers).
 
-Each route runs the unchanged local modules (``app.read_map``, ``app.stream_conversation``)
-against a ``HostedCompanionCatalog``, a ``HostedBookSource`` and, for the chat, a
-``HostedBookStore`` bound to the signed-in reader. The owner comes from the session only
+Each route runs the unchanged local modules (``app.read_map``, ``app.stream_conversation``,
+``app.home_conversation``, ``app.recollections``) against a ``HostedCompanionCatalog``, a
+``HostedBookSource`` and, for the chats, a ``HostedBookStore`` bound to the signed-in reader. The owner comes from the session only
 (``_owner`` / ``_csrf_owner``, which also apply CSRF and the per-owner request limit). A book that
 is not this reader's is unknown: the same 404 as a book that does not exist.
 
@@ -11,8 +12,9 @@ These are plain ``def`` routes: FastAPI runs them in its thread pool, and every 
 short synchronous transaction (ADR 0041 section 2), so a streamed reply holds no database
 connection while a model answers. Only the streamed chat calls a model: the platform's, paid by
 the owner of Mothli and held to the reader's caps by the catalog's spend methods (section 6).
-Where the local routes start chapter notes (a finished chapter, a reply), these add a durable
-``chapter_notes`` job for the worker instead (part 6); none of them waits for it.
+Where the local routes start chapter notes (a finished chapter, a reply) or recollections (a
+reply), these add a durable ``chapter_notes`` or ``recollect`` job for the worker instead (parts 6
+and 7); none of them waits for it.
 """
 
 from __future__ import annotations
@@ -23,10 +25,12 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from app.api.profile import reader_profile
 from app.api.reading import ReadChapters, ReadPage
 from app.ask import AskRequest
+from app.home_conversation import HomeAsk, home_turns, read_maps, shelf_books, stream_home
 from app.hosted.companion import CompanionDatabaseBusy
-from app.hosted.companion.jobs import ChapterNotesQueue
+from app.hosted.companion.jobs import ChapterNotesQueue, RecollectQueue
 from app.hosted.companion.memory import HostedBookStore
 from app.hosted.companion.source import HostedBookSource
 from app.hosted.companion.store import HostedCompanionCatalog, ReplyCatalog
@@ -42,23 +46,16 @@ from app.read_map import (
     visible_turns,
 )
 from app.reader_place import skipped_before
+from app.recollections import listed
 from app.stream_conversation import stream_read_prefix
 
 router = APIRouter(prefix="/api/books/{book_id}", tags=["hosted-library"])
 
 
-class _NotYet:
-    """The ``recollector`` handed to the streamed chat. The chat calls ``ensure`` only while
-    recollections are on, which hosted settings refuse until part 7 gives them durable jobs;
-    until then this does nothing."""
-
-    __slots__ = ()
-
-    def ensure(self, book_id) -> None:
-        return None
-
-
-_NOT_YET = _NotYet()
+def _recollector(request: Request, owner_id: OwnerId) -> RecollectQueue:
+    """This reader's ``recollector``: ``ensure`` adds a durable ``recollect`` job (part 7). The
+    chats call it only while recollections are on."""
+    return RecollectQueue(request.app.state.companion_dsn, owner_id)
 
 
 def _notes_wanted(settings) -> bool:
@@ -209,7 +206,7 @@ def ask_the_book_stream(book_id: uuid.UUID, body: AskRequest, request: Request,
         events = stream_read_prefix(str(book_id), body, catalog, store, settings,
                                     request.app.state.platform_client, source,
                                     notes_builder=_notes_queue(request, owner_id),
-                                    recollector=_NOT_YET)
+                                    recollector=_recollector(request, owner_id))
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc
     return StreamingResponse(
@@ -246,14 +243,148 @@ def stored_conversation(book_id: uuid.UUID, request: Request,
 @router.delete("/conversation", status_code=204)
 def clear_conversation(book_id: uuid.UUID, request: Request,
                        owner_id: OwnerId = Depends(_csrf_owner)):
-    """Forget this book's conversation. Locally, with recollections on, what the reader said is
-    distilled first; hosted mode refuses recollections until part 7, and then clearing just
-    deletes (ADR 0041 section 5), so this stays a plain ``clear_turns``."""
+    """Forget this book's conversation and how far it was looked at for recollections. Locally,
+    with recollections on, what the reader said and nobody has looked at yet is distilled first;
+    hosted clearing just deletes (ADR 0041 section 5): keeping it for a job would mean storing
+    cleared text. Notes already kept stay."""
     catalog, _source, _settings = _bound(request, owner_id)
     book = str(book_id)
     try:
         if catalog.get_book(book) is None:
             raise HTTPException(404, "unknown book")
         catalog.clear_turns(book)
+    except CompanionDatabaseBusy as exc:
+        raise _busy(exc) from exc
+
+
+# ---- the reader across their books: the home chat, the profile, what Mothli remembers (part 7) ----
+
+# Tagged as every tenant route, so the inventory gate counts it (test_tenant_postgres.py).
+reader_router = APIRouter(prefix="/api/reader", tags=["hosted-library"])
+
+
+class _NoHistory:
+    """The reading history imported from other apps, which hosted mode does not keep until part
+    11: nothing read elsewhere (``stream_home`` is given ``elsewhere=[]`` for the same reason)."""
+
+    __slots__ = ()
+
+    def list(self, limit):
+        return 0, []
+
+
+def _home(request: Request, owner_id: OwnerId, catalog_type=HostedCompanionCatalog):
+    """(catalog, source, settings) for the home conversation, or 404 while it is off (the local
+    route's condition)."""
+    settings = request.app.state.settings
+    if not (settings.reader_read_map and settings.reader_page_context
+            and settings.reader_conversation_stream):
+        raise HTTPException(404, "the home conversation is not enabled")
+    return _bound(request, owner_id, catalog_type)
+
+
+def _remembering(request: Request, owner_id: OwnerId) -> HostedCompanionCatalog:
+    """This reader's catalog for what Mothli remembers, or 404 while recollections are off."""
+    settings = request.app.state.settings
+    if not (settings.reader_recollections and settings.reader_read_map
+            and settings.reader_page_context):
+        raise HTTPException(404, "recollections are not enabled")
+    return HostedCompanionCatalog(request.app.state.companion_dsn, owner_id)
+
+
+def _shelf_only(event: dict) -> dict:
+    """A home reply's event without ``suggested``: the books it named from the free library, which
+    the app offers to add to the shelf. Hosted mode has no free library until part 11, so a
+    suggestion is only ever spoken, from its reviewed catalogue line."""
+    if event.get("type") != "done" or "suggested" not in event.get("answer", {}):
+        return event
+    return {**event, "answer": {key: value for key, value in event["answer"].items()
+                                if key != "suggested"}}
+
+
+@reader_router.post("/ask/stream")
+def ask_home(body: HomeAsk, request: Request, owner_id: OwnerId = Depends(_csrf_owner)):
+    """Server-sent events, as for a book: one ``sentence`` per checked sentence, then ``done`` or
+    ``error``. The local route's body over the hosted adapters: the unchanged ``stream_home`` with
+    this reader's shelf, story memory and sources, and the platform's clients."""
+    # One reply: once its first call is admitted under the caps, the rest of it finishes.
+    catalog, source, settings = _home(request, owner_id, ReplyCatalog)
+    store = HostedBookStore(request.app.state.companion_dsn, owner_id)
+    try:
+        events = stream_home(body, catalog, store, settings, request.app.state.platform_client,
+                             source, [], recollector=_recollector(request, owner_id))
+    except CompanionDatabaseBusy as exc:
+        raise _busy(exc) from exc
+    return StreamingResponse(
+        ("data: " + json.dumps(_shelf_only(event), ensure_ascii=False) + "\n\n"
+         for event in events),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+@reader_router.get("/conversation")
+def home_conversation(request: Request, owner_id: OwnerId = Depends(_owner)):
+    """What was said on the home screen and may be shown again: see ``home_turns``."""
+    catalog, source, settings = _home(request, owner_id)
+    try:
+        turns = home_turns(catalog, read_maps(shelf_books(catalog, settings, source)), limit=80)
+    except CompanionDatabaseBusy as exc:
+        raise _busy(exc) from exc
+    return {"turns": [{"role": turn["role"], "content": turn["content"],
+                       "created_at": turn["created_at"]} for turn in turns]}
+
+
+@reader_router.delete("/conversation", status_code=204)
+def clear_home_conversation(request: Request, owner_id: OwnerId = Depends(_csrf_owner)):
+    """Forget the home conversation, as for a book's: it is deleted, nothing of it is distilled
+    afterwards, and notes already kept stay."""
+    catalog, _source, _settings = _home(request, owner_id)
+    try:
+        catalog.clear_turns(None)
+    except CompanionDatabaseBusy as exc:
+        raise _busy(exc) from exc
+
+
+@reader_router.get("/profile")
+def profile(request: Request, owner_id: OwnerId = Depends(_owner)):
+    """The reader across their books, from the read map: the unchanged ``reader_profile``. Nothing
+    read in another app until history import (part 11)."""
+    catalog, source, settings = _bound(request, owner_id)
+    try:
+        return reader_profile(catalog, settings, _NoHistory(), source)
+    except CompanionDatabaseBusy as exc:
+        raise _busy(exc) from exc
+
+
+@reader_router.get("/recollections")
+def recollections(request: Request, owner_id: OwnerId = Depends(_owner)):
+    """What Mothli remembers about the reader, newest first: the unchanged ``listed``. Each note's
+    id is its public id; a note about pages no longer read is counted in ``hidden``."""
+    catalog = _remembering(request, owner_id)
+    try:
+        return listed(catalog)
+    except CompanionDatabaseBusy as exc:
+        raise _busy(exc) from exc
+
+
+@reader_router.delete("/recollections/{public_id}", status_code=204)
+def forget_recollection(public_id: str, request: Request,
+                        owner_id: OwnerId = Depends(_csrf_owner)):
+    """Forget one note. Another reader's note, a missing one and a malformed id are the same 404."""
+    catalog = _remembering(request, owner_id)
+    try:
+        forgotten = catalog.delete_recollection(public_id)
+    except CompanionDatabaseBusy as exc:
+        raise _busy(exc) from exc
+    if not forgotten:
+        raise HTTPException(404, "unknown recollection")
+
+
+@reader_router.delete("/recollections", status_code=204)
+def forget_recollections(request: Request, owner_id: OwnerId = Depends(_csrf_owner)):
+    """Forget every note, shown or held back, and everything said so far that might become one."""
+    catalog = _remembering(request, owner_id)
+    try:
+        catalog.clear_recollections()
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc

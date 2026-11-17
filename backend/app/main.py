@@ -621,6 +621,7 @@ def create_app(
         # Without reader keys the key routes are not mounted: they answer as unknown paths.
         app.include_router(tenant_api.hosted_router(reader_keys=settings.hosted_reader_keys))
         app.include_router(companion_routes.router)
+        app.include_router(companion_routes.reader_router)
         app.add_middleware(_EpubUploadBodyLimit, max_file_bytes=settings.epub_max_upload_bytes)
         if settings.hosted_reader_keys:
             app.add_middleware(_CredentialBodyLimit)

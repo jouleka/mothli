@@ -1,5 +1,5 @@
 {
-  "version": 18,
+  "version": 19,
   "required_surface_classes": [
     "list",
     "get",
@@ -432,6 +432,62 @@
       "access": "account-keep",
       "repository_method": "PostgresAuthRepository.restore_account",
       "cross_tenant_test": "test_one_reader_cannot_delete_keep_or_erase_another"
+    },
+    {
+      "method": "POST",
+      "path": "/api/reader/ask/stream",
+      "surface": "answer",
+      "access": "streamed-answer",
+      "repository_method": "HostedCompanionCatalog.add_turn",
+      "cross_tenant_test": "test_second_readers_home_chat_and_profile_hold_only_their_own_shelf"
+    },
+    {
+      "method": "GET",
+      "path": "/api/reader/conversation",
+      "surface": "get",
+      "access": "read",
+      "repository_method": "HostedCompanionCatalog.get_turns",
+      "cross_tenant_test": "test_second_readers_home_chat_and_profile_hold_only_their_own_shelf"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/reader/conversation",
+      "surface": "delete",
+      "access": "delete",
+      "repository_method": "HostedCompanionCatalog.clear_turns",
+      "cross_tenant_test": "test_second_readers_home_chat_and_profile_hold_only_their_own_shelf"
+    },
+    {
+      "method": "GET",
+      "path": "/api/reader/profile",
+      "surface": "list",
+      "access": "read",
+      "repository_method": "HostedCompanionCatalog.list_books",
+      "cross_tenant_test": "test_second_readers_home_chat_and_profile_hold_only_their_own_shelf"
+    },
+    {
+      "method": "GET",
+      "path": "/api/reader/recollections",
+      "surface": "list",
+      "access": "read",
+      "repository_method": "HostedCompanionCatalog.get_recollections",
+      "cross_tenant_test": "test_second_reader_cannot_list_forget_or_evict_first_readers_notes"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/reader/recollections/{public_id}",
+      "surface": "delete",
+      "access": "delete",
+      "repository_method": "HostedCompanionCatalog.delete_recollection",
+      "cross_tenant_test": "test_second_reader_cannot_list_forget_or_evict_first_readers_notes"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/reader/recollections",
+      "surface": "delete",
+      "access": "delete",
+      "repository_method": "HostedCompanionCatalog.clear_recollections",
+      "cross_tenant_test": "test_second_reader_cannot_list_forget_or_evict_first_readers_notes"
     }
   ],
   "background": [
@@ -462,7 +518,8 @@
     },
     {
       "resource": "companion-jobs",
-      "operations": ["enqueue", "claim", "run-as-tenant", "store-notes", "pause"],
+      "operations": ["enqueue", "claim", "run-as-tenant", "store-notes", "store-recollections",
+                     "pause"],
       "cross_tenant_test": "test_second_reader_cannot_see_trigger_or_change_first_readers_notes_or_jobs"
     },
     {
