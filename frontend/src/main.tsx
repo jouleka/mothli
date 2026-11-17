@@ -76,7 +76,7 @@ function App({ session }: { session?: OfflineSession | null }) {
   // key: a book->book transition must fully unmount the old reader (its view/reporter must never
   // route a stale offset into ANOTHER book's permanent bookmark ratchet — pass-2 F4)
   return bookId ? (
-    <ReaderPage key={bookId} bookId={bookId} onBack={back} />
+    <ReaderPage key={bookId} bookId={bookId} onBack={back} hosted={session !== undefined} />
   ) : recalling && withHistory ? (
     <ReadingHistory onBack={back} onOpen={open} />
   ) : browsing ? (

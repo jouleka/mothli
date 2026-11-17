@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -54,7 +55,7 @@ vi.mock("./BookNavigation", () => ({
 
 import { ReaderPage } from "./ReaderPage";
 import { ApiError } from "../api";
-import { activeOfflineOwner, pendingPosition } from "../pwa/offline";
+import { activeOfflineOwner, BOOK_GONE_EVENT, BOOK_REMOVED_KEY, pendingPosition } from "../pwa/offline";
 import { readSavedReplies, writeSavedReplies } from "./companionNotes";
 
 class TestFoliateView extends HTMLElement {
@@ -707,5 +708,108 @@ describe("reader startup and search boundaries", () => {
     act(() => window.dispatchEvent(new Event("pagehide")));
     expect(pendingPosition("b")).toBeNull();
     expect(mocks.putPosition).not.toHaveBeenCalled();
+  });
+});
+
+describe("a book that is not on the shelf", () => {
+  // Catches: "The book could not be opened: the EPUB could not be fetched (404)" for a book that
+  // was removed, or a link to one that was never the reader's.
+  test("opens to a kind line and the way back, not an error", async () => {
+    mocks.manifest.mockRejectedValue(new ApiError("unknown book", 404));
+    mocks.position.mockRejectedValue(new ApiError("unknown book", 404));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "unknown book" }), { status: 404 })));
+    const onBack = vi.fn();
+    localStorage.setItem("rc:reader-marks:b", "[]");
+    render(<ReaderPage bookId="b" onBack={onBack} />);
+    const alert = await screen.findByRole("alert");
+    // Removed on another device: what this one kept of it goes too.
+    await waitFor(() => expect(localStorage.getItem("rc:reader-marks:b")).toBeNull());
+    expect(alert.textContent).toContain("I can’t find this book on your shelf.");
+    expect(alert.textContent).toContain("It may have been removed, here or on another device.");
+    expect(alert.textContent).not.toMatch(/EPUB|404|could not be opened/);
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    const back = screen.getByRole("button", { name: "Back to your shelf" });
+    await waitFor(() => expect(document.activeElement).toBe(back));
+    fireEvent.click(back);
+    expect(onBack).toHaveBeenCalled();
+  });
+
+  test("a file that does not arrive for another reason says so in plain words", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 503 })));
+    render(<ReaderPage bookId="b" onBack={() => {}} />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("its pages didn’t arrive. Check your connection and try again.");
+    expect(alert.textContent).not.toMatch(/EPUB|503/);
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
+  // Catches: a reader in the middle of a book removed in another tab (or on another device)
+  // meeting raw errors on the next page turn instead of being told.
+  test.each([
+    ["removed in another tab of this browser", () => window.dispatchEvent(new StorageEvent("storage", {
+      key: BOOK_REMOVED_KEY, newValue: JSON.stringify({ owner: activeOfflineOwner(), book: "b" }),
+    }))],
+    ["refused by the server as gone", () => window.dispatchEvent(new CustomEvent(BOOK_GONE_EVENT, { detail: "b" }))],
+  ])("an open book %s turns into the same kind line", async (_how, happen) => {
+    render(<ReaderPage bookId="b" onBack={() => {}} />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+    // Another book's news changes nothing here.
+    act(() => window.dispatchEvent(new CustomEvent(BOOK_GONE_EVENT, { detail: "other" })));
+    expect(screen.queryByText("I can’t find this book on your shelf.")).toBeNull();
+    act(() => happen());
+    expect(await screen.findByText("I can’t find this book on your shelf.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Back to your shelf" })).toBeTruthy();
+  });
+});
+
+describe("help with a picked passage", () => {
+  async function pickAPassage() {
+    await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+    const paragraph = document.createElement("p");
+    paragraph.textContent = "A passage worth keeping.";
+    document.body.append(paragraph);
+    act(() => document.querySelector("foliate-view")!.dispatchEvent(
+      new CustomEvent("load", { detail: { doc: document, index: 0 } })));
+    window.getSelection()!.selectAllChildren(paragraph);
+    act(() => document.dispatchEvent(new Event("pointerup")));
+    const tools = await screen.findByRole("group", { name: "Work with selected text" });
+    paragraph.remove();
+    return tools;
+  }
+
+  beforeEach(() => {
+    (TestFoliateView.prototype as unknown as { getCFI: () => string }).getCFI = () => "epubcfi(/6/2!/4/2/1:0)";
+  });
+
+  // Catches: Explain, Define and "Talk to Mothli" offered for a picked passage where the server
+  // cannot help with one (hosted mode), each ending in "I can't help with a picked passage".
+  test("where the server has none, only what works is offered", async () => {
+    const extra = mocks as Record<string, unknown>;
+    extra.passageHelp = vi.fn(async () => false);
+    try {
+      render(<ReaderPage bookId="b" onBack={() => {}} hosted />);
+      const tools = await pickAPassage();
+      await waitFor(() => expect(within(tools).queryByRole("button", { name: "Talk to Mothli" })).toBeNull());
+      expect(within(tools).queryByRole("button", { name: "More passage tools" })).toBeNull();
+      expect(within(tools).getByRole("button", { name: /Highlight/ })).toBeTruthy();
+      expect(within(tools).getByRole("button", { name: "Note" })).toBeTruthy();
+      expect(extra.passageHelp).toHaveBeenCalledWith("b", true);
+    } finally {
+      delete extra.passageHelp;
+    }
+  });
+
+  test("local mode keeps every passage tool, as before", async () => {
+    const extra = mocks as Record<string, unknown>;
+    extra.passageHelp = vi.fn(async () => true);
+    try {
+      render(<ReaderPage bookId="b" onBack={() => {}} />);
+      const tools = await pickAPassage();
+      expect(within(tools).getByRole("button", { name: "Talk to Mothli" })).toBeTruthy();
+      expect(within(tools).getByRole("button", { name: "More passage tools" })).toBeTruthy();
+      expect(extra.passageHelp).toHaveBeenCalledWith("b", false);
+    } finally {
+      delete extra.passageHelp;
+    }
   });
 });

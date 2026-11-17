@@ -358,11 +358,10 @@ def test_chapter_counter_follows_the_map_beside_the_versioned_position(
     reading_app, readers: dict, database: str
 ) -> None:
     """The break it catches (ADR 0041, "least sure" 3): the map lowering the chapter counter in a
-    way that breaks cross-device sync (its version clock or saved place), or a device's stale
-    report raising the counter for good past what the map says was read.
-
-    What holds today, and is recorded as open: between a stale device report and the reader's
-    next read-map call, the counter can stand ahead of the map; the next call takes it back.
+    way that breaks cross-device sync (its version clock or saved place), or a device's report
+    raising the counter past what the map says was read. With the read map a reported place moves
+    the place only, never the counter, as locally: the app told the reader a chapter they had
+    marked not read was done when a report raised it again (walk, 17 November).
     """
     client, tokens, _app = reading_app
     book = upload(client, tokens, "a", lamp_book())
@@ -403,9 +402,10 @@ def test_chapter_counter_follows_the_map_beside_the_versioned_position(
 
     # A second device that never saw that reports chapter 2 as completed from an old version.
     stale = device(start["position_version"], 1, uuid.uuid4())
-    assert stale.status_code == 200 and stale.json()["bookmark"] == 2      # ahead of the map
+    assert stale.status_code == 200 and stale.json()["bookmark"] == 1      # never ahead of the map
+    assert client.get(f"/api/books/{book}/position").json()["bookmark"] == 1
     assert [c["read"] for c in client.get(f"/api/books/{book}/read-map").json()["chapters"]] == [
         1.0, 0, 0]
-    # The map's next word takes it back; the device report added nothing to the map.
+    # The device report added nothing to the map either.
     assert client.get(f"/api/books/{book}/read-frontier").json()["available_chapter"] == 0
     assert client.get(f"/api/books/{book}/position").json()["bookmark"] == 1

@@ -369,6 +369,11 @@
 }
 .ml-offline:hover:not(:disabled) { color: var(--m-ink); }
 .ml-offline.is-saved { color: var(--m-accent); }
+/* a book's own actions under its cover: saving it offline, and (quieter, last) removing it */
+.ml-book-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0 16px; }
+.ml-remove { text-decoration: underline; text-decoration-color: var(--m-line-strong); text-underline-offset: 4px; }
+.ml-collection-head h2:focus { outline: 0; }
+.ml-collection-head h2:focus-visible { outline: 2px solid var(--m-accent); outline-offset: 4px; }
 
 /* list view */
 .ml-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--m-line-strong); }

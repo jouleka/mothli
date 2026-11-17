@@ -6,8 +6,10 @@ import {
   activeOfflineOwner,
   announcePendingDeletion,
   announceSignedOut,
+  BOOK_GONE_EVENT,
   applyPendingMarks,
   discardPositionBeforeEpoch,
+  forgetBookOnDevice,
   pendingPosition,
   positionRequestBody,
   purgeOfflineTenant,
@@ -348,6 +350,11 @@ export class ApiError extends Error {
   }
 }
 
+// Both modes answer a book that is not on this reader's shelf with exactly this.
+const UNKNOWN_BOOK = "unknown book";
+// FastAPI's own answer for a path this server does not have at all.
+const NO_SUCH_ROUTE = "Not Found";
+
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
     // Hosted mode: the sign-in has ended. The app shows the sign-in screen (main.tsx).
@@ -358,6 +365,10 @@ async function j<T>(res: Response): Promise<T> {
     let code: string | null = null;
     try {
       const detail = (JSON.parse(text) as { detail?: unknown }).detail;
+      if (res.status === 404 && detail === UNKNOWN_BOOK) {
+        const book = /\/api\/books\/([^/?#]+)/.exec(res.url)?.[1];
+        if (book) globalThis.dispatchEvent(new CustomEvent(BOOK_GONE_EVENT, { detail: decodeURIComponent(book) }));
+      }
       if (typeof detail === "string" && detail) msg = detail;
       if (detail && typeof detail === "object") {
         const structured = detail as { code?: unknown; message?: unknown; erase_after?: unknown };
@@ -385,6 +396,39 @@ function csrfHeaders(): Record<string, string> {
   return value ? { "X-CSRF-Token": decodeURIComponent(value) } : {};
 }
 
+/** Routes this server does not have at all, learned from its first "Not Found" this session:
+ * hosted mode has no story memory, chapter notes or reader-key routes yet. Asked once, then
+ * answered here with the same 404, so the console and the server's log are not filled with the
+ * same refusal on every page. A 404 that says anything else (a book the reader does not have, a
+ * switched-off feature) is never kept: those can change and are asked every time. */
+const missingRoutes = new Set<string>();
+
+async function unlessMissing(route: string, request: () => Promise<Response>): Promise<Response> {
+  if (missingRoutes.has(route))
+    return new Response(JSON.stringify({ detail: NO_SUCH_ROUTE }), {
+      status: 404, headers: { "content-type": "application/json" },
+    });
+  const response = await request();
+  if (response.status === 404) {
+    const detail = await response.clone().json().then(
+      (body: { detail?: unknown } | null) => body?.detail,
+      () => null,
+    );
+    if (detail === NO_SUCH_ROUTE) missingRoutes.add(route);
+  }
+  return response;
+}
+
+/** Tests only: forget what this session learned about the server's routes. */
+export function forgetMissingRoutes(): void {
+  missingRoutes.clear();
+  passageHelpProbe = null;
+}
+
+// null until asked: whether this server helps with a picked passage (hosted mode, reader keys off,
+// does not have the route). One question per session, and only in hosted mode.
+let passageHelpProbe: Promise<boolean> | null = null;
+
 function offlineFailure(error: unknown): boolean {
   return error instanceof TypeError || (typeof navigator !== "undefined" && !navigator.onLine);
 }
@@ -409,7 +453,8 @@ function requestRecap(id: string, bookmark?: number): Promise<CatchMeUp> {
   if (pending) return pending;
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 60_000);
-  const request = fetch(`/api/books/${id}/catch-me-up${bookmark != null ? `?bookmark=${bookmark}` : ""}`, { signal: controller.signal })
+  const request = unlessMissing("catch-me-up", () =>
+    fetch(`/api/books/${id}/catch-me-up${bookmark != null ? `?bookmark=${bookmark}` : ""}`, { signal: controller.signal }))
     .then((response) => j<CatchMeUp>(response))
     .then((value) => {
       if (owner !== activeOfflineOwner()) throw new ApiError("Your reading session changed. Reopen the book.", 409, "session_changed");
@@ -515,6 +560,17 @@ export const api = {
     return fetch("/api/books", { method: "POST", headers: csrfHeaders(), body: fd }).then(
       (r) => j<{ book_id: string }>(r),
     );
+  },
+  /** Takes the book off the reader's shelf, then forgets it on this device (offline copy, what
+   * this browser kept for it). A book already gone is gone: the device is cleared all the same. */
+  deleteBook: async (id: string) => {
+    try {
+      await fetch(`/api/books/${encodeURIComponent(id)}`, { method: "DELETE", headers: csrfHeaders() })
+        .then((r) => j<void>(r));
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 404)) throw error;
+    }
+    await forgetBookOnDevice(id);
   },
   manifest: (id: string) => fetch(`/api/books/${id}/manifest`).then((r) => j<Manifest>(r)),
   epubUrl: (id: string) => `/api/books/${id}/epub`,
@@ -690,7 +746,7 @@ export const api = {
   // Either way the server CLAMPS to the high-water — the client never widens its own frontier.
   catchMeUp: requestRecap,
   preparedQuestions: (id: string, bookmark: number) =>
-    fetch(`/api/books/${id}/prepared-questions?bookmark=${bookmark}`).then(
+    unlessMissing("prepared-questions", () => fetch(`/api/books/${id}/prepared-questions?bookmark=${bookmark}`)).then(
       (r) => j<{ as_of_chapter: number; questions: string[] }>(r),
     ),
   readFrontier: (id: string, anchor?: ReadAnchor) => fetch(`/api/books/${id}/read-frontier`, anchor ? {
@@ -726,7 +782,8 @@ export const api = {
       method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders() },
       body: JSON.stringify({ atoms, read, ...(source === "import" ? { source } : {}) }),
     }).then((r) => j<ReadFrontier>(r)),
-  readOffer: (id: string) => fetch(`/api/books/${id}/read-offer`).then((r) => j<{ offer: ReadOffer | null }>(r)),
+  readOffer: (id: string) =>
+    unlessMissing("read-offer", () => fetch(`/api/books/${id}/read-offer`)).then((r) => j<{ offer: ReadOffer | null }>(r)),
   /** The home conversation. 404 where the server does not have it switched on. */
   homeConversation: () => fetch("/api/reader/conversation").then((r) => j<{ turns: HomeTurn[] }>(r)),
   clearHome: () =>
@@ -844,37 +901,56 @@ export const api = {
   ) => {
     if (Array.from(value.text).length > 2000)
       return Promise.reject(new ApiError("Select a shorter passage (up to 2,000 characters).",413,"selection_too_large"));
-    return fetch(`/api/books/${id}/selection-action`, {
+    return unlessMissing("selection-action", () => fetch(`/api/books/${id}/selection-action`, {
     method: "POST",
     headers: { "content-type": "application/json", ...csrfHeaders() },
     body: JSON.stringify({
       ...value,
       ...(value.action === "translate" ? { target_language: "English" } : {}),
     }),
-  }).then((r) => j<SelectionAssistAnswer>(r));
+  })).then((r) => j<SelectionAssistAnswer>(r));
+  },
+  /** Whether this server helps with a picked passage (Explain, Define, Translate, a question about
+   * it). Local mode always does, and nothing is asked. In hosted mode it is asked once a session,
+   * without doing anything: the route takes only POST, so a GET is "Method Not Allowed" where it
+   * exists and "Not Found" where it does not. When the answer cannot be had, the tools are offered,
+   * as before. */
+  passageHelp: (id: string, hosted: boolean): Promise<boolean> => {
+    if (!hosted) return Promise.resolve(true);
+    if (missingRoutes.has("selection-action")) return Promise.resolve(false);
+    passageHelpProbe ??= unlessMissing("selection-action", () =>
+      fetch(`/api/books/${encodeURIComponent(id)}/selection-action`, { cache: "no-store" }),
+    ).then(
+      () => !missingRoutes.has("selection-action"),
+      () => {
+        passageHelpProbe = null;
+        return true;
+      },
+    );
+    return passageHelpProbe;
   },
   chapterCloseout: (id: string, chapter: number) =>
-    fetch(`/api/books/${id}/chapter-closeout`, {
+    unlessMissing("chapter-closeout", () => fetch(`/api/books/${id}/chapter-closeout`, {
       method: "POST",
       headers: { "content-type": "application/json", ...csrfHeaders() },
       body: JSON.stringify({ chapter }),
-    }).then((r) => j<ChapterCloseout>(r)),
+    })).then((r) => j<ChapterCloseout>(r)),
   // a character's bookmark-clamped card (identity + ties); server 404s a future/unknown entity (LIT-30)
   character: (id: string, entityId: number, bookmark?: number) =>
-    fetch(
+    unlessMissing("character", () => fetch(
       `/api/books/${id}/character/${entityId}${bookmark != null ? `?bookmark=${bookmark}` : ""}`,
-    ).then((r) => j<Character>(r)),
-  ingest: (id: string) => fetch(`/api/books/${id}/ingest`).then((r) => j<IngestStatus>(r)),
+    )).then((r) => j<Character>(r)),
+  ingest: (id: string) => unlessMissing("ingest", () => fetch(`/api/books/${id}/ingest`)).then((r) => j<IngestStatus>(r)),
   retryIngest: (id: string) => fetch(`/api/books/${id}/ingest/retry`, { method: "POST", headers: csrfHeaders() })
     .then((r) => j<{status: string}>(r)),
   // the character graph as of `bookmark` (the scrubber's point); server clamps to the high-water
   graph: (id: string, bookmark?: number) =>
-    fetch(`/api/books/${id}/graph${bookmark != null ? `?bookmark=${bookmark}` : ""}`).then(
+    unlessMissing("graph", () => fetch(`/api/books/${id}/graph${bookmark != null ? `?bookmark=${bookmark}` : ""}`)).then(
       (r) => j<Graph>(r),
     ),
-  visiblePeople: (id: string, point: ReadFrontier) => fetch(`/api/books/${id}/people`,{
+  visiblePeople: (id: string, point: ReadFrontier) => unlessMissing("people", () => fetch(`/api/books/${id}/people`,{
     method:"POST",headers:{"content-type":"application/json",...csrfHeaders()},body:JSON.stringify(point),
-  }).then((r)=>j<{read_frontier:ReadFrontier;names:string[]}>(r)),
+  })).then((r)=>j<{read_frontier:ReadFrontier;names:string[]}>(r)),
   memoryCorrections: (id: string, bookmark?: number) =>
     fetch(
       `/api/books/${id}/memory-corrections${bookmark != null ? `?bookmark=${bookmark}` : ""}`,
@@ -889,7 +965,7 @@ export const api = {
   }).then((r) => j<MemoryCorrections & { correction_id: number | string; target_entity_id: number | string }>(r)),
   // the chapter-by-chapter breakdown (summary + highlights) + visible cast, clamped to `bookmark` (LIT-31)
   notes: (id: string, bookmark?: number) =>
-    fetch(`/api/books/${id}/notes${bookmark != null ? `?bookmark=${bookmark}` : ""}`).then(
+    unlessMissing("notes", () => fetch(`/api/books/${id}/notes${bookmark != null ? `?bookmark=${bookmark}` : ""}`)).then(
       (r) => j<Notes>(r),
     ),
   credentials: () => fetch("/api/credentials").then((r) => j<CredentialMetadata[]>(r)),
@@ -904,7 +980,7 @@ export const api = {
       (r) => j<void>(r),
     ),
   providerSettings: () =>
-    fetch("/api/provider-settings").then((r) => j<ProviderSettingsPayload>(r)),
+    unlessMissing("provider-settings", () => fetch("/api/provider-settings")).then((r) => j<ProviderSettingsPayload>(r)),
   putProviderSetting: (capability: ProviderCapability, value: ProviderSettingInput) =>
     fetch(`/api/provider-settings/${capability}`, {
       method: "PUT",

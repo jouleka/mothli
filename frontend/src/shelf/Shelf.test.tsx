@@ -19,10 +19,12 @@ const mocks = vi.hoisted(() => ({
   classics: vi.fn(),
   addClassic: vi.fn(),
   recollections: vi.fn(),
+  deleteBook: vi.fn(),
 }));
 vi.mock("../api", () => ({
   api: {
     books: mocks.books,
+    deleteBook: mocks.deleteBook,
     importBook: mocks.importBook,
     providerSettings: mocks.providerSettings,
     classics: mocks.classics,
@@ -594,5 +596,103 @@ describe("the current book's progress line with the read map", () => {
     expect(screen.queryByText(/Ready to begin/)).toBeNull();
     delete api.position;
     delete api.manifest;
+  });
+});
+
+describe("Removing a book from the shelf", () => {
+  const hosted = {
+    user: { id: ownerA, display_name: "Wren Example" },
+    expires_at: "2099-01-01T00:00:00+00:00",
+  };
+
+  // Catches: no way to remove a book; a single stray click removing one; Escape or "Keep it"
+  // removing it anyway; focus lost after the sheet closes.
+  test("one click opens a second step that keeps the book unless the reader says remove", async () => {
+    const user = userEvent.setup();
+    mocks.books.mockResolvedValue(library);
+    render(<Shelf onOpen={() => {}} />);
+    const [first] = await screen.findAllByRole("button", { name: "Remove from your shelf" });
+    expect(first.getAttribute("aria-describedby")).toBe("book-lantern-title");
+    // Reachable by keyboard, a real button.
+    first.focus();
+    await user.keyboard("{Enter}");
+    const sheet = await screen.findByRole("alertdialog", { name: "Remove “The Lantern”?" });
+    expect(document.activeElement).toBe(within(sheet).getByRole("button", { name: "Keep it" }));
+    await user.keyboard("{Enter}");                       // Enter on the first button keeps it
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(first));
+    await user.click(first);
+    await screen.findByRole("alertdialog");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await user.click(first);
+    await user.click(await screen.findByRole("button", { name: "Close and keep the book" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(mocks.deleteBook).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /The Lantern/ })).toBeTruthy();
+  });
+
+  // Catches: the shelf still showing a removed book until a reload, or the recent list and the
+  // continue card still pointing at it.
+  test("removing takes the book off the shelf at once and says so", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("litlet.library-recent:local", JSON.stringify(["lantern", "sea"]));
+    mocks.books.mockResolvedValue(library);
+    mocks.deleteBook.mockReset().mockImplementation(async () => {
+      mocks.books.mockResolvedValue(library.slice(1));
+    });
+    render(<Shelf onOpen={() => {}} />);
+    expect(await screen.findByRole("heading", { name: "The Lantern" })).toBeTruthy();   // continue card
+    const [first] = await screen.findAllByRole("button", { name: "Remove from your shelf" });
+    await user.click(first);
+    await user.click(await screen.findByRole("button", { name: "Remove book" }));
+    expect(mocks.deleteBook).toHaveBeenCalledWith("lantern");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.queryByRole("button", { name: /^The Lantern/ })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "The Lantern" })).toBeNull();
+    expect(screen.getByRole("button", { name: /Atlas of Quiet Places/ })).toBeTruthy();
+    expect(await screen.findByText("The Lantern is off your shelf.")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: /Your books/ })));
+    // In the list view too.
+    await user.click(screen.getByRole("button", { name: "List view" }));
+    expect(screen.getAllByRole("button", { name: "Remove from your shelf" })).toHaveLength(2);
+  });
+
+  test("a removal that fails says so and keeps the book", async () => {
+    const user = userEvent.setup();
+    mocks.books.mockResolvedValue(library);
+    mocks.deleteBook.mockReset().mockRejectedValue(new Error("offline"));
+    render(<Shelf onOpen={() => {}} />);
+    const [first] = await screen.findAllByRole("button", { name: "Remove from your shelf" });
+    await user.click(first);
+    await user.click(await screen.findByRole("button", { name: "Remove book" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "I couldn’t remove it just now. Check your connection and try again.");
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /The Lantern/ }).length).toBeGreaterThan(0);
+  });
+
+  // Catches: a confirmation that says something the mode's server does not do.
+  test("says what goes and what stays, for the mode the reader is in", async () => {
+    const user = userEvent.setup();
+    mocks.books.mockResolvedValue(library);
+    const local = render(<Shelf onOpen={() => {}} />);
+    await user.click((await screen.findAllByRole("button", { name: "Remove from your shelf" }))[0]);
+    let sheet = await screen.findByRole("alertdialog");
+    expect(within(sheet).getByText(/in Mothli’s folder on this computer/)).toBeTruthy();
+    expect(within(sheet).getByText(/highlights, notes, bookmarks and saved replies, which live on this device/)).toBeTruthy();
+    expect(within(sheet).queryByText("Kept out of sight")).toBeNull();
+    expect(within(sheet).getByText(/You can add it again any time/)).toBeTruthy();
+    await user.keyboard("{Escape}");
+    local.unmount();
+
+    render(<Shelf onOpen={() => {}} session={hosted} />);
+    await user.click((await screen.findAllByRole("button", { name: "Remove from your shelf" }))[0]);
+    sheet = await screen.findByRole("alertdialog");
+    expect(within(sheet).getByText("The book’s file, from Mothli’s storage.")).toBeTruthy();
+    expect(within(sheet).getByText("Kept out of sight")).toBeTruthy();
+    expect(within(sheet).getByText(/Mothli never shows or uses them again/)).toBeTruthy();
+    expect(within(sheet).queryByText(/on this computer/)).toBeNull();
+    expect(await axeAA(sheet)).toHaveNoViolations();
   });
 });

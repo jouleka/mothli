@@ -98,6 +98,21 @@ def test_a_classic_already_on_the_shelf_is_not_downloaded_again(env):
     assert calls == ["158"]
 
 
+def test_a_classic_removed_from_the_shelf_can_be_added_again(env):
+    """The break it catches: a book taken off the shelf still counted as "already imported", so a
+    reader who removed it can never add it back from the free library."""
+    c, calls = env
+    book_id = c.post("/api/classics/1342").json()["book_id"]
+    assert c.delete(f"/api/books/{book_id}").status_code == 204
+    listed = {book["id"]: book["book_id"] for book in c.get("/api/classics", params={"q": "jane austen"}).json()["books"]}
+    assert listed["1342"] is None
+    again = c.post("/api/classics/1342")
+    assert again.status_code == 201, again.text
+    assert calls == ["1342", "1342"]
+    assert [book["book_id"] for book in c.get("/api/books").json()] == [again.json()["book_id"]]
+    assert c.get(f"/api/books/{again.json()['book_id']}/position").json()["bookmark"] == 0
+
+
 def test_only_catalogue_ids_can_be_requested(env):
     c, calls = env
     for bad in ("not-a-book", "pride-and-prejudice", "0", "01342", "99999999", "1342x", "..%2f..%2fetc", "https:%2F%2Fexample.org%2Fbook.epub"):

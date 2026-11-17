@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { api } from "./api";
+import { api, forgetMissingRoutes } from "./api";
 import {
+  BOOK_GONE_EVENT,
+  BOOK_REMOVED_KEY,
   flushOfflineMutations,
   PENDING_DELETION_EVENT,
   pendingPosition,
@@ -470,5 +472,114 @@ describe("Hosted writes", () => {
         body: JSON.stringify(correction),
       }),
     );
+  });
+});
+
+describe("Removing a book", () => {
+  const BOOK = "bk1234567890ab";
+
+  test("deletes it on the server and forgets it on this device, not the other books", async () => {
+    vi.spyOn(document, "cookie", "get").mockReturnValue("__Host-litlet-csrf=csrf-token");
+    localStorage.setItem(`rc:reader-marks:${BOOK}`, "[]");
+    localStorage.setItem(`mothli.lastPassage:local:${BOOK}`, "{}");
+    localStorage.setItem(`rc:pip-keeps:${JSON.stringify(["local", BOOK, "0"])}`, "[]");
+    localStorage.setItem("rc:reader-marks:bkother", "[]");
+    localStorage.setItem("litlet.library-recent:local", JSON.stringify([BOOK, "bkother"]));
+    queuePosition(BOOK, `/api/books/${BOOK}/position`, { cfi: "x", offset: 1, position_epoch: 0 });
+    queuePosition("bkother", "/api/books/bkother/position", { cfi: "y", offset: 2, position_epoch: 0 });
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
+    await api.deleteBook(BOOK);
+    expect(fetch).toHaveBeenCalledWith(`/api/books/${BOOK}`, expect.objectContaining({
+      method: "DELETE", headers: expect.objectContaining({ "X-CSRF-Token": "csrf-token" }),
+    }));
+    const left = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index));
+    expect(left.filter((key) => key?.includes(BOOK))).toEqual([]);
+    expect(localStorage.getItem("rc:reader-marks:bkother")).toBe("[]");
+    expect(JSON.parse(localStorage.getItem("litlet.library-recent:local")!)).toEqual(["bkother"]);
+    expect(pendingPosition(BOOK)).toBeNull();
+    expect(pendingPosition("bkother")).toMatchObject({ cfi: "y" });
+    // The other tabs of this browser are told which book went.
+    expect(JSON.parse(localStorage.getItem(BOOK_REMOVED_KEY)!)).toMatchObject({ owner: "local", book: BOOK });
+  });
+
+  test("a book already gone is forgotten here all the same; any other failure keeps it", async () => {
+    localStorage.setItem(`rc:reader-marks:${BOOK}`, "[]");
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ detail: "unknown book" }), { status: 404 }));
+    await api.deleteBook(BOOK);
+    expect(localStorage.getItem(`rc:reader-marks:${BOOK}`)).toBeNull();
+    localStorage.setItem(`rc:reader-marks:${BOOK}`, "[]");
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ detail: "source object storage is unavailable" }), { status: 503 }));
+    await expect(api.deleteBook(BOOK)).rejects.toMatchObject({ status: 503 });
+    expect(localStorage.getItem(`rc:reader-marks:${BOOK}`)).toBe("[]");
+  });
+
+  test("a book the server does not know is announced to the reader showing it", async () => {
+    const heard: string[] = [];
+    const listen = (event: Event) => heard.push((event as CustomEvent<string>).detail);
+    window.addEventListener(BOOK_GONE_EVENT, listen);
+    const response = new Response(JSON.stringify({ detail: "unknown book" }), { status: 404 });
+    Object.defineProperty(response, "url", { value: `http://localhost/api/books/${BOOK}/manifest` });
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(response);
+    await expect(api.manifest(BOOK)).rejects.toMatchObject({ status: 404 });
+    window.removeEventListener(BOOK_GONE_EVENT, listen);
+    expect(heard).toEqual([BOOK]);
+  });
+});
+
+describe("Routes this server does not have", () => {
+  afterEach(() => forgetMissingRoutes());
+  const notFound = () => new Response(JSON.stringify({ detail: "Not Found" }), { status: 404 });
+
+  test("are asked for once a session, then answered here with the same 404", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => notFound());
+    const asks = [() => api.providerSettings(), () => api.graph("a", 2), () => api.notes("a", 2),
+      () => api.preparedQuestions("a", 2), () => api.readOffer("a"), () => api.ingest("a")];
+    for (const ask of asks) {
+      await expect(ask()).rejects.toMatchObject({ status: 404, message: "Not Found" });
+      await expect(ask()).rejects.toMatchObject({ status: 404, message: "Not Found" });
+    }
+    // Another book: the route is still known to be missing.
+    await expect(api.graph("b", 1)).rejects.toMatchObject({ status: 404 });
+    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/provider-settings", "/api/books/a/graph?bookmark=2", "/api/books/a/notes?bookmark=2",
+      "/api/books/a/prepared-questions?bookmark=2", "/api/books/a/read-offer", "/api/books/a/ingest"]);
+  });
+
+  test("never hide a book the server does not know, a switched-off feature, or a failure", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) =>
+      String(url).includes("read-offer")
+        ? new Response(JSON.stringify({ detail: "the read map is not enabled" }), { status: 404 })
+        : String(url).includes("graph")
+          ? new Response(JSON.stringify({ detail: "unknown book" }), { status: 404 })
+          : new Response(JSON.stringify({ detail: "busy" }), { status: 503 }));
+    for (let round = 0; round < 2; round++) {
+      await expect(api.graph("a", 2)).rejects.toMatchObject({ status: 404, message: "unknown book" });
+      await expect(api.readOffer("a")).rejects.toMatchObject({ status: 404 });
+      await expect(api.providerSettings()).rejects.toMatchObject({ status: 503 });
+    }
+    expect(fetch).toHaveBeenCalledTimes(6);
+  });
+
+  test("passage help: local mode is never asked; hosted mode is asked once, doing nothing", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => notFound());
+    expect(await api.passageHelp("a", false)).toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await api.passageHelp("a", true)).toBe(false);
+    expect(await api.passageHelp("b", true)).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe("/api/books/a/selection-action");
+    expect(fetch.mock.calls[0][1]?.method).toBeUndefined();          // a GET: nothing is asked of Mothli
+    // Once known, a picked passage is never sent.
+    await expect(api.selectionAction("a", { action: "define", text: "word", atom: 1, cfi: "c" }))
+      .rejects.toMatchObject({ status: 404 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("passage help where the server has it: the probe is refused as the wrong method", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Method Not Allowed" }), { status: 405 }));
+    expect(await api.passageHelp("a", true)).toBe(true);
   });
 });

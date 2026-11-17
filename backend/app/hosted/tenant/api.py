@@ -1562,6 +1562,7 @@ async def update_position(
 ):
     _private(response)
     key = _resource(owner_id, ResourceKind.BOOK, book_id)
+    settings = request.app.state.settings
     async with request.app.state.hosted_runtime.serialized(key):
         try:
             return await request.app.state.tenant_repository.update_position(
@@ -1574,6 +1575,10 @@ async def update_position(
                 base_version=update.base_version,
                 client_id=update.client_id,
                 client_sequence=update.client_sequence,
+                # With the read map the chapter counter moves when chapters are read, not when a
+                # page is reached, as locally (app/api/reading.py put_position): a chapter the
+                # reader said they have not read is never counted again by turning past it.
+                move_counter=not (settings.reader_read_map and settings.reader_page_context),
             )
         except MissingTenantResourceError as exc:
             raise HTTPException(404, "unknown book") from exc

@@ -227,6 +227,14 @@
   color: var(--m-soft);
   font: 700 15px var(--m-ui);
 }
+/* the book is not on the shelf: nothing else on the page */
+.mr .reader-fatal.mr-gone {
+  inset: 0;
+  padding: 0 16px;
+  background: var(--m-bg);
+  color: var(--m-soft);
+  font: italic 400 20px var(--m-book);
+}
 .mr .reader-fatal h2 {
   margin: 0;
   font: 800 24px var(--m-ui);
