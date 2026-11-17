@@ -271,6 +271,8 @@ export type MemoryCorrections = { as_of_chapter: number; items: MemoryCorrection
 export type ChapterNote = {
   chapter_key: string; revealed_at: number; title: string; summary: string;
   new_characters: { entity_id: EntityId; name: string }[]; events: string[];
+  /** Hosted only: Mothli could not make notes on this chapter, so its summary is empty. */
+  unremembered?: boolean;
 };
 export type Notes = { as_of_chapter: number; cast: CastMember[]; chapters: ChapterNote[] };
 export type ProviderCapability = "extraction" | "synthesis" | "embedding" | "judge";

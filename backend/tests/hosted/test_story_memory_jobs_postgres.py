@@ -290,8 +290,10 @@ def test_the_target_is_the_read_map_never_a_counter_pushed_ahead(memory_app, rea
     a, book = opened(memory_app, readers)
     a.mark(book, [1])
     with psycopg.connect(database) as conn:
-        conn.execute("UPDATE reading_state SET bookmark=3 WHERE owner_id=%s AND book_id=%s",
-                     (a.owner, book))
+        # Both counters ahead: a device can raise only the first since ADR 0042 part 5, so this
+        # stands for any counter ahead of the map.
+        conn.execute("UPDATE reading_state SET bookmark=3,memory_through=3"
+                     " WHERE owner_id=%s AND book_id=%s", (a.owner, book))
     catalog = HostedCompanionCatalog(database, OwnerId(a.owner))
 
     def unfinished_part_is_never_sent(schema, part):

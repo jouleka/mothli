@@ -48,8 +48,12 @@ _FAILURE_CODES = frozenset(
         "provider_unavailable",
         "source_integrity",
         "source_missing",
+        "too_many_unremembered",
     }
 )
+# ADR 0042 part 5: this many chapters in a row kept unremembered stop a book's story memory (the
+# model is likely failing every chapter, each paid for twice and kept empty).
+UNREMEMBERED_IN_A_ROW = 3
 
 
 class LostLeaseError(RuntimeError):
@@ -738,6 +742,44 @@ class PostgresWorkerRepository:
                 (claim.owner_id, claim.book_id, claim.book_incarnation,
                  sorted(CHAPTER_FAILURES), ordinal),
             ).fetchone()["failed"]
+
+    def is_library_account(self, owner_id: uuid.UUID) -> bool:
+        """Whether this owner is the library account, whose editions are built whole by the
+        operator's command rather than up to a reader's read map (ADR 0042 part 5)."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM public.library_account WHERE account_id=%s) AS found",
+                (owner_id,),
+            ).fetchone()["found"]
+
+    def unremembered_before(self, claim: ClaimedJob, ordinal: int) -> int:
+        """How many chapters in a row, ending just before ``ordinal``, the claimed book keeps as
+        unremembered (``chapters.kind``), counted up to ``UNREMEMBERED_IN_A_ROW``."""
+        if claim.book_id is None:
+            raise ValueError("only a book's job has chapters")
+        with self._connect() as conn:
+            kinds = {
+                row["revealed_at"]: row["kind"]
+                for row in conn.execute(
+                    """
+                    SELECT chapter.revealed_at,chapter.kind FROM public.chapters AS chapter
+                    JOIN public.ingested_chapters AS receipt
+                      ON (receipt.owner_id,receipt.book_id,receipt.book_incarnation,
+                          receipt.chapter_id)
+                       =(chapter.owner_id,chapter.book_id,chapter.book_incarnation,chapter.id)
+                    WHERE chapter.owner_id=%s AND chapter.book_id=%s
+                      AND chapter.book_incarnation=%s AND chapter.retracted_at IS NULL
+                      AND receipt.retracted_at IS NULL
+                      AND chapter.revealed_at>=%s AND chapter.revealed_at<%s
+                    """,
+                    (claim.owner_id, claim.book_id, claim.book_incarnation,
+                     ordinal - UNREMEMBERED_IN_A_ROW, ordinal),
+                ).fetchall()
+            }
+        streak = 0
+        while kinds.get(ordinal - 1 - streak) == "unremembered":
+            streak += 1
+        return streak
 
     def succeed(self, claim: ClaimedJob) -> bool:
         with self._connect() as conn, conn.transaction():

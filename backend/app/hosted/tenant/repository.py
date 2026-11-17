@@ -62,6 +62,11 @@ ERASED_WITH_THE_BOOK = (
     "source_objects",
 )
 
+# What a reader is told when they try to correct the memory of a free-library book, which the
+# library edition gives every reader of that file (ADR 0042 section 3).
+LIBRARY_MEMORY_FIXED = ("Mothli’s notes on free-library books are prepared once for everyone, "
+                        "so they can’t be corrected here.")
+
 
 @dataclass(slots=True)
 class PostgresTenantRepository:
@@ -1562,6 +1567,13 @@ class PostgresTenantRepository:
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s::text || ':' || %s::text, 48))",
                 (owner_id.value, book_id),
             )
+            # A library book's memory is the library edition's, shared through the door
+            # (ADR 0042 section 3): no reader can change it.
+            shared = await (
+                await conn.execute("SELECT 1 FROM public.library_story_memory(%s)", (book_id,))
+            ).fetchone()
+            if shared is not None:
+                raise ValueError(LIBRARY_MEMORY_FIXED)
             scope = await (
                 await conn.execute(
                     """

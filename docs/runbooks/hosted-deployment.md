@@ -160,6 +160,47 @@ next run; nothing of it is shown to anyone meanwhile. The audit log of an erased
 docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.audit show --owner READER_ID
 ```
 
+## 4b. Preparing the free library's story memory (when you choose)
+
+For a book from the free library, Mothli can keep who's who and the story so far, prepared once
+for everyone and handed to each reader only up to where they are. You choose which titles; nothing
+is prepared until you run this. It needs the worker on (`COMPOSE_PROFILES=worker` in
+`deploy/.env`) and `HOSTED_STORY_MEMORY=true` in `deploy/app.env`. A reader's own uploads are not
+touched by any of this.
+
+1. Start it for the titles you want, by their free-library numbers (the number in the book's
+   Project Gutenberg address, for example 1342 for *Pride and Prejudice*):
+   ```
+   docker compose -f deploy/compose.yaml run --rm library python -m app.hosted.library_memory build 1342 11
+   ```
+   The first run makes the library account, a reserved account nobody signs in to, and prints
+   its id (`library account ...`). Each title is fetched and added to that account as a reader's
+   add would, and the worker then prepares it one chapter at a time. A title that could not be
+   added prints the reader's own line for it (a full shelf, for example: raise the account's
+   `--max-books` or `--max-library-bytes` with the limits tool below, then run `build` again).
+2. **Set what it may spend** (about $7 for a novel of that length at today's prices). It spends
+   only from the library account's own allowance, never a reader's, and the platform's daily cap
+   still applies to it. For example $10 a day:
+   ```
+   docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.limits set LIBRARY_ACCOUNT_ID --max-spend-usd-per-day 10 --max-spend-usd-per-month 50
+   ```
+   Until then it uses the readers' default caps, which prepare about one chapter a day.
+3. See how each title stands, as often as you like:
+   ```
+   docker compose -f deploy/compose.yaml run --rm library
+   ```
+   One line per title, for example
+   `1342 Pride and Prejudice: built through chapter 12 of 61, 0 unremembered, $1.0412, building`.
+   "unremembered" counts chapters Mothli could not make notes on (readers see a short line for
+   each). "waiting for tomorrow" means a day's cap was reached. "stopped: three chapters in a row
+   could not be remembered" means the model is failing and nothing more is spent on that title;
+   look at the AI account before trying again.
+
+Running `build` again is safe: a title already prepared is left alone and one half prepared
+carries on. A reader whose copy of a title is a different file (Project Gutenberg changed it)
+gets no prepared notes for it. The library command has its own database role
+(`MOTHLI_DB_LIBRARY_PASSWORD` in `deploy/.env`), which only this step has.
+
 ## 5. Restoring
 
 Only into an empty Mothli (a new server, or after removing everything). You need the backup

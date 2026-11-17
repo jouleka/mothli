@@ -71,6 +71,24 @@ Books are private. There is no cross-user book deduplication, shared object key,
 or content-addressed existence signal in the first hosted release. A matching EPUB hash in two accounts
 creates two independently owned logical books and opaque storage objects.
 
+**Amended 17 November 2026 (ADR 0042 section 3, the owner's decision): library editions.** One kind
+of shared derived memory exists: the story memory of a free-library book, built once by the
+operator, ahead of time and the same for everyone, as the **library account** (one reserved user
+row that never signs in, named in the service table `library_account`). Its rows are ordinary
+memory rows under that account's `owner_id`, so row-level security hides all of them from every
+reader. A reader reaches them only through one `SECURITY DEFINER` function,
+`library_story_memory(book)`, executable by the tenant role alone. It takes the book and nothing
+else, finds the reader from the transaction's owner setting, and answers only for that reader's
+live book added from the free library whose file hash is exactly a built edition's. It works out
+the reader's place from the reader's own rows (`reading_state.memory_through`, which only the read
+map writes, capped by the last chapter the reader has a read page in) and returns only rows
+stamped at or before it, with any later end left out. Uploads are never matched to it, and a file
+that differs gets nothing, so it says nothing about what anyone owns; which titles have editions
+is the operator's choice, made before anyone reads. Everything else in this section stands: the
+reader's own book row, file, place, marks, chat and notes stay theirs alone, and removing a book
+or erasing an account touches none of the library's rows. Readers are told, in the privacy text,
+that notes on free-library books are prepared once for everyone.
+
 Deleting an account is a durable workflow that revokes sessions, prevents new work, tombstones or
 deletes owned rows, deletes object storage, and records only the minimum non-content audit evidence
 required by policy. Export and deletion never accept an owner supplied by the client.

@@ -66,6 +66,8 @@ function MemoryState({ mood, children }: { mood: "thinking" | "sleepy" | "curiou
 }
 
 const WAITING = "I’m a little behind you. I’ll catch up on the rest tomorrow.";
+/** A chapter Mothli could not make notes on (hosted story memory keeps it and reads on). */
+const UNREMEMBERED ="This chapter slipped past me, so I couldn’t make notes on it. You can still ask me about it in the chat.";
 
 /** Whether the rest of this book's memory waits for tomorrow (the server answers
  * `status: "waiting"` once a reader's allowance for the day is spent). Asked only when what came
@@ -315,7 +317,11 @@ export function StoryPanel({
               <span className="memory-timeline-dot" aria-hidden="true">{chapter.revealed_at}</span>
               <article>
                 <h3>{chapter.title || `Chapter ${chapter.revealed_at}`}</h3>
-                <p className={expanded ? undefined : "is-clamped"}>{chapter.summary}</p>
+                {chapter.unremembered ? (
+                  <p className="lp-voice">{UNREMEMBERED}</p>
+                ) : (
+                  <p className={expanded ? undefined : "is-clamped"}>{chapter.summary}</p>
+                )}
                 {expanded && chapter.events.length > 0 && (
                   <ul className="memory-events">
                     {chapter.events.map((event) => (

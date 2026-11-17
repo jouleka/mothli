@@ -61,8 +61,17 @@ class _BookStore(OwnerBoundAdapter):
     def get_state(self, book_id):
         """{bookmark, cfi, ingest_progress, position_epoch, updated_at} of a live book, or None.
 
+        ``bookmark`` is the companion's chapter counter: ``memory_through``, which only
+        ``set_bookmark`` (the read map's ``sync_counter``) writes, so a device's position report
+        never moves it up (ADR 0042 section 3). The older counter, which "start over" sets to 0,
+        can only bring it down until the map writes both again, as it did before. Until the
+        book's read map has begun, it is that older counter, from which the shared code begins
+        the map once (a book moved in from local mode carries its progress there).
+
         ``ingest_progress`` counts the chapters, from the first, whose story memory is built: a
-        live receipt for a live chapter at every ordinal up to it (0 before extraction).
+        live receipt for a live chapter at every ordinal up to it (0 before extraction). For a
+        library book they are the receipts the door hands this reader, so it never passes their
+        place.
         """
         try:
             book = as_uuid(book_id)
@@ -70,8 +79,14 @@ class _BookStore(OwnerBoundAdapter):
             return None
         with self._transaction() as conn:
             row = conn.execute(
-                """SELECT state.book_incarnation,state.bookmark,state.current_cfi,
-                          state.position_epoch,state.updated_at
+                """SELECT state.book_incarnation,state.current_cfi,state.position_epoch,
+                          state.updated_at,
+                          CASE WHEN EXISTS (
+                                 SELECT 1 FROM public.read_position AS place
+                                 WHERE (place.owner_id,place.book_id,place.book_incarnation)
+                                     =(state.owner_id,state.book_id,state.book_incarnation))
+                               THEN LEAST(state.memory_through,state.bookmark)
+                               ELSE state.bookmark END AS counter
                    FROM public.reading_state AS state
                    JOIN public.books AS book
                      ON (book.owner_id,book.id,book.incarnation)
@@ -80,42 +95,51 @@ class _BookStore(OwnerBoundAdapter):
                 (self._owner.value, book)).fetchone()
             if row is None:
                 return None
-            built = [receipt["revealed_at"] for receipt in conn.execute(
-                """SELECT chapter.revealed_at
-                   FROM public.ingested_chapters AS receipt
-                   JOIN public.chapters AS chapter
-                     ON (chapter.owner_id,chapter.book_id,chapter.book_incarnation,chapter.id)
-                      =(receipt.owner_id,receipt.book_id,receipt.book_incarnation,
-                        receipt.chapter_id)
-                   WHERE receipt.owner_id=%s AND receipt.book_id=%s
-                     AND receipt.book_incarnation=%s
-                     AND receipt.retracted_at IS NULL AND chapter.retracted_at IS NULL
-                   ORDER BY chapter.revealed_at""",
-                (self._owner.value, book, row["book_incarnation"])).fetchall()]
+            door = conn.execute("SELECT completed FROM public.library_story_memory(%s)",
+                                (book,)).fetchone()
+            if door is not None:
+                built = sorted(receipt["ordinal"] for receipt in door["completed"])
+            else:
+                built = [receipt["revealed_at"] for receipt in conn.execute(
+                    """SELECT chapter.revealed_at
+                       FROM public.ingested_chapters AS receipt
+                       JOIN public.chapters AS chapter
+                         ON (chapter.owner_id,chapter.book_id,chapter.book_incarnation,chapter.id)
+                          =(receipt.owner_id,receipt.book_id,receipt.book_incarnation,
+                            receipt.chapter_id)
+                       WHERE receipt.owner_id=%s AND receipt.book_id=%s
+                         AND receipt.book_incarnation=%s
+                         AND receipt.retracted_at IS NULL AND chapter.retracted_at IS NULL
+                       ORDER BY chapter.revealed_at""",
+                    (self._owner.value, book, row["book_incarnation"])).fetchall()]
         progress = 0
         for ordinal in built:
             if ordinal != progress + 1:
                 break
             progress = ordinal
-        return {"bookmark": row["bookmark"], "cfi": row["current_cfi"],
+        return {"bookmark": row["counter"], "cfi": row["current_cfi"],
                 "ingest_progress": progress, "position_epoch": row["position_epoch"],
                 "updated_at": row["updated_at"].isoformat()}
 
     def set_bookmark(self, book_id, bookmark):
         """Set the chapter counter exactly, lowering it if need be (only the read map calls this).
 
+        It writes ``memory_through``, the reader's place for the library door, and nothing else
+        in the app writes that column; the older counter the device position route raises is
+        set to the same value, as before, so the reader's position still follows the map.
         Lowering never reveals anything. The cross-device position clock is left alone: this is
         the server's own reading of the map, not a device's report.
         """
         check_position(bookmark, "bookmark")
         with self._transaction() as conn:
             conn.execute(
-                """UPDATE public.reading_state AS state SET bookmark=%s,updated_at=now()
+                """UPDATE public.reading_state AS state
+                   SET bookmark=%s,memory_through=%s,updated_at=now()
                    FROM public.books AS book
                    WHERE (book.owner_id,book.id,book.incarnation)
                        =(state.owner_id,state.book_id,state.book_incarnation)
                      AND state.owner_id=%s AND state.book_id=%s AND book.deleted_at IS NULL""",
-                (bookmark, self._owner.value, as_uuid(book_id)))
+                (bookmark, bookmark, self._owner.value, as_uuid(book_id)))
 
     def get_conversation_frontier(self, book_id):
         """Always None: hosted mode runs only with the read map, which never saves an anchor.

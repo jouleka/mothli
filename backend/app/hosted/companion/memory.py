@@ -50,7 +50,8 @@ _LOAD = """
 SELECT book.content_language,
   COALESCE((SELECT json_agg(json_build_object(
               'key', chapter.chapter_key, 'ordinal', chapter.revealed_at, 'title', chapter.title,
-              'part_label', chapter.part_label, 'live', chapter.retracted_at IS NULL)
+              'part_label', chapter.part_label, 'kind', chapter.kind,
+              'live', chapter.retracted_at IS NULL)
             ORDER BY chapter.revealed_at, chapter.chapter_key, chapter.id)
             FROM public.chapters AS chapter
             WHERE chapter.owner_id=%(owner)s AND chapter.book_id=book.id
@@ -132,6 +133,12 @@ FROM public.books AS book
 WHERE book.owner_id=%(owner)s AND book.id=%(book)s AND book.deleted_at IS NULL
 """
 
+# The door (ADR 0042 section 3, migration 0026): for a reader's free-library book whose file is
+# exactly a built library edition's, the edition's rows up to the reader's own place, worked out
+# in the database from the reader's rows, in the shape of ``_LOAD``. No row for any other book.
+# It takes the book and nothing else; the reader is the transaction's owner setting.
+DOOR = "SELECT * FROM public.library_story_memory(%(book)s)"
+
 
 class StoryMemoryUnavailable(Exception):
     """A book's story memory could not be read. The reply stops; nothing is let through unchecked.
@@ -186,15 +193,17 @@ class StoryMemorySnapshot:
     """One book's story memory as of one moment, immutable, safe to share between threads."""
 
     __slots__ = ("_language", "_chapters", "_completed", "_entities", "_aliases", "_themes",
-                 "_events", "_summaries", "_edges", "_states")
+                 "_events", "_summaries", "_edges", "_states", "shared")
 
-    def __init__(self, payload) -> None:
-        values = {}
+    def __init__(self, payload, *, shared: bool = False) -> None:
+        values = {"shared": bool(shared)}
         values["_language"] = payload["content_language"]
         values["_chapters"] = _frozen(
             {"chapter_key": _text(row["key"]), "revealed_at": _ordinal(row["ordinal"]),
              "title": _text(row["title"], optional=True),
-             "part_label": _text(row["part_label"], optional=True), "live": _flag(row["live"])}
+             "part_label": _text(row["part_label"], optional=True),
+             # A payload without a chapter's kind (one built by hand) holds an ordinary chapter.
+             "kind": _text(row.get("kind", "body")), "live": _flag(row["live"])}
             for row in _rows(payload["chapters"]))
         # A chapter key is unique within a book incarnation (``chapters`` constraint).
         values["_completed"] = MappingProxyType(
@@ -284,8 +293,10 @@ class StoryMemorySnapshot:
         return SnapshotView(self, bookmark)
 
     def has_rows(self):
-        """Whether anything of this book's story memory was ever written (a chapter of it)."""
-        return bool(self._chapters)
+        """Whether this book has story memory: a chapter of it was written, or it is a library
+        edition's (``shared``), which every reader of that file has from before they start, so
+        a reader at the first page sees an empty cast rather than "none kept"."""
+        return self.shared or bool(self._chapters)
 
     def _audit_all(self, table):
         """Every row of one of the three tables ``score_recap`` reads, future ones included.
@@ -343,6 +354,12 @@ class SnapshotView:
         rows = [row for row in self._memory._chapters if self._shown(row) and row["live"]]
         return [{key: row[key] for key in ("chapter_key", "revealed_at", "title", "part_label")}
                 for row in _ordered(rows, "revealed_at", "chapter_key")]
+
+    def unremembered(self):
+        """The ordinals of the live chapters shown here that Mothli could not make notes on
+        (``chapters.kind``, ADR 0042 section 2). Hosted only: local mode never keeps one."""
+        return sorted(row["revealed_at"] for row in self._memory._chapters
+                      if self._shown(row) and row["live"] and row["kind"] == "unremembered")
 
     def entities_of_type(self, entity_type):
         rows = [row for row in self._visible_entities() if row["type"] == entity_type]
@@ -497,15 +514,26 @@ class HostedBookStore(OwnerBoundAdapter):
                 snapshot = self._snapshots[book] = self._load(book)
             return snapshot
 
+    def shared(self, book_id) -> bool:
+        """Whether this reader's book is served through the door: a free-library book whose file
+        is exactly a built library edition's. Raises ``LookupError`` for a book not theirs."""
+        return self._snapshot(book_id).shared
+
     def _load(self, book) -> StoryMemorySnapshot:
+        """The door's answer for a library book, else this reader's own rows: never both, and
+        never the library's rows by any other way (row-level security hides them)."""
         try:
             with self._transaction() as conn:
-                payload = conn.execute(_LOAD, {"owner": self._owner.value, "book": book}).fetchone()
+                payload = conn.execute(DOOR, {"book": book}).fetchone()
+                shared = payload is not None
+                if not shared:
+                    payload = conn.execute(_LOAD, {"owner": self._owner.value,
+                                                   "book": book}).fetchone()
         except (CompanionDatabaseBusy, psycopg.Error) as exc:
             raise StoryMemoryUnavailable("the story memory could not be read") from exc
         if payload is None:
             raise LookupError("unknown book")
         try:
-            return StoryMemorySnapshot(payload)
+            return StoryMemorySnapshot(payload, shared=shared)
         except (KeyError, TypeError, ValueError) as exc:
             raise StoryMemoryUnavailable("the story memory is malformed") from exc

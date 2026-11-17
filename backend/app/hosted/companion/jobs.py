@@ -33,7 +33,7 @@ from app.chapter_notes import NotesBuilder, build_missing
 from app.cost.limits import CostCeilingExceeded
 from app.home_conversation import HOME
 from app.hosted.companion import CompanionDatabaseBusy, OwnerBoundAdapter, as_uuid
-from app.hosted.companion.memory import HostedBookStore
+from app.hosted.companion.memory import HostedBookStore, StoryMemoryUnavailable
 from app.hosted.companion.source import HostedBookSource
 from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.companion.store_recollections import RecollectionCursorMoved
@@ -45,6 +45,7 @@ from app.hosted.jobs import (
     ClaimedJob,
     LostLeaseError,
     PostgresWorkerRepository,
+    UNREMEMBERED_IN_A_ROW,
     SanitizedFailure,
     WorkerConfigurationError,
 )
@@ -105,6 +106,16 @@ class StoryMemoryQueue(ChapterNotesQueue):
 
     __slots__ = ()
     KIND, KEY, PRIORITY = "story_memory", "story-memory", STORY_MEMORY_PRIORITY
+
+    def ensure(self, book_id) -> bool:
+        """As for notes, except that a library book (one the door serves, ADR 0042 section 3)
+        never gets a job of its reader's: its memory is the library edition's."""
+        try:
+            if HostedBookStore(self._dsn, self._owner).shared(book_id):
+                return False
+        except (LookupError, StoryMemoryUnavailable):
+            return False
+        return super().ensure(book_id)
 
 
 def _conversation(catalog, book_id):
@@ -232,6 +243,11 @@ KINDS = frozenset({"chapter_notes", "recollect", "story_memory"})
 # Two runs that failed on a chapter for a reason the chapter causes make the next run keep it as
 # an unremembered chapter (ADR 0042 section 2).
 UNREMEMBERED_AFTER = 2
+
+
+class _Stopped(Exception):
+    """The book has ``UNREMEMBERED_IN_A_ROW`` chapters in a row kept unremembered: its story
+    memory stops there (ADR 0042 part 5)."""
 
 
 def companion_kinds(settings) -> frozenset[str]:
@@ -399,8 +415,15 @@ class CompanionJobs:
         chapter without memory, only when the reader has finished it. The target is the read
         map's ``finished_through``, read now through the tenant role, never the chapter counter
         a device can push. After the chapter, the next run is asked for if the target lies
-        further on; a lowered target ("I haven't read this") stops the work at the next run."""
-        if not self._settings.hosted_reader_story_memory:
+        further on; a lowered target ("I haven't read this") stops the work at the next run.
+
+        The library account's editions (ADR 0042 part 5) are built whole: their target is the
+        book's last chapter, and they run whatever ``HOSTED_READER_STORY_MEMORY`` says. A
+        reader's book that the door serves gets nothing of its own. A book with
+        ``UNREMEMBERED_IN_A_ROW`` chapters in a row kept unremembered is stopped, before anything
+        is spent, with ``too_many_unremembered``."""
+        library = repository.is_library_account(claim.owner_id)
+        if not (library or self._settings.hosted_reader_story_memory):
             return              # a reader's own book gets no memory of its own while this is off
         owner = OwnerId(claim.owner_id)
         catalog = HostedCompanionCatalog(self._dsn, owner)
@@ -414,15 +437,32 @@ class CompanionJobs:
             return              # deleted, or uploaded again since: nothing of this job is left
         try:
             source = HostedBookSource(self._storage, catalog, self._sources)
-            _point, _read, state, *_rest = read_snapshot(book_id, catalog, self._settings, source)
-            target, ordinal = state["finished_through"], state["ingest_progress"] + 1
+            if library:
+                book = catalog.get_book(book_id)
+                _manifest, chapters = source.verified_source(book_id, book)
+                target = max(chapter["ordinal"] for chapter in chapters)
+                state = catalog.get_state(book_id)
+            elif HostedBookStore(self._dsn, owner).shared(book_id):
+                return          # the library edition's memory serves this book
+            else:
+                _point, _read, state, *_rest = read_snapshot(book_id, catalog, self._settings,
+                                                             source)
+                target = state["finished_through"]
+            ordinal = state["ingest_progress"] + 1
             if ordinal > target:
                 return          # nothing finished past what is built: nothing to do or spend
+            if repository.unremembered_before(claim, ordinal) >= UNREMEMBERED_IN_A_ROW:
+                raise _Stopped()
             failed = repository.begin_story_memory_chapter(claim, ordinal)
             remember_chapter(claim, repository, hold=lease.hold, tenant_dsn=self._dsn,
                              settings=self._settings, client=self._extraction_client,
                              storage=self._storage, sources=self._sources, ordinal=ordinal,
                              unremembered=failed >= UNREMEMBERED_AFTER)
+            if repository.unremembered_before(claim, ordinal + 1) >= UNREMEMBERED_IN_A_ROW:
+                raise _Stopped()
+        except _Stopped:
+            raise HandledJobFailure(
+                SanitizedFailure("too_many_unremembered", retryable=False)) from None
         except ChapterAlreadyPublished:
             pass                # another run published it: carry on from there
         except LookupError:
