@@ -84,7 +84,13 @@ import type { FoliateTTS } from "./tts";
 import { Icon } from "../ui/Icon";
 import { Button } from "../ui/Button";
 import { presentationFor } from "./bookProfile";
-import { activeOfflineOwner, flushOfflineMutations, queuePosition } from "../pwa/offline";
+import {
+  activeOfflineOwner,
+  BOOK_GONE_EVENT,
+  BOOK_REMOVED_KEY,
+  flushOfflineMutations,
+  queuePosition,
+} from "../pwa/offline";
 
 type FoliateView = HTMLElement & {
   open: (book: unknown) => Promise<void>;
@@ -144,12 +150,21 @@ type FoliateView = HTMLElement & {
   book: { sections: { id: string }[]; toc?: EpubTocItem[] | null };
 };
 
+/** Said when the book is not on the reader's shelf: removed (here, in another tab, or on another
+ * device), or a link to a book that was never theirs. Both modes. */
+export const BOOK_GONE_TITLE = "I can’t find this book on your shelf.";
+export const BOOK_GONE_LINE =
+  "It may have been removed, here or on another device. Your other books are waiting for you.";
+
 export function ReaderPage({
   bookId,
   onBack,
+  hosted = false,
 }: {
   bookId: string;
   onBack: () => void;
+  /** Hosted mode (signed-in readers): some help this server may not offer is asked about first. */
+  hosted?: boolean;
 }) {
   const holder = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -158,6 +173,47 @@ export function ReaderPage({
   const [title, setTitle] = useState("");
   const [pos, setPos] = useState<PutPosition | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
+  // The book is not (or no longer) on this reader's shelf: a kind line and the way back.
+  const [gone, setGone] = useState(false);
+  const goneBackRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (gone) goneBackRef.current?.focus();
+  }, [gone]);
+  // Help with a picked passage: always in local mode; in hosted mode once the server says so.
+  // Where it has none, the selection tools offer only what works (highlight, note), the chat is
+  // never about the picked passage, and nothing dead is shown.
+  const [passageHelp, setPassageHelp] = useState(!hosted);
+  useEffect(() => {
+    let live = true;
+    void api.passageHelp?.(bookId, hosted).then((offered) => {
+      if (live) setPassageHelp(offered);
+    });
+    return () => {
+      live = false;
+    };
+  }, [bookId, hosted]);
+  useEffect(() => {
+    const owner = activeOfflineOwner();
+    const onGone = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === bookId) setGone(true);
+    };
+    // Removed in another tab of this browser: heard at once, not at the next request.
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== BOOK_REMOVED_KEY || !event.newValue) return;
+      try {
+        const removed = JSON.parse(event.newValue) as { owner?: unknown; book?: unknown };
+        if (removed.book === bookId && removed.owner === owner) setGone(true);
+      } catch {
+        /* not ours */
+      }
+    };
+    window.addEventListener(BOOK_GONE_EVENT, onGone);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(BOOK_GONE_EVENT, onGone);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [bookId]);
   const [readerReady, setReaderReady] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [sourceReturn, setSourceReturn] = useState<{cfi:string; destination:"mothli"|"notebook"} | null>(null);
@@ -741,8 +797,9 @@ export function ReaderPage({
           fetch(api.epubUrl(bookId), { signal: download.signal }).then(
             async (response) => {
               if (!response.ok)
-                throw new Error(
-                  `the EPUB could not be fetched (${response.status})`,
+                throw new ApiError(
+                  "its pages didn’t arrive. Check your connection and try again.",
+                  response.status,
                 );
               return new File([await response.blob()], "book.epub", {
                 type: "application/epub+zip",
@@ -1059,7 +1116,9 @@ export function ReaderPage({
       } catch (e) {
         download.abort();
         releaseBook();
-        if (!dead) setFatal(e instanceof Error ? e.message : String(e));
+        // Not on this reader's shelf (removed, or never theirs): the kind line, not the error.
+        if (!dead && e instanceof ApiError && e.status === 404) setGone(true);
+        else if (!dead) setFatal(e instanceof Error ? e.message : String(e));
       } finally {
         initializing = false;
         if (dead) releaseBook();
@@ -1573,6 +1632,24 @@ export function ReaderPage({
     }
   }, [cast, nameTapsOn]);
 
+  if (gone)
+    return (
+      <div className="reader-grid mr" data-reader-theme={preferences.theme}>
+        <main id="main" className="book-pane mr-main">
+          <div className="reader-fatal mr-gone" role="alert">
+            <Moth mood="sleepy" size={72} glow={false} />
+            <h2>{BOOK_GONE_TITLE}</h2>
+            <p>{BOOK_GONE_LINE}</p>
+            <div className="reader-fatal-actions">
+              <Button ref={goneBackRef} variant="primary" icon="arrowLeft" onClick={onBack}>
+                Back to your shelf
+              </Button>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+
   return (
     <div
       className="reader-grid mr"
@@ -1639,9 +1716,9 @@ export function ReaderPage({
                     )}`
               }
               status={marksStatus}
-              onAssist={(action) => {
+              onAssist={passageHelp ? (action) => {
                 if (readerSelection) setSelectionAssist({ action, selection: readerSelection });
-              }}
+              } : undefined}
               onHighlight={(color) => {
                 void saveHighlight(color);
               }}
@@ -1663,7 +1740,7 @@ export function ReaderPage({
               }}
               savedReplies={shownReplies}
               keptBackReplies={keptBack}
-              onTalkAboutSelection={() => openConversation()}
+              onTalkAboutSelection={passageHelp ? () => openConversation() : undefined}
               onNavigateReply={(reply) => {
                 const citation = reply.citations[0];
                 if (citation) void viewRef.current?.goTo(citation.cfi ?? citation.href);
@@ -1888,7 +1965,7 @@ export function ReaderPage({
           chapterLabel={throughLabel}
           embedded
           compact={compactShell}
-          selection={readerSelection}
+          selection={passageHelp ? readerSelection : null}
           onClearSelection={clearReaderSelection}
           sessionRef={askSessionRef}
           onSaveReply={(reply) => saveReplies([...savedReplies.filter((saved) => saved.id !== reply.id), { ...reply, createdAt: new Date().toISOString() }])}

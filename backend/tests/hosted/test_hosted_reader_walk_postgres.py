@@ -40,13 +40,44 @@ def test_a_place_past_the_first_chapter_is_kept_for_a_book_with_no_story_memory(
     book = upload(library_app, "a", made_up_book()).json()["book_id"]
     saved = put_position(library_app, "a", book, 2)
     assert saved.status_code == 200, saved.text
-    assert saved.json()["bookmark"] == 2
+    assert saved.json()["applied"] is True
     again = library_app[0].get(f"/api/books/{book}/position", headers=as_reader(library_app, "a"))
-    assert again.json()["bookmark"] == 2 and again.json()["cfi"] == "epubcfi(/6/4!/4/2/1:0)"
+    assert again.json()["cfi"] == "epubcfi(/6/4!/4/2/1:0)"
+    # With the read map the counter follows what was read (nothing yet), not the place reported.
+    assert again.json()["bookmark"] == 0
     # Past the book's last chapter (it has two) is still refused.
     beyond = put_position(library_app, "a", book, 3, sequence=2, version=saved.json()[
         "position_version"])
     assert beyond.status_code == 422
+
+
+def test_a_chapter_marked_not_read_is_not_counted_again_by_the_place_reported_after_it(
+        library_app):
+    """The break it catches: after "I haven't read this" for chapter 2, the next place the
+    reader's page reports (in chapter 3, as on every reload) raised the chapter counter back to
+    2, and the app said "That's Chapter Two done!" for a chapter the reader said they had not
+    read. Locally, with the read map, a reported place never moves the counter."""
+    client = library_app[0]
+    book = upload(library_app, "a", read_map_gate.lamp_book()).json()["book_id"]
+    told = client.put(f"/api/books/{book}/read-chapters", headers=as_reader(library_app, "a"),
+                      json={"atoms": [1, 2], "read": True})
+    assert told.status_code == 200, told.text
+    position = client.get(f"/api/books/{book}/position", headers=as_reader(library_app, "a")).json()
+    assert position["bookmark"] == 2
+    in_three = put_position(library_app, "a", book, 2, version=position["position_version"])
+    assert in_three.status_code == 200 and in_three.json()["bookmark"] == 2
+    unread = client.put(f"/api/books/{book}/read-chapters", headers=as_reader(library_app, "a"),
+                        json={"atoms": [2], "read": False})
+    assert unread.status_code == 200, unread.text
+    lowered = client.get(f"/api/books/{book}/position", headers=as_reader(library_app, "a")).json()
+    assert lowered["bookmark"] == 1
+    # The reload: the page in chapter 3 reports its place again.
+    reloaded = put_position(library_app, "a", book, 2, sequence=2,
+                            version=lowered["position_version"])
+    assert reloaded.status_code == 200, reloaded.text
+    assert reloaded.json()["bookmark"] == 1 and reloaded.json()["applied"] is True
+    after = client.get(f"/api/books/{book}/position", headers=as_reader(library_app, "a")).json()
+    assert after["bookmark"] == 1 and after["position_version"] > lowered["position_version"]
 
 
 # The local manifest's shape (app/api/books.py atom_manifest), which the reader reads.

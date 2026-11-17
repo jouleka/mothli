@@ -1110,7 +1110,11 @@ class PostgresTenantRepository:
         base_version: int,
         client_id: uuid.UUID,
         client_sequence: int,
+        move_counter: bool = True,
     ) -> dict:
+        """Keep the reader's place. ``completed_chapter`` raises the chapter counter only with
+        ``move_counter``; without it (the read map, which moves the counter itself) it is checked
+        against the book and otherwise leaves the counter as it is."""
         async with self._transaction(owner_id) as conn:
             state = await (
                 await conn.execute(
@@ -1149,6 +1153,8 @@ class PostgresTenantRepository:
             ).fetchone()
             if completed_chapter > maximum["maximum"]:
                 raise InvalidPositionError("completed chapter is outside the current book")
+            if not move_counter:
+                completed_chapter = min(completed_chapter, state["bookmark"])
 
             stale_base = base_version < state["position_version"]
             incoming_writer = (client_id.hex, client_sequence)

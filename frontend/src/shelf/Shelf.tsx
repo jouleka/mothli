@@ -18,6 +18,7 @@ import { readLastPassage, sinceLabel } from "../reader/lastPassage";
 import { shelfJourney } from "../reader/chapterPlace";
 import { Account } from "./Account";
 import { ProviderSettings } from "./ProviderSettings";
+import { RemoveBook } from "./RemoveBook";
 import { HomeChat } from "./HomeChat";
 import "./shelf-redesign.css";
 
@@ -155,6 +156,11 @@ export function Shelf({
   const offlineIds =
     offlineState.owner === owner ? offlineState.ids : new Set<string>();
   const [offlineStatus, setOfflineStatus] = useState("");
+  const [toastIcon, setToastIcon] = useState<"download" | "check">("download");
+  // The book whose "Remove" was pressed: the second step asks before anything goes.
+  const [removing, setRemoving] = useState<Book | null>(null);
+  const removeOpener = useRef<HTMLElement | null>(null);
+  const collectionTitle = useRef<HTMLHeadingElement>(null);
   const [showAccount, setShowAccount] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "recent" | "offline">("all");
@@ -307,6 +313,7 @@ export function Shelf({
   const saveOffline = async (book: Book) => {
     if (offlineBusy) return;
     setOfflineBusy(book.book_id);
+    setToastIcon("download");
     setOfflineStatus(`Saving ${book.title} for offline reading…`);
     try {
       await cacheBookForOffline(book.book_id);
@@ -386,6 +393,37 @@ export function Shelf({
       </span>
     </button>
   );
+  // Quiet, under the offline button: it only opens the second step, which asks first.
+  const removeButton = (book: Book) => (
+    <button
+      type="button"
+      className="ml-offline ml-remove"
+      aria-label="Remove from your shelf"
+      aria-describedby={`book-${book.book_id}-title`}
+      aria-haspopup="dialog"
+      title="Remove from your shelf"
+      onClick={(event) => {
+        removeOpener.current = event.currentTarget;
+        setRemoving(book);
+      }}
+    >
+      Remove
+    </button>
+  );
+  const afterRemoval = (book: Book) => {
+    setRemoving(null);
+    setBooks((current) => current?.filter((item) => item.book_id !== book.book_id) ?? current);
+    setRecent((current) => ({ owner, ids: current.ids.filter((id) => id !== book.book_id) }));
+    setOfflineState((current) => ({
+      owner,
+      ids: new Set([...current.ids].filter((id) => id !== book.book_id)),
+    }));
+    setToastIcon("check");
+    setOfflineStatus(`${book.title} is off your shelf.`);
+    // Its button is gone with it: focus the list it was in.
+    window.setTimeout(() => collectionTitle.current?.focus());
+    void refresh();
+  };
   const bookName = (book: Book) =>
     book.author ? `${book.title}, ${book.author}` : book.title;
 
@@ -629,7 +667,7 @@ export function Shelf({
 
         <section className="ml-collection" aria-labelledby="collection-title">
           <div className="ml-collection-head">
-            <h2 id="collection-title">
+            <h2 id="collection-title" ref={collectionTitle} tabIndex={-1}>
               {filter === "recent"
                 ? "Recently opened"
                 : filter === "offline"
@@ -764,7 +802,10 @@ export function Shelf({
                           <BookCover book={book} art={`/api/books/${encodeURIComponent(book.book_id)}/cover`} />
                         </button>
                         <span className="sr-only" id={`book-${book.book_id}-title`}>{book.title}</span>
-                        {offlineButton(book)}
+                        <div className="ml-book-actions">
+                          {offlineButton(book)}
+                          {removeButton(book)}
+                        </div>
                       </article>
                     ))}
                     {browsingAll && (
@@ -812,6 +853,7 @@ export function Shelf({
                             </span>
                           </button>
                           {offlineButton(book)}
+                          {removeButton(book)}
                         </article>
                       </li>
                     ))}
@@ -853,6 +895,18 @@ export function Shelf({
         </footer>
       </main>
 
+      {removing && (
+        <RemoveBook
+          book={removing}
+          hosted={session !== undefined}
+          onRemoved={() => afterRemoval(removing)}
+          onClose={() => {
+            setRemoving(null);
+            // After the sheet has gone and the page behind is no longer inert.
+            window.setTimeout(() => removeOpener.current?.focus());
+          }}
+        />
+      )}
       {showSettings && (
         <ProviderSettings onClose={() => setShowSettings(false)} />
       )}
@@ -868,11 +922,11 @@ export function Shelf({
       )}
       {offlineStatus && (
         <div className="library-toast ml-toast" aria-live="polite">
-          <Icon name="download" size={17} />
+          <Icon name={toastIcon} size={17} />
           {offlineStatus}
           <button
             className="plain"
-            aria-label="Dismiss offline message"
+            aria-label="Dismiss message"
             onClick={() => setOfflineStatus("")}
           >
             <Icon name="close" size={17} />

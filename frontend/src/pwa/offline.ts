@@ -242,6 +242,53 @@ export async function purgeOfflineTenant(
     target.removeItem(ACTIVE_OWNER_KEY);
 }
 
+/** Fired when the server says a book is not the reader's (it was removed, maybe in another tab
+ * or on another device), with the book's id as `detail` (api.ts). The reader for that book listens. */
+export const BOOK_GONE_EVENT = "mothli:book-gone";
+
+/** Set in this browser when a book is removed from the shelf, so another tab reading it hears
+ * about it at once (a `storage` event) instead of at its next request. The value is the book's id
+ * and the reader's, as JSON. */
+export const BOOK_REMOVED_KEY = "mothli.book-removed";
+
+/** A book left the shelf: forget it on this device. The offline copy and every response the app
+ * kept for it, everything this browser stored under its id (highlights and notes in local mode,
+ * saved replies, the last passage, drafts, preferences), changes still waiting to be sent for it,
+ * and its place in the recently opened list. Then tell this browser's other tabs. */
+export async function forgetBookOnDevice(
+  bookId: string,
+  owner = activeOfflineOwner(),
+): Promise<void> {
+  const target = storage();
+  if (target) {
+    const keys = Array.from({ length: target.length }, (_, index) => target.key(index));
+    for (const key of keys) if (key?.includes(bookId)) target.removeItem(key);
+    writeOutbox(readOutbox(owner).filter((item) => item.bookId !== bookId), owner);
+    const recentKey = `litlet.library-recent:${owner}`;
+    try {
+      const recent: unknown = JSON.parse(target.getItem(recentKey) ?? "[]");
+      if (Array.isArray(recent))
+        target.setItem(recentKey, JSON.stringify(recent.filter((id) => id !== bookId)));
+    } catch {
+      target.removeItem(recentKey);
+    }
+    try {
+      target.setItem(BOOK_REMOVED_KEY, JSON.stringify({ owner, book: bookId, at: Date.now() }));
+    } catch {
+      /* the other tabs find out at their next request instead */
+    }
+  }
+  if (!("caches" in globalThis)) return;
+  try {
+    const cache = await caches.open(offlineOwnerCacheName(owner));
+    const prefix = `/api/books/${bookId}/`;
+    for (const request of await cache.keys())
+      if (new URL(request.url, "http://localhost").pathname.startsWith(prefix)) await cache.delete(request);
+  } catch {
+    /* no cache storage here: nothing was kept */
+  }
+}
+
 async function setOwner(owner: string): Promise<void> {
   const normalized = validOwner(owner) ? owner : LOCAL_OWNER;
   const previous = activeOfflineOwner();

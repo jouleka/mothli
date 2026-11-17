@@ -40,7 +40,9 @@ export function ReaderMarks({
   exportUrl: string;
   status: string;
   onHighlight: (color: HighlightMark["color"]) => void;
-  onAssist: (action: SelectionAction) => void;
+  /** Mothli's help with the picked passage. Left out where the server has none: then "Talk to
+   * Mothli" and the passage tools are not offered with a selection. */
+  onAssist?: (action: SelectionAction) => void;
   onAnnotate: (body: string) => void;
   onBookmark: (label: string) => void;
   onNavigate: (mark: ReaderMark) => void;
@@ -148,15 +150,17 @@ export function ReaderMarks({
               disabled={busy}
               onClick={() => setSelectionTool(selectionTool === "note" ? null : "note")}
             >Note</Button>
-            <Button variant="ghost" icon="sparkle" disabled={busy}
-              onClick={() => onTalkAboutSelection ? onTalkAboutSelection() : onAssist("explain")}
-            >Talk to Mothli</Button>
-            <Button variant="ghost" className="icon-button" aria-label="More passage tools"
-              aria-expanded={selectionTool === "understand"} aria-controls={`${id}-understand`}
-              disabled={busy} onClick={() => setSelectionTool(selectionTool === "understand" ? null : "understand")}
-            ><Icon name="more" /></Button>
+            {onAssist && <>
+              <Button variant="ghost" icon="sparkle" disabled={busy}
+                onClick={() => onTalkAboutSelection ? onTalkAboutSelection() : onAssist("explain")}
+              >Talk to Mothli</Button>
+              <Button variant="ghost" className="icon-button" aria-label="More passage tools"
+                aria-expanded={selectionTool === "understand"} aria-controls={`${id}-understand`}
+                disabled={busy} onClick={() => setSelectionTool(selectionTool === "understand" ? null : "understand")}
+              ><Icon name="more" /></Button>
+            </>}
           </div>
-          {selectionTool === "understand" && <div id={`${id}-understand`} className="selection-ai-actions" aria-label="Passage tools">
+          {onAssist && selectionTool === "understand" && <div id={`${id}-understand`} className="selection-ai-actions" aria-label="Passage tools">
             <Button disabled={busy} onClick={() => onAssist("define")}>Define</Button>
             <Button disabled={busy} onClick={() => onAssist("translate")}>Translate</Button>
           </div>}
