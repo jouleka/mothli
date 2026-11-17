@@ -553,7 +553,8 @@ async def store_epub(
     source_kind: str = "upload",
 ) -> dict:
     """The hosted import of one EPUB for this owner: validated and segmented, stored encrypted
-    under the owner's own object, then its rows, search text and (with reader keys) extraction job
+    under the owner's own object, then its rows, search text and (with reader keys, and story
+    memory off) extraction job
     written in one transaction under the owner's limits; the object is removed again if that
     transaction fails.
     The upload route and the free library's add both come here, so a book from either is
@@ -627,9 +628,11 @@ async def store_epub(
                 chapter_count=len(chapters),
                 search_documents=search_documents,
                 source_kind=source_kind,
-                # Extraction runs on a reader's own key; while there are none, nothing could
-                # run a job, so none is made (ADR 0041 part 10).
-                extraction_job=request.app.state.settings.hosted_reader_keys,
+                # The reader-key extraction job never had a handler. While there are no reader
+                # keys nothing could run one (ADR 0041 part 10), and with story memory on it is
+                # retired: story_memory jobs build the memory instead (ADR 0042 section 6).
+                extraction_job=(request.app.state.settings.hosted_reader_keys
+                                and not request.app.state.settings.hosted_story_memory),
             )
         except BaseException as exc:
             try:

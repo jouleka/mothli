@@ -152,3 +152,34 @@ def test_local_rules_for_the_conversation_are_unchanged(tmp_path) -> None:
                         jev_enabled=True)
     assert settings.reader_conversation_stream and settings.reader_read_map
     assert settings.reader_story_notes and settings.reader_recollections
+
+
+def test_story_memory_settings_refuse_what_cannot_work(tmp_path) -> None:
+    """The break it catches (ADR 0042 sections 3 and 6): a reader's own story memory switched on
+    without the feature (nothing would build it), the hosted feature switched on in local mode
+    (which builds its own), or owner-paid extraction without the chat's keys and caps; the
+    worker running the kind without HOSTED_STORY_MEMORY; or an extraction client that embeds for
+    real or follows the chat's model settings."""
+    from app.hosted.companion.jobs import companion_kinds
+    from app.llm.factory import build_extraction_client
+
+    off = hosted_settings(tmp_path, **CHAT)
+    assert not off.hosted_story_memory and not off.hosted_reader_story_memory
+    assert companion_kinds(off) == {"recollect"}
+    library_only = hosted_settings(tmp_path, **CHAT, hosted_story_memory=True)
+    assert companion_kinds(library_only) == {"recollect", "story_memory"}
+    readers = hosted_settings(tmp_path, **CHAT, hosted_story_memory=True,
+                              hosted_reader_story_memory=True,
+                              embed_provider="openai-compatible", llm_cheap_model="gpt-6-luna")
+    client = build_extraction_client(readers)
+    assert client.embed_identity() == "stub:lexical-stub-256"
+    assert client.provider == "openai-compatible"
+    assert client._model_for("cheap") == client._model_for("large") != "gpt-6-luna"
+    with pytest.raises(ValueError, match="HOSTED_READER_STORY_MEMORY requires HOSTED_STORY_MEMORY"):
+        hosted_settings(tmp_path, **CHAT, hosted_reader_story_memory=True)
+    with pytest.raises(ValueError, match="story memory in hosted mode requires"):
+        hosted_settings(tmp_path, hosted_story_memory=True)
+    with pytest.raises(ValueError, match="the streamed chat in hosted mode requires"):
+        hosted_settings(tmp_path, **without("openai_api_key"), hosted_story_memory=True)
+    with pytest.raises(ValueError, match="HOSTED_STORY_MEMORY is a hosted-mode setting"):
+        Settings(_env_file=None, data_dir=str(tmp_path / "local"), hosted_story_memory=True)

@@ -39,6 +39,22 @@ def _check_hosted(settings: Settings) -> None:
         raise PlatformClientsUnavailable("hosted mode requires TYPESAFE_API_KEY for the platform's checks")
 
 
+def build_extraction_client(settings: Settings) -> LLMClient:
+    """The platform's story-memory extraction client (ADR 0042 sections 4 and 8): the writer's
+    account, both tiers on the provider's default model whatever the chat's ``LLM_*_MODEL`` say,
+    and the stub embedder, set explicitly (a lone OpenAI key would otherwise turn real embeddings
+    on). Raises to refuse startup."""
+    if settings.deployment_mode == "hosted":
+        _check_hosted(settings)
+    account = {name: value for name, value in settings.llm_env().items()
+               if name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_BASE_URL")}
+    client = LLMClient(env=account, embed_provider="stub", embed_model="lexical-stub-256",
+                       allow_stub=settings.allow_stub, max_retries=0)
+    if settings.deployment_mode == "hosted" and client.provider not in HOSTED_WRITER_PROVIDERS:
+        raise PlatformClientsUnavailable("hosted mode allows only an OpenAI-compatible or Anthropic writer")
+    return client
+
+
 def build_platform_clients(settings: Settings) -> LLMClient:
     """The writer ``LLMClient``, with ``.jev`` set when Jev is enabled. Raises to refuse startup."""
     hosted = settings.deployment_mode == "hosted"

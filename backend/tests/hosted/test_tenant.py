@@ -115,7 +115,7 @@ def test_every_companion_adapter_is_bound_to_one_owner_at_construction() -> None
 
 def test_endpoint_inventory_names_cross_tenant_evidence_and_unavailable_surfaces() -> None:
     inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
-    assert inventory["version"] == 22
+    assert inventory["version"] == 23
     assert all(item["cross_tenant_test"] for item in inventory["enabled"])
     assert all(item["cross_tenant_test"] for item in inventory["unavailable"])
     assert all(item["cross_tenant_test"] for item in inventory["background"])
@@ -143,6 +143,7 @@ def test_endpoint_inventory_names_cross_tenant_evidence_and_unavailable_surfaces
         "s3-source-storage",
         "runtime-cache-and-locks",
         "companion-jobs",
+        "story-memory",
         "account-purge",
     }
     unavailable = {item["access"] for item in inventory["unavailable"]}
