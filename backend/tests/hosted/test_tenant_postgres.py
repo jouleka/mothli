@@ -275,6 +275,9 @@ class SessionRepository:
     async def authenticate_session(self, *, session_digest, now, idle_ttl):
         return self.sessions.get(session_digest)
 
+    async def account_joined(self, *, owner_id):
+        return datetime(2026, 7, 1, 9, tzinfo=UTC)
+
 
 class UnusedOIDCClient:
     pass

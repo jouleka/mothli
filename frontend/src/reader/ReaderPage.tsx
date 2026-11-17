@@ -157,6 +157,12 @@ export const BOOK_GONE_TITLE = "I can’t find this book on your shelf.";
 export const BOOK_GONE_LINE =
   "It may have been removed, here or on another device. Your other books are waiting for you.";
 
+/** The name a saved book file gets: its title, as a file name every system accepts. */
+export function bookFileName(title: string): string {
+  const name = title.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim();
+  return `${name.slice(0, 80).trim() || "book"}.epub`;
+}
+
 export function ReaderPage({
   bookId,
   onBack,
@@ -1719,6 +1725,7 @@ export function ReaderPage({
                       }),
                     )}`
               }
+              bookFile={hosted ? { url: api.epubUrl(bookId), name: bookFileName(title) } : undefined}
               status={marksStatus}
               onAssist={passageHelp ? (action) => {
                 if (readerSelection) setSelectionAssist({ action, selection: readerSelection });

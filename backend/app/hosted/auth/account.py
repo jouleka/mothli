@@ -9,7 +9,7 @@ sign out. The erasure itself is the daily purge (``app/hosted/purge.py``), under
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.hosted.auth.api import (
     _NO_STORE,
@@ -20,10 +20,68 @@ from app.hosted.auth.api import (
     authenticated_session,
     csrf_valid,
 )
-from app.hosted.tenant.api import _csrf_owner, _owner_input_guard
+from app.hosted.companion import CompanionDatabaseBusy
+from app.hosted.limits import LimitExceededError
+from app.hosted.tenant.api import _csrf_owner, _limit_failure, _owner_input_guard
+from app.hosted.tenant.export import ExportGate, ExportRefused, make_copy, stream
 from app.hosted.tenant.models import OwnerId
 
 router = APIRouter(prefix="/api/account", tags=["hosted-library"])
+
+
+def _refused(status: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse({"detail": {"code": code, "message": message}}, status_code=status,
+                        headers=_NO_STORE)
+
+
+@router.get("/export")
+async def export_account(request: Request, _guard: None = Depends(_owner_input_guard)):
+    """The reader's copy of their data, one zip (``app/hosted/tenant/export.py``). Read-only.
+    Signed in, and the one more thing, with keeping the account and signing out, that a reader
+    waiting to be erased may do: so it checks the session itself instead of ``_owner``, and still
+    counts against the reader's request limit."""
+    authenticated = await authenticated_session(request)
+    if authenticated is None:
+        raise HTTPException(401, "Authentication required")
+    principal = authenticated.principal
+    owner_id = OwnerId(principal.owner_id)
+    tenant = request.app.state.tenant_repository
+    try:
+        await tenant.consume_request_limit(owner_id)
+    except LimitExceededError as exc:
+        raise _limit_failure(exc) from exc
+    gate = getattr(request.app.state, "account_export_gate", None)
+    if gate is None:
+        gate = request.app.state.account_export_gate = ExportGate()
+    try:
+        gate.admit(owner_id)
+    except ExportRefused as refused:
+        return _refused(refused.status, refused.code, refused.message)
+    made = False
+    try:
+        joined = await request.app.state.auth_repository.account_joined(owner_id=owner_id.value)
+        who = {"name": principal.display_name, "email": principal.email,
+               "joined": None if joined is None else joined.isoformat()}
+        try:
+            copy = await make_copy(request=request, owner_id=owner_id, who=who)
+        except CompanionDatabaseBusy:
+            return _refused(503, "export_busy",
+                            "Mothli is busy right now. Try again in a minute.")
+        try:
+            await tenant.record_account_export(owner_id)
+        except BaseException:
+            copy.close()
+            raise
+        made = True
+    finally:
+        if not made:
+            gate.finished(owner_id, made=False)
+    day = _now(request).strftime("%Y-%m-%d")
+    return StreamingResponse(
+        stream(copy, lambda: gate.finished(owner_id, made=True)),
+        media_type="application/zip",
+        headers={**_NO_STORE,
+                 "Content-Disposition": f'attachment; filename="mothli-my-data-{day}.zip"'})
 
 
 @router.post("/delete")

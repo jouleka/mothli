@@ -3,7 +3,8 @@
  * 404), signing out, which also clears the books saved for offline reading on this device, and,
  * quietly at the end, deleting the account: a second step says plainly what happens and needs a
  * deliberate yes. A modal sheet like "What Mothli remembers" (fl-scrim / fl-sheet), with the same
- * focus handling. Taking a copy of one's data is not here yet. */
+ * focus handling. "Take a copy of my data" sits quietly after "What Mothli remembers", and is
+ * offered again in the delete confirmation (TakeACopy.tsx). */
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, ApiError } from "../api";
@@ -12,6 +13,7 @@ import { keepTabFocusInside } from "../reader/focusTrap";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { MothliRemembers } from "./MothliRemembers";
+import { TakeACopy } from "./TakeACopy";
 import { noteAccountDeleted } from "./SignIn";
 import "../library/free-library.css";
 import "./home-chat.css";
@@ -157,6 +159,7 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
                 remembers are erased for good.
               </li>
             </ul>
+            <TakeACopy what="Before you go, you can keep a copy of your shelf, your notes and your chats. The books themselves aren’t in it." />
             <label className="ml-account-understood" htmlFor={understoodId}>
               <input
                 id={understoodId}
@@ -203,6 +206,10 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
                 <p className="ml-mem-quiet">The little things you’ve told Mothli about yourself. Forget any of them whenever you like.</p>
               </div>
             )}
+
+            <div className="ml-account-part">
+              <TakeACopy />
+            </div>
 
             <div className="ml-account-part">
               <p className="ml-mem-quiet" id={leaveId}>

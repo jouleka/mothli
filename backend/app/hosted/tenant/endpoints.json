@@ -1,5 +1,5 @@
 {
-  "version": 20,
+  "version": 21,
   "required_surface_classes": [
     "list",
     "get",
@@ -432,6 +432,15 @@
       "access": "account-keep",
       "repository_method": "PostgresAuthRepository.restore_account",
       "cross_tenant_test": "test_one_reader_cannot_delete_keep_or_erase_another"
+    },
+    {
+      "method": "GET",
+      "path": "/api/account/export",
+      "surface": "export",
+      "access": "account-export",
+      "repository_method": "export.build_copy",
+      "cross_tenant_test": "test_each_readers_copy_holds_only_their_own_data",
+      "while_pending_deletion": "allowed"
     },
     {
       "method": "POST",

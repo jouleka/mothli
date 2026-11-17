@@ -1013,4 +1013,12 @@ export const api = {
   /** Hosted: undo a pending deletion; an ordinary account again, everything as it was. */
   keepAccount: () =>
     fetch("/api/account/keep", { method: "POST", headers: csrfHeaders() }).then((r) => j<void>(r)),
+  /** Hosted: the reader's copy of their data, one zip, with the name the server gives it. Open
+   * to a reader waiting to be erased too. */
+  exportAccount: async (): Promise<{ blob: Blob; name: string }> => {
+    const response = await fetch("/api/account/export", { cache: "no-store" });
+    if (!response.ok) await j<never>(response);
+    const name = /filename="([^"]+)"/.exec(response.headers.get("content-disposition") ?? "")?.[1];
+    return { blob: await response.blob(), name: name ?? "mothli-my-data.zip" };
+  },
 };

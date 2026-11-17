@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import { axeAA } from "../test-a11y";
 import type { ReaderMark } from "../api";
 import { ReaderMarks } from "./ReaderMarksPanel";
+import { bookFileName } from "./ReaderPage";
 
 const mark: ReaderMark = {
   id: "m",
@@ -134,5 +135,21 @@ describe("ReaderMarks", () => {
     expect(sourceJump).toHaveBeenCalledOnce();
     rerender(<ReaderMarks {...props} savedReplies={[reply]} onNavigateReply={navigate} openRequest={1} />);
     expect(screen.getByRole("region", { name: "Saved from Mothli" })).toBeTruthy();
+  });
+  // Catches: a hosted reader with no way to save a book's own file (their copy of their data
+  // leaves the books out and sends them here); a link to a file local mode keeps in its folder.
+  test("hosted: the notebook offers the book's own file; local: it does not", () => {
+    const { rerender } = render(<ReaderMarks {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Notebook" }));
+    expect(screen.queryByRole("link", { name: "Download the book" })).toBeNull();
+    rerender(<ReaderMarks {...props} bookFile={{ url: "/api/books/b1/epub", name: "The Lamp Book.epub" }} />);
+    const link = screen.getByRole("link", { name: "Download the book" });
+    expect(link.getAttribute("href")).toBe("/api/books/b1/epub");
+    expect(link.getAttribute("download")).toBe("The Lamp Book.epub");
+  });
+  test("a saved book is named after its title, safely", () => {
+    expect(bookFileName("The Lamp Book")).toBe("The Lamp Book.epub");
+    expect(bookFileName("What? A/B: \"C\"")).toBe("What A B C.epub");
+    expect(bookFileName("   ")).toBe("book.epub");
   });
 });

@@ -18,6 +18,7 @@ export function ReaderMarks({
   selection,
   currentAnchor,
   exportUrl,
+  bookFile,
   status,
   onHighlight,
   onAssist,
@@ -38,6 +39,8 @@ export function ReaderMarks({
   selection: ReaderSelection | null;
   currentAnchor: ReaderMarkAnchor | null;
   exportUrl: string;
+  /** Hosted mode: the book's own file, to save (local mode keeps it in Mothli's folder). */
+  bookFile?: { url: string; name: string };
   status: string;
   onHighlight: (color: HighlightMark["color"]) => void;
   /** Mothli's help with the picked passage. Left out where the server has none: then "Talk to
@@ -305,6 +308,11 @@ export function ReaderMarks({
           >
             <Icon name="download" size={16} /> Export pages
           </a>
+          {bookFile && (
+            <a className="plain marks-export" href={bookFile.url} download={bookFile.name}>
+              <Icon name="download" size={16} /> Download the book
+            </a>
+          )}
         </section>
       )}
       {!open && !selection && status && (

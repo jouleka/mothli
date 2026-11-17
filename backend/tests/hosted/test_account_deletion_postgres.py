@@ -8,9 +8,11 @@ as its own least-privileged role. Made-up data only.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import re
 import uuid
+import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -368,14 +370,28 @@ def test_signing_in_while_pending_answers_only_the_pending_refusal_on_every_inve
     session = a["client"].get("/api/auth/session")
     assert session.status_code == 200
     erase_after = session.json()["erase_after"]
+    quiet = {"sessions", "audit_events", "external_identities"}
     with psycopg.connect(world.database) as conn:
-        before = _rows(conn, a["owner"], leave_out={"sessions", "audit_events",
-                                                    "external_identities"})
+        before = _rows(conn, a["owner"], leave_out=quiet)
 
     inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
+    # The one stated exception besides keeping the account: taking a copy of one's data first.
+    # It reads and changes nothing but the reader's request counter.
+    allowed = {item["path"] for item in inventory["enabled"]
+               if item.get("while_pending_deletion") == "allowed"}
+    assert allowed == {"/api/account/export"}
+    copy = a["client"].get("/api/account/export")
+    assert copy.status_code == 200, copy.text
+    assert copy.headers["content-type"] == "application/zip"
+    assert "shelf.json" in zipfile.ZipFile(io.BytesIO(copy.content)).namelist()
+    with psycopg.connect(world.database) as conn:
+        after_copy = _rows(conn, a["owner"], leave_out=quiet)
+    assert {t: r for t, r in after_copy.items() if t != "owner_request_windows"} == {
+        t: r for t, r in before.items() if t != "owner_request_windows"}
+    before = after_copy
     walked = 0
     for item in inventory["enabled"]:
-        if item["path"] == "/api/account/keep":
+        if item["path"] == "/api/account/keep" or item["path"] in allowed:
             continue
         path = re.sub(r"\{(\w+)\}", lambda match: "extraction" if match[1] == "capability"
                       else str(book) if match[1] == "book_id" else str(uuid.uuid4()), item["path"])
@@ -384,10 +400,9 @@ def test_signing_in_while_pending_answers_only_the_pending_refusal_on_every_inve
         assert response.status_code == 403, (item["method"], path, response.text)
         assert response.json()["detail"] == {"code": PENDING, "erase_after": erase_after}, path
         walked += 1
-    assert walked == len(inventory["enabled"]) - 1
+    assert walked == len(inventory["enabled"]) - 1 - len(allowed)
     with psycopg.connect(world.database) as conn:
-        assert _rows(conn, a["owner"], leave_out={"sessions", "audit_events",
-                                                  "external_identities"}) == before
+        assert _rows(conn, a["owner"], leave_out=quiet) == before
     # Signing out still works.
     assert a["client"].post("/api/auth/logout", headers=world.csrf("a")).status_code == 204
     assert a["client"].get("/api/auth/session").status_code == 401

@@ -239,6 +239,9 @@ describe("Library interactions", () => {
     expect(within(menu).queryByRole("button", { name: "Your account" })).toBeNull();
     expect(within(menu).queryByRole("link")).toBeNull();
     expect(within(menu).queryByText(/sign (in|out)/i)).toBeNull();
+    // No account, so no copy of one either.
+    expect(screen.queryByRole("button", { name: "Take a copy of my data" })).toBeNull();
+    expect(screen.queryByText(/copy of (my|your) data/i)).toBeNull();
   });
 
   test("hosted: the reader's account opens from the menu and focus comes back to it", async () => {

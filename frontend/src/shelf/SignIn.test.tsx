@@ -1,11 +1,11 @@
 /** The hosted welcome and the gate in front of the app: local mode is untouched, a signed-out
  * reader gets one way in, and a sign-in that ends mid-read brings them back to the same page. */
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { announcePendingDeletion, announceSignedOut, type OfflineSession } from "../pwa/offline";
 import { axeAA } from "../test-a11y";
 
-const mocks = vi.hoisted(() => ({ keepAccount: vi.fn(), logout: vi.fn() }));
+const mocks = vi.hoisted(() => ({ keepAccount: vi.fn(), logout: vi.fn(), exportAccount: vi.fn() }));
 vi.mock("../api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api")>()),
   api: mocks,
@@ -132,6 +132,35 @@ describe("waiting to be erased", () => {
       "That didn’t work just now. Check your connection and try again.");
     expect(assign).not.toHaveBeenCalled();
     expect((screen.getByRole("button", { name: "Keep my account" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // Catches: a reader on their way out with no way to take what is theirs; the copy offered
+  // to a reader who is simply signed out.
+  test("the one more thing they may do is take a copy of their data", async () => {
+    mocks.exportAccount.mockReset().mockResolvedValue({
+      blob: new Blob(["zip"]), name: "mothli-my-data-2026-11-17.zip" });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const realCreate = URL.createObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:made-up");
+    try {
+      const { container } = render(<SignInGate session={pending}>{theApp()}</SignInGate>);
+      const door = screen.getByRole("button", { name: "Take a copy of my data" });
+      expect(document.getElementById(door.getAttribute("aria-describedby")!)?.textContent).toBe(
+        "Leaving anyway? Take everything that’s yours with you first, in one file. The books themselves aren’t in it.");
+      fireEvent.click(door);
+      await waitFor(() => expect(screen.getByRole("status").textContent).toBe(
+        "Done. Your copy is in your downloads."));
+      expect(click).toHaveBeenCalledTimes(1);
+      expect(mocks.keepAccount).not.toHaveBeenCalled();
+      expect(mocks.logout).not.toHaveBeenCalled();
+      expect(await axeAA(container)).toHaveNoViolations();
+    } finally {
+      URL.createObjectURL = realCreate;
+      click.mockRestore();
+    }
+    cleanup();
+    render(<SignInGate session={null}>{theApp()}</SignInGate>);
+    expect(screen.queryByRole("button", { name: "Take a copy of my data" })).toBeNull();
   });
 
   test("signing out goes back to the welcome", async () => {

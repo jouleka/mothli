@@ -2226,6 +2226,19 @@ class PostgresTenantRepository:
             )
             return cursor.rowcount
 
+    async def record_account_export(self, owner_id: OwnerId) -> None:
+        """A content-free audit line: this reader took a copy of their data."""
+        async with self._transaction(owner_id) as conn:
+            await record_event_async(
+                conn,
+                owner_id=owner_id.value,
+                actor_kind="owner",
+                action="account.export",
+                target_kind="account",
+                target_id=None,
+                result="succeeded",
+            )
+
     async def create_credential(
         self, owner_id: OwnerId, envelope: EncryptedCredential
     ) -> dict:
