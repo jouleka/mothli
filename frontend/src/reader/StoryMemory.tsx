@@ -2,14 +2,21 @@
  * served by bookmark-clamped routes (graph, character, notes, catch-me-up), so nothing past the
  * reader's frontier can appear. Read-only; asking about something hands off to the conversation. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, type ChapterNote, type Character, type GraphNode } from "../api";
+import { api, ApiError, type ChapterNote, type Character, type EntityId, type GraphNode } from "../api";
 import { Icon } from "../ui/Icon";
 import { Moth } from "../ui/Moth";
 
 const TONES = ["wing", "moss", "dusk", "rose", "sky"] as const;
-function toneFor(id: number) {
-  return TONES[Math.abs(id * 7 + 3) % TONES.length];
+/** A person's colour, always the same for them. Ids are numbers locally and UUIDs in hosted mode. */
+export function toneFor(id: EntityId) {
+  let value = 0;
+  if (typeof id === "number") value = id;
+  else for (const char of id) value = (value * 31 + char.charCodeAt(0)) % 1000003;
+  return TONES[Math.abs(value * 7 + 3) % TONES.length];
 }
+/** Local ids count up in the order people were met, so they break a tie; hosted ids do not, and
+ * the server's own order stands. */
+const byId = (a: EntityId, b: EntityId) => (typeof a === "number" && typeof b === "number" ? a - b : 0);
 function initials(name: string) {
   const parts = name.replace(/[^\p{L}\s'-]/gu, "").trim().split(/\s+/);
   return ((parts[0]?.[0] ?? "?") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
@@ -18,7 +25,7 @@ export function shortName(name: string) {
   return name.split(/\s+/)[0] ?? name;
 }
 
-export function PersonAvatar({ id, name, size = 40 }: { id: number; name: string; size?: number }) {
+export function PersonAvatar({ id, name, size = 40 }: { id: EntityId; name: string; size?: number }) {
   return (
     <span
       className={`memory-avatar memory-avatar--${toneFor(id)}`}
@@ -58,6 +65,28 @@ function MemoryState({ mood, children }: { mood: "thinking" | "sleepy" | "curiou
   );
 }
 
+const WAITING = "I’m a little behind you. I’ll catch up on the rest tomorrow.";
+
+/** Whether the rest of this book's memory waits for tomorrow (the server answers
+ * `status: "waiting"` once a reader's allowance for the day is spent). Asked only when what came
+ * back is behind the reader; a server that never waits never shows the line. */
+function useWaiting(bookId: string, behind: boolean) {
+  const [waiting, setWaiting] = useState(false);
+  useEffect(() => {
+    setWaiting(false);
+    if (!behind) return;
+    let live = true;
+    Promise.resolve()
+      .then(() => api.ingest(bookId))
+      .then((state) => live && setWaiting(state.status === "waiting"))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [bookId, behind]);
+  return waiting;
+}
+
 export function PeoplePanel({
   bookId,
   bookmark,
@@ -69,15 +98,17 @@ export function PeoplePanel({
   bookmark: number;
   /** Changes when more of the book has been extracted: fetch again, keeping what is shown. */
   refresh?: number;
-  focusId?: number | null;
+  focusId?: EntityId | null;
   onAsk: (name: string) => void;
 }) {
   const [people, setPeople] = useState<GraphNode[] | null>(null);
+  const [asOf, setAsOf] = useState<number | null>(null);
   const [failed, setFailed] = useState<Failure>(false);
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<number | null>(focusId ?? null);
+  const [selected, setSelected] = useState<EntityId | null>(focusId ?? null);
   const [detail, setDetail] = useState<Character | null>(null);
   const [detailFailed, setDetailFailed] = useState(false);
+  const waiting = useWaiting(bookId, asOf != null && asOf < bookmark);
 
   useEffect(() => setSelected(focusId ?? null), [focusId]);
   const shownFor = useRef("");
@@ -89,8 +120,10 @@ export function PeoplePanel({
     api
       .graph(bookId, bookmark)
       .then((graph) => {
-        if (live && graph.as_of_chapter <= bookmark)
+        if (live && graph.as_of_chapter <= bookmark) {
           setPeople(graph.characters.filter((node) => node.type === "character" || !node.type));
+          setAsOf(graph.as_of_chapter);
+        }
       })
       .catch((reason: unknown) => live && setFailed(failure(reason)));
     return () => {
@@ -113,7 +146,7 @@ export function PeoplePanel({
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const list = [...(people ?? [])].sort((a, b) => a.revealed_at - b.revealed_at || a.entity_id - b.entity_id);
+    const list = [...(people ?? [])].sort((a, b) => a.revealed_at - b.revealed_at || byId(a.entity_id, b.entity_id));
     if (!needle) return list;
     return list.filter((person) =>
       [person.canonical_name, ...(person.aliases ?? [])].some((name) => name.toLowerCase().includes(needle)),
@@ -197,9 +230,10 @@ export function PeoplePanel({
       ) : people == null ? (
         <MemoryState mood="thinking">Gathering everyone you’ve met…</MemoryState>
       ) : people.length === 0 ? (
-        <MemoryState mood="curious">No one yet. Keep reading and I’ll keep track of who’s who.</MemoryState>
+        <MemoryState mood="curious">{waiting ? WAITING : "No one yet. Keep reading and I’ll keep track of who’s who."}</MemoryState>
       ) : (
         <>
+          {waiting && <p className="memory-intro" role="status">{WAITING}</p>}
           <p className="memory-collection-count">
             <strong>{people.length}</strong> {people.length === 1 ? "person" : "people"} in your cast
           </p>
@@ -233,12 +267,14 @@ export function StoryPanel({
   bookmark: number;
   /** Changes when more of the book has been extracted: fetch again, keeping what is shown. */
   refresh?: number;
-  onOpenPerson: (id: number) => void;
+  onOpenPerson: (id: EntityId) => void;
   onAskChapter: (title: string) => void;
 }) {
   const [chapters, setChapters] = useState<ChapterNote[] | null>(null);
+  const [asOf, setAsOf] = useState<number | null>(null);
   const [failed, setFailed] = useState<Failure>(false);
   const [open, setOpen] = useState<string | null>(null);
+  const waiting = useWaiting(bookId, asOf != null && asOf < bookmark);
 
   const shownFor = useRef("");
   useEffect(() => {
@@ -249,8 +285,10 @@ export function StoryPanel({
     api
       .notes(bookId, bookmark)
       .then((notes) => {
-        if (live && notes.as_of_chapter <= bookmark)
+        if (live && notes.as_of_chapter <= bookmark) {
           setChapters([...notes.chapters].filter((chapter) => chapter.revealed_at <= bookmark).reverse());
+          setAsOf(notes.as_of_chapter);
+        }
       })
       .catch((reason: unknown) => live && setFailed(failure(reason)));
     return () => {
@@ -263,11 +301,12 @@ export function StoryPanel({
   if (failed) return <MemoryState mood="sleepy">I couldn’t open my notes right now. Try again in a moment.</MemoryState>;
   if (!chapters) return <MemoryState mood="thinking">Flipping back through my notes…</MemoryState>;
   if (!chapters.length)
-    return <MemoryState mood="curious">Finish your first chapter and I’ll start keeping notes for you here.</MemoryState>;
+    return <MemoryState mood="curious">{waiting ? WAITING : "Finish your first chapter and I’ll start keeping notes for you here."}</MemoryState>;
 
   return (
     <div className="memory-pane">
       <p className="memory-intro">What happened, chapter by chapter. Your latest chapter is first.</p>
+      {waiting && <p className="memory-intro" role="status">{WAITING}</p>}
       <ol className="memory-timeline" aria-label="The story so far">
         {chapters.map((chapter, index) => {
           const expanded = open === chapter.chapter_key;

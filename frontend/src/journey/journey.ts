@@ -83,17 +83,22 @@ export function milestoneLine(mark: number, title: string) {
   return `A quarter of the way through ${title}. You’re properly in it now.`;
 }
 
-export function unlockedCast(bookId: string): Set<number> {
+/** A cast member's id: a number locally, a UUID in hosted mode. */
+type CastId = number | string;
+
+export function unlockedCast(bookId: string): Set<CastId> {
   try {
     const value = JSON.parse(localStorage.getItem(CAST_KEY(bookId)) ?? "[]");
-    return new Set(Array.isArray(value) ? value.filter((item) => typeof item === "number") : []);
+    return new Set(Array.isArray(value)
+      ? value.filter((item): item is CastId => typeof item === "number" || typeof item === "string")
+      : []);
   } catch {
     return new Set();
   }
 }
 
 /** Remember cast members as unlocked; returns the ids that were new. */
-export function unlockCast(bookId: string, ids: number[]): number[] {
+export function unlockCast(bookId: string, ids: CastId[]): CastId[] {
   const known = unlockedCast(bookId);
   const fresh = ids.filter((id) => !known.has(id));
   if (!fresh.length) return [];

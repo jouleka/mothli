@@ -129,8 +129,10 @@ export type PutPosition = {
   high_water_offset?: number; position_version?: number; applied?: boolean; conflict?: string | null;
   queued?: boolean;
 };
+/** A person in the story memory: a number locally, a UUID in hosted mode. */
+export type EntityId = number | string;
 // a bookmark-bounded surface form -> its entity, so a clicked name opens the one card (LIT-30)
-export type CastMember = { name: string; entity_id: number };
+export type CastMember = { name: string; entity_id: EntityId };
 export type CatchMeUp = {
   // recap = the flowing "story so far" (hero); now = the tight "right now" one-liner (sidebar);
   // cast = the bookmark-bounded names the recap renders as clickable name affordances (LIT-29/30)
@@ -237,21 +239,21 @@ export type SelectionAssistAnswer = {
 };
 export type ChapterCloseout = AskAnswer & { chapter: number };
 // a character's tie to another entity, phrased by `direction` relative to the queried character (LIT-30)
-export type Tie = { entity_id: number; name: string; rel_type: string; label: string; direction: "in" | "out" };
+export type Tie = { entity_id: EntityId; name: string; rel_type: string; label: string; direction: "in" | "out" };
 export type Character = {
-  as_of_chapter: number; entity_id: number; name: string; type: string;
+  as_of_chapter: number; entity_id: EntityId; name: string; type: string;
   aliases: string[]; first_seen: number; status: unknown; ties: Tie[];
 };
 export type IngestStatus = { ingest_progress: number; status: string; flags: string[]; error: string | null };
 export type GraphNode = {
-  entity_id: number;
+  entity_id: EntityId;
   canonical_name: string;
   type: string;
   revealed_at: number;
   aliases?: string[];
 };
 export type GraphEdge = {
-  edge_id: number; src_entity: number; dst_entity: number;
+  edge_id: EntityId; src_entity: EntityId; dst_entity: EntityId;
   rel_type: string; label: string; revealed_at: number; invalid_at: number | null;
 };
 export type Graph = { as_of_chapter: number; characters: GraphNode[]; relationships: GraphEdge[] };
@@ -268,7 +270,7 @@ export type MemoryCorrections = { as_of_chapter: number; items: MemoryCorrection
 // the codex "story broken down" (LIT-31): a chapter + its highlights (who first appears, its events)
 export type ChapterNote = {
   chapter_key: string; revealed_at: number; title: string; summary: string;
-  new_characters: { entity_id: number; name: string }[]; events: string[];
+  new_characters: { entity_id: EntityId; name: string }[]; events: string[];
 };
 export type Notes = { as_of_chapter: number; cast: CastMember[]; chapters: ChapterNote[] };
 export type ProviderCapability = "extraction" | "synthesis" | "embedding" | "judge";
@@ -936,9 +938,9 @@ export const api = {
       body: JSON.stringify({ chapter }),
     })).then((r) => j<ChapterCloseout>(r)),
   // a character's bookmark-clamped card (identity + ties); server 404s a future/unknown entity (LIT-30)
-  character: (id: string, entityId: number, bookmark?: number) =>
+  character: (id: string, entityId: EntityId, bookmark?: number) =>
     unlessMissing("character", () => fetch(
-      `/api/books/${id}/character/${entityId}${bookmark != null ? `?bookmark=${bookmark}` : ""}`,
+      `/api/books/${id}/character/${encodeURIComponent(entityId)}${bookmark != null ? `?bookmark=${bookmark}` : ""}`,
     )).then((r) => j<Character>(r)),
   ingest: (id: string) => unlessMissing("ingest", () => fetch(`/api/books/${id}/ingest`)).then((r) => j<IngestStatus>(r)),
   retryIngest: (id: string) => fetch(`/api/books/${id}/ingest/retry`, { method: "POST", headers: csrfHeaders() })

@@ -2,7 +2,7 @@
  * chapter, a return after a break) it says something short in a speech bubble. Tapping the moth
  * opens the full chat. It never covers the text and never blocks reading. */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, type CatchMeUp } from "../api";
+import { api, type CatchMeUp, type EntityId } from "../api";
 import { Icon } from "../ui/Icon";
 import { Moth, type MothMood } from "../ui/Moth";
 import { PersonAvatar } from "./StoryMemory";
@@ -11,7 +11,7 @@ import "./moth-corner.css";
 export type CornerNote = {
   id: string;
   text: string;
-  people?: { entity_id: number; name: string }[];
+  people?: { entity_id: EntityId; name: string }[];
   action?: { label: string; run: () => void };
 };
 
@@ -30,7 +30,7 @@ export function MothCorner({
   mood?: MothMood;
   onOpen: () => void;
   onDismiss: () => void;
-  onPerson: (id: number) => void;
+  onPerson: (id: EntityId) => void;
 }) {
   const speaking = !!welcome || !!note;
   return (
@@ -146,8 +146,8 @@ export function WelcomeBackCard({
   }, [bookId, bookmark]);
 
   const people = useMemo(() => {
-    const seen = new Set<number>();
-    const list: { id: number; name: string }[] = [];
+    const seen = new Set<EntityId>();
+    const list: { id: EntityId; name: string }[] = [];
     for (const member of recap?.cast ?? []) {
       if (seen.has(member.entity_id)) continue;
       seen.add(member.entity_id);
