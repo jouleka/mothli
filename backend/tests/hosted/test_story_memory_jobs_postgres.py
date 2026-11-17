@@ -392,8 +392,11 @@ def test_a_chapter_failing_on_two_runs_is_kept_unremembered_and_the_book_goes_on
     a.mark(book, [1, 2, 3])
     assert drain(worker(app, extraction, worker_dsn)) == 5
     failed = {"code": code, "retryable": False}
-    assert [(row["state"], row["sanitized_error"], row["payload_metadata"], row["attempt_count"])
-            for row in jobs_of(database, a.owner)] == [
+    # By chapter, failed runs first: two jobs asked for in quick succession can carry the same
+    # (or, when the database host's clock steps, out of order) created_at.
+    assert sorted(((row["state"], row["sanitized_error"], row["payload_metadata"],
+                    row["attempt_count"]) for row in jobs_of(database, a.owner)),
+                  key=lambda job: (job[2]["chapter"], job[0] != "failed")) == [
         ("succeeded", None, {"chapter": 1}, 1), ("failed", failed, {"chapter": 2}, 1),
         ("failed", failed, {"chapter": 2}, 1), ("succeeded", None, {"chapter": 2}, 1),
         ("succeeded", None, {"chapter": 3}, 1)]
