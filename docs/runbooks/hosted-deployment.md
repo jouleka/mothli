@@ -222,6 +222,11 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
   ```
   docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.limits show --owner READER_ID
   ```
+- **"Add to my books" in the free library always says Mothli couldn't get the book.** The web
+  process fetches each book itself, over HTTPS, from Project Gutenberg's `gutenberg.pglaf.org`
+  and `www.gutenberg.org` (nowhere else, and through no proxy). If your server's provider or a
+  firewall limits outbound traffic, allow those two hosts on port 443. To check from the server:
+  `docker compose -f deploy/compose.yaml exec web python -c "import httpx; print(httpx.head('https://gutenberg.pglaf.org/').status_code)"`.
 - **What happened to an account.** The audit log holds no content, only what happened and when:
   ```
   docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.audit show --owner READER_ID --limit 50

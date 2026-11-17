@@ -20,14 +20,17 @@ from app.hosted.tenant.models import OwnerId
 
 _BOOK_COLUMNS = """
     SELECT book.id,book.incarnation,book.title,book.author,book.file_hash,
-           book.content_language,book.book_type,book.created_at
+           book.content_language,book.book_type,book.created_at,book.source_kind
     FROM public.books AS book
 """
 
 
 def _book(row):
+    # ``source`` as locally: "upload", or the free-library tag ("gutenberg:<number>") of a book
+    # added from the library, by which suggestions know that book is already on the shelf.
     return {"book_id": str(row["id"]), "incarnation": str(row["incarnation"]),
             "title": row["title"], "author": row["author"], "file_hash": row["file_hash"],
+            "source": row["source_kind"],
             "content_language": row["content_language"], "book_type": row["book_type"],
             "added_at": row["created_at"].isoformat()}
 

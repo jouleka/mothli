@@ -538,6 +538,25 @@ async def upload_book(
         raise HTTPException(413, "EPUB upload exceeds the configured size limit")
     if not blob:
         raise HTTPException(422, "empty upload")
+    return await store_epub(
+        request, owner_id, blob, fallback_title=(file.filename or "book.epub").rsplit(".", 1)[0]
+    )
+
+
+async def store_epub(
+    request: Request,
+    owner_id: OwnerId,
+    blob: bytes,
+    *,
+    fallback_title: str,
+    fallback_author: str | None = None,
+    source_kind: str = "upload",
+) -> dict:
+    """The hosted import of one EPUB for this owner: validated and segmented, stored encrypted
+    under the owner's own object, then its rows, search text and extraction job written in one
+    transaction under the owner's limits; the object is removed again if that transaction fails.
+    The upload route and the free library's add both come here, so a book from either is
+    imported the same way (ADR 0041 part 11)."""
     book_id = uuid.uuid4()
     incarnation = uuid.uuid4()
     ref = new_source_ref(owner_id)
@@ -553,8 +572,8 @@ async def upload_book(
         raise HTTPException(422, "no body chapters detected in this EPUB")
 
     profile = detect_book_type(result, chapters)
-    title = result.title or (file.filename or "book.epub").rsplit(".", 1)[0]
-    author = result.author
+    title = result.title or fallback_title
+    author = result.author or fallback_author
     checksum = hashlib.sha256(blob).hexdigest()
     char_start = 0
     search_documents = []
@@ -606,6 +625,7 @@ async def upload_book(
                 encryption=receipt.encryption,
                 chapter_count=len(chapters),
                 search_documents=search_documents,
+                source_kind=source_kind,
             )
         except BaseException as exc:
             try:

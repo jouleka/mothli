@@ -1,9 +1,20 @@
 /** The Library: a page for finding a public-domain book to read. A reader can search, pick a mood
  * or a genre, or just wander along the shelves; a book is only downloaded when they add it. The
  * catalogue lives on the reader's own server, which also serves the cover art. */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   api,
+  ApiError,
   type Book,
   type Classic,
   type ClassicDetail,
@@ -59,10 +70,14 @@ function readingTime(minutes: number | null) {
 
 type Results = { key: string; matches: number; books: Classic[] };
 
+/** Whether the server has cover art. Hosted mode has none (a cover cache shared by every reader
+ * would tell one reader what others looked at): the cloth covers are shown and nothing is asked. */
+const CoversShown = createContext(true);
+
 /** Tells the server which covers are about to be shown, so it fetches them ahead, several at once. */
-function warmCovers(books: Classic[]) {
+function warmCovers(books: Classic[], covers: boolean | undefined) {
   const ids = books.slice(0, MAX_WARM).map((book) => book.id);
-  if (ids.length) void api.warmCovers(ids).catch(() => {});
+  if (ids.length && covers !== false) void api.warmCovers(ids).catch(() => {});
 }
 
 /** The front page's books in the order they come into view: the start of every shelf, then the rest. */
@@ -93,11 +108,12 @@ function rememberFilters(filters: Filters) {
 /** Real cover art over a cloth cover: the cloth shows while the picture loads and when there is none. */
 export function Cover({ book, eager = false }: { book: Classic; eager?: boolean }) {
   const [state, setState] = useState<"loading" | "shown" | "none">("loading");
+  const art = useContext(CoversShown);
   const cloth: Book = { book_id: book.id, title: book.title, author: book.author };
   return (
-    <span className="fl-cover" data-art={state}>
+    <span className="fl-cover" data-art={art ? state : "none"}>
       <BookCover book={cloth} />
-      {state !== "none" && (
+      {art && state !== "none" && (
         <img
           src={`/api/classics/${encodeURIComponent(book.id)}/cover`}
           alt=""
@@ -358,6 +374,14 @@ function BookSheet({
       const added = await api.addClassic(book.id);
       onAdded(book, added.book_id);
     } catch (problem) {
+      // Hosted mode: it is on the shelf already (added from elsewhere meanwhile), which is what was asked.
+      if (problem instanceof ApiError && problem.code === "already_on_shelf") {
+        const shelved = await api.classic(book.id).catch(() => null);
+        if (shelved?.book_id) {
+          onAdded(book, shelved.book_id);
+          return;
+        }
+      }
       setError(problem instanceof Error && problem.message ? problem.message : "Couldn’t add this book. Try again.");
     } finally {
       setAdding(false);
@@ -432,6 +456,7 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [added, setAdded] = useState<Record<string, string>>({});
+  const [covers, setCovers] = useState(true);
   const [picked, setPicked] = useState<Classic | null>(null);
   const pickedFrom = useRef<HTMLElement | null>(null);
   const sentinel = useRef<HTMLLIElement>(null);
@@ -453,6 +478,7 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
     api
       .classics({ limit: 1 })
       .then((catalog) => {
+        if (catalog.covers === false) setCovers(false);
         if (!stale) setSummary(catalog);
       })
       .catch(() => {
@@ -503,7 +529,8 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
         .classicsFront(language)
         .then((loaded) => {
           kept.current.fronts.set(language, loaded.shelves);
-          warmCovers(firstInView(loaded.shelves));
+          if (loaded.covers === false) setCovers(false);
+          warmCovers(firstInView(loaded.shelves), loaded.covers);
           if (!stale) setShelves({ language, shelves: loaded.shelves });
         })
         .catch(fail)
@@ -524,7 +551,8 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
         api
           .classics({ ...search, limit: PAGE })
           .then((loaded) => {
-            warmCovers(loaded.books);
+            if (loaded.covers === false) setCovers(false);
+            warmCovers(loaded.books, loaded.covers);
             if (!stale) setResults({ key, matches: loaded.matches, books: loaded.books });
           })
           .catch(fail)
@@ -556,7 +584,7 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
       .then((page) => {
         if (stale) return;
         kept.current.next = { key: at, offset, page };
-        warmCovers(page.books);
+        warmCovers(page.books, page.covers);
       })
       .catch(() => {});
     return () => {
@@ -627,6 +655,7 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
   const shownShelves = shelves && shelves.language === filters.language ? shelves.shelves : null;
 
   return (
+    <CoversShown.Provider value={covers}>
     <div className="mothli-library fl">
       <a className="skip-link" href="#fl-main">
         Skip to the books
@@ -837,5 +866,6 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
         />
       )}
     </div>
+    </CoversShown.Provider>
   );
 }

@@ -1,5 +1,5 @@
 {
-  "version": 19,
+  "version": 20,
   "required_surface_classes": [
     "list",
     "get",
@@ -488,6 +488,38 @@
       "access": "delete",
       "repository_method": "HostedCompanionCatalog.clear_recollections",
       "cross_tenant_test": "test_second_reader_cannot_list_forget_or_evict_first_readers_notes"
+    },
+    {
+      "method": "GET",
+      "path": "/api/classics",
+      "surface": "search",
+      "access": "read",
+      "repository_method": "shelved_classics",
+      "cross_tenant_test": "test_two_readers_adding_the_same_classic_each_get_their_own_book"
+    },
+    {
+      "method": "GET",
+      "path": "/api/classics/front",
+      "surface": "list",
+      "access": "read",
+      "repository_method": "shelved_classics",
+      "cross_tenant_test": "test_two_readers_adding_the_same_classic_each_get_their_own_book"
+    },
+    {
+      "method": "GET",
+      "path": "/api/classics/{classic_id}",
+      "surface": "get",
+      "access": "read",
+      "repository_method": "shelved_classics",
+      "cross_tenant_test": "test_two_readers_adding_the_same_classic_each_get_their_own_book"
+    },
+    {
+      "method": "POST",
+      "path": "/api/classics/{classic_id}",
+      "surface": "import",
+      "access": "import",
+      "repository_method": "create_uploaded_book",
+      "cross_tenant_test": "test_two_readers_adding_the_same_classic_each_get_their_own_book"
     }
   ],
   "background": [

@@ -32,6 +32,8 @@ export type ClassicsCatalog = {
   genres: { id: string; label: string }[];
   moods: { id: string; label: string }[];
   books: Classic[];
+  /** `false` where the server has no cover art (hosted mode): the cloth covers are shown. */
+  covers?: boolean;
 };
 /** A title in the reader's history from other reading apps. */
 export type HistoryEntry = {
@@ -445,7 +447,7 @@ export const api = {
   },
   classicsFront: (language = "") =>
     fetch(`/api/classics/front${language ? `?language=${encodeURIComponent(language)}` : ""}`).then((r) =>
-      j<{ shelves: ClassicShelf[] }>(r),
+      j<{ shelves: ClassicShelf[]; covers?: boolean }>(r),
     ),
   classic: (id: string) => fetch(`/api/classics/${encodeURIComponent(id)}`).then((r) => j<ClassicDetail>(r)),
   history: (search: { status?: string; only?: string; q?: string; offset?: number; limit?: number } = {}) => {

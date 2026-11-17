@@ -27,6 +27,14 @@ class InvalidPositionError(ValueError):
     pass
 
 
+class AlreadyOnShelfError(Exception):
+    """The reader already has a live book added from this free-library entry."""
+
+    def __init__(self, book_id: uuid.UUID) -> None:
+        super().__init__("already on the shelf")
+        self.book_id = book_id
+
+
 @dataclass(frozen=True, slots=True)
 class SourceObjectRecord:
     book_id: uuid.UUID
