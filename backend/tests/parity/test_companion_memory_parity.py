@@ -478,6 +478,8 @@ def _payload(**changes) -> dict:
         "themes": [],
         "events": [],
         "summaries": [],
+        "edges": [],
+        "states": [],
     }
     payload.update(changes)
     return payload

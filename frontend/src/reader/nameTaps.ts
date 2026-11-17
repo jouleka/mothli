@@ -2,7 +2,7 @@
  * reader's frontier is in it) is matched against the visible book text. Matches are painted with
  * the CSS Custom Highlight API and hit-tested from the tap point, so the EPUB's DOM is never
  * mutated: CFIs, highlights and reading positions keep working exactly as before. */
-import type { GraphNode } from "../api";
+import type { EntityId, GraphNode } from "../api";
 
 export const NAME_HIGHLIGHT = "mothli-names";
 
@@ -10,10 +10,10 @@ export type NameMatcher = {
   /** Longest names first, so "Katerina Ivanovna" wins over "Katerina". Null when nobody is known. */
   pattern: RegExp | null;
   /** Exact matched text to the one person it can mean. Ambiguous names are left out. */
-  owner: Map<string, number>;
+  owner: Map<string, EntityId>;
 };
 
-export type NameSpan = { start: number; end: number; entityId: number };
+export type NameSpan = { start: number; end: number; entityId: EntityId };
 /** Per text node, the names found in it. Kept outside the DOM. */
 export type NameIndex = Map<Text, NameSpan[]>;
 
@@ -27,7 +27,7 @@ function tappable(name: string) {
 }
 
 export function buildNameMatcher(people: GraphNode[]): NameMatcher {
-  const owner = new Map<string, number>();
+  const owner = new Map<string, EntityId>();
   const ambiguous = new Set<string>();
   for (const person of people) {
     if (person.type && person.type !== "character") continue;
@@ -97,7 +97,7 @@ export function markNames(doc: Document, matcher: NameMatcher): NameIndex {
 }
 
 /** The name under a caret position, with the range that covers it. */
-export function nameAt(index: NameIndex, node: Node | null, offset: number): { entityId: number; range: Range } | null {
+export function nameAt(index: NameIndex, node: Node | null, offset: number): { entityId: EntityId; range: Range } | null {
   if (!node || node.nodeType !== 3) return null;
   const text = node as Text;
   const span = index.get(text)?.find((item) => offset >= item.start && offset <= item.end);
