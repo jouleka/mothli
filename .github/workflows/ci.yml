@@ -69,12 +69,12 @@ jobs:
         run: npm run build
       - name: Audit dependencies
         working-directory: frontend
-        run: npm audit
+        run: node ../.github/scripts/npm-audit.mjs
       - name: Install and audit vendored toolchain
         working-directory: frontend/src/vendor/foliate-js
         run: |
           npm ci --ignore-scripts
-          npm audit
+          node ../../../../.github/scripts/npm-audit.mjs
       - name: Rebuild vendored libraries
         working-directory: frontend/src/vendor/foliate-js
         run: npm run build
