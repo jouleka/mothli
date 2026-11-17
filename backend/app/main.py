@@ -25,6 +25,7 @@ from app import deps
 from app.api import books, classics, health, history, ingest, profile, reading, views
 from app.config import Settings
 from app.ingest.worker import IngestWorker
+from app.hosted.auth import account as account_api
 from app.hosted.auth import api as auth_api
 from app.hosted.auth.oidc import OIDCClient
 from app.hosted.auth.repository import PostgresAuthRepository
@@ -616,6 +617,7 @@ def create_app(
                                 status_code=200 if ready else 503)
 
         app.include_router(auth_api.router)
+        app.include_router(account_api.router)
         # Without reader keys the key routes are not mounted: they answer as unknown paths.
         app.include_router(tenant_api.hosted_router(reader_keys=settings.hosted_reader_keys))
         app.include_router(companion_routes.router)

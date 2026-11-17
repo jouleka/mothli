@@ -364,3 +364,91 @@ def test_storage_configuration_is_fail_loud_and_keeps_keys_secret(tmp_path) -> N
             hosted_s3_bucket="private-books",
             hosted_s3_endpoint_url="http://object-store.example",
         )
+
+
+def test_filesystem_owner_deletion_takes_every_file_of_one_owner_only(tmp_path) -> None:
+    """The break it catches: an erased reader's book file left behind (one whose row was never
+    written included), or another reader's file taken with it (ADR 0041 part 8)."""
+    storage = EncryptedFilesystemStorage(
+        root=tmp_path / "objects", encryption_key=b"k" * 32, max_object_bytes=1024)
+    owner_a, owner_b = OwnerId(uuid.uuid4()), OwnerId(uuid.uuid4())
+    payload = b"PK\x03\x04made-up bytes"
+    refs = {owner: [new_source_ref(owner) for _ in range(2)] for owner in (owner_a, owner_b)}
+    for owner_refs in refs.values():
+        for ref in owner_refs:
+            storage.put(ref, payload, media_type=EPUB_MEDIA_TYPE, expected_sha256=_sha256(payload))
+    # A half-written upload's temporary file, which no row names.
+    (tmp_path / "objects" / owner_a.value.hex / ".stray.tmp").write_bytes(b"x")
+    before_b = {path.name: path.read_bytes()
+                for path in (tmp_path / "objects" / owner_b.value.hex).iterdir()}
+
+    storage.delete_owner(owner_a)
+    assert not (tmp_path / "objects" / owner_a.value.hex).exists()
+    assert all(not storage.exists(ref) for ref in refs[owner_a])
+    assert {path.name: path.read_bytes()
+            for path in (tmp_path / "objects" / owner_b.value.hex).iterdir()} == before_b
+    assert all(storage.get(ref).data == payload for ref in refs[owner_b])
+    storage.delete_owner(owner_a)  # safe to repeat after a crash
+    with pytest.raises(TypeError):
+        storage.delete_owner(owner_a.value)
+
+
+def test_s3_owner_deletion_lists_the_owner_prefix_and_deletes_only_there() -> None:
+    """The break it catches: an erased reader's objects left in the bucket past the first page of
+    a listing, or the deletion reaching outside that reader's prefix."""
+    owner_a, owner_b = OwnerId(uuid.uuid4()), OwnerId(uuid.uuid4())
+
+    class Listing(_FakeS3Client):
+        def __init__(self) -> None:
+            super().__init__()
+            self.listed: list[dict] = []
+
+        def list_objects_v2(self, **kwargs):
+            self.listed.append(kwargs)
+            keys = sorted(key for bucket, key in self.objects
+                          if bucket == kwargs["Bucket"] and key.startswith(kwargs["Prefix"]))
+            start = int(kwargs.get("ContinuationToken", "0"))
+            page = keys[start:start + 2]
+            more = start + 2 < len(keys)
+            return {"Contents": [{"Key": key} for key in page], "IsTruncated": more,
+                    **({"NextContinuationToken": str(start + 2)} if more else {})}
+
+        def delete_object(self, **kwargs):
+            # Deleting while listing moves later keys forward; keep the fake's pages stable.
+            self.objects[(kwargs["Bucket"], kwargs["Key"])]["deleted"] = True
+            return {}
+
+    client = Listing()
+    storage = S3ObjectStorage(client=client, bucket="private-books", max_object_bytes=1024,
+                              sse_algorithm="AES256", expected_bucket_owner="111122223333")
+    payload = b"PK\x03\x04made-up bytes"
+    for owner, count in ((owner_a, 5), (owner_b, 2)):
+        for _ in range(count):
+            storage.put(new_source_ref(owner), payload, media_type=EPUB_MEDIA_TYPE,
+                        expected_sha256=_sha256(payload))
+
+    storage.delete_owner(owner_a)
+    deleted = {key for (_bucket, key), item in client.objects.items() if item.get("deleted")}
+    assert deleted == {key for (_bucket, key) in client.objects
+                       if key.startswith(f"owners/{owner_a.value.hex}/")}
+    assert len(deleted) == 5
+    assert all(call["Prefix"] == f"owners/{owner_a.value.hex}/" for call in client.listed)
+    assert all(call["ExpectedBucketOwner"] == "111122223333" for call in client.listed)
+    assert len(client.listed) == 3
+
+    # The same calls are valid against the real service model.
+    real = boto3.client("s3", region_name="us-east-1", aws_access_key_id="test-access-id",
+                        aws_secret_access_key="test-secret-key")
+    checked = S3ObjectStorage(client=real, bucket="private-books", max_object_bytes=1024,
+                              sse_algorithm="AES256", expected_bucket_owner="111122223333")
+    prefix = f"owners/{owner_a.value.hex}/"
+    key = f"{prefix}epubs/{uuid.uuid4().hex}.epub"
+    with Stubber(real) as stubber:
+        stubber.add_response(
+            "list_objects_v2", {"Contents": [{"Key": key}], "IsTruncated": False},
+            {"Bucket": "private-books", "Prefix": prefix, "ExpectedBucketOwner": "111122223333"})
+        stubber.add_response(
+            "delete_object", {},
+            {"Bucket": "private-books", "Key": key, "ExpectedBucketOwner": "111122223333"})
+        checked.delete_owner(owner_a)
+        stubber.assert_no_pending_responses()

@@ -88,7 +88,27 @@ def test_the_role_script_matches_every_startup_check_as_written() -> None:
         tables, functions = granted(roles.render(roles.grant_statements("mothli", by_key[key])))
         assert tables == by_key[key].tables
         assert functions == {}
-    assert [role.bypass_rls for role in roles.RUNTIME_ROLES] == [True, False, True, True, True]
+    assert [role.bypass_rls for role in roles.RUNTIME_ROLES] == [True, False, True, True, True, True]
+    assert [role.key for role in roles.RUNTIME_ROLES if role.owner_tables] == ["purge"]
+
+
+def test_the_role_script_grants_the_purge_role_the_owner_tables_and_its_few_others() -> None:
+    """The break it catches: the purge role granted a table it should not touch, or not granted
+    a table that holds a reader's rows (which would leave them behind after an erasure)."""
+    from app.hosted.tenant.grants import PURGE_OTHER_TABLE_PRIVILEGES
+
+    roles = load_roles()
+    purge = next(role for role in roles.RUNTIME_ROLES if role.key == "purge")
+    assert purge.tables is PURGE_OTHER_TABLE_PRIVILEGES
+    tables, functions = granted(roles.render(
+        roles.grant_statements("mothli", purge, ["books", "audit_events", "sessions"])))
+    assert tables == {
+        "books": frozenset({"SELECT", "DELETE"}),
+        "sessions": frozenset({"SELECT", "DELETE"}),
+        "audit_events": frozenset({"SELECT", "DELETE", "INSERT"}),
+        "users": frozenset({"SELECT", "UPDATE"}),
+    }
+    assert functions == {}
 
 
 def test_the_role_script_refuses_weak_or_unsafe_passwords_by_name() -> None:

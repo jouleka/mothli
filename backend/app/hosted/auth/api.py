@@ -214,23 +214,32 @@ def csrf_valid(request: Request, authenticated: AuthenticatedSession) -> bool:
     )
 
 
+PENDING_DELETION = "account_pending_deletion"
+
+
+def pending_deletion_detail(erase_after: datetime) -> dict[str, str]:
+    """What every reader route answers while the account waits to be erased: a code the app
+    tells apart from any other refusal, and the moment, so it can name the day."""
+    return {"code": PENDING_DELETION, "erase_after": erase_after.astimezone(UTC).isoformat()}
+
+
 @router.get("/session")
 async def session(request: Request):
     authenticated = await authenticated_session(request)
     if authenticated is None:
         return _error(401, "Authentication required")
     principal = authenticated.principal
-    return JSONResponse(
-        {
-            "user": {
-                "id": str(principal.owner_id),
-                "display_name": principal.display_name,
-                "email": principal.email,
-            },
-            "expires_at": principal.expires_at.isoformat(),
+    payload = {
+        "user": {
+            "id": str(principal.owner_id),
+            "display_name": principal.display_name,
+            "email": principal.email,
         },
-        headers=_NO_STORE,
-    )
+        "expires_at": principal.expires_at.isoformat(),
+    }
+    if principal.erase_after is not None:
+        payload["erase_after"] = principal.erase_after.astimezone(UTC).isoformat()
+    return JSONResponse(payload, headers=_NO_STORE)
 
 
 @router.post("/logout")

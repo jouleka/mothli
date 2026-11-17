@@ -32,3 +32,6 @@ class Principal:
     email: str | None
     csrf_digest: bytes
     expires_at: datetime
+    # Set while the reader has asked to delete their account (ADR 0041 part 8): the moment it
+    # will be erased. Such a session may only keep the account or sign out.
+    erase_after: datetime | None = None
