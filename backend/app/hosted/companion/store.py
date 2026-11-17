@@ -165,8 +165,63 @@ class _BookStore(OwnerBoundAdapter):
                 "atoms": [(atom["ordinal"], atom["href"], atom["char_len"]) for atom in atoms]}
 
 
+class _ChapterSpendStore(SpendStore):
+    """The two catalog calls the shared chapter extraction makes beyond spend (ADR 0042 section 1).
+
+    ``app.ingest.chapter_extraction`` asks for a chapter's outstanding extraction reservations
+    before it pays for the chapter again, and calls ``finalize_ingest`` once the chapter's memory
+    is committed. In hosted mode the commit is the publish, which already wrote the receipt, so
+    finalizing only settles the chapter's deferred extraction calls, each once.
+    """
+
+    __slots__ = ()
+
+    def cost_reservation_ids(self, book_id, *, phase=None, chapter_ordinal=None):
+        """This owner's open companion reservations of one live book, oldest first, optionally
+        of one purpose (the local phase name) and one chapter. A book that is not this reader's
+        live book has none."""
+        try:
+            book = as_uuid(book_id)
+        except LookupError:
+            return []
+        clauses, params = [], []
+        if phase is not None:
+            clauses.append(" AND reservation.purpose=%s")
+            params.append(phase)
+        if chapter_ordinal is not None:
+            clauses.append(" AND reservation.chapter_ordinal=%s")
+            params.append(chapter_ordinal)
+        with self._transaction() as conn:
+            rows = conn.execute(
+                """SELECT reservation.id FROM public.cost_reservations AS reservation
+                   JOIN public.books AS book
+                     ON (book.owner_id,book.id)=(reservation.owner_id,reservation.book_id)
+                   WHERE reservation.owner_id=%s AND reservation.book_id=%s
+                     AND book.deleted_at IS NULL
+                     AND reservation.state='reserved' AND reservation.purpose IS NOT NULL"""
+                + "".join(clauses) + " ORDER BY reservation.created_at,reservation.id",
+                (self._owner.value, book, *params)).fetchall()
+        return [row["id"].hex for row in rows]
+
+    def finalize_ingest(self, book_id, n, *, cost=None, incarnation=None):
+        """Settle chapter ``n``'s deferred extraction reservations, at their noted size, once.
+
+        ``cost`` (the receipt's own total) is not used: each extraction call was reserved and
+        its actual usage noted, so settling the reservations records exactly what was spent,
+        and a reservation already settled is not open any more. Raises ``ValueError`` when the
+        book is not this reader's live book in ``incarnation``, as locally.
+        """
+        check_position(n, "ingest_progress")
+        book = self.get_book(book_id)
+        if book is None or (incarnation is not None and book["incarnation"] != incarnation):
+            raise ValueError(f"stale catalog incarnation for book {book_id!r}")
+        for reservation in self.cost_reservation_ids(book_id, phase="extraction",
+                                                     chapter_ordinal=n):
+            self.settle_cost(book_id, reservation)
+
+
 # The combining line: each part adds its feature's methods here.
-class HostedCompanionCatalog(_BookStore, ReadMapStore, TurnStore, SpendStore, NotesStore,
+class HostedCompanionCatalog(_BookStore, ReadMapStore, TurnStore, _ChapterSpendStore, NotesStore,
                              RecollectionStore):
     """The companion's catalog for one hosted reader. Construct per request or per job:
     ``HostedCompanionCatalog(dsn, owner_id)``."""
@@ -188,3 +243,16 @@ class ReplyCatalog(HostedCompanionCatalog):
     def __init__(self, dsn: str, owner_id: OwnerId) -> None:
         super().__init__(dsn, owner_id)
         object.__setattr__(self, "_admitted", threading.Event())
+
+
+class ChapterCatalog(ReplyCatalog):
+    """The catalog for one chapter of story memory (ADR 0042 section 4). Construct one per
+    chapter.
+
+    A reply's rule, for the same reason: the chapter's first model call is checked against the
+    caps like any other, and once it is admitted the chapter's later calls are not refused for a
+    dollar cap, so a chapter begun under the cap is finished and its paid calls are not thrown
+    away. A reader already at a cap is refused at the first call, before anything is spent.
+    """
+
+    __slots__ = ()
