@@ -202,7 +202,8 @@ class StoryMemorySnapshot:
             {"chapter_key": _text(row["key"]), "revealed_at": _ordinal(row["ordinal"]),
              "title": _text(row["title"], optional=True),
              "part_label": _text(row["part_label"], optional=True),
-             "kind": _text(row["kind"]), "live": _flag(row["live"])}
+             # A payload without a chapter's kind (one built by hand) holds an ordinary chapter.
+             "kind": _text(row.get("kind", "body")), "live": _flag(row["live"])}
             for row in _rows(payload["chapters"]))
         # A chapter key is unique within a book incarnation (``chapters`` constraint).
         values["_completed"] = MappingProxyType(
