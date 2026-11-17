@@ -242,7 +242,8 @@ networks:
   # Proxy and the tunnel connector.
   tunnel:
     internal: true
-  # Outbound internet: sign-in service and AI providers (web, worker), Cloudflare (tunnel).
+  # Outbound internet: sign-in service and AI providers (web, worker), the free library's books
+  # from Project Gutenberg (web), Cloudflare (tunnel).
   egress: {}
 
 volumes:

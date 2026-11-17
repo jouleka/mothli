@@ -11,7 +11,11 @@ const mocks = vi.hoisted(() => ({
   addClassic: vi.fn(),
   warmCovers: vi.fn(),
 }));
-vi.mock("../api", () => ({ api: mocks }));
+vi.mock("../api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api")>()),
+  api: mocks,
+}));
+import { ApiError } from "../api";
 
 type Row = { id: string; title: string; author: string; language: string; book_id: string | null };
 const emma: Row = { id: "158", title: "Emma", author: "Jane Austen", language: "en", book_id: null };
@@ -180,6 +184,55 @@ describe("The Library", () => {
     expect(mocks.addClassic).toHaveBeenCalledWith("345");
     await user.click(await within(sheet).findByRole("button", { name: "Start reading" }));
     expect(onOpen).toHaveBeenCalledWith("bkdracula");
+  });
+
+  test("where the server has no cover art (hosted), cloth covers only and no cover is asked for", async () => {
+    const user = userEvent.setup();
+    const hosted = { ...summary, covers: false };
+    mocks.classicsFront.mockResolvedValue({ ...front, covers: false });
+    mocks.classics.mockImplementation(async (search: { mood?: string; offset?: number } = {}) => {
+      if (search.mood === "chills") return { ...(search.offset ? page([carmilla], 2) : page([dracula], 2)), covers: false };
+      return hosted;
+    });
+    const { container } = render(<FreeLibrary onBack={() => {}} onOpen={() => {}} />);
+    const popular = await screen.findByRole("region", { name: "Most read right now" });
+    expect(within(popular).getByRole("button", { name: "Emma, Jane Austen" })).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: "Keep me up at night" }));
+    expect(await screen.findByText("2 books")).toBeTruthy();
+    await waitFor(() => expect(mocks.classics).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 1 })));
+    await user.click(screen.getByRole("button", { name: "Dracula, Bram Stoker" }));
+    expect(await screen.findByText("A count leaves his castle.")).toBeTruthy();
+    expect(container.querySelector("img")).toBeNull();
+    expect(mocks.warmCovers).not.toHaveBeenCalled();
+    expect(await axeAA(container)).toHaveNoViolations();
+  });
+
+  test("a book someone already put on the shelf (hosted: already_on_shelf) is shown as on it", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    mocks.addClassic.mockRejectedValue(
+      new ApiError("This book is already on your shelf.", 409, "already_on_shelf"),
+    );
+    render(<FreeLibrary onBack={() => {}} onOpen={onOpen} />);
+    await user.click(await screen.findByRole("button", { name: "Dracula, Bram Stoker" }));
+    const sheet = screen.getByRole("dialog", { name: "Dracula" });
+    await within(sheet).findByText("A count leaves his castle.");
+    mocks.classic.mockResolvedValue({ ...detail(dracula), book_id: "bkdracula" });
+    await user.click(within(sheet).getByRole("button", { name: "Add to my books" }));
+    await user.click(await within(sheet).findByRole("button", { name: "Start reading" }));
+    expect(onOpen).toHaveBeenCalledWith("bkdracula");
+    expect(within(sheet).queryByRole("alert")).toBeNull();
+  });
+
+  test("a hosted refusal is shown in the server's own words", async () => {
+    const user = userEvent.setup();
+    const line = "Your shelf is full, so this book wasn’t added. Remove a book you no longer need, then add it again.";
+    mocks.addClassic.mockRejectedValue(new ApiError(line, 409, "book_quota_exceeded"));
+    render(<FreeLibrary onBack={() => {}} onOpen={() => {}} />);
+    await user.click(await screen.findByRole("button", { name: "Dracula, Bram Stoker" }));
+    await user.click(screen.getByRole("button", { name: "Add to my books" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(line);
+    expect(screen.getByRole("button", { name: "Add to my books" })).toBeTruthy();
   });
 
   test("a failed download is explained, and Escape closes the book and returns focus", async () => {

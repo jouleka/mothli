@@ -466,6 +466,10 @@ def test_every_enabled_tenant_endpoint_requires_a_session(tenant_app, corpus: di
             },
         ),
         ("GET", "/api/costs", None),
+        ("GET", "/api/classics", None),
+        ("GET", "/api/classics/front", None),
+        ("GET", "/api/classics/1342", None),
+        ("POST", "/api/classics/1342", None),
     ]
     for method, path, body in requests:
         response = client.request(method, path, json=body)

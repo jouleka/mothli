@@ -30,6 +30,7 @@ from app.hosted.limits import LimitExceededError
 from app.hosted.provider_settings import ValidationResult
 from app.hosted.tenant.grants import ALL_TABLE_PRIVILEGES, TENANT_TABLE_PRIVILEGES
 from app.hosted.tenant.models import (
+    AlreadyOnShelfError,
     FuturePositionVersionError,
     InvalidPositionError,
     MissingTenantResourceError,
@@ -1768,6 +1769,91 @@ class PostgresTenantRepository:
             "total_usd": str(sum((row["usd"] or 0 for row in rows), start=0)),
         }
 
+    @staticmethod
+    async def _admit_book(
+        conn: psycopg.AsyncConnection, owner_id: OwnerId, byte_size: int
+    ) -> None:
+        """Raise ``LimitExceededError`` when one more book of ``byte_size`` bytes would exceed this
+        owner's limits: the one check an upload and a free-library add both meet."""
+        limits = await (
+            await conn.execute(
+                """
+                SELECT max_upload_bytes,max_library_bytes,max_books,max_active_jobs
+                FROM public.owner_limits WHERE owner_id=%s
+                """,
+                (owner_id.value,),
+            )
+        ).fetchone()
+        if limits is None:
+            raise RuntimeError("owner limit policy is unavailable")
+        usage = await (
+            await conn.execute(
+                """
+                SELECT
+                  (SELECT count(*) FROM public.books
+                   WHERE owner_id=%s AND deleted_at IS NULL) AS books,
+                  COALESCE((SELECT sum(byte_size) FROM public.source_objects
+                   WHERE owner_id=%s AND deleted_at IS NULL),0) AS library_bytes,
+                  (SELECT count(*) FROM public.jobs WHERE owner_id=%s
+                   AND kind='ingest_book' AND state IN
+                   ('waiting_configuration','pending','leased','running')) AS active_jobs
+                """,
+                (owner_id.value, owner_id.value, owner_id.value),
+            )
+        ).fetchone()
+        assert usage is not None
+        if byte_size > limits["max_upload_bytes"]:
+            raise LimitExceededError(
+                "upload_size_exceeded",
+                limits["max_upload_bytes"],
+                None,
+                "Choose a smaller EPUB or ask an operator to raise the upload limit.",
+            )
+        if usage["books"] >= limits["max_books"]:
+            raise LimitExceededError(
+                "book_quota_exceeded",
+                limits["max_books"],
+                None,
+                "Delete an existing book or ask an operator to raise the book limit.",
+            )
+        if usage["library_bytes"] + byte_size > limits["max_library_bytes"]:
+            raise LimitExceededError(
+                "library_storage_exceeded",
+                limits["max_library_bytes"],
+                None,
+                "Delete stored books or ask an operator to raise the storage limit.",
+            )
+        if usage["active_jobs"] >= limits["max_active_jobs"]:
+            raise LimitExceededError(
+                "active_job_limit_exceeded",
+                limits["max_active_jobs"],
+                15,
+                "Wait for an active ingestion job to finish or cancel one before retrying.",
+            )
+
+    async def admit_book(self, owner_id: OwnerId) -> None:
+        """The upload's limit check for a book of no size, before anything is fetched: a reader
+        whose shelf is already full is refused without a request to the free library's source.
+        ``create_uploaded_book`` checks again, with the real size, under the owner lock."""
+        async with self._transaction(owner_id) as conn:
+            await self._admit_book(conn, owner_id, 0)
+
+    async def shelved_classics(self, owner_id: OwnerId) -> dict[str, str]:
+        """{free-library tag: book id} for this owner's live books added from the library (and
+        local books migrated with their library tag), oldest first wins."""
+        async with self._transaction(owner_id) as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT source_kind,id FROM public.books
+                    WHERE owner_id=%s AND deleted_at IS NULL AND source_kind LIKE 'gutenberg:%%'
+                    ORDER BY created_at DESC,id DESC
+                    """,
+                    (owner_id.value,),
+                )
+            ).fetchall()
+        return {row["source_kind"]: str(row["id"]) for row in rows}
+
     async def create_uploaded_book(
         self,
         owner_id: OwnerId,
@@ -1786,68 +1872,34 @@ class PostgresTenantRepository:
         encryption: str,
         chapter_count: int,
         search_documents: list[dict] | None = None,
+        source_kind: str = "upload",
     ) -> dict:
+        """Store one book's metadata, search text, source object row and extraction job.
+
+        ``source_kind`` is ``upload`` for a reader's own file, or the free-library entry's tag
+        (``gutenberg:<number>``, the local catalog's ``source``) for a book added from the library;
+        a second live book from the same entry is refused with ``AlreadyOnShelfError``, as the
+        local library refuses it, under the same owner lock as the limits."""
         job_id = uuid.uuid4()
         async with self._transaction(owner_id) as conn:
             await conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s::text,47))",
                 (owner_id.value,),
             )
-            limits = await (
-                await conn.execute(
-                    """
-                    SELECT max_upload_bytes,max_library_bytes,max_books,max_active_jobs
-                    FROM public.owner_limits WHERE owner_id=%s
-                    """,
-                    (owner_id.value,),
-                )
-            ).fetchone()
-            if limits is None:
-                raise RuntimeError("owner limit policy is unavailable")
-            usage = await (
-                await conn.execute(
-                    """
-                    SELECT
-                      (SELECT count(*) FROM public.books
-                       WHERE owner_id=%s AND deleted_at IS NULL) AS books,
-                      COALESCE((SELECT sum(byte_size) FROM public.source_objects
-                       WHERE owner_id=%s AND deleted_at IS NULL),0) AS library_bytes,
-                      (SELECT count(*) FROM public.jobs WHERE owner_id=%s
-                       AND kind='ingest_book' AND state IN
-                       ('waiting_configuration','pending','leased','running')) AS active_jobs
-                    """,
-                    (owner_id.value, owner_id.value, owner_id.value),
-                )
-            ).fetchone()
-            assert usage is not None
-            if byte_size > limits["max_upload_bytes"]:
-                raise LimitExceededError(
-                    "upload_size_exceeded",
-                    limits["max_upload_bytes"],
-                    None,
-                    "Choose a smaller EPUB or ask an operator to raise the upload limit.",
-                )
-            if usage["books"] >= limits["max_books"]:
-                raise LimitExceededError(
-                    "book_quota_exceeded",
-                    limits["max_books"],
-                    None,
-                    "Delete an existing book or ask an operator to raise the book limit.",
-                )
-            if usage["library_bytes"] + byte_size > limits["max_library_bytes"]:
-                raise LimitExceededError(
-                    "library_storage_exceeded",
-                    limits["max_library_bytes"],
-                    None,
-                    "Delete stored books or ask an operator to raise the storage limit.",
-                )
-            if usage["active_jobs"] >= limits["max_active_jobs"]:
-                raise LimitExceededError(
-                    "active_job_limit_exceeded",
-                    limits["max_active_jobs"],
-                    15,
-                    "Wait for an active ingestion job to finish or cancel one before retrying.",
-                )
+            await self._admit_book(conn, owner_id, byte_size)
+            if source_kind != "upload":
+                existing = await (
+                    await conn.execute(
+                        """
+                        SELECT id FROM public.books
+                        WHERE owner_id=%s AND source_kind=%s AND deleted_at IS NULL
+                        ORDER BY created_at,id LIMIT 1
+                        """,
+                        (owner_id.value, source_kind),
+                    )
+                ).fetchone()
+                if existing is not None:
+                    raise AlreadyOnShelfError(existing["id"])
             extraction = await (
                 await conn.execute(
                     """
@@ -1870,7 +1922,7 @@ class PostgresTenantRepository:
                     INSERT INTO public.books
                       (owner_id,id,incarnation,title,author,source_kind,file_hash,schema_version,
                        content_language,book_type)
-                    VALUES (%s,%s,%s,%s,%s,'upload',%s,1,%s,%s)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s,%s)
                     RETURNING id,title,author,content_language,book_type,created_at
                     """,
                     (
@@ -1879,6 +1931,7 @@ class PostgresTenantRepository:
                         incarnation,
                         title,
                         author,
+                        source_kind,
                         file_hash,
                         content_language,
                         book_type,

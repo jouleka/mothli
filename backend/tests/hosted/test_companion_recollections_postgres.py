@@ -6,7 +6,8 @@ platform's clients; the reader's notes ("recollections") are distilled by durabl
 jobs that run the unchanged ``pending`` and ``distil`` through the RLS-enforced tenant role, and are
 listed and forgotten through the unchanged ``listed`` at the local paths. Proven here: the local
 home chat's spoiler probes, across books, with an empty and a seeded story memory; suggestions
-spoken only from their reviewed line, never offered to add; two readers (the shelf, the
+spoken only from their reviewed line, and offered to add through the free library (part 11) to
+the asking reader's shelf only; two readers (the shelf, the
 conversation, the profile, the notes, the cap); the 301st note; one waiting job; a lost lease, two
 workers and a moved cursor never storing a batch twice; clearing that no later job undoes; a
 capped reader's job waiting; the role's exact grants. Stand-in writer and Jev only.
@@ -44,6 +45,7 @@ from tests.api._epub import epub_ncx
 from tests.hosted import test_companion_read_map_postgres as read_map_gate
 from tests.hosted import test_jobs_postgres as jobs_gate
 from tests.hosted.test_companion_notes_postgres import expire_lease, held_privileges, rows
+from tests.hosted.test_free_library_postgres import MIRROR, Source
 from tests.hosted.test_companion_stream_postgres import (
     CHAT,
     Reader,
@@ -373,13 +375,18 @@ def test_an_outage_shows_nothing_and_keeps_nothing_and_an_empty_shelf_is_answere
     assert models.writes == 1 and "The shelf is empty" in models.prompts[-1]
 
 
-def test_a_book_not_on_the_shelf_is_spoken_of_only_through_its_reviewed_line_and_never_offered(
-        home_app, readers, monkeypatch):
+def test_a_book_not_on_the_shelf_is_spoken_of_only_through_its_reviewed_line_and_added_on_asking(
+        home_app, readers, database, monkeypatch):
     """The break it catches: a suggestion given to the writer or the checker with anything but
-    its reviewed catalogue line, or a reply that offers to add a book to the shelf when hosted
-    mode has no free library (part 11)."""
+    its reviewed catalogue line; a reply that names a suggested book without offering to add it
+    (part 11); the offer's request adding the book to anyone's shelf but the asking reader's; or
+    any of the added book's text reaching a reply before the reader has read it, or the book
+    suggested again once it is on the shelf."""
     _client, _tokens, app = home_app
+    library = Source(monkeypatch)
     a, _lamps, _carts, _unread = shelf(home_app, readers)
+    b = reader(home_app, readers, "b")
+    b_books = b.get("/api/books").json()
     models = HomeModels(app.state.platform_client, monkeypatch, reply="Hello.")
     a.ask_home("Can you suggest something new to read?")
     prompt = models.prompts[-1]
@@ -396,7 +403,31 @@ def test_a_book_not_on_the_shelf_is_spoken_of_only_through_its_reviewed_line_and
     HomeModels(app.state.platform_client, monkeypatch, reply=reply)
     events = a.ask_home("Can you suggest something new to read?")
     assert sentences(events) == [reply]
-    assert "suggested" not in events[-1]["answer"]
+    offered = events[-1]["answer"]["suggested"]
+    assert [(book["title"], book["author"]) for book in offered] == [(title, author)]
+    classic = offered[0]["classic_id"]
+
+    # The app's "Add … to my shelf": the free library's add, for the asking reader only. (Each
+    # book waits for extraction, which hosted mode does not run until part 10, and three waiting
+    # books are the default limit: this shelf already holds three.)
+    update_limits(database, a.owner, {"max_active_jobs": 4})
+    added = a.call("POST", f"/api/classics/{classic}")
+    assert added.status_code == 201, added.text
+    assert library.seen == [MIRROR.format(pg=classic)]
+    assert added.json()["book_id"] in {book["id"] for book in a.get("/api/books").json()}
+    assert b.get("/api/books").json() == b_books
+    assert rows(database, "SELECT count(*) AS n FROM books WHERE source_kind=%s",
+                f"gutenberg:{classic}")[0]["n"] == 1
+
+    # Added, not read: nothing of its text reaches the writer or the checker, and it is not
+    # suggested again now that it is on the shelf.
+    models = HomeModels(app.state.platform_client, monkeypatch, reply="Hello.")
+    a.ask_home("Can you suggest something new to read? What is in my new book?")
+    assert "“A Made-Up Classic” by Nobody Real: not started" in models.prompts[-1]
+    assert "LIBRARY_CANARY" not in models.everything()
+    listed = models.prompts[-1].split("BOOKS YOU CAN SUGGEST", 1)[1].split(
+        "\n\nWHAT YOU HAVE READ TOGETHER")[0]
+    assert lines[0] not in listed
 
 
 # ---- two readers: the shelf, the home conversation, the profile -----------------------------------

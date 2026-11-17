@@ -56,6 +56,10 @@ class ClassicUnavailable(Exception):
     """The book could not be fetched right now. The message is safe to show a reader."""
 
 
+class ClassicTooLarge(ClassicUnavailable):
+    """The book's file is larger than the upload limit, so it was not downloaded."""
+
+
 class _Missing(Exception):
     """This address does not have the book; another one may."""
 
@@ -416,7 +420,7 @@ def _download(client, url, max_bytes):
             for chunk in response.iter_bytes():
                 total += len(chunk)
                 if total > max_bytes:
-                    raise ClassicUnavailable("This book is too large to add.")
+                    raise ClassicTooLarge("This book is too large to add.")
                 chunks.append(chunk)
             if not total:
                 raise _Missing

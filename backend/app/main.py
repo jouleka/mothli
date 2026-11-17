@@ -39,6 +39,7 @@ from app.hosted.provider_settings import ProviderValidator, allowed_origins
 from app.hosted.runtime import HostedRuntimeRegistry
 from app.hosted.storage import build_object_storage
 from app.hosted.tenant import api as tenant_api
+from app.hosted.tenant import classics as hosted_classics
 from app.hosted.tenant.repository import PostgresTenantRepository
 from app.lifecycle.archive import DataDirLock
 from app.lifecycle_cache import RecapRegistry
@@ -622,6 +623,8 @@ def create_app(
         app.include_router(tenant_api.hosted_router(reader_keys=settings.hosted_reader_keys))
         app.include_router(companion_routes.router)
         app.include_router(companion_routes.reader_router)
+        # The free library (ADR 0041 part 11): the local paths, without covers.
+        app.include_router(hosted_classics.router)
         app.add_middleware(_EpubUploadBodyLimit, max_file_bytes=settings.epub_max_upload_bytes)
         if settings.hosted_reader_keys:
             app.add_middleware(_CredentialBodyLimit)

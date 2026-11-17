@@ -292,21 +292,13 @@ def _remembering(request: Request, owner_id: OwnerId) -> HostedCompanionCatalog:
     return HostedCompanionCatalog(request.app.state.companion_dsn, owner_id)
 
 
-def _shelf_only(event: dict) -> dict:
-    """A home reply's event without ``suggested``: the books it named from the free library, which
-    the app offers to add to the shelf. Hosted mode has no free library until part 11, so a
-    suggestion is only ever spoken, from its reviewed catalogue line."""
-    if event.get("type") != "done" or "suggested" not in event.get("answer", {}):
-        return event
-    return {**event, "answer": {key: value for key, value in event["answer"].items()
-                                if key != "suggested"}}
-
-
 @reader_router.post("/ask/stream")
 def ask_home(body: HomeAsk, request: Request, owner_id: OwnerId = Depends(_csrf_owner)):
     """Server-sent events, as for a book: one ``sentence`` per checked sentence, then ``done`` or
     ``error``. The local route's body over the hosted adapters: the unchanged ``stream_home`` with
-    this reader's shelf, story memory and sources, and the platform's clients."""
+    this reader's shelf, story memory and sources, and the platform's clients. A reply that names
+    a book from the free library carries it in ``suggested``, which the app offers to add through
+    the hosted free library (part 11), as locally."""
     # One reply: once its first call is admitted under the caps, the rest of it finishes.
     catalog, source, settings = _home(request, owner_id, ReplyCatalog)
     store = HostedBookStore(request.app.state.companion_dsn, owner_id)
@@ -316,8 +308,7 @@ def ask_home(body: HomeAsk, request: Request, owner_id: OwnerId = Depends(_csrf_
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc
     return StreamingResponse(
-        ("data: " + json.dumps(_shelf_only(event), ensure_ascii=False) + "\n\n"
-         for event in events),
+        ("data: " + json.dumps(event, ensure_ascii=False) + "\n\n" for event in events),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
