@@ -3,7 +3,6 @@ Catalog (the one shared writer), LLMClient — built once in the lifespan and re
 Routes NEVER construct these; the Store's sole-owner guarantee rests on there being exactly one."""
 import asyncio
 import os
-from copy import copy
 
 from fastapi import Request
 
@@ -22,14 +21,6 @@ def build_state(settings: Settings) -> dict:
     # The writer and Jev, built by the one construction both modes share (ADR 0041 section 1).
     client = build_platform_clients(settings)
     reader = client
-    if settings.reader_fast_mode:
-        if (client.provider != "openai-compatible" or not client._is_native_openai
-                or any(client._model_for(t) not in {"gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra"}
-                       for t in ("cheap", "large"))):
-            raise ValueError("Reader Fast mode requires native OpenAI GPT-6 Luna, Sol or Terra")
-        reader = copy(client)
-        reader._oai = client._oai.with_options(max_retries=0)
-        reader.service_tier = "fast"
     from app.answer_bank import AnswerBank
     reader.answers = AnswerBank(persist_path=(os.path.join(settings.data_dir, "reviewed-answers-v2.json")
                                              if settings.reader_answer_cache else None))

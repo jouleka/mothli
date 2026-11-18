@@ -10,34 +10,7 @@ import pytest
 from test_views import env as env
 from app.deps import book_lifecycle
 from app.lifecycle_cache import RecapRegistry
-from app.cost.limits import usd_of, reserved_usd_of
-from app.config import Settings
-from app.deps import build_state
 from app.llm.client import LLMClient
-
-
-@pytest.mark.parametrize("model", ["gpt-6-luna", "gpt-6.1-terra"])
-def test_reader_fast_mode_is_isolated_and_bills_the_fast_premium(tmp_path, model):
-    settings = Settings(_env_file=None, openai_api_key="unit-test-only",
-                        llm_cheap_model=model, llm_large_model=model,
-                        reader_fast_mode=True, data_dir=str(tmp_path / "data"))
-    state = build_state(settings)
-    try:
-        primary, reader = state["client"], state["reader_client"]
-        assert primary is not reader and getattr(primary, "service_tier", "default") == "default"
-        assert reader.service_tier == "fast" and reader._oai.max_retries == 0
-        assert reader.extractor_version() == primary.extractor_version()
-        assert reader._embed_oai is primary._embed_oai
-        assert reader.embed_identity() == primary.embed_identity()
-        assert reader.billing_model("large") == f"fast:{model}"
-        usage = {"in": 1000, "out": 200, "cache_read": 100}
-        assert usd_of(reader.billing_model("large"), usage) == 2 * usd_of(model, usage)
-        assert reserved_usd_of(reader.billing_model("large"), usage) == 2 * reserved_usd_of(model, usage)
-    finally:
-        state["store"].close()
-        state["catalog"].close()
-        state["client"]._oai.close()
-        state["client"]._embed_oai.close()
 
 
 def test_fast_wire_keeps_reasoning_and_independent_structured_review():

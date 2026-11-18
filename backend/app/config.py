@@ -77,7 +77,6 @@ class Settings(BaseSettings):
     # One model call in a page conversation. The provider default (120 s) is far past the
     # point where a reader has given up; codex-local keeps its own subprocess timeout.
     reader_conversation_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
-    reader_fast_mode: bool = False
     reader_reuse_enabled: bool = False
     reader_reuse_fast_review: bool = True  # Local GPT-6 Luna reuse checks only; normal preparation is unchanged.
     reader_reuse_min_probability: float = Field(default=0.99, ge=0.95, le=1)
