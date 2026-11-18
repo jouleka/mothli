@@ -67,6 +67,7 @@ Part one is in 6ae: the store, the distilling, the reader's API, and use in the 
 
 ## Before going live
 
+- [ ] "Make it one product": `docs/adr/0043-one-product.md` lists every solo-only piece (11 kept for the workshop, 8 to remove, 4 for the owner to decide in two questions) and the order of small pull requests. Waiting for the owner's yes; nothing removed yet. (18 November)
 - [x] In the home chat a remembered feeling about a moment in a book cannot be said back: the sentence is removed, because passages are fetched for the reader's message and not for the note, so the book's own text for that moment is not among them. Fetch passages for the chosen notes that are tied to a book as well. (6af) Done in 6ah: up to three tied notes bring up to two read passages each, ranked first; nothing when no read text matches. Stand-in models only.
 - [x] Suggestions ignore a book the reader has named or plans to read ("maybe Jane Eyre"): put it among the candidates when it is in the reviewed library. (6af) Done in 6ah: named in the message or a chosen plan note, it comes first when it passes every rule; a one-word title needs the author's surname. Stand-in models only.
 - [x] The home chat answers plain questions about a book worse than the chat inside it ("what's an elder?"): it takes fewer passages per book. (6af) Answered in 6ah: not the per-book limit (one book, ten passages) but the search words, which carry the last two messages; "maybe jane eyre" pushed the explanation out. The message's own passages now take every other place. Stand-in models only.
