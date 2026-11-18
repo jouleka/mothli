@@ -772,6 +772,77 @@ def test_dropping_provider_capabilities_keeps_every_other_row_and_is_named_nowhe
         assert "provider_capabilities" not in listed
 
 
+# ---- 0031: the split fingerprint (ADR 0044 step 1) ---------------------------------------------
+
+BOOK_SPLIT_HASH = 31
+_DOOR_FUNCTION = "library_story_memory(uuid)"
+
+
+def _door_record(conn) -> tuple:
+    """Everything about the door but its body: owner, privileges, security, settings, arguments
+    and result."""
+    return conn.execute(
+        "SELECT proowner::regrole::text, proacl::text, prosecdef, provolatile, proconfig, "
+        "pg_get_function_identity_arguments(oid), pg_get_function_result(oid) "
+        "FROM pg_proc WHERE oid = %s::regprocedure", (_DOOR_FUNCTION,)).fetchone()
+
+
+def _door_body(conn) -> str:
+    return conn.execute("SELECT prosrc FROM pg_proc WHERE oid = %s::regprocedure",
+                        (_DOOR_FUNCTION,)).fetchone()[0]
+
+
+def test_the_split_fingerprint_starts_unknown_and_the_door_changes_only_its_match(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches: the migration failing on a database that has books, filling in a
+    fingerprint it cannot know, or touching any other value of a book; a fingerprint of any shape
+    but a SHA-256; or the door's replacement changing anything but its match (the place, the
+    predicates, the hidden later ends and the key rewrite stay byte for byte), or its owner,
+    privileges (EXECUTE revoked from PUBLIC), security, settings, arguments or result."""
+    _apply_before(database, BOOK_SPLIT_HASH, monkeypatch)
+    owner, book, incarnation = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    columns = ("owner_id, id, incarnation, title, author, source_kind, source_id, file_hash, "
+               "schema_version, content_language, book_type, created_at, updated_at, deleted_at")
+    with psycopg.connect(database) as conn:
+        _seed_owner_and_book(conn, owner, book, incarnation)
+        conn.execute("UPDATE books SET source_kind='gutenberg:1342', file_hash=repeat('a', 64)")
+        books = conn.execute(f"SELECT {columns} FROM books ORDER BY id").fetchall()
+        # As the role script grants it to the tenant role.
+        if conn.execute("SELECT 1 FROM pg_roles WHERE rolname='lit38_door_reader'").fetchone() \
+                is None:
+            conn.execute("CREATE ROLE lit38_door_reader NOLOGIN")
+        conn.execute(f"GRANT EXECUTE ON FUNCTION {_DOOR_FUNCTION} TO lit38_door_reader")
+        record, body = _door_record(conn), _door_body(conn)
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        assert conn.execute(f"SELECT {columns} FROM books ORDER BY id").fetchall() == books
+        assert conn.execute("SELECT split_hash FROM books").fetchall() == [(None,)]
+        assert _door_record(conn) == record
+        assert [conn.execute("SELECT has_function_privilege(%s, %s, 'EXECUTE')",
+                             (role, _DOOR_FUNCTION)).fetchone()[0]
+                for role in ("lit38_door_reader", "public")] == [True, False]
+        changed = [
+            ("           mine.file_hash\n", "           mine.file_hash, mine.split_hash\n"),
+            ("      AND mine.file_hash IS NOT NULL\n",
+             "      AND mine.file_hash IS NOT NULL\n      AND mine.split_hash IS NOT NULL\n"),
+            ("     AND built.file_hash = reader.file_hash\n",
+             "     AND built.file_hash = reader.file_hash\n"
+             "     AND built.split_hash = reader.split_hash\n"),
+        ]
+        expected = body
+        for before, after in changed:
+            assert expected.count(before) == 1, before
+            expected = expected.replace(before, after)
+        assert _door_body(conn) == expected
+        conn.execute("UPDATE books SET split_hash=repeat('b', 64)")
+    for wrong in ("B" * 64, "b" * 63, "b" * 65, "not a hash"):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with psycopg.connect(database) as conn:
+                conn.execute("UPDATE books SET split_hash=%s", (wrong,))
+
+
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:
     apply_migrations(database)
     owner_a, owner_b = uuid.uuid4(), uuid.uuid4()

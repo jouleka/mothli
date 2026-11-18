@@ -304,9 +304,10 @@ def test_removing_a_book_erases_its_reading_keeps_the_money_and_never_brings_it_
         assert jobs and all(cancelled for _state, cancelled in jobs)
         # The book's row stays as a bare id for those records, with nothing of what it was.
         assert conn.execute(
-            "SELECT title, author, source_kind, source_id, file_hash, deleted_at IS NOT NULL "
+            "SELECT title, author, source_kind, source_id, file_hash, split_hash, "
+            "deleted_at IS NOT NULL "
             "FROM books WHERE owner_id=%s AND id=%s", (a.owner, book_id)).fetchone() == (
-            "", None, None, None, None, True)
+            "", None, None, None, None, None, True)
         assert ("book.delete", "succeeded") in conn.execute(
             "SELECT action, result FROM audit_events WHERE owner_id=%s AND target_id=%s",
             (a.owner, book_id)).fetchall()

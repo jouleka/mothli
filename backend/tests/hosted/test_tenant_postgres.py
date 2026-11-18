@@ -836,6 +836,7 @@ def test_owner_limits_are_visible_atomic_and_owner_scoped(
                 title=f"Atomic {index}",
                 author=None,
                 file_hash=f"{index + 1:064x}",
+                split_hash=f"{index + 101:064x}",
                 content_language="en",
                 book_type="novel",
                 object_id=uuid.uuid4(),

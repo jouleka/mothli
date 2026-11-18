@@ -16,6 +16,7 @@ Stand-in writer, checker and Jev only: nothing is called and nothing paid.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import uuid
@@ -47,10 +48,12 @@ from app.hosted.library_memory import (
 from app.hosted.limits import update_limits
 from app.hosted.purge import PostgresAccountPurge, owner_tables, purge_account
 from app.hosted.runtime import HostedRuntimeRegistry
+from app.hosted.tenant import api as hosted_api
 from app.hosted.tenant import classics as hosted_classics
 from app.hosted.tenant.grants import LIBRARY_TABLE_PRIVILEGES, purge_grants
 from app.hosted.tenant.models import OwnerId
 from app.hosted.tenant.repository import LIBRARY_MEMORY_FIXED, PostgresTenantRepository
+from app.ingest.extraction.chapter_text import segment_for_ingest, split_hash_of
 from app.main import create_app
 from app.memory_views import graph_payload, notes_payload
 from tests.api._epub import epub_ncx
@@ -971,3 +974,86 @@ def test_the_place_follows_the_read_map_in_every_path_and_nothing_else_writes_it
                      for path in app_dir.rglob("*.py")
                      if re.search(r"memory_through\s*=(?!=)", path.read_text(encoding="utf-8")))
     assert writers == ["hosted/companion/store.py"]
+
+
+# ---- 11: the split fingerprint (ADR 0044 step 1) ---------------------------------------------------
+
+def fingerprints(dsn: str, owner, book) -> tuple:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute("SELECT file_hash,split_hash FROM books WHERE owner_id=%s AND id=%s",
+                            (owner, book)).fetchone()
+
+
+def test_two_imports_of_one_file_have_one_split_fingerprint_and_another_file_another(
+        shelf, database):
+    """The break it catches: an import that keeps no split fingerprint, or one that depends on
+    the reader, the book id or the way the file came (a free-library add or an upload), so two
+    copies of one file would never match; one that stays the same for another file; or a removed
+    book that keeps it, still tying the reader to the file."""
+    a, b, uploader = reader(shelf, "r2a"), reader(shelf, "r5a"), reader(shelf, "u")
+    book_a, book_b = add(a), add(b)
+    upload = read_map_gate.upload(shelf.client, shelf.tokens, "u", LONG)
+    found = {fingerprints(database, a.owner, book_a), fingerprints(database, b.owner, book_b),
+             fingerprints(database, uploader.owner, upload)}
+    [(file_hash, split_hash)] = found
+    _result, chapters = segment_for_ingest(LONG, "any-book")
+    assert len(chapters) == PARTS
+    assert split_hash == split_hash_of(chapters, "any-book") and file_hash != split_hash
+
+    shelf.source.files[int(ALICE)] = long_lamps("The Long Lamp Book, Revised")
+    other = add(a, ALICE)
+    other_file, other_split = fingerprints(database, a.owner, other)
+    assert other_file != file_hash and other_split != split_hash and other_split is not None
+
+    assert a.call("DELETE", f"/api/books/{book_a}").status_code == 204
+    assert fingerprints(database, a.owner, book_a) == (None, None)
+    assert fingerprints(database, b.owner, book_b) == (file_hash, split_hash)
+
+
+def test_the_door_refuses_a_reader_whose_split_differs_from_the_editions_or_is_unknown(
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch):
+    """The break it catches: the door matching on the file alone, so a copy of the very same file
+    split another way (numbered one on, as another version of the splitter could number it) is
+    handed the edition's chapter 4 as its chapter 4; or a reader's book, or the edition, whose
+    split is not known being matched rather than refused. Each refusal is shown to be the split's
+    alone: putting the fingerprint back hands the reader exactly what it did before."""
+    account, *_ = built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
+    edition = _library_book(tenant_dsn, account)
+    a = reader(shelf, "r5a")
+    book = add(a)
+    a.mark(book, [1, 2, 3])
+    file_hash, split_hash = fingerprints(database, a.owner, book)
+    assert fingerprints(database, account, edition) == (file_hash, split_hash)
+    before = door(tenant_dsn, a.owner, book)
+    assert before is not None and max(stamps(before)) == 3
+
+    def set_split(owner, which, value) -> None:
+        with psycopg.connect(database) as conn:
+            conn.execute("UPDATE books SET split_hash=%s WHERE owner_id=%s AND id=%s",
+                         (value, owner, which))
+
+    other = hashlib.sha256(b"another split of the same file").hexdigest()
+    for owner, which in ((a.owner, book), (account, edition)):
+        for value in (other, None):
+            set_split(owner, which, value)
+            assert door(tenant_dsn, a.owner, book) is None, (owner, value)
+            assert door(database, a.owner, book) is None, (owner, value)
+            assert not HostedBookStore(tenant_dsn, OwnerId(a.owner)).shared(book)
+            assert get(a, f"/api/books/{book}/graph").status_code == 404
+        set_split(owner, which, split_hash)
+        assert door(tenant_dsn, a.owner, book) == before
+
+    # An import of the same bytes whose splitter numbers every chapter one on: same file,
+    # another split, refused; the reader keeps nothing of the edition's.
+    real = hosted_api.split_hash_of
+    monkeypatch.setattr(hosted_api, "split_hash_of", lambda chapters, book_id: real(
+        [{**chapter, "ordinal": chapter["ordinal"] + 1} for chapter in chapters], book_id))
+    later = reader(shelf, "r10a")
+    shifted = add(later)
+    assert fingerprints(database, later.owner, shifted)[0] == file_hash
+    assert fingerprints(database, later.owner, shifted)[1] not in (split_hash, None)
+    later.mark(shifted, [1, 2, 3, 4])
+    assert door(tenant_dsn, later.owner, shifted) is None
+    assert door(database, later.owner, shifted) is None
+    assert get(later, f"/api/books/{shifted}/graph").status_code == 404
+    assert door(tenant_dsn, a.owner, book) == before
