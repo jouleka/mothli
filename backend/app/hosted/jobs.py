@@ -581,7 +581,7 @@ class PostgresWorkerRepository:
         operator's command rather than up to a reader's read map (ADR 0042 part 5)."""
         with self._connect() as conn:
             return conn.execute(
-                "SELECT EXISTS (SELECT 1 FROM public.library_account WHERE account_id=%s) AS found",
+                "SELECT EXISTS (SELECT 1 FROM public.notes_account WHERE account_id=%s) AS found",
                 (owner_id,),
             ).fetchone()["found"]
 

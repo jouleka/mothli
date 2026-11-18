@@ -82,20 +82,21 @@ WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "events": frozenset({"INSERT"}),
     "event_participants": frozenset({"INSERT"}),
     "themes": frozenset({"INSERT"}),
-    # ADR 0042 part 5: whether a claimed job is the library account's, whose editions are built
-    # whole rather than up to a read map.
-    "library_account": frozenset({"SELECT"}),
+    # ADR 0042 part 5: whether a claimed job is the library account's (since ADR 0044 step 2,
+    # the notes account's), whose editions are built whole rather than up to a read map.
+    "notes_account": frozenset({"SELECT"}),
 }
 
 # ADR 0041 part 3 (migration 0020): the platform's day total is reached only through these two
 # functions, which run as their owner and answer "fits" or nothing, never a sum. The tenant role
 # holds no privilege on ``platform_spend_days`` itself, and PUBLIC holds none on the functions.
-# ADR 0042 part 5 (migration 0026): a library edition's story memory is reached by a reader only
-# through the door, which hands out the rows up to the reader's own place and nothing else.
+# ADR 0042 part 5 (migration 0026), ADR 0044 step 2 (migration 0032): an edition's story memory
+# is reached by a reader only through the door, which hands out the rows up to the reader's own
+# place and nothing else, for any book of theirs whose file matches an edition.
 TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
     "companion_platform_reserve(numeric,numeric)": frozenset({"EXECUTE"}),
     "companion_platform_adjust(date,numeric,numeric)": frozenset({"EXECUTE"}),
-    "library_story_memory(uuid)": frozenset({"EXECUTE"}),
+    "story_memory_door(uuid)": frozenset({"EXECUTE"}),
 }
 
 # ADR 0042 part 5: the operator's library build (python -m app.hosted.library_memory). Its own
@@ -104,7 +105,7 @@ TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
 # as a reader's add does. Never in web or worker.
 LIBRARY_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "users": frozenset({"INSERT"}),
-    "library_account": frozenset({"SELECT", "INSERT"}),
+    "notes_account": frozenset({"SELECT", "INSERT"}),
 }
 
 # ADR 0041 part 8: the account purge, run once a day from the command line, never by web or

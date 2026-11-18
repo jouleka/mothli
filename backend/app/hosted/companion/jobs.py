@@ -108,8 +108,9 @@ class StoryMemoryQueue(ChapterNotesQueue):
     KIND, KEY, PRIORITY = "story_memory", "story-memory", STORY_MEMORY_PRIORITY
 
     def ensure(self, book_id) -> bool:
-        """As for notes, except that a library book (one the door serves, ADR 0042 section 3)
-        never gets a job of its reader's: its memory is the library edition's."""
+        """As for notes, except that a book the door serves (it hands this reader something of
+        an edition, ADR 0042 section 3, ADR 0044 section 4) never gets a job of its reader's:
+        its memory is the edition's."""
         try:
             if HostedBookStore(self._dsn, self._owner).shared(book_id):
                 return False
@@ -443,7 +444,7 @@ class CompanionJobs:
                 target = max(chapter["ordinal"] for chapter in chapters)
                 state = catalog.get_state(book_id)
             elif HostedBookStore(self._dsn, owner).shared(book_id):
-                return          # the library edition's memory serves this book
+                return          # an edition's memory, through the door, serves this book
             else:
                 _point, _read, state, *_rest = read_snapshot(book_id, catalog, self._settings,
                                                              source)
