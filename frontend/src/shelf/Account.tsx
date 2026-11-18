@@ -8,7 +8,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, ApiError } from "../api";
-import type { OfflineSession } from "../pwa/offline";
+import { offersChat, type OfflineSession } from "../pwa/offline";
 import { keepTabFocusInside } from "../reader/focusTrap";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
@@ -55,6 +55,11 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
   }, [confirming]);
 
   useEffect(() => {
+    // A server without Mothli's chat keeps nothing to remember: no door, and nothing asked.
+    if (!offersChat(session)) {
+      setRemembers(false);
+      return;
+    }
     let stale = false;
     api.recollections()
       .then(() => { if (!stale) setRemembers(true); })

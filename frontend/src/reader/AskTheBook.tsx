@@ -301,8 +301,12 @@ export function AskTheBook({
   chapterLabel: _chapterLabel = "",
   initialTab = "talk",
   navigate = null,
+  hosted = false,
 }: {
   bookId: string;
+  /** Hosted mode: replies come only as a stream; there is no non-streamed reply to fall back on
+   * (ADR 0043), so a reply that cannot stream is a failed reply, not a second request. */
+  hosted?: boolean;
   bookmark: number;
   onNavigate: (citation: AskCitation) => void;
   onClose: () => void;
@@ -559,6 +563,8 @@ export function AskTheBook({
             }, request.signal)
           : null;
         if (!isCurrentRequest()) return;
+        // Hosted mode has nothing else to ask: shown as any reply that could not be had.
+        if (hosted && streamed === null) throw new Error("no streamed reply");
         kept = streamed !== null;
         // The older, non-streamed path keeps nothing on the server and still reads the earlier
         // conversation from the request: it is sent what is on this panel now.
