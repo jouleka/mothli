@@ -11,6 +11,13 @@ back shrinks it and reading on grows it; parity with local mode; the chat's spoi
 later name the writer "remembers"; nothing between readers; the operator's build; erasure,
 removal and grants with library rows present; and the place column kept in step by the read map.
 Stand-in writer, checker and Jev only: nothing is called and nothing paid.
+
+ADR 0044 step 2 (the door for every book): the door is ``story_memory_door`` and serves any
+reader's book whose file matches an edition on both fingerprints, however it came (a free-library
+add or an upload); a live book of the reader with no edition gets one row with empty lists, the
+same answer as an edition read at place 0. The door tests run for a free-library add and for an
+upload of the same file. Nothing builds an edition for an upload yet: the editions here are the
+notes account's (the old library account's), built by the operator's command, chapter by chapter.
 """
 
 from __future__ import annotations
@@ -61,6 +68,7 @@ from tests.hosted import test_companion_read_map_postgres as read_map_gate
 from tests.hosted import test_jobs_postgres as jobs_gate
 from tests.hosted.test_account_deletion_postgres import _role
 from tests.hosted.test_account_export_postgres import copy_of
+from tests.hosted.test_companion_recollections_postgres import HomeModels
 from tests.hosted.test_companion_stream_postgres import (  # noqa: F401  (autouse fixture)
     CHAT,
     Reader,
@@ -256,16 +264,39 @@ def place_at(someone: Reader, book: str, at: int, parts: int = PARTS) -> None:
         someone.mark(book, list(range(at + 1, parts + 1)), read=False)
 
 
-def built_edition(shelf, library_dsn, worker_dsn, monkeypatch, entry=PRIDE, *, writer=Writer,
-                  **options):
-    """The operator's command for one entry, then the worker until it has nothing left."""
+def started_edition(shelf, library_dsn, worker_dsn, monkeypatch, entry=PRIDE, *, writer=Writer,
+                    **options):
+    """The operator's command for one entry, its worker not run yet: ``drain(work, n)`` builds
+    the edition's next ``n`` chapters, one a run."""
     extraction = extraction_client()
     models = writer(extraction, monkeypatch, **options)
     library = PostgresLibraryAccount(library_dsn)
     build(command(shelf), library, [entry])
     work = worker(shelf.app, extraction, worker_dsn)
-    drain(work, 60)
     return library.account(), models, extraction, work
+
+
+def built_edition(shelf, library_dsn, worker_dsn, monkeypatch, entry=PRIDE, *, writer=Writer,
+                  **options):
+    """The operator's command for one entry, then the worker until it has nothing left."""
+    account, models, extraction, work = started_edition(shelf, library_dsn, worker_dsn,
+                                                        monkeypatch, entry, writer=writer,
+                                                        **options)
+    drain(work, 60)
+    return account, models, extraction, work
+
+
+# The two ways a reader comes to hold a file (ADR 0044 section 1): the door treats them alike.
+HOW = pytest.mark.parametrize("how", ["library", "upload"])
+
+
+def acquire(shelf, someone: Reader, how: str, entry: str = PRIDE) -> str:
+    """``someone``'s copy of the file the free library serves for ``entry``: added from the
+    free library, or the very same bytes uploaded."""
+    if how == "library":
+        return add(someone, entry)
+    return read_map_gate.upload(shelf.client, shelf.tokens, someone.label,
+                                shelf.source.files.get(int(entry), LONG))
 
 
 def door(dsn: str, owner, book) -> dict | None:
@@ -273,7 +304,31 @@ def door(dsn: str, owner, book) -> dict | None:
     with psycopg.connect(dsn, row_factory=dict_row) as conn, conn.transaction():
         if owner is not None:
             conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(owner),))
-        return conn.execute("SELECT * FROM library_story_memory(%s)", (book,)).fetchone()
+        return conn.execute("SELECT * FROM story_memory_door(%s)", (book,)).fetchone()
+
+
+def door_bytes(dsn: str, owner, book) -> str | None:
+    """The door's answer as the database writes it out, for a byte-for-byte comparison."""
+    with psycopg.connect(dsn) as conn, conn.transaction():
+        conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(owner),))
+        row = conn.execute("SELECT row_to_json(answer)::text FROM story_memory_door(%s) AS answer",
+                           (book,)).fetchone()
+    return None if row is None else row[0]
+
+
+HANDED = ("chapters", "completed", "entities", "aliases", "themes", "events", "summaries",
+          "edges", "states")
+
+
+def nothing(row: dict | None) -> bool:
+    """The door handed nothing: no row at all, or the one row with every list empty."""
+    return row is None or not any(row[name] for name in HANDED)
+
+
+def empty_row(row: dict | None) -> bool:
+    """The door's answer for a live book of the reader with no edition: one row, every list
+    empty."""
+    return row is not None and nothing(row)
 
 
 def stamps(row: dict) -> list[int]:
@@ -321,12 +376,14 @@ def get(someone: Reader, path: str):
 
 # ---- 1: the owner's test -------------------------------------------------------------------------
 
+@HOW
 def test_readers_at_2_5_and_10_are_each_handed_only_what_is_up_to_their_place(
-        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch):
-    """The owner's test. The break it catches: a row of a later chapter, or an end ("this state
-    ends at chapter 6") past the reader's place, leaving the database for that reader's request,
-    on the row-security role or past it, or reaching their story memory, the four screens, the
-    chat's prompts and checks, or their copy of their data."""
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch, how):
+    """The owner's test, for readers who added the file from the free library and for readers
+    who uploaded the very same file. The break it catches: a row of a later chapter, or an end
+    ("this state ends at chapter 6") past the reader's place, leaving the database for that
+    reader's request, on the row-security role or past it, or reaching their story memory, the
+    four screens, the chat's prompts and checks, or their copy of their data."""
     account, _models, _extraction, _work = built_edition(shelf, library_dsn, worker_dsn,
                                                          monkeypatch)
     assert built(database, account) == [(n, "body") for n in range(1, PARTS + 1)]
@@ -339,7 +396,7 @@ def test_readers_at_2_5_and_10_are_each_handed_only_what_is_up_to_their_place(
     books = {}
     for label, at in PLACES.items():
         someone = reader(shelf, label)
-        books[label] = add(someone)
+        books[label] = acquire(shelf, someone, how)
         someone.mark(books[label], list(range(1, at + 1)))
 
     platform = shelf.app.state.platform_client
@@ -402,23 +459,26 @@ def test_readers_at_2_5_and_10_are_each_handed_only_what_is_up_to_their_place(
 
 # ---- 2: no way to choose another place ----------------------------------------------------------
 
+@HOW
 def test_no_argument_device_tab_or_direct_write_moves_the_place_and_the_door_refuses_the_rest(
-        shelf, library_dsn, tenant_dsn, database, worker_dsn, admin_dsn, monkeypatch):
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, admin_dsn, monkeypatch, how):
     """The break it catches: a place taken from a caller (an argument, a requested chapter), from
     the counter a device's position report raises, from a stale tab, or from a column written
     past every chapter the reader has a read page in; or the door answering a caller with no
-    owner setting, another reader's book, a removed book, an upload of the very same file, a
-    library book whose file differs, or the library account itself."""
+    owner setting, another reader's book, a removed book, a book whose file differs, or the
+    notes account itself; or the very same file come the other way (an upload for a library add,
+    a library add for an upload) handed anything but what the first is handed at the same place.
+    Run for a reader who added the file from the free library and one who uploaded it."""
     account, *_ = built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
     a, b = reader(shelf, "r2a"), reader(shelf, "r5a")
-    book, other = add(a), add(b)
+    book, other = acquire(shelf, a, how), acquire(shelf, b, how)
     a.mark(book, [1, 2])
     b.mark(other, [1, 2, 3, 4, 5])
     assert through(tenant_dsn, a.owner, book) == 2
 
     with psycopg.connect(database) as conn:
         assert conn.execute(
-            "SELECT pg_get_function_identity_arguments('library_story_memory'::regproc)"
+            "SELECT pg_get_function_identity_arguments('story_memory_door'::regproc)"
         ).fetchone()[0] == "book uuid"
     assert get(a, f"/api/books/{book}/graph?bookmark=11").json()["as_of_chapter"] == 2
 
@@ -467,17 +527,25 @@ def test_no_argument_device_tab_or_direct_write_moves_the_place_and_the_door_ref
         library_book = conn.execute("SELECT id FROM books WHERE owner_id=%s",
                                     (account,)).fetchone()[0]
     assert door(tenant_dsn, account, library_book) is None
-    uploader = reader(shelf, "u")
-    upload = read_map_gate.upload(shelf.client, shelf.tokens, "u", LONG)
-    assert door(tenant_dsn, uploader.owner, upload) is None
-    uploader.mark(upload, [1, 2, 3])
-    assert not HostedBookStore(tenant_dsn, OwnerId(uploader.owner)).shared(upload)
-    assert get(uploader, f"/api/books/{upload}/graph").status_code == 404
+    assert door(tenant_dsn, account, book) is None and door(database, account, book) is None
+    # The very same file, come the other way: handed exactly what the first is at that place,
+    # and before reading, nothing.
+    twin_reader = reader(shelf, "u")
+    twin = acquire(shelf, twin_reader, "upload" if how == "library" else "library")
+    assert empty_row(door(tenant_dsn, twin_reader.owner, twin))
+    twin_reader.mark(twin, [1, 2])
+    assert stamps(door(tenant_dsn, twin_reader.owner, twin)) == stamps(door(tenant_dsn, a.owner,
+                                                                            book))
+    assert HostedBookStore(tenant_dsn, OwnerId(twin_reader.owner)).shared(twin)
+    assert get(twin_reader, f"/api/books/{twin}/graph").json()["as_of_chapter"] == 2
+    # Another file of the same title: handed nothing, and nothing of its own to show.
     shelf.source.files[int(PRIDE)] = long_lamps("The Long Lamp Book, Revised")
     differs = reader(shelf, "r10a")
-    changed = add(differs)
+    changed = acquire(shelf, differs, how)
     differs.mark(changed, [1, 2, 3])
-    assert door(tenant_dsn, differs.owner, changed) is None
+    assert empty_row(door(tenant_dsn, differs.owner, changed))
+    assert empty_row(door(database, differs.owner, changed))
+    assert not HostedBookStore(tenant_dsn, OwnerId(differs.owner)).shared(changed)
     assert get(differs, f"/api/books/{changed}/graph").status_code == 404
     assert a.call("DELETE", f"/api/books/{book}").status_code == 204
     assert door(tenant_dsn, a.owner, book) is None and door(database, a.owner, book) is None
@@ -485,7 +553,7 @@ def test_no_argument_device_tab_or_direct_write_moves_the_place_and_the_door_ref
     # Executable by the tenant role alone: not by everyone, the worker or the purge.
     with psycopg.connect(database) as conn:
         roles = {name: conn.execute(
-            "SELECT has_function_privilege(%s,'library_story_memory(uuid)','EXECUTE')",
+            "SELECT has_function_privilege(%s,'story_memory_door(uuid)','EXECUTE')",
             (name,)).fetchone()[0] for name in (
             conninfo.conninfo_to_dict(tenant_dsn)["user"],
             conninfo.conninfo_to_dict(worker_dsn)["user"],
@@ -495,14 +563,15 @@ def test_no_argument_device_tab_or_direct_write_moves_the_place_and_the_door_ref
 
 # ---- 3: moving back shrinks, moving on grows ------------------------------------------------------
 
+@HOW
 def test_i_havent_read_this_shrinks_the_next_answer_and_reading_on_grows_it(
-        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch):
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch, how):
     """The break it catches: a per-reader copy kept in step (or not) beside the edition, so
     "I haven't read this" leaves later people in the reader's memory, or reading on does not
-    bring them."""
+    bring them. For a free-library add and an upload alike."""
     account, *_ = built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
     a = reader(shelf, "r5a")
-    book = add(a)
+    book = acquire(shelf, a, how)
     a.mark(book, [1, 2, 3, 4, 5])
     library = memory_of(database, account)
     assert through(tenant_dsn, a.owner, book) == 5
@@ -559,7 +628,9 @@ def test_a_reader_of_the_library_edition_gets_what_local_mode_builds_to_their_pl
                 expected = answers(mem, local_atoms, chapters)
                 expected_screens = {bm: screens(mem, bm) for bm in range(0, 6)}
             with HostedBookStore(tenant_dsn, OwnerId(someone.owner)).book(book) as mem:
-                assert mem.shared
+                # Served by the door once it hands anything; at place 0 it hands nothing, the
+                # same as for a book with no edition (ADR 0044 section 4).
+                assert mem.shared == (at > 0)
                 assert answers(mem, atoms, chapters) == expected, at
                 assert {bm: screens(mem, bm) for bm in range(0, 6)} == expected_screens, at
             assert expected["frontier"] == at
@@ -575,9 +646,10 @@ def test_a_reader_of_the_library_edition_gets_what_local_mode_builds_to_their_pl
 UNREAD = {1: ("Corvus", "Vex", "Lamplighter"), 2: ("Vex", "Lamplighter"), 3: ("Lamplighter",)}
 
 
+@HOW
 @pytest.mark.parametrize("hole", [False, True])
 def test_the_chats_spoiler_probes_through_the_door(
-        shelf, library_dsn, tenant_dsn, database, worker_dsn, tmp_path, monkeypatch, hole):
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, tmp_path, monkeypatch, hole, how):
     """The chat's spoiler probes (a person first met later, one first met in an unremembered
     chapter, a late alias, foreshadowing) for a reader of the library edition at places before,
     at and after each person's first chapter, with and without an unremembered chapter. The break
@@ -587,14 +659,18 @@ def test_the_chats_spoiler_probes_through_the_door(
     doubts every name its passages do not hold (the stream tests' probes with no memory) every
     probe goes; with a checker that clears everything, a person or name first met after the place
     is shown, because nothing stamped after the place is handed out for the fixed check to know
-    (see ``test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look``)."""
+    (see ``test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look``).
+    Run for a free-library add and an upload of the same file, with a second reader of the file
+    at its end, so the one probed is behind them."""
     shelf.source.files[int(ALICE)] = lamps()
     account, *_ = built_edition(shelf, library_dsn, worker_dsn, monkeypatch, ALICE,
                                 writer=Lamps, reject={2} if hole else ())
     assert built(database, account) == [(1, "body"), (2, "unremembered" if hole else "body"),
                                         (3, "body")]
+    ahead = reader(shelf, "r10a")
+    ahead.mark(acquire(shelf, ahead, how, ALICE), [1, 2, 3])
     someone = reader(shelf, "r2a")
-    book = add(someone, ALICE)
+    book = acquire(shelf, someone, how, ALICE)
     atoms = hosted_atoms(shelf.app, someone.owner, book)
     platform = shelf.app.state.platform_client
     local_client = extraction_client()
@@ -683,11 +759,18 @@ def test_the_edition_tells_no_reader_anything_of_another_and_its_account_is_nobo
     account, models, *_ = built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
     a, b = reader(shelf, "r5a"), reader(shelf, "r2a")
     book_a, book_b = add(a), add(b)
-    before = [get(someone, f"/api/books/{book}/graph").json()
-              for someone, book in ((a, book_a), (b, book_b))]
-    assert before == [{"as_of_chapter": 0, "characters": [], "relationships": []}] * 2
-    unbuilt = add(a, ALICE)              # a title nobody built: the same for everyone, too
-    assert get(a, f"/api/books/{unbuilt}/graph").status_code == 404
+    before = [get(someone, f"/api/books/{book}/graph") for someone, book in ((a, book_a),
+                                                                              (b, book_b))]
+    # A title nobody built, the same for everyone, too. Its file must differ: the door matches
+    # files, not catalogue entries.
+    shelf.source.files[int(ALICE)] = long_lamps("Another Lamp Book")
+    unbuilt = add(a, ALICE)
+    # Before reading, a built title answers as a title nobody built (ADR 0044 section 4): the
+    # door hands both the same row, byte for byte, and the screen says the same of both.
+    assert door_bytes(tenant_dsn, a.owner, book_a) == door_bytes(tenant_dsn, b.owner, book_b) \
+        == door_bytes(tenant_dsn, a.owner, unbuilt)
+    assert [(response.status_code, response.json()) for response in before] \
+        == [(404, get(a, f"/api/books/{unbuilt}/graph").json())] * 2
 
     edition = everything_of(database, account)
     calls = list(models.calls)
@@ -857,7 +940,9 @@ def test_three_unremembered_chapters_in_a_row_stop_a_book_for_the_library_and_fo
         own = extraction_client()
         writer = Writer(own, monkeypatch, reject={2, 3, 4})
         someone = Reader(client, tokens, "u", people["u"])
-        book = read_map_gate.upload(client, tokens, "u", LONG)
+        # Another file than the edition's: an upload of the edition's own file is served by the
+        # door (ADR 0044 step 2) and so gets no memory of its own.
+        book = read_map_gate.upload(client, tokens, "u", another_file_of_the_same_title())
         someone.mark(book, list(range(1, 9)))
         drain(worker(app, own, worker_dsn), 60)
         assert built(database, someone.owner) == [(1, "body"), *[(n, "unremembered")
@@ -893,7 +978,7 @@ def test_the_library_role_is_exactly_what_the_command_needs(library_dsn, databas
         other = uuid.uuid4()
         conn.execute("INSERT INTO users (id,display_name) VALUES (%s,'Someone')", (other,))
         with pytest.raises(psycopg.errors.UniqueViolation):
-            conn.execute("INSERT INTO library_account (account_id) VALUES (%s)", (other,))
+            conn.execute("INSERT INTO notes_account (account_id) VALUES (%s)", (other,))
 
 
 # ---- 9: erasure, removal and the purge with library rows present ---------------------------------
@@ -940,14 +1025,16 @@ def tpage(part: int, first: int, last: int) -> dict:
     return {"start": anchor(first, False), "end": anchor(last, True), "skimmed": False}
 
 
+@HOW
 def test_the_place_follows_the_read_map_in_every_path_and_nothing_else_writes_it(
-        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch):
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch, how):
     """The break it catches: ``memory_through`` left behind by a read-map path (a page that
     finishes a chapter, chapters marked read or not read, a book added again), so the door hands
-    out less, or more, than the map says was read; or a second writer of the column."""
+    out less, or more, than the map says was read; or a second writer of the column. For a
+    free-library add and an upload alike."""
     built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
     a = reader(shelf, "r5a")
-    book = add(a)
+    book = acquire(shelf, a, how)
     assert memory_through(database, a.owner, book) == 0
     finished = a.call("PUT", f"/api/books/{book}/read-page", tpage(1, 1, 40))
     assert finished.status_code == 200, finished.text
@@ -962,7 +1049,7 @@ def test_the_place_follows_the_read_map_in_every_path_and_nothing_else_writes_it
     assert memory_through(database, a.owner, book) == 4
     # Added again after removal: a new place, which follows the new map.
     assert a.call("DELETE", f"/api/books/{book}").status_code == 204
-    again = add(a)
+    again = acquire(shelf, a, how)
     assert again != book and memory_through(database, a.owner, again) == 0
     assert through(tenant_dsn, a.owner, again) == 0
     a.mark(again, [1, 2])
@@ -1023,17 +1110,20 @@ def test_two_imports_of_one_file_have_one_split_fingerprint_and_another_split_an
     assert fingerprints(database, b.owner, book_b) == (file_hash, split_hash)
 
 
+@HOW
 def test_the_door_refuses_a_reader_whose_split_differs_from_the_editions_or_is_unknown(
-        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch):
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch, how):
     """The break it catches: the door matching on the file alone, so a copy of the very same file
     split another way (numbered one on, as another version of the splitter could number it) is
     handed the edition's chapter 4 as its chapter 4; or a reader's book, or the edition, whose
     split is not known being matched rather than refused. Each refusal is shown to be the split's
-    alone: putting the fingerprint back hands the reader exactly what it did before."""
+    alone: putting the fingerprint back hands the reader exactly what it did before. Refused
+    means handed nothing: no row for a reader's book with no fingerprint, else the empty row of a
+    book with no edition (ADR 0044 step 2). For a free-library add and an upload alike."""
     account, *_ = built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
     edition = _library_book(tenant_dsn, account)
     a = reader(shelf, "r5a")
-    book = add(a)
+    book = acquire(shelf, a, how)
     a.mark(book, [1, 2, 3])
     file_hash, split_hash = fingerprints(database, a.owner, book)
     assert fingerprints(database, account, edition) == (file_hash, split_hash)
@@ -1049,8 +1139,10 @@ def test_the_door_refuses_a_reader_whose_split_differs_from_the_editions_or_is_u
     for owner, which in ((a.owner, book), (account, edition)):
         for value in (other, None):
             set_split(owner, which, value)
-            assert door(tenant_dsn, a.owner, book) is None, (owner, value)
-            assert door(database, a.owner, book) is None, (owner, value)
+            unknown = owner == a.owner and value is None
+            for dsn in (tenant_dsn, database):
+                answer = door(dsn, a.owner, book)
+                assert (answer is None) == unknown and nothing(answer), (owner, value)
             assert not HostedBookStore(tenant_dsn, OwnerId(a.owner)).shared(book)
             assert get(a, f"/api/books/{book}/graph").status_code == 404
         set_split(owner, which, split_hash)
@@ -1062,11 +1154,324 @@ def test_the_door_refuses_a_reader_whose_split_differs_from_the_editions_or_is_u
     monkeypatch.setattr(hosted_api, "split_hash_of", lambda chapters, book_id: real(
         [{**chapter, "ordinal": chapter["ordinal"] + 1} for chapter in chapters], book_id))
     later = reader(shelf, "r10a")
-    shifted = add(later)
+    shifted = acquire(shelf, later, how)
     assert fingerprints(database, later.owner, shifted)[0] == file_hash
     assert fingerprints(database, later.owner, shifted)[1] not in (split_hash, None)
     later.mark(shifted, [1, 2, 3, 4])
-    assert door(tenant_dsn, later.owner, shifted) is None
-    assert door(database, later.owner, shifted) is None
+    assert empty_row(door(tenant_dsn, later.owner, shifted))
+    assert empty_row(door(database, later.owner, shifted))
     assert get(later, f"/api/books/{shifted}/graph").status_code == 404
     assert door(tenant_dsn, a.owner, book) == before
+
+
+# ---- 12: the door for every book (ADR 0044 step 2) --------------------------------------------------
+#
+# Uploads only, against editions of the notes account (the old library account) that the
+# operator's command builds chapter by chapter: nothing builds an edition for an upload yet.
+
+def another_file_of_the_same_title() -> bytes:
+    """The long lamp book's title, author and parts, with one sentence more in part 1: another
+    file (and another split) of the same novel."""
+    return epub_ncx([(f"c{n}.xhtml", f"Part {n}", f"Part {n}",
+                      " ".join(tline(n, i) for i in range(1, 41)) + EXTRA.get(n, "")
+                      + (" A gull cried over the quay." if n == 1 else ""))
+                     for n in range(1, PARTS + 1)], title="The Long Lamp Book", author="Ada Writer")
+
+
+def upload(shelf, someone: Reader, blob: bytes = LONG) -> str:
+    return read_map_gate.upload(shelf.client, shelf.tokens, someone.label, blob)
+
+
+def only_up_to(shelf, tenant_dsn, database, account, someone: Reader, book: str, at: int,
+               monkeypatch) -> None:
+    """What ``someone``, at ``at``, is handed of the edition: on the raw function (the
+    row-security role and past it), through ``HostedBookStore``, on the four screens and in the
+    chat's prompts and checks: everything up to ``at``, nothing of a later chapter, no end past
+    ``at``."""
+    hidden = later_words(at)
+    for dsn in (tenant_dsn, database):
+        raw = door(dsn, someone.owner, book)
+        assert raw is not None and max(stamps(raw)) == at, (someone.label, dsn)
+        assert sorted(item["ordinal"] for item in raw["completed"]) == list(range(1, at + 1))
+        assert {item["name"] for item in raw["entities"]} == set(NAMES[:at])
+        assert not [word for word in hidden if word in json.dumps(raw, default=str)]
+    with HostedBookStore(tenant_dsn, OwnerId(someone.owner)).book(book) as mem:
+        assert mem.shared
+        assert {row["canonical_name"] for row in mem._audit_all("entities")} == set(NAMES[:at])
+        assert mem.completion_frontier(hosted_atoms(shelf.app, someone.owner, book)) == at
+
+    with psycopg.connect(database) as conn:
+        ids = dict(conn.execute("SELECT canonical_name,id::text FROM entities WHERE owner_id=%s",
+                                (account,)).fetchall())
+    graph = get(someone, f"/api/books/{book}/graph?bookmark=99")
+    notes = get(someone, f"/api/books/{book}/notes?bookmark=99")
+    progress = get(someone, f"/api/books/{book}/ingest")
+    assert graph.json()["as_of_chapter"] == at == notes.json()["as_of_chapter"]
+    assert {row["canonical_name"] for row in graph.json()["characters"]} == set(NAMES[:at])
+    assert [row["revealed_at"] for row in notes.json()["chapters"]] == list(range(1, at + 1))
+    assert progress.json()["ingest_progress"] == at
+    assert get(someone, f"/api/books/{book}/character/{ids[NAMES[at - 1]]}").status_code == 200
+    for name in NAMES[at:]:
+        if name in ids:
+            assert get(someone, f"/api/books/{book}/character/{ids[name]}").status_code == 404
+    screens = graph.text + notes.text + progress.text
+    assert not [word for word in hidden if word in screens], someone.label
+
+    models = StandIns(shelf.app.state.platform_client, monkeypatch,
+                      reply=f"{tline(1, 2)} {tline(at, 3)}")
+    assert tline(at, 3) in sentences(someone.ask(book, "What has happened so far?"))
+    assert not [word for word in hidden if word in models.everything()], someone.label
+
+
+def test_two_readers_at_2_and_5_of_one_imported_file_are_each_handed_only_their_own_part(
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch):
+    """ADR 0044 section 4's first new test. The break it catches: the door matching an upload
+    on anything but its own reader's place (the other reader's, the furthest one's, the
+    edition's end), on any path."""
+    account, *_ = built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
+    two, five = reader(shelf, "r2a"), reader(shelf, "r5a")
+    books = {"r2a": upload(shelf, two), "r5a": upload(shelf, five)}
+    two.mark(books["r2a"], [1, 2])
+    five.mark(books["r5a"], [1, 2, 3, 4, 5])
+    for someone, at in ((two, 2), (five, 5)):
+        only_up_to(shelf, tenant_dsn, database, account, someone, books[someone.label], at,
+                   monkeypatch)
+
+
+def test_with_the_edition_one_chapter_past_the_furthest_reader_no_reader_gets_past_their_own(
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch):
+    """ADR 0044 section 4's second and third new tests: the edition built to the furthest
+    reader's place + 1 (what "one ahead" will leave). The break it catches: chapter 6, its new
+    person (Brannoch) or the end it puts on Mara's first state reaching the furthest reader at
+    chapter 5, or anything past chapter 2 the reader behind them; on the raw function, the
+    adapter, the screens or the chat."""
+    account, _models, _extraction, work = started_edition(shelf, library_dsn, worker_dsn,
+                                                          monkeypatch)
+    behind, furthest = reader(shelf, "r2a"), reader(shelf, "r5a")
+    books = {"r2a": upload(shelf, behind), "r5a": upload(shelf, furthest)}
+    behind.mark(books["r2a"], [1, 2])
+    furthest.mark(books["r5a"], [1, 2, 3, 4, 5])
+    assert drain(work, 6) == 6
+    assert built(database, account) == [(n, "body") for n in range(1, 7)]
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT count(*) FROM entity_state WHERE owner_id=%s"
+                            " AND invalid_at=6", (account,)).fetchone()[0] == 1
+    for someone, at in ((behind, 2), (furthest, 5)):
+        only_up_to(shelf, tenant_dsn, database, account, someone, books[someone.label], at,
+                   monkeypatch)
+
+
+def test_the_chats_spoiler_probes_for_the_furthest_reader_of_an_upload_with_the_next_chapter_built(
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, tmp_path, monkeypatch):
+    """ADR 0044 section 4's third new test, on the chat: the probes of
+    ``test_the_chats_spoiler_probes_through_the_door`` for the furthest reader of an uploaded
+    file, at each place *n* with chapter *n*+1 already built. The break it catches: chapter
+    *n*+1 reaching the furthest reader's checks or screens, or the door's fixed checks dropping
+    less than a memory built only to their place."""
+    shelf.source.files[int(ALICE)] = lamps()
+    account, _models, _extraction, work = started_edition(shelf, library_dsn, worker_dsn,
+                                                          monkeypatch, ALICE, writer=Lamps)
+    someone = reader(shelf, "r2a")
+    book = acquire(shelf, someone, "upload", ALICE)
+    atoms = hosted_atoms(shelf.app, someone.owner, book)
+    platform = shelf.app.state.platform_client
+    local_client = extraction_client()
+    Lamps(local_client, monkeypatch)
+    door_drops = {}
+    with local_book(tmp_path, lamps()) as (extract, memory, local_atoms, chapters):
+        for at in (1, 2, 3):
+            drain(work, 2 if at == 1 else 1)
+            assert built(database, account) == [(n, "body") for n in range(1, min(at + 1, 3) + 1)]
+            extract(local_client, at)
+            place_at(someone, book, at, parts=3)
+            assert through(tenant_dsn, someone.owner, book) == at
+            assert through(database, someone.owner, book) == at
+            assert get(someone, f"/api/books/{book}/graph?bookmark=99").json()[
+                "as_of_chapter"] == at
+            assert [row["revealed_at"] for row in get(
+                someone, f"/api/books/{book}/notes?bookmark=99").json()["chapters"]] \
+                == list(range(1, at + 1))
+            read_text = " ".join(ch["text"] for ch in chapters if ch["ordinal"] <= at)
+            with memory() as mem:
+                local = fixed_check_drops(mem, min(at, mem.completion_frontier(local_atoms)),
+                                          read_text)
+            with HostedBookStore(tenant_dsn, OwnerId(someone.owner)).book(book) as mem:
+                assert mem.completion_frontier(atoms) == at
+                door_drops[at] = fixed_check_drops(mem, at, read_text)
+            assert door_drops[at] >= local, at
+            for probe, sentence in PROBES.items():
+                unread = [name for name in UNREAD[at] if name in sentence]
+                StandIns(platform, monkeypatch, reply=f"{line(1, 2)} {sentence}",
+                         unsupported=UNREAD[at])
+                shown = sentences(someone.ask(book))
+                assert line(1, 2) in shown, (at, probe)
+                assert (sentence in shown) == (not unread and probe not in door_drops[at]), (
+                    at, probe)
+                StandIns(platform, monkeypatch, reply=f"{line(1, 2)} {sentence}")
+                shown = sentences(someone.ask(book))
+                assert (sentence not in shown) == (probe in door_drops[at]), (at, probe)
+    assert door_drops == {1: {"foreshadowing"}, 2: {"foreshadowing"}, 3: {"foreshadowing"}}
+
+
+def test_a_reader_of_another_file_of_the_same_title_is_handed_nothing(
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch):
+    """ADR 0044 section 4's fourth new test (a different split of the same file, and an unknown
+    one, are ``test_the_door_refuses_a_reader_whose_split_differs_from_the_editions_or_is_unknown``
+    for an upload). The break it catches: the door matching a title, an author or a catalogue
+    entry rather than the file, so another edition's chapters reach this reader; or "nothing"
+    told apart from an edition read at place 0."""
+    built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
+    starting = reader(shelf, "r5a")
+    fresh = upload(shelf, starting)
+    other = reader(shelf, "u")
+    another = upload(shelf, other, another_file_of_the_same_title())
+    other.mark(another, [1, 2, 3])
+    for dsn in (tenant_dsn, database):
+        assert empty_row(door(dsn, other.owner, another))
+    assert door_bytes(tenant_dsn, other.owner, another) \
+        == door_bytes(tenant_dsn, starting.owner, fresh)
+    assert not HostedBookStore(tenant_dsn, OwnerId(other.owner)).shared(another)
+    assert get(other, f"/api/books/{another}/graph").status_code == 404
+    models = StandIns(shelf.app.state.platform_client, monkeypatch,
+                      reply=f"{tline(1, 2)} {tline(3, 3)}")
+    assert tline(3, 3) in sentences(other.ask(another, "What has happened so far?"))
+    assert not [word for word in later_words(3) if word in models.everything()]
+
+
+def test_a_removed_upload_an_account_pending_deletion_and_the_notes_account_get_nothing(
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch):
+    """ADR 0044 section 4's sixth new test. The break it catches: the door answering a book its
+    reader removed, an account waiting to be erased handed anything past its place (in its copy
+    of its data, or by the door given that owner), or the door serving the notes account's own
+    book, or that account signing in."""
+    account, *_ = built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
+    gone, leaving = reader(shelf, "r2a"), reader(shelf, "r5a")
+    gone_book, leaving_book = upload(shelf, gone), upload(shelf, leaving)
+    gone.mark(gone_book, [1, 2, 3])
+    leaving.mark(leaving_book, [1, 2, 3])
+    assert through(tenant_dsn, gone.owner, gone_book) == 3 \
+        == through(tenant_dsn, leaving.owner, leaving_book)
+
+    # A removed book: no row, the same as a book that does not exist.
+    assert gone.call("DELETE", f"/api/books/{gone_book}").status_code == 204
+    for dsn in (tenant_dsn, database):
+        assert door(dsn, gone.owner, gone_book) is None
+    assert get(gone, f"/api/books/{gone_book}/graph").status_code == 404
+
+    # An account waiting to be erased. Its sign-in answers every story screen and the chat with
+    # the pending refusal (``test_account_deletion_postgres::
+    # test_signing_in_while_pending_answers_only_the_pending_refusal_on_every_inventoried_route``,
+    # every route the app lists); the copy of its data, the one thing it may still take, holds
+    # nothing past its place. This app's sign-in stand-in does not read the account's state, so
+    # the state is set in the database and the copy taken through it.
+    with psycopg.connect(database) as conn:
+        conn.execute("UPDATE users SET status='deleting', erase_after=now()+interval '30 days'"
+                     " WHERE id=%s", (leaving.owner,))
+    files = copy_of(leaving.call("GET", "/api/account/export"))
+    [entry] = [json.loads(body) for name, body in files.items() if name.startswith("books/")]
+    assert entry["what_mothli_keeps_about_the_story"]["as_of_chapter"] == 3
+    assert not [word for word in later_words(3) if word in "\n".join(files.values())]
+    # The door decides nothing from the account's state: given that owner, it still hands only
+    # what is up to their place (no session of theirs can reach it).
+    assert through(database, leaving.owner, leaving_book) == 3
+
+    # The notes account: its own book is not served to it, and it never signs in.
+    edition = _library_book(tenant_dsn, account)
+    for dsn in (tenant_dsn, database):
+        assert door(dsn, account, edition) is None
+        assert door(dsn, account, leaving_book) is None
+    auth = PostgresAuthRepository(database)
+    now = datetime.now(UTC)
+    with pytest.raises(InactiveUserError):
+        asyncio.run(auth.create_session(owner_id=account, session_digest=b"n" * 32,
+                                        csrf_digest=b"m" * 32, issuer="https://idp.example",
+                                        old_session_digest=None, now=now,
+                                        expires_at=now + timedelta(hours=1)))
+
+
+def test_the_doors_answer_at_place_0_is_the_same_byte_for_byte_with_and_without_an_edition(
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch):
+    """ADR 0044 section 4's seventh new test and the owner's rule on acceptance: nothing a reader
+    is shown says anything about another. The break it catches: the door, the story memory, the
+    screens or the copy of one's data answering a reader before their first chapter differently
+    once an edition of their file exists (someone else has the same file); or an edition row
+    naming a reader, their book or anything they did."""
+    first, other, later = reader(shelf, "r2a"), reader(shelf, "r5a"), reader(shelf, "r10a")
+    mine = upload(shelf, first)
+    elsewhere = upload(shelf, other, another_file_of_the_same_title())
+
+    def seen(someone: Reader, book: str, *, copy: bool = True) -> tuple:
+        """What the reader is given; with ``copy``, their copy of their data's story too (a
+        reader may take one copy every few minutes, so each reader takes it once)."""
+        raw = door_bytes(tenant_dsn, someone.owner, book)
+        with HostedBookStore(tenant_dsn, OwnerId(someone.owner)).book(book) as mem:
+            memory = (mem.shared, mem.has_rows(),
+                      mem.completion_frontier(hosted_atoms(shelf.app, someone.owner, book)),
+                      {bm: screens(mem, bm) for bm in range(0, 3)},
+                      [sorted(map(str, mem._audit_all(table)))
+                       for table in ("entities", "aliases", "themes")])
+        graph = get(someone, f"/api/books/{book}/graph")
+        shown = (raw, memory, (graph.status_code, graph.json()))
+        if not copy:
+            return shown
+        files = copy_of(someone.call("GET", "/api/account/export"))
+        [entry] = [json.loads(body) for name, body in files.items() if name.startswith("books/")]
+        return (*shown, entry.get("what_mothli_keeps_about_the_story"))
+
+    before = seen(first, mine)
+    assert empty_row(json.loads(before[0]))
+    assert seen(other, elsewhere, copy=False) == before[:3]
+
+    account, *_ = built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
+    added = acquire(shelf, later, "library")
+    assert seen(first, mine, copy=False) == before[:3]
+    assert seen(other, elsewhere) == before
+    assert seen(later, added) == before
+
+    # No edition row names a reader, their book or their copy; reading and asking change none.
+    edition = everything_of(database, account)
+    with psycopg.connect(database) as conn:
+        names = [row[0] for row in conn.execute(
+            "SELECT display_name FROM users WHERE id = ANY(%s)",
+            ([first.owner, other.owner, later.owner],)).fetchall()]
+    words = [str(first.owner), str(other.owner), str(later.owner), mine, elsewhere, added,
+             *names]
+    assert len(names) == 3
+    assert not [word for word in words if word in json.dumps(edition)]
+    first.mark(mine, [1, 2])
+    StandIns(shelf.app.state.platform_client, monkeypatch, reply=f"{tline(1, 2)} Reader one.")
+    assert sentences(first.ask(mine)) == [tline(1, 2), "Reader one."]
+    assert everything_of(database, account) == edition
+
+
+def test_an_unread_upload_whose_edition_others_built_to_the_end_gives_its_chats_nothing(
+        shelf, library_dsn, tenant_dsn, database, worker_dsn, monkeypatch):
+    """ADR 0044 section 4's eighth new test, the owner's rule for unread books: of a book not
+    yet started, the home chat and the book's own chat are given nothing of the story. The break
+    it catches: an edition built to the end by others reaching either chat's prompts or checks
+    for a reader at place 0; checked against the same reader's situation before any edition
+    existed."""
+    platform = shelf.app.state.platform_client
+
+    def asked(someone: Reader, book: str) -> str:
+        models = HomeModels(platform, monkeypatch, reply="Happy reading.")
+        home = someone.call("POST", "/api/reader/ask/stream",
+                            {"question": "What should I read tonight?"})
+        assert home.status_code == 200, home.text
+        own = someone.stream(book, "What is this book about?")
+        assert own.status_code == 200, own.text
+        return models.everything().replace(book, "BOOK").replace(str(someone.owner), "OWNER")
+
+    early = reader(shelf, "r2a")
+    early_book = upload(shelf, early)
+    before = asked(early, early_book)
+
+    built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
+    ahead = reader(shelf, "r10a")
+    ahead_book = upload(shelf, ahead)
+    ahead.mark(ahead_book, list(range(1, PARTS + 1)))
+    late = reader(shelf, "r2b")
+    late_book = upload(shelf, late)
+    after = asked(late, late_book)
+    assert not [word for word in (*NAMES, "Keeper") if word in after]
+    assert after == before
