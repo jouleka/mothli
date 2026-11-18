@@ -207,7 +207,7 @@ class PostgresTenantRepository:
                 await conn.execute(
                     """
                     SELECT limits.max_upload_bytes,limits.max_library_bytes,limits.max_books,
-                           limits.max_active_jobs,limits.requests_per_window,
+                           limits.requests_per_window,
                            limits.request_window_seconds,limits.max_provider_concurrency,
                            limits.max_spend_usd,limits.updated_at,
                            (SELECT count(*) FROM public.books AS book
@@ -216,10 +216,6 @@ class PostgresTenantRepository:
                             FROM public.source_objects AS object
                             WHERE object.owner_id=limits.owner_id AND object.deleted_at IS NULL),0)
                               AS library_bytes,
-                           (SELECT count(*) FROM public.jobs AS job
-                            WHERE job.owner_id=limits.owner_id AND job.kind='ingest_book'
-                              AND job.state IN
-                              ('waiting_configuration','pending','leased','running')) AS active_jobs,
                            COALESCE((SELECT sum(entry.usd) FROM public.cost_ledger AS entry
                             WHERE entry.owner_id=limits.owner_id),0) AS spend_usd,
                            COALESCE((SELECT sum(reservation.reserved_usd)
@@ -1462,7 +1458,7 @@ class PostgresTenantRepository:
         limits = await (
             await conn.execute(
                 """
-                SELECT max_upload_bytes,max_library_bytes,max_books,max_active_jobs
+                SELECT max_upload_bytes,max_library_bytes,max_books
                 FROM public.owner_limits WHERE owner_id=%s
                 """,
                 (owner_id.value,),
@@ -1477,12 +1473,9 @@ class PostgresTenantRepository:
                   (SELECT count(*) FROM public.books
                    WHERE owner_id=%s AND deleted_at IS NULL) AS books,
                   COALESCE((SELECT sum(byte_size) FROM public.source_objects
-                   WHERE owner_id=%s AND deleted_at IS NULL),0) AS library_bytes,
-                  (SELECT count(*) FROM public.jobs WHERE owner_id=%s
-                   AND kind='ingest_book' AND state IN
-                   ('waiting_configuration','pending','leased','running')) AS active_jobs
+                   WHERE owner_id=%s AND deleted_at IS NULL),0) AS library_bytes
                 """,
-                (owner_id.value, owner_id.value, owner_id.value),
+                (owner_id.value, owner_id.value),
             )
         ).fetchone()
         assert usage is not None
@@ -1506,13 +1499,6 @@ class PostgresTenantRepository:
                 limits["max_library_bytes"],
                 None,
                 "Delete stored books or ask an operator to raise the storage limit.",
-            )
-        if usage["active_jobs"] >= limits["max_active_jobs"]:
-            raise LimitExceededError(
-                "active_job_limit_exceeded",
-                limits["max_active_jobs"],
-                15,
-                "Wait for an active ingestion job to finish or cancel one before retrying.",
             )
 
     async def admit_book(self, owner_id: OwnerId) -> None:
@@ -1554,20 +1540,17 @@ class PostgresTenantRepository:
         media_type: str,
         byte_size: int,
         encryption: str,
-        chapter_count: int,
         search_documents: list[dict] | None = None,
         source_kind: str = "upload",
-        extraction_job: bool = True,
     ) -> dict:
-        """Store one book's metadata, search text, source object row and, when
-        ``extraction_job``, its extraction job (``job`` in the answer, else None). Without one the
-        book is readable and chattable on an empty story memory and counts against no job limit.
+        """Store one book's metadata, search text and source object row. The book is readable and
+        chattable at once, on an empty story memory; no job is made for it here (story memory
+        jobs follow the reader's reading, ADR 0042).
 
         ``source_kind`` is ``upload`` for a reader's own file, or the free-library entry's tag
         (``gutenberg:<number>``, the local catalog's ``source``) for a book added from the library;
         a second live book from the same entry is refused with ``AlreadyOnShelfError``, as the
         local library refuses it, under the same owner lock as the limits."""
-        job_id = uuid.uuid4()
         async with self._transaction(owner_id) as conn:
             await conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s::text,47))",
@@ -1587,22 +1570,6 @@ class PostgresTenantRepository:
                 ).fetchone()
                 if existing is not None:
                     raise AlreadyOnShelfError(existing["id"])
-            extraction = await (
-                await conn.execute(
-                    """
-                    SELECT credential_id,validation_status
-                    FROM public.provider_model_settings
-                    WHERE owner_id=%s AND capability='extraction' AND enabled
-                    """,
-                    (owner_id.value,),
-                )
-            ).fetchone()
-            ready_credential = (
-                extraction["credential_id"]
-                if extraction is not None and extraction["validation_status"] == "ready"
-                else None
-            )
-            initial_job_state = "pending" if ready_credential is not None else "waiting_configuration"
             row = await (
                 await conn.execute(
                     """
@@ -1672,34 +1639,6 @@ class PostgresTenantRepository:
                         psycopg.types.json.Jsonb(search_documents),
                     ),
                 )
-            job_row = None
-            if extraction_job:
-                job_row = await (
-                    await conn.execute(
-                        """
-                        INSERT INTO public.jobs
-                          (owner_id,id,book_id,book_incarnation,credential_id,kind,state,
-                           idempotency_key,payload_metadata)
-                        VALUES (%s,%s,%s,%s,%s,'ingest_book',%s,%s,
-                                jsonb_build_object('chapter_count',%s))
-                        RETURNING id,book_id,kind,state,attempt_count,max_attempts,run_after,
-                                  cancellation_requested_at,sanitized_error,created_at,
-                                  updated_at,completed_at
-                        """,
-                        (
-                            owner_id.value,
-                            job_id,
-                            book_id,
-                            incarnation,
-                            ready_credential,
-                            initial_job_state,
-                            f"ingest:{book_id.hex}:{incarnation.hex}",
-                            chapter_count,
-                        ),
-                    )
-                ).fetchone()
-                job_row["completed_chapters"] = 0
-                job_row["total_chapters"] = chapter_count
             await record_event_async(
                 conn,
                 owner_id=owner_id.value,
@@ -1711,130 +1650,7 @@ class PostgresTenantRepository:
             )
         payload = self._book_payload(row)
         payload.update(bookmark=0, position_epoch=0)
-        payload["job"] = self._job_payload(job_row) if job_row is not None else None
         return payload
-
-    async def list_jobs(self, owner_id: OwnerId) -> list[dict]:
-        async with self._transaction(owner_id) as conn:
-            rows = await (
-                await conn.execute(
-                    """
-                    SELECT job.id,job.book_id,job.kind,job.state,job.attempt_count,
-                           job.max_attempts,job.run_after,job.cancellation_requested_at,
-                           job.sanitized_error,job.created_at,job.updated_at,job.completed_at,
-                           COALESCE((job.payload_metadata->>'chapter_count')::integer,0)
-                             AS total_chapters,
-                           (SELECT count(*) FROM public.ingested_chapters AS receipt
-                            WHERE receipt.owner_id=job.owner_id
-                              AND receipt.book_id=job.book_id
-                              AND receipt.book_incarnation=job.book_incarnation)
-                             AS completed_chapters
-                    FROM public.jobs AS job
-                    WHERE job.owner_id=%s AND job.kind='ingest_book'
-                    ORDER BY job.created_at DESC,job.id DESC
-                    """,
-                    (owner_id.value,),
-                )
-            ).fetchall()
-        return [self._job_payload(row) for row in rows]
-
-    async def get_job(self, owner_id: OwnerId, job_id: uuid.UUID) -> dict | None:
-        async with self._transaction(owner_id) as conn:
-            row = await (
-                await conn.execute(
-                    """
-                    SELECT job.id,job.book_id,job.kind,job.state,job.attempt_count,
-                           job.max_attempts,job.run_after,job.cancellation_requested_at,
-                           job.sanitized_error,job.created_at,job.updated_at,job.completed_at,
-                           COALESCE((job.payload_metadata->>'chapter_count')::integer,0)
-                             AS total_chapters,
-                           (SELECT count(*) FROM public.ingested_chapters AS receipt
-                            WHERE receipt.owner_id=job.owner_id
-                              AND receipt.book_id=job.book_id
-                              AND receipt.book_incarnation=job.book_incarnation)
-                             AS completed_chapters
-                    FROM public.jobs AS job
-                    WHERE job.owner_id=%s AND job.id=%s AND job.kind='ingest_book'
-                    """,
-                    (owner_id.value, job_id),
-                )
-            ).fetchone()
-        return self._job_payload(row) if row else None
-
-    async def cancel_job(self, owner_id: OwnerId, job_id: uuid.UUID) -> dict | None:
-        # The reader's job routes show and cancel extraction only; companion jobs are the
-        # server's own background work (ADR 0041 section 5) and answer as unknown here.
-        async with self._transaction(owner_id) as conn:
-            row = await (
-                await conn.execute(
-                    """
-                    SELECT id,state FROM public.jobs
-                    WHERE owner_id=%s AND id=%s AND kind='ingest_book'
-                    FOR UPDATE
-                    """,
-                    (owner_id.value, job_id),
-                )
-            ).fetchone()
-            if row is None:
-                await record_event_async(
-                    conn,
-                    owner_id=owner_id.value,
-                    actor_kind="owner",
-                    action="job.cancel",
-                    target_kind="job",
-                    target_id=job_id,
-                    result="denied",
-                    reason_code="not_found",
-                )
-                return None
-            if row["state"] in {"waiting_configuration", "pending"}:
-                await conn.execute(
-                    """
-                    UPDATE public.jobs
-                    SET state='cancelled',cancellation_requested_at=COALESCE(
-                          cancellation_requested_at,now()),completed_at=now(),updated_at=now()
-                    WHERE owner_id=%s AND id=%s
-                    """,
-                    (owner_id.value, job_id),
-                )
-            elif row["state"] in {"leased", "running"}:
-                await conn.execute(
-                    """
-                    UPDATE public.jobs
-                    SET cancellation_requested_at=COALESCE(cancellation_requested_at,now()),
-                        updated_at=now()
-                    WHERE owner_id=%s AND id=%s
-                    """,
-                    (owner_id.value, job_id),
-                )
-            result = await (
-                await conn.execute(
-                    """
-                    SELECT job.id,job.book_id,job.kind,job.state,job.attempt_count,
-                           job.max_attempts,job.run_after,job.cancellation_requested_at,
-                           job.sanitized_error,job.created_at,job.updated_at,job.completed_at,
-                           COALESCE((job.payload_metadata->>'chapter_count')::integer,0)
-                             AS total_chapters,
-                           (SELECT count(*) FROM public.ingested_chapters AS receipt
-                            WHERE receipt.owner_id=job.owner_id
-                              AND receipt.book_id=job.book_id
-                              AND receipt.book_incarnation=job.book_incarnation)
-                             AS completed_chapters
-                    FROM public.jobs AS job WHERE job.owner_id=%s AND job.id=%s
-                    """,
-                    (owner_id.value, job_id),
-                )
-            ).fetchone()
-            await record_event_async(
-                conn,
-                owner_id=owner_id.value,
-                actor_kind="owner",
-                action="job.cancel",
-                target_kind="job",
-                target_id=job_id,
-                result="succeeded",
-            )
-        return self._job_payload(result)
 
     async def cancel_owner_jobs(self, owner_id: OwnerId) -> int:
         """Every job of this reader that waits or runs, of every kind, as removing a book does
@@ -1845,13 +1661,11 @@ class PostgresTenantRepository:
                 """
                 UPDATE public.jobs
                 SET cancellation_requested_at=COALESCE(cancellation_requested_at,now()),
-                    state=CASE WHEN state IN ('waiting_configuration','pending')
-                               THEN 'cancelled' ELSE state END,
-                    completed_at=CASE WHEN state IN ('waiting_configuration','pending')
-                                      THEN now() ELSE completed_at END,
+                    state=CASE WHEN state='pending' THEN 'cancelled' ELSE state END,
+                    completed_at=CASE WHEN state='pending' THEN now() ELSE completed_at END,
                     updated_at=now()
                 WHERE owner_id=%s
-                  AND state IN ('waiting_configuration','pending','leased','running')
+                  AND state IN ('pending','leased','running')
                 """,
                 (owner_id.value,),
             )
@@ -1951,13 +1765,11 @@ class PostgresTenantRepository:
                 """
                 UPDATE public.jobs
                 SET cancellation_requested_at=COALESCE(cancellation_requested_at,now()),
-                    state=CASE WHEN state IN ('waiting_configuration','pending')
-                               THEN 'cancelled' ELSE state END,
-                    completed_at=CASE WHEN state IN ('waiting_configuration','pending')
-                                      THEN now() ELSE completed_at END,
+                    state=CASE WHEN state='pending' THEN 'cancelled' ELSE state END,
+                    completed_at=CASE WHEN state='pending' THEN now() ELSE completed_at END,
                     updated_at=now()
                 WHERE owner_id=%s AND book_id=%s AND book_incarnation=%s
-                  AND state IN ('waiting_configuration','pending','leased','running')
+                  AND state IN ('pending','leased','running')
                 """,
                 (owner_id.value, book_id, row["incarnation"]),
             )
@@ -2042,6 +1854,3 @@ class PostgresTenantRepository:
                 payload[key] = str(value)
         return payload
 
-    @classmethod
-    def _job_payload(cls, row: dict) -> dict:
-        return cls._json_row(row)

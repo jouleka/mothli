@@ -591,22 +591,136 @@ def test_idempotency_keys_are_tenant_scoped(database: str) -> None:
             "INSERT INTO users (id, display_name) VALUES (%s, 'A'), (%s, 'B')",
             (owner_a, owner_b),
         )
+        # Recollection jobs (a living kind that needs no book), running rather than waiting: at
+        # most one companion job of an owner, kind and book waits, and that index must not be
+        # what refuses the third.
         conn.execute(
-            "INSERT INTO jobs (owner_id, id, kind, idempotency_key, payload_metadata) "
-            "VALUES (%s, %s, 'ingest_book', 'same', '{\"chapter_count\":1}')",
+            "INSERT INTO jobs (owner_id, id, kind, state, idempotency_key) "
+            "VALUES (%s, %s, 'recollect', 'running', 'same')",
             (owner_a, job_a),
         )
         conn.execute(
-            "INSERT INTO jobs (owner_id, id, kind, idempotency_key, payload_metadata) "
-            "VALUES (%s, %s, 'ingest_book', 'same', '{\"chapter_count\":1}')",
+            "INSERT INTO jobs (owner_id, id, kind, state, idempotency_key) "
+            "VALUES (%s, %s, 'recollect', 'running', 'same')",
             (owner_b, job_b),
         )
-        with pytest.raises(psycopg.errors.UniqueViolation):
+        with pytest.raises(psycopg.errors.UniqueViolation, match="idempotency_key"):
             conn.execute(
-                "INSERT INTO jobs (owner_id, id, kind, idempotency_key, payload_metadata) "
-                "VALUES (%s, %s, 'ingest_book', 'same', '{\"chapter_count\":1}')",
+                "INSERT INTO jobs (owner_id, id, kind, state, idempotency_key) "
+                "VALUES (%s, %s, 'recollect', 'running', 'same')",
                 (owner_a, uuid.uuid4()),
             )
+
+
+# ---- 0028: the retired book job (ADR 0043 step 7) ---------------------------------------------
+
+RETIRE_BOOK_JOB = 28
+
+
+def _apply_before(database: str, version: int, monkeypatch) -> None:
+    """Apply every migration older than ``version``, as a database made before it would be."""
+    from app.hosted import migrations
+
+    older = tuple(item for item in discover_migrations() if item.version < version)
+    with monkeypatch.context() as patch:
+        patch.setattr(migrations, "discover_migrations", lambda: older)
+        apply_migrations(database)
+
+
+def _book_job_world(conn) -> dict:
+    """One reader with a book and a job of every kind, the retired one waiting for a key and with
+    an attempt behind it, as a database made before 0028 could hold them."""
+    owner, book, incarnation = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (owner,))
+    conn.execute("INSERT INTO books (owner_id, id, incarnation, title, schema_version) "
+                 "VALUES (%s, %s, %s, 'A book', 1)", (owner, book, incarnation))
+    jobs = {}
+    for kind, state in (("ingest_book", "waiting_configuration"), ("chapter_notes", "pending"),
+                        ("story_memory", "running"), ("recollect", "pending")):
+        jobs[kind] = conn.execute(
+            "INSERT INTO jobs (owner_id, book_id, book_incarnation, kind, state, idempotency_key, "
+            "payload_metadata) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb) RETURNING id",
+            (owner, None if kind == "recollect" else book,
+             None if kind == "recollect" else incarnation, kind, state,
+             f"{kind.replace('_', '-')}:{uuid.uuid4().hex}",
+             '{"chapter_count": 3}' if kind == "ingest_book" else "{}")).fetchone()[0]
+    conn.execute("INSERT INTO job_attempts (owner_id, job_id, attempt_no, worker_id, "
+                 "lease_token_digest, leased_at, lease_expires_at, finished_at, outcome) "
+                 "VALUES (%s, %s, 1, 'worker', %s, now(), now() + interval '1 minute', now(), "
+                 "'expired')",
+                 (owner, jobs["ingest_book"], b"0" * 32))
+    return {"owner": owner, "book": book, "incarnation": incarnation, "jobs": jobs}
+
+
+def test_retiring_the_book_job_deletes_its_jobs_and_leaves_every_other(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches: the migration failing on a database that holds the retired kind's
+    rows, touching a job of a living kind, or leaving the kind, its state or the job limit
+    possible afterwards. The rule that a living job names its book and no credential stays."""
+    _apply_before(database, RETIRE_BOOK_JOB, monkeypatch)
+    with psycopg.connect(database) as conn:
+        world = _book_job_world(conn)
+        living = conn.execute("SELECT id, kind, state, book_id FROM jobs WHERE kind<>'ingest_book' "
+                              "ORDER BY id").fetchall()
+    apply_migrations(database)
+
+    owner, book, incarnation = world["owner"], world["book"], world["incarnation"]
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT id, kind, state, book_id FROM jobs ORDER BY id"
+                            ).fetchall() == living
+        assert conn.execute("SELECT count(*) FROM job_attempts WHERE job_id=%s",
+                            (world["jobs"]["ingest_book"],)).fetchone()[0] == 0
+        assert not conn.execute("SELECT 1 FROM information_schema.columns WHERE "
+                                "table_name='owner_limits' AND column_name='max_active_jobs'"
+                                ).fetchall()
+        assert not conn.execute("SELECT 1 FROM pg_indexes WHERE indexname="
+                                "'ix_jobs_owner_active_limit'").fetchall()
+    refused = (
+        ("ingest_book", "pending", book, None, '{"chapter_count": 3}'),
+        ("chapter_notes", "waiting_configuration", book, None, "{}"),
+        ("story_memory", "pending", None, None, "{}"),
+        ("recollect", "running", None, uuid.uuid4(), "{}"),
+    )
+    for kind, state, book_id, credential_id, payload in refused:
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with psycopg.connect(database) as conn:
+                conn.execute(
+                    "INSERT INTO jobs (owner_id, book_id, book_incarnation, kind, state, "
+                    "idempotency_key, payload_metadata, credential_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s)",
+                    (owner, book_id, incarnation if book_id else None, kind, state,
+                     f"refused:{uuid.uuid4().hex}", payload, credential_id))
+
+
+def test_retiring_the_book_job_stops_rather_than_lose_a_cost_or_misplace_a_job(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches: what a retired job cost deleted with it, or a job of a living kind
+    left in the retired state. Either stops the migration whole: nothing of it is applied."""
+    _apply_before(database, RETIRE_BOOK_JOB, monkeypatch)
+    with psycopg.connect(database) as conn:
+        world = _book_job_world(conn)
+        conn.execute("INSERT INTO cost_ledger (owner_id, id, book_id, book_incarnation, job_id, "
+                     "phase, provider, model, input_tokens, output_tokens, usd, idempotency_key) "
+                     "VALUES (%s, %s, %s, %s, %s, 'extraction', 'made-up', 'model', 10, 2, 0.01, "
+                     "'cost-of-a-retired-job')",
+                     (world["owner"], uuid.uuid4(), world["book"], world["incarnation"],
+                      world["jobs"]["ingest_book"]))
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        assert max(row[0] for row in conn.execute(
+            "SELECT version FROM app_schema_migrations").fetchall()) == RETIRE_BOOK_JOB - 1
+        assert conn.execute("SELECT count(*) FROM jobs WHERE kind='ingest_book'").fetchone()[0] == 1
+        conn.execute("DELETE FROM cost_ledger WHERE job_id=%s", (world["jobs"]["ingest_book"],))
+        conn.execute("UPDATE jobs SET state='waiting_configuration' WHERE id=%s",
+                     (world["jobs"]["chapter_notes"],))
+    with pytest.raises(psycopg.errors.CheckViolation, match="jobs_state_check"):
+        apply_migrations(database)
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT count(*) FROM jobs WHERE kind='ingest_book'").fetchone()[0] == 1
 
 
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:

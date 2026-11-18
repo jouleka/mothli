@@ -223,7 +223,7 @@ that owner, and every transaction independently sets the RLS owner. Valid foreig
 the same `404` shape as missing identifiers; list and cost surfaces cannot contain another owner.
 `app/hosted/tenant/endpoints.json` is checked against the actual FastAPI routes and names the
 cross-tenant evidence for each one. It also inventories required unavailable product surfaces plus
-worker, credential-resolution, filesystem/S3 storage, cache, and lock paths. The real PostgreSQL
+worker, filesystem/S3 storage, cache, and lock paths. The real PostgreSQL
 harness uses another owner's actual identifiers and also runs the repository as a superuser to prove
 explicit predicates still isolate when RLS is bypassed. See
 [`../docs/adr/0021-owner-scoped-hosted-repositories.md`](../docs/adr/0021-owner-scoped-hosted-repositories.md).
@@ -288,8 +288,9 @@ See [`../docs/adr/0023-filesystem-s3-source-object-storage.md`](../docs/adr/0023
 
 Hosted credential APIs are write-only for secret material and return masked metadata. Each owner then
 selects a provider, model, credential, and HTTPS base URL independently for extraction, synthesis,
-embedding, and spoiler review. Recommendations are display-only; an upload waits in
-`waiting_configuration` until that owner validates an extraction selection. Validation checks provider
+embedding, and spoiler review. Recommendations are display-only. (No upload waits on that selection
+any more: the reader-key extraction job and its `waiting_configuration` state were retired in ADR
+0043 step 7.) Validation checks provider
 model availability without generating tokens and returns only fixed, secret-free outcome codes.
 
 | Variable | Default | Meaning |

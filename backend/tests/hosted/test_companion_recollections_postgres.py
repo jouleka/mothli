@@ -407,10 +407,7 @@ def test_a_book_not_on_the_shelf_is_spoken_of_only_through_its_reviewed_line_and
     assert [(book["title"], book["author"]) for book in offered] == [(title, author)]
     classic = offered[0]["classic_id"]
 
-    # The app's "Add … to my shelf": the free library's add, for the asking reader only. (Each
-    # book waits for extraction, which hosted mode does not run until part 10, and three waiting
-    # books are the default limit: this shelf already holds three.)
-    update_limits(database, a.owner, {"max_active_jobs": 4})
+    # The app's "Add … to my shelf": the free library's add, for the asking reader only.
     added = a.call("POST", f"/api/classics/{classic}")
     assert added.status_code == 201, added.text
     assert library.seen == [MIRROR.format(pg=classic)]

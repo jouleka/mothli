@@ -1,5 +1,5 @@
 {
-  "version": 24,
+  "version": 25,
   "required_surface_classes": [
     "list",
     "get",
@@ -10,7 +10,6 @@
     "search",
     "memory",
     "cost",
-    "job",
     "answer"
   ],
   "enabled": [
@@ -53,30 +52,6 @@
       "access": "read",
       "repository_method": "get_book_manifest",
       "cross_tenant_test": "test_foreign_book_is_hidden_from_every_identifier_endpoint"
-    },
-    {
-      "method": "GET",
-      "path": "/api/jobs",
-      "surface": "job",
-      "access": "jobs",
-      "repository_method": "list_jobs",
-      "cross_tenant_test": "test_hosted_source_lifecycle_is_owner_scoped"
-    },
-    {
-      "method": "GET",
-      "path": "/api/jobs/{job_id}",
-      "surface": "job",
-      "access": "jobs",
-      "repository_method": "get_job",
-      "cross_tenant_test": "test_hosted_source_lifecycle_is_owner_scoped"
-    },
-    {
-      "method": "POST",
-      "path": "/api/jobs/{job_id}/cancel",
-      "surface": "job",
-      "access": "jobs",
-      "repository_method": "cancel_job",
-      "cross_tenant_test": "test_hosted_source_lifecycle_is_owner_scoped"
     },
     {
       "method": "GET",
@@ -477,11 +452,6 @@
       "resource": "worker-claim-and-mutations",
       "operations": ["claim", "start", "heartbeat", "reserve-spend", "commit", "fail", "succeed"],
       "cross_tenant_test": "test_worker_claim_is_owner_and_book_fenced_against_foreign_identifiers"
-    },
-    {
-      "resource": "worker-credential-resolution",
-      "operations": ["resolve-credential"],
-      "cross_tenant_test": "test_worker_resolves_only_claim_bound_owner_credential_just_in_time"
     },
     {
       "resource": "filesystem-source-storage",

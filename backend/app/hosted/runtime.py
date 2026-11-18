@@ -18,7 +18,6 @@ class ResourceKind(str, Enum):
     BOOK = "book"
     LIBRARY = "library"
     COSTS = "costs"
-    JOB = "job"
 
 
 class CacheNamespace(str, Enum):

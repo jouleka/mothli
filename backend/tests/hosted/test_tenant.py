@@ -115,7 +115,7 @@ def test_every_companion_adapter_is_bound_to_one_owner_at_construction() -> None
 
 def test_endpoint_inventory_names_cross_tenant_evidence_and_unavailable_surfaces() -> None:
     inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
-    assert inventory["version"] == 24
+    assert inventory["version"] == 25
     assert all(item["cross_tenant_test"] for item in inventory["enabled"])
     assert all(item["cross_tenant_test"] for item in inventory["unavailable"])
     assert all(item["cross_tenant_test"] for item in inventory["background"])
@@ -138,7 +138,6 @@ def test_endpoint_inventory_names_cross_tenant_evidence_and_unavailable_surfaces
     assert surfaces == set(inventory["required_surface_classes"])
     assert {item["resource"] for item in inventory["background"]} == {
         "worker-claim-and-mutations",
-        "worker-credential-resolution",
         "filesystem-source-storage",
         "s3-source-storage",
         "runtime-cache-and-locks",
@@ -153,7 +152,8 @@ def test_endpoint_inventory_names_cross_tenant_evidence_and_unavailable_surfaces
 def test_inventory_names_every_tenant_route_and_no_route_hangs_on_a_switch() -> None:
     """The break it catches: a tenant route mounted but not inventoried (or inventoried but gone),
     or a route that a setting can mount again. The reader-key routes were the only ones behind a
-    switch and are removed (ADR 0043 step 6), so the inventory marks none."""
+    switch and are removed (ADR 0043 step 6), so the inventory marks none; the job routes are
+    removed with the job they listed (step 7)."""
     from app.hosted.tenant.api import router
 
     inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
@@ -163,5 +163,5 @@ def test_inventory_names_every_tenant_route_and_no_route_hangs_on_a_switch() -> 
                for method in getattr(route, "methods", ()) or ()}
     assert mounted <= inventoried
     assert not {path for _method, path in mounted
-                if path.startswith(("/api/credentials", "/api/provider-settings"))
+                if path.startswith(("/api/credentials", "/api/provider-settings", "/api/jobs"))
                 or path.endswith(("/ask", "/selection-action", "/chapter-closeout"))}

@@ -308,14 +308,6 @@ def test_the_place_is_the_read_map_even_when_a_device_pushes_the_counter_ahead(
         assert _cast(shelf.get("a", book, "/graph")) == ["Mara", "Old Wick"]
 
 
-def _allow_story_memory_jobs(database: str) -> None:
-    """Stands in for ADR 0042 part 3's migration, which adds the ``story_memory`` job kind."""
-    with psycopg.connect(database) as conn:
-        conn.execute("ALTER TABLE jobs DROP CONSTRAINT jobs_kind_ck")
-        conn.execute("ALTER TABLE jobs ADD CONSTRAINT jobs_kind_ck CHECK (kind IN "
-                     "('ingest_book','chapter_notes','recollect','story_memory'))")
-
-
 def _memory_job(database: str, owner: uuid.UUID, book: str, *, state: str, run_after: str):
     with psycopg.connect(database) as conn:
         incarnation = conn.execute("SELECT incarnation FROM books WHERE id=%s",
@@ -338,7 +330,6 @@ def test_progress_says_running_waiting_or_nothing_and_a_book_with_no_memory_is_a
     with psycopg.connect(database) as conn:
         for owner in readers.values():
             conn.execute("INSERT INTO users (id,display_name) VALUES (%s,'Reader')", (owner,))
-    _allow_story_memory_jobs(database)
     with Shelf(tenant_dsn, readers, tmp_path, superuser=False) as shelf:
         book = upload(shelf.client, shelf.tokens, "a", alice_shaped_epub())
         shelf.read("a", book, [3])

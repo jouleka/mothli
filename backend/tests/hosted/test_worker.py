@@ -6,7 +6,6 @@ import uuid
 from dataclasses import dataclass, field
 
 from app.hosted.jobs import ClaimedJob, SanitizedFailure
-from app.hosted.credentials import CredentialUnavailableError
 from app.hosted.worker import DurableWorker, HandledJobFailure
 
 
@@ -16,7 +15,7 @@ def _claim() -> ClaimedJob:
         job_id=uuid.uuid4(),
         book_id=uuid.uuid4(),
         book_incarnation=uuid.uuid4(),
-        kind="ingest_book",
+        kind="chapter_notes",
         attempt_no=1,
         worker_id="worker",
         lease_token="private-token",
@@ -42,6 +41,32 @@ class FakeRepository:
 
     def fail(self, claim, *, failure, retry_after):
         self.calls.append(("fail", failure, retry_after))
+
+    def check_runtime_role(self):
+        self.calls.append(("check_runtime_role",))
+
+
+def test_the_worker_starts_and_runs_without_a_credential_key(monkeypatch) -> None:
+    """The break it catches: the worker still asking for the reader-key decrypter at start, so it
+    cannot run without HOSTED_CREDENTIAL_MASTER_KEY although no job of any kind uses a reader's
+    key (ADR 0043 step 7 retired the only kind that did)."""
+    from app.hosted import worker as worker_module
+
+    for name in ("HOSTED_CREDENTIAL_MASTER_KEY", "HOSTED_CREDENTIAL_KEY_VERSION",
+                 "HOSTED_CREDENTIAL_PREVIOUS_MASTER_KEYS"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HOSTED_WORKER_DSN", "postgresql://unused.invalid/db")
+    built = []
+
+    def repository(*args, **kwargs):
+        built.append(FakeRepository(None))
+        assert args == ("postgresql://unused.invalid/db",) and not kwargs
+        return built[-1]
+
+    monkeypatch.setattr(worker_module, "PostgresWorkerRepository", repository)
+    assert worker_module.main(["--handler", "builtins:print", "--once"]) == 0
+    assert [call[0] for call in built[0].calls] == ["check_runtime_role", "claim"]
+    assert not [name for name in vars(worker_module) if "credential" in name.lower()]
 
 
 def test_worker_runs_claimed_job_to_success() -> None:
@@ -79,17 +104,6 @@ def test_worker_honors_reviewed_retryability_and_cancelled_start() -> None:
     cancelled = FakeRepository(_claim(), started=False)
     assert DurableWorker(cancelled, fail, "worker").run_once()
     assert [call[0] for call in cancelled.calls] == ["claim", "start"]
-
-
-def test_worker_classifies_unavailable_credential_without_leaking_detail() -> None:
-    repository = FakeRepository(_claim())
-
-    def fail(_claim, _repository):
-        raise CredentialUnavailableError("private-key-canary")
-
-    assert DurableWorker(repository, fail, "worker").run_once()
-    assert repository.calls[-1][1] == SanitizedFailure("provider_rejected", retryable=False)
-    assert "private-key-canary" not in repr(repository.calls)
 
 
 def test_worker_claims_only_the_kinds_its_handler_runs() -> None:

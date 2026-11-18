@@ -410,9 +410,6 @@ def test_every_enabled_tenant_endpoint_requires_a_session(tenant_app, corpus: di
         ("GET", "/api/books", None),
         ("POST", "/api/books", None),
         ("GET", f"/api/books/{book}", None),
-        ("GET", "/api/jobs", None),
-        ("GET", f"/api/jobs/{uuid.uuid4()}", None),
-        ("POST", f"/api/jobs/{uuid.uuid4()}/cancel", None),
         ("GET", f"/api/books/{book}/epub", None),
         ("DELETE", f"/api/books/{book}", None),
         ("GET", f"/api/books/{book}/position", None),
@@ -758,7 +755,7 @@ def test_owner_limits_are_visible_atomic_and_owner_scoped(
     assert policy["max_upload_bytes"] == 128 * 1024 * 1024
     assert policy["max_library_bytes"] == 5 * 1024 * 1024 * 1024
     assert policy["max_books"] == 100
-    assert policy["max_active_jobs"] == 3
+    assert not ({"max_active_jobs", "active_jobs"} & set(policy))
     assert policy["max_provider_concurrency"] == 2
     assert policy["max_spend_usd"] is None
     assert not ({"owner_id", "title", "credential_id"} & set(policy))
@@ -824,7 +821,6 @@ def test_owner_limits_are_visible_atomic_and_owner_scoped(
         {
             "requests_per_window": 600,
             "max_books": 2,
-            "max_active_jobs": 10,
             "max_library_bytes": 1_000_000,
             "max_upload_bytes": 100_000,
         },
@@ -849,7 +845,6 @@ def test_owner_limits_are_visible_atomic_and_owner_scoped(
                 media_type=EPUB_MEDIA_TYPE,
                 byte_size=100,
                 encryption="AES-256-GCM",
-                chapter_count=1,
             )
         )
 
@@ -874,13 +869,13 @@ def test_owner_limits_are_visible_atomic_and_owner_scoped(
     )
     with pytest.raises(LimitExceededError, match="library_storage_exceeded"):
         create(4)
-    update_limits(
-        database,
-        corpus["owner_a"],
-        {"max_library_bytes": 1_000_000, "max_active_jobs": 1},
-    )
-    with pytest.raises(LimitExceededError, match="active_job_limit_exceeded"):
-        create(5)
+    # No limit counts jobs: a book adds none (ADR 0043 step 7).
+    update_limits(database, corpus["owner_a"], {"max_library_bytes": 1_000_000})
+    assert isinstance(create(5), dict)
+    with psycopg.connect(database) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM jobs WHERE owner_id=%s", (corpus["owner_a"],)
+        ).fetchone()[0] == 0
 
 
 def test_own_memory_is_bookmark_bounded_and_reset_is_csrf_epoch_bound(
@@ -1158,25 +1153,6 @@ def test_owner_identity_input_is_rejected_not_ignored(tenant_app, corpus: dict) 
     ).status_code == 422
 
 
-def _waiting_extraction_job(database: str, owner: uuid.UUID, book_id: str) -> uuid.UUID:
-    """The retired reader-key extraction job an upload made before ADR 0043, written as the
-    database owner, so the job routes' own checks keep running until the job goes (step 7)."""
-    job_id = uuid.uuid4()
-    with psycopg.connect(database) as conn:
-        incarnation = conn.execute("SELECT incarnation FROM books WHERE owner_id=%s AND id=%s",
-                                   (owner, book_id)).fetchone()[0]
-        conn.execute(
-            """
-            INSERT INTO jobs
-              (owner_id,id,book_id,book_incarnation,kind,state,idempotency_key,payload_metadata)
-            VALUES (%s,%s,%s,%s,'ingest_book','waiting_configuration',%s,
-                    '{"chapter_count":1}'::jsonb)
-            """,
-            (owner, job_id, book_id, incarnation, f"ingest:{job_id.hex}"),
-        )
-    return job_id
-
-
 def test_hosted_source_lifecycle_is_owner_scoped(tenant_app, corpus: dict, database: str) -> None:
     client, tokens, app = tenant_app
     payload = epub_ncx(
@@ -1209,14 +1185,9 @@ def test_hosted_source_lifecycle_is_owner_scoped(tenant_app, corpus: dict, datab
     assert body["title"] == "Private upload"
     assert body["author"] == "Owner A"
     assert body["atoms"] == 1
-    assert body["job"] is None              # readers have no keys: no extraction job (ADR 0043)
+    assert "job" not in body                # an upload makes no job (ADR 0043 step 7)
     assert not ({"storage_key", "object_id", "object_key"} & set(body))
     book_id = body["id"]
-    job_id = str(_waiting_extraction_job(database, corpus["owner_a"], book_id))
-    job = client.get(f"/api/jobs/{job_id}").json()
-    assert (job["state"], job["book_id"]) == ("waiting_configuration", book_id)
-    assert (job["completed_chapters"], job["total_chapters"]) == (0, 1)
-    assert not ({"worker_id", "lease_token", "payload_metadata"} & set(job))
     with psycopg.connect(database) as conn:
         stored_metadata = conn.execute(
             """
@@ -1266,24 +1237,12 @@ def test_hosted_source_lifecycle_is_owner_scoped(tenant_app, corpus: dict, datab
     absent = client.get(f"/api/books/{uuid.uuid4()}/epub")
     assert (hidden.status_code, hidden.json()) == (absent.status_code, absent.json())
     assert hidden.status_code == 404
-    assert client.get(f"/api/jobs/{job_id}").status_code == 404
-    assert all(item["id"] != job_id for item in client.get("/api/jobs").json())
-    assert client.post(
-        f"/api/jobs/{job_id}/cancel", headers={CSRF_HEADER: csrf_b}
-    ).status_code == 404
     assert client.delete(
         f"/api/books/{book_id}", headers={CSRF_HEADER: csrf_b}
     ).status_code == 404
 
     _become(client, tokens, "a")
     assert client.get(f"/api/books/{book_id}/epub").content == payload
-    assert client.get(f"/api/jobs/{job_id}").json()["state"] == "waiting_configuration"
-    cancelled = client.post(
-        f"/api/jobs/{job_id}/cancel", headers={CSRF_HEADER: csrf_a}
-    )
-    assert cancelled.status_code == 200
-    assert cancelled.json()["state"] == "cancelled"
-    assert cancelled.json()["cancellation_requested_at"] is not None
     assert client.delete(f"/api/books/{book_id}").status_code == 403
     deleted = client.delete(
         f"/api/books/{book_id}", headers={CSRF_HEADER: csrf_a}
@@ -1345,13 +1304,12 @@ def test_security_audit_events_and_canaries_are_content_free(
     )
     responses.append(uploaded.text)
     assert uploaded.status_code == 201
-    job_id = _waiting_extraction_job(database, corpus["owner_a"], uploaded.json()["id"])
-    cancelled = client.post(
-        f"/api/jobs/{job_id}/cancel",
+    removed = client.delete(
+        f"/api/books/{uploaded.json()['id']}",
         headers={CSRF_HEADER: csrf, "Authorization": authorization_canary},
     )
-    responses.append(cancelled.text)
-    assert cancelled.status_code == 200
+    responses.append(removed.text)
+    assert removed.status_code == 204
     with psycopg.connect(database) as conn:
         events = conn.execute(
             """
@@ -1365,7 +1323,7 @@ def test_security_audit_events_and_canaries_are_content_free(
             (corpus["owner_a"],),
         ).fetchall()
     actions = {row[1] for row in events}
-    assert {"book.import", "job.cancel"} <= actions
+    assert {"book.import", "book.delete"} <= actions
     assert all(row[0] == "owner" for row in events)
     assert all(row[2] and row[3] and row[4] in {"succeeded", "denied", "failed"} for row in events)
     assert all(row[6].tzinfo is not None for row in events)
@@ -1428,8 +1386,6 @@ def test_repository_owner_predicates_hold_when_rls_is_bypassed(database: str, co
     assert asyncio.run(repository.list_costs(owner_b, corpus["book_a"])) is None
     assert asyncio.run(repository.source_object(owner_b, corpus["book_a"])) is None
     assert not asyncio.run(repository.remove_book(owner_b, corpus["book_a"]))
-    assert asyncio.run(repository.get_job(owner_b, uuid.uuid4())) is None
-    assert asyncio.run(repository.cancel_job(owner_b, uuid.uuid4())) is None
     with pytest.raises(MissingTenantResourceError):
         asyncio.run(repository.reset_position(owner_b, corpus["book_a"], 0))
     with pytest.raises(MissingTenantResourceError):

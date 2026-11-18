@@ -544,7 +544,8 @@ the library account's own caps.
 **The reader-key path is retired for extraction.** No `ingest_book` handler ever existed (fact 8). With
 story memory on, `store_epub` creates no `ingest_book` job in either mode; the hidden credential and
 provider-settings code stays as ADR 0041 decided, and old `ingest_book` rows remain listable and
-cancellable. ADR 0026's "ingestion waits for a validated extraction selection" no longer describes any
+cancellable. (ADR 0043 step 7 then retired the kind: its rows are deleted by migration 0028, and
+`GET /api/jobs` with its cancel route is gone.) ADR 0026's "ingestion waits for a validated extraction selection" no longer describes any
 running path.
 
 ### 7. What already exists must cover the new rows without anyone remembering

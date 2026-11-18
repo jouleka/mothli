@@ -533,7 +533,8 @@ read, which is worse.
 
 **Quotas.** The upload admission counts active jobs against `max_active_jobs`
 (`tenant/repository.py:1841,1868`); it must count `ingest_book` only, or a busy companion would block
-uploads. `GET /api/jobs` keeps showing `ingest_book` jobs only.
+uploads. `GET /api/jobs` keeps showing `ingest_book` jobs only. (ADR 0043 step 7 retired
+`ingest_book` with `GET /api/jobs`, the count and `max_active_jobs`: no limit counts jobs now.)
 
 ### 6. Money: platform keys, one ledger per reader, caps per day and month
 
