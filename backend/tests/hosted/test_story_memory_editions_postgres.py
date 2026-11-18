@@ -80,6 +80,8 @@ from tests.hosted.test_story_memory_postgres import (
     edition_of,
     memory_of,
     no_memory_of_their_own,
+    notes_account,
+    notes_spend,
     settled_once,
     spend_of,
 )
@@ -214,13 +216,18 @@ def test_two_readers_finishing_one_chapter_at_once_make_one_build_one_spend_and_
     assert len(editions_of_file(database, *fingerprints(database, a.owner, book_a))) == 1
     assert built_in(database, edition) == [(1, "body")]
     assert no_memory_of_their_own(database, a.owner) and no_memory_of_their_own(database, b.owner)
-    paid = [someone for someone in (a, b) if spend_of(database, someone.owner) != ([], [])]
-    assert len(paid) == 1
-    settled_once(database, paid[0].owner)
-    [waited] = [someone for someone in (a, b) if someone is not paid[0]]
-    built_job = [row for row in jobs_of(database, paid[0].owner)]
+    # ADR 0044 step 4: the one build is paid by the notes account, once; neither reader pays.
+    ledger = settled_once(database, notes_account(database))
+    assert {row["chapter_ordinal"] for row in ledger} == {1}
+    assert sum(row["purpose"] == "extraction" for row in ledger) == 1
+    assert spend_of(database, a.owner) == ([], []) == spend_of(database, b.owner)
+    built_by = [someone for someone in (a, b) if slot(1, edition) in [
+        row["payload_metadata"] for row in jobs_of(database, someone.owner)]]
+    assert len(built_by) == 1
+    [waited] = [someone for someone in (a, b) if someone is not built_by[0]]
+    built_job = [row for row in jobs_of(database, built_by[0].owner)]
     assert [(row["state"], row["payload_metadata"]) for row in built_job] == [
-        ("succeeded", slot(1, edition))]
+        ("succeeded", slot(1, edition)), ("pending", {})]    # and its next: part 2, one ahead
     # The run that found the chapter taken spent nothing, held no slot and asked for its
     # reader's next run a couple of minutes later.
     waiting = jobs_of(database, waited.owner)
@@ -230,12 +237,14 @@ def test_two_readers_finishing_one_chapter_at_once_make_one_build_one_spend_and_
                  waiting[1]["id"])[0]["ahead"]
     assert timedelta(minutes=1) < ahead <= timedelta(minutes=2)
 
-    # Its next run: the chapter is there; nothing is extracted or paid; both readers have it.
+    # The next runs: part 2 is built once, part 1 is not built or paid again; both readers
+    # have part 1, their place.
     with psycopg.connect(database) as conn:
         conn.execute("UPDATE jobs SET run_after=now() WHERE id=%s", (waiting[1]["id"],))
-    assert drain(works[0]) == 1
-    assert models.parts() == [1] and spend_of(database, waited.owner) == ([], [])
-    assert built_in(database, edition) == [(1, "body")]
+    monkeypatch.setattr(PostgresWorkerRepository, "begin_story_memory_chapter", real_begin)
+    assert drain(works[0]) == 2
+    assert models.parts() == [1, 2] and spend_of(database, waited.owner) == ([], [])
+    assert built_in(database, edition) == [(1, "body"), (2, "body")]
     for someone, book in ((a, book_a), (b, book_b)):
         with HostedBookStore(tenant_dsn, OwnerId(someone.owner)).book(book) as mem:
             assert [row["canonical_name"] for row in mem.view(1).characters()] == ["Mara"]
@@ -249,8 +258,8 @@ def test_one_live_edition_per_file_is_the_databases_rule_and_the_door_finds_one(
     the fingerprints and would then have two to choose from), a second live edition written
     around the code, a reader's own book marked as an edition, an edition without its
     fingerprints, or the door serving anything but the one marked edition."""
-    a, book_a = opened(memory_app, readers, "a")
-    b, book_b = opened(memory_app, readers, "b")
+    a, book_a = opened(memory_app, readers, "a", reading=False)
+    b, book_b = opened(memory_app, readers, "b", reading=False)
     file_hash, split_hash = fingerprints(database, a.owner, book_a)
     assert fingerprints(database, b.owner, book_b) == (file_hash, split_hash)
     account = account_of(database)
@@ -351,14 +360,17 @@ def test_one_live_edition_per_file_is_the_databases_rule_and_the_door_finds_one(
 
 def test_a_run_for_a_reader_at_chapter_3_never_reads_a_row_of_the_chapters_others_built_past_it(
         memory_app, readers, database, tenant_dsn, worker_dsn, monkeypatch):
-    """The first spoiler property of this step. Reader B has built the edition of the long lamp
-    book to chapter 9; reader A has finished chapters 1 and 2 and is reading chapter 3. The break
-    it catches: A's run reading any row of chapters 3 to 9 (a person, another name, a state, the
-    end a later chapter puts on an earlier state, a chapter or its receipt), building or paying
-    for anything, or the worker's statement for the notes before a chapter holding anything of
-    that chapter or a later one. The statement is checked on its own: for chapter 3 it reads
-    exactly what it read when the edition stopped at chapter 2, with Mara's first state still
-    open (chapter 6 ends it)."""
+    """The first spoiler property of this step, restated for one ahead (ADR 0044 step 4). Reader
+    B has built the edition of the long lamp book to chapter 9; reader A has finished chapters 1
+    and 2 (n = 2) and is reading chapter 3. The break it catches: A's run reading the notes of
+    any chapter from 3 on (a person, another name, a state, the end a later chapter puts on an
+    earlier state, a chapter or its receipt), asking anything of chapters 4 to 9 (it may ask only
+    whether chapter 3, n+1, exists or is unremembered), building or paying for anything, or the
+    worker's statement for the notes before a chapter holding anything of that chapter or a
+    later one. The statement is checked on its own: for chapter 3 it reads exactly what it read
+    when the edition stopped at chapter 2, with Mara's first state still open (chapter 6 ends
+    it). The same property for a run that builds chapter n+1 itself is
+    ``test_story_memory_one_ahead_postgres.py``."""
     _client, _tokens, app = memory_app
     extraction = extraction_client()
     models = Writer(extraction, monkeypatch)
@@ -370,13 +382,14 @@ def test_a_run_for_a_reader_at_chapter_3_never_reads_a_row_of_the_chapters_other
     work = worker(app, extraction, worker_dsn)
     repository = PostgresWorkerRepository(worker_dsn)
 
-    b.mark(book_b, [1, 2])
+    assert b.call("PUT", f"/api/books/{book_b}/read-page", tpage(1, 1, 2)).status_code == 200
+    b.mark(book_b, [1])                                   # one ahead: built to 2
     assert drain(work) == 2
     [claim] = claims_of_book(worker_dsn, tenant_dsn, b.owner, book_b)
     edition = repository.edition_of(claim)
     repository.succeed(claim)
     at_two = repository.read_edition(edition, before=3)
-    b.mark(book_b, list(range(3, 10)))
+    b.mark(book_b, list(range(2, 9)))                     # one ahead: built to 9
     assert drain(work, 20) == 7
     assert built_in(database, edition_of(database, b.owner, book_b)) == [
         (n, "body") for n in range(1, 10)]
@@ -392,11 +405,12 @@ def test_a_run_for_a_reader_at_chapter_3_never_reads_a_row_of_the_chapters_other
     assert 6 in {row["invalid_at"] for row in repository.read_edition(edition,
                                                                       before=10)["states"]}
 
-    # A's run: nothing past chapter 2 is read, by any read of the edition the run makes.
+    # A's run: no notes past chapter 2 are read, and nothing past chapter 3 is asked, by any
+    # read of the edition the run makes.
     a.mark(book_a, [1, 2])
     reading = a.call("PUT", f"/api/books/{book_a}/read-page", tpage(3, 1, 10))
     assert reading.status_code == 200, reading.text
-    calls, spent, before = list(models.calls), spend_of(database, a.owner), book_memory(
+    calls, spent, before = list(models.calls), notes_spend(database), book_memory(
         database, edition_of(database, a.owner, book_a))
     reads = []
 
@@ -415,8 +429,10 @@ def test_a_run_for_a_reader_at_chapter_3_never_reads_a_row_of_the_chapters_other
     bounded("unremembered_before", lambda edition, ordinal: ordinal - 1)
     StoryMemoryQueue(app.state.companion_dsn, OwnerId(a.owner)).ensure(book_a)
     assert drain(work) >= 1
-    assert reads and max(reach for _name, reach in reads) <= 2, reads
-    assert models.calls == calls and spend_of(database, a.owner) == spent
+    assert reads and max(reach for _name, reach in reads) <= 3, reads
+    assert max([reach for name, reach in reads if name == "read_edition"], default=0) <= 2, reads
+    assert models.calls == calls and notes_spend(database) == spent
+    assert spend_of(database, a.owner) == ([], [])
     assert book_memory(database, edition_of(database, a.owner, book_a)) == before
     assert handed_through(a.owner, book_a) == 2
 
@@ -438,16 +454,16 @@ def test_a_readers_run_reads_only_their_own_copy_and_the_edition_never_has_a_fil
     _client, _tokens, app = memory_app
     extraction = extraction_client()
     models = Lamps(extraction, monkeypatch)
-    a, book_a = opened(memory_app, readers, "a")
-    b, book_b = opened(memory_app, readers, "b")
-    b.mark(book_b, [1])
+    a, book_a = opened(memory_app, readers, "a", reading=False)
+    b, book_b = opened(memory_app, readers, "b")          # a page read: target 1
     assert drain(worker(app, extraction, worker_dsn)) == 1
     edition = edition_of(database, b.owner, book_b)
     assert built_in(database, edition) == [(1, "body")]
 
     # A's own copy gone (B's is there): A's run builds nothing, extracts nothing. (A worker
     # that has not read A's copy before, so no parse of it is held in its memory.)
-    a.mark(book_a, [1, 2])
+    a.read(book_a, 1, 1, 2)
+    a.mark(book_a, [1])                                   # target 2
     catalog = HostedCompanionCatalog(app.state.companion_dsn, OwnerId(a.owner))
     app.state.object_storage.delete(catalog.source_record(book_a)["ref"])
     fresh = CompanionJobs(tenant_dsn=app.state.companion_dsn, settings=app.state.settings,
@@ -464,7 +480,8 @@ def test_a_readers_run_reads_only_their_own_copy_and_the_edition_never_has_a_fil
     assert b.call("DELETE", f"/api/books/{book_b}").status_code == 204
     assert a.call("DELETE", f"/api/books/{book_a}").status_code == 204
     again = read_map_gate.upload(a.client, a.tokens, "a", lamps())
-    a.mark(again, [1, 2])
+    a.read(again, 1, 1, 2)
+    a.mark(again, [1])                                    # target 2
     drain(worker(app, extraction, worker_dsn))
     assert built_in(database, edition) == [(1, "body"), (2, "body")]
     assert models.parts() == [1, 2]
@@ -488,11 +505,11 @@ def test_a_build_fails_closed_on_a_copy_split_another_way_or_an_earlier_chapter_
     extraction = extraction_client()
     models = Lamps(extraction, monkeypatch)
     a, book = opened(memory_app, readers, "a")
-    a.mark(book, [1, 2])
+    a.mark(book, [1])                                     # target 2
     work = worker(app, extraction, worker_dsn)
     assert drain(work) == 2
     edition = edition_of(database, a.owner, book)
-    calls, spent = list(models.calls), spend_of(database, a.owner)
+    calls, spent = list(models.calls), notes_spend(database)
 
     def last_job():
         return jobs_of(database, a.owner)[-1]
@@ -501,12 +518,12 @@ def test_a_build_fails_closed_on_a_copy_split_another_way_or_an_earlier_chapter_
     real = chapter_text.split_hash_of
     monkeypatch.setattr(chapter_text, "split_hash_of", lambda chapters, book_id: real(
         [{**chapter, "ordinal": chapter["ordinal"] + 1} for chapter in chapters], book_id))
-    a.mark(book, [3])
+    a.mark(book, [2])                                     # target 3
     drain(work)
     assert (last_job()["state"], last_job()["sanitized_error"]) == (
         "failed", {"code": "source_integrity", "retryable": False})
     assert built_in(database, edition) == [(1, "body"), (2, "body")]
-    assert models.calls == calls and spend_of(database, a.owner) == spent
+    assert models.calls == calls and notes_spend(database) == spent
     monkeypatch.setattr(chapter_text, "split_hash_of", real)
 
     # An earlier chapter of the edition whose text hash is not the copy's chapter's.
@@ -524,7 +541,7 @@ def test_a_build_fails_closed_on_a_copy_split_another_way_or_an_earlier_chapter_
     assert (last_job()["state"], last_job()["sanitized_error"]) == (
         "failed", {"code": "source_integrity", "retryable": False})
     assert built_in(database, edition) == [(1, "body"), (2, "body")]
-    assert models.calls == calls and spend_of(database, a.owner) == spent
+    assert models.calls == calls and notes_spend(database) == spent
 
     # Put right, the same run builds chapter 3.
     with psycopg.connect(database) as conn:
@@ -549,9 +566,8 @@ def test_a_readers_session_never_selects_an_edition_row_before_or_after_their_ow
     _client, _tokens, app = memory_app
     extraction = extraction_client()
     Lamps(extraction, monkeypatch)
-    a, book_a = opened(memory_app, readers, "a")
-    b, book_b = opened(memory_app, readers, "b")
-    b.mark(book_b, [1])
+    a, book_a = opened(memory_app, readers, "a", reading=False)
+    b, book_b = opened(memory_app, readers, "b")          # a page read: target 1
     work = worker(app, extraction, worker_dsn)
     assert drain(work) == 1
     edition = edition_of(database, b.owner, book_b)
@@ -572,12 +588,14 @@ def test_a_readers_session_never_selects_an_edition_row_before_or_after_their_ow
     nothing = {"books": 0, **{table: 0 for table in EDITION_TABLES}}
     assert book_memory(database, edition)["entities"]
     assert seen_by_a() == nothing                          # before A's job built any
-    a.mark(book_a, [1, 2])
+    a.read(book_a, 1, 1, 2)
+    a.mark(book_a, [1])                                    # target 2 (ADR 0044 step 4)
     assert drain(work) >= 1
     assert built_in(database, edition) == [(1, "body"), (2, "body")]
-    assert spend_of(database, a.owner) != ([], [])         # A's own run built chapter 2
+    assert slot(2, edition) in [row["payload_metadata"]    # A's own run built chapter 2
+                                for row in jobs_of(database, a.owner)]
     assert seen_by_a() == nothing                          # and after
-    assert handed_through(a.owner, book_a) == 2            # only the door hands it
+    assert handed_through(a.owner, book_a) == 1            # only the door hands, to A's place
 
     with psycopg.connect(database) as conn:
         for table in ("books", *MEMORY_TABLES):
@@ -666,15 +684,16 @@ def test_two_readers_failed_runs_of_one_chapter_count_once_for_the_edition(
     models = Lamps(extraction, monkeypatch, reject={2})
     a, book_a = opened(memory_app, readers, "a")
     b, book_b = opened(memory_app, readers, "b")
-    a.mark(book_a, [1, 2])
-    b.mark(book_b, [1, 2])
+    a.mark(book_a, [1])                                   # target 2 (ADR 0044 step 4)
+    b.mark(book_b, [1])
     drain(worker(app, extraction, worker_dsn), 20)
     edition = edition_of(database, a.owner, book_a)
     assert built_in(database, edition) == [(1, "body"), (2, "unremembered")]
     every = jobs_of(database, a.owner) + jobs_of(database, b.owner)
     failed = [row for row in every if row["state"] == "failed"]
     assert [(row["sanitized_error"], row["payload_metadata"]) for row in failed] == [
-        ({"code": "grounding_rejected", "retryable": False}, slot(2, edition))] * 2
+        ({"code": "grounding_rejected", "retryable": False},
+         slot(2, edition, published=False))] * 2
     # Two runs of chapter 2 in all (its extraction and one repair each), chapter 1 once.
     assert Counter(models.parts()) == {1: 1, 2: 4}
 
@@ -693,6 +712,9 @@ def test_three_unremembered_in_a_row_stop_the_edition_for_every_reader(
     b = Reader(client, tokens, "b", readers["b"])
     book_a = read_map_gate.upload(client, tokens, "a", LONG)
     book_b = read_map_gate.upload(client, tokens, "b", LONG)
+    for someone, book in ((a, book_a), (b, book_b)):      # a page read (ADR 0044 step 4)
+        assert someone.call("PUT", f"/api/books/{book}/read-page",
+                            tpage(1, 1, 2)).status_code == 200
     a.mark(book_a, list(range(1, 9)))
     b.mark(book_b, list(range(1, 9)))
     work = worker(app, extraction, worker_dsn)
@@ -726,16 +748,15 @@ def test_an_expired_lease_frees_the_build_slot_at_the_next_claim_and_not_before(
     next attempt, or the chapter built twice."""
     _client, _tokens, app = memory_app
     extraction = extraction_client()
-    a, book_a = opened(memory_app, readers, "a")
-    b, book_b = opened(memory_app, readers, "b")
-    a.mark(book_a, [1])
+    a, book_a = opened(memory_app, readers, "a")          # a page read: target 1
+    b, book_b = opened(memory_app, readers, "b", reading=False)
     first = worker(app, extraction, worker_dsn, "first")
     second = worker(app, extraction, worker_dsn, "second")
     seen = {}
 
     def b_meanwhile_then_a_dies(schema, part):
         if not seen:
-            b.mark(book_b, [1])
+            b.read(book_b, 1, 1, 2)                       # target 1
             seen["b ran"] = second.run_once()
             raise KeyboardInterrupt("A's worker died mid-chapter")
 
@@ -765,7 +786,8 @@ def test_an_expired_lease_frees_the_build_slot_at_the_next_claim_and_not_before(
         kinds=frozenset({"chapter_notes"})) is None
     assert holders() == []
     [a_job] = jobs_of(database, a.owner)
-    assert (a_job["state"], a_job["payload_metadata"]) == ("pending", slot(1, edition))
+    assert (a_job["state"], a_job["payload_metadata"]) == (
+        "pending", slot(1, edition, published=False))
 
     models.hook = None
     assert drain(second) == 2                               # B's run builds it; A's finds it
@@ -773,8 +795,10 @@ def test_an_expired_lease_frees_the_build_slot_at_the_next_claim_and_not_before(
     assert models.parts() == [1, 1]                         # A's dead attempt, and B's
     assert [(row["state"], row["payload_metadata"]) for row in jobs_of(database, a.owner)] == [
         ("succeeded", {"chapter": 1})]                     # the slot was not carried over
-    settled_once(database, a.owner)                         # A's dead calls settled once
-    settled_once(database, b.owner)
+    # A's dead calls and B's build, settled once each, by the notes account (ADR 0044 step 4).
+    ledger = settled_once(database, notes_account(database))
+    assert "extraction-abandoned" in {row["purpose"] for row in ledger}
+    assert spend_of(database, a.owner) == ([], []) == spend_of(database, b.owner)
 
 
 # ---- 8: a reader's own rows from before ------------------------------------------------------------
@@ -814,13 +838,13 @@ def test_a_readers_own_rows_from_before_are_left_and_the_edition_is_built_beside
                      (chapter,))
     own = memory_of(database, a.owner)
     assert own["entities"]
-    a.mark(book, [1, 2])
+    a.mark(book, [1, 2])                                    # target 3 (ADR 0044 step 4)
     drain(worker(app, extraction, worker_dsn))
     assert {row["state"] for row in jobs_of(database, a.owner)} == {"succeeded"}
-    assert models.parts() == [1, 2]                         # built for the edition, from 1
+    assert models.parts() == [1, 2, 3]                      # built for the edition, from 1
     assert memory_of(database, a.owner) == own              # left exactly as they were
     edition = edition_of(database, a.owner, book)
-    assert built_in(database, edition) == [(1, "body"), (2, "body")]
+    assert built_in(database, edition) == [(1, "body"), (2, "body"), (3, "body")]
     assert "Oldname" not in json.dumps(book_memory(database, edition))
     with HostedBookStore(tenant_dsn, OwnerId(a.owner)).book(book) as mem:
         assert mem.shared

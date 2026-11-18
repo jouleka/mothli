@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +19,7 @@ from app.config import Settings
 from app.hosted.auth.api import SESSION_COOKIE
 from app.hosted.auth.models import Principal
 from app.hosted.auth.tokens import new_token
-from app.hosted.companion.spend import set_spend_limits, spend_limits
+from app.hosted.companion.spend import SpendLimits, set_spend_limits, spend_limits
 from tests.hosted.test_platform_pays import JEV_CANARY, KEY_CANARY, _Tenant, hosted_app
 
 
@@ -155,34 +156,65 @@ def test_local_rules_for_the_conversation_are_unchanged(tmp_path) -> None:
 
 
 def test_story_memory_settings_refuse_what_cannot_work(tmp_path) -> None:
-    """The break it catches (ADR 0042 sections 3 and 6): a reader's own story memory switched on
-    without the feature (nothing would build it), the hosted feature switched on in local mode
-    (which builds its own), or owner-paid extraction without the chat's keys and caps; the
+    """The break it catches (ADR 0042 sections 3 and 6): the hosted feature switched on in local
+    mode (which builds its own), or owner-paid extraction without the chat's keys and caps; the
     worker running the kind without HOSTED_STORY_MEMORY; or an extraction client that embeds for
-    real or follows the chat's model settings."""
+    real or follows the chat's model settings. ADR 0044 step 4 removed the setting for a
+    reader's own books (HOSTED_READER_STORY_MEMORY): every book is built for once the feature
+    is on, and the old line in an environment file changes nothing."""
     from app.hosted.companion.jobs import companion_kinds
     from app.llm.factory import build_extraction_client
 
     off = hosted_settings(tmp_path, **CHAT)
-    assert not off.hosted_story_memory and not off.hosted_reader_story_memory
+    assert not off.hosted_story_memory and "hosted_reader_story_memory" not in Settings.model_fields
     assert companion_kinds(off) == {"recollect"}
-    library_only = hosted_settings(tmp_path, **CHAT, hosted_story_memory=True)
-    assert companion_kinds(library_only) == {"recollect", "story_memory"}
-    readers = hosted_settings(tmp_path, **CHAT, hosted_story_memory=True,
-                              hosted_reader_story_memory=True,
-                              embed_provider="openai-compatible", llm_cheap_model="gpt-6-luna")
-    client = build_extraction_client(readers)
+    with pytest.MonkeyPatch.context() as env:
+        env.setenv("HOSTED_READER_STORY_MEMORY", "false")         # a line left from before
+        on = hosted_settings(tmp_path, **CHAT, hosted_story_memory=True,
+                             embed_provider="openai-compatible", llm_cheap_model="gpt-6-luna")
+    assert companion_kinds(on) == {"recollect", "story_memory"}
+    client = build_extraction_client(on)
     assert client.embed_identity() == "stub:lexical-stub-256"
     assert client.provider == "openai-compatible"
     assert client._model_for("cheap") == client._model_for("large") != "gpt-6-luna"
-    with pytest.raises(ValueError, match="HOSTED_READER_STORY_MEMORY requires HOSTED_STORY_MEMORY"):
-        hosted_settings(tmp_path, **CHAT, hosted_reader_story_memory=True)
     with pytest.raises(ValueError, match="story memory in hosted mode requires"):
         hosted_settings(tmp_path, hosted_story_memory=True)
     with pytest.raises(ValueError, match="the streamed chat in hosted mode requires"):
         hosted_settings(tmp_path, **without("openai_api_key"), hosted_story_memory=True)
     with pytest.raises(ValueError, match="HOSTED_STORY_MEMORY is a hosted-mode setting"):
         Settings(_env_file=None, data_dir=str(tmp_path / "local"), hosted_story_memory=True)
+
+
+def test_story_memory_guards_and_ceilings_start_at_the_owners_numbers(tmp_path) -> None:
+    """ADR 0044, the owner's rule on acceptance: one reader's runs may be the first to build at
+    most 30 new chapters a UTC day and 300 a month, and be first to chapter 1 of at most 5 new
+    files a month; the notes ceiling for everyone is $10 a day and the platform's day $15. The
+    break it catches: a default that differs from what the owner decided, a ceiling that needs
+    an operator's step on a fresh deployment (it is a default in code), or a process whose
+    caps do not carry the notes ceiling."""
+    settings = hosted_settings(tmp_path, **without("hosted_platform_usd_per_day"),
+                               hosted_platform_usd_per_day=15.00)
+    defaults = Settings.model_fields
+    assert (defaults["hosted_story_memory_new_chapters_per_day"].default,
+            defaults["hosted_story_memory_new_chapters_per_month"].default,
+            defaults["hosted_story_memory_new_files_per_month"].default) == (30, 300, 5)
+    assert defaults["hosted_story_memory_usd_per_day"].default == 10.00
+    assert defaults["hosted_platform_usd_per_day"].default == 15.00
+    assert (SpendLimits().notes_usd_per_day, SpendLimits().platform_usd_per_day) == (
+        Decimal("10.00"), Decimal("15.00"))
+    before = spend_limits()
+    try:
+        with TestClient(hosted_app(settings), base_url="https://reader.example"):
+            assert spend_limits().notes_usd_per_day == Decimal("10.00")
+        with TestClient(hosted_app(hosted_settings(tmp_path, **CHAT,
+                                                   hosted_story_memory_usd_per_day=2.5)),
+                        base_url="https://reader.example"):
+            assert spend_limits().notes_usd_per_day == Decimal("2.5")
+    finally:
+        set_spend_limits(reader_usd_per_day=before.reader_usd_per_day,
+                         reader_usd_per_month=before.reader_usd_per_month,
+                         platform_usd_per_day=before.platform_usd_per_day,
+                         notes_usd_per_day=before.notes_usd_per_day)
 
 
 # ---- whether this server has a chat at all, and the one mixed state that pays without replying ----

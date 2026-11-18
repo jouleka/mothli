@@ -387,8 +387,8 @@ def test_readers_at_2_5_and_10_are_each_handed_only_what_is_up_to_their_place(
     ("this state ends at chapter 6") past the reader's place, leaving the database for that
     reader's request, on the row-security role or past it, or reaching their story memory, the
     four screens, the chat's prompts and checks, or their copy of their data."""
-    account, _models, _extraction, _work = built_edition(shelf, library_dsn, worker_dsn,
-                                                         monkeypatch)
+    account, models, _extraction, work = built_edition(shelf, library_dsn, worker_dsn,
+                                                       monkeypatch)
     assert built(database, account) == [(n, "body") for n in range(1, PARTS + 1)]
     with psycopg.connect(database, row_factory=dict_row) as conn:
         ids = {row["canonical_name"]: str(row["id"]) for row in conn.execute(
@@ -401,6 +401,11 @@ def test_readers_at_2_5_and_10_are_each_handed_only_what_is_up_to_their_place(
         someone = reader(shelf, label)
         books[label] = acquire(shelf, someone, how)
         someone.mark(books[label], list(range(1, at + 1)))
+    # ADR 0044 step 4: "I've read this" asks each reader's story-memory job, for any book; with
+    # no page read and the edition built, it builds and spends nothing.
+    calls = list(models.calls)
+    assert drain(work, 60) == len(PLACES)
+    assert models.calls == calls
 
     platform = shelf.app.state.platform_client
     for label, at in PLACES.items():
@@ -472,7 +477,8 @@ def test_no_argument_device_tab_or_direct_write_moves_the_place_and_the_door_ref
     notes account itself; or the very same file come the other way (an upload for a library add,
     a library add for an upload) handed anything but what the first is handed at the same place.
     Run for a reader who added the file from the free library and one who uploaded it."""
-    account, *_ = built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
+    account, _models, _extraction, work = built_edition(shelf, library_dsn, worker_dsn,
+                                                        monkeypatch)
     a, b = reader(shelf, "r2a"), reader(shelf, "r5a")
     book, other = acquire(shelf, a, how), acquire(shelf, b, how)
     a.mark(book, [1, 2])
@@ -549,6 +555,9 @@ def test_no_argument_device_tab_or_direct_write_moves_the_place_and_the_door_ref
     assert empty_row(door(tenant_dsn, differs.owner, changed))
     assert empty_row(door(database, differs.owner, changed))
     assert not HostedBookStore(tenant_dsn, OwnerId(differs.owner)).shared(changed)
+    # ADR 0044 step 4: the marks asked for its job; run (no page read), it builds nothing.
+    drain(work, 60)
+    assert empty_row(door(tenant_dsn, differs.owner, changed))
     assert get(differs, f"/api/books/{changed}/graph").status_code == 404
     assert a.call("DELETE", f"/api/books/{book}").status_code == 204
     assert door(tenant_dsn, a.owner, book) is None and door(database, a.owner, book) is None
@@ -759,7 +768,8 @@ def test_the_edition_tells_no_reader_anything_of_another_and_its_account_is_nobo
     it, or differs between readers before anyone reads; a reader's request that changes the
     edition's rows or makes a job of theirs; one reader's place, chat or memory reaching another
     reader of the same edition; or the library account signed into or listed to a reader."""
-    account, models, *_ = built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
+    account, models, _extraction, work = built_edition(shelf, library_dsn, worker_dsn,
+                                                       monkeypatch)
     a, b = reader(shelf, "r5a"), reader(shelf, "r2a")
     book_a, book_b = add(a), add(b)
     before = [get(someone, f"/api/books/{book}/graph") for someone, book in ((a, book_a),
@@ -793,7 +803,12 @@ def test_the_edition_tells_no_reader_anything_of_another_and_its_account_is_nobo
         assert not [name for name in NAMES if name in json.dumps(shown)], own
     copy_of(a.call("GET", "/api/account/export"))
     assert everything_of(database, account) == edition and models.calls == calls
-    assert jobs_of(database, a.owner) == [] == jobs_of(database, b.owner)
+    # ADR 0044 step 4: "I've read this" asks for each reader's job, for any book; with no page
+    # read it builds, writes and spends nothing.
+    assert [row["state"] for row in jobs_of(database, a.owner)] == ["pending"] \
+        == [row["state"] for row in jobs_of(database, b.owner)]
+    assert drain(work, 60) == 2
+    assert everything_of(database, account) == edition and models.calls == calls
 
     # Reader B sees nothing of A: not A's place, chat or what A was handed.
     assert through(tenant_dsn, b.owner, book_b) == 2
@@ -849,7 +864,9 @@ def test_the_command_builds_a_whole_title_once_carries_on_a_half_built_one_and_p
         "The Long Lamp Book", PARTS, 0, "building")
     update_limits(database, account, {"max_spend_usd_per_day": Decimal("0")})
     work = worker(shelf.app, extraction, worker_dsn)
-    assert drain(work, 60) == 0 and models.calls == []
+    # ADR 0044 step 4: the claim no longer holds story memory for an owner's cap; the run is
+    # refused at its first call, spends nothing, and asks for its next run tomorrow.
+    assert drain(work, 60) == 1 and models.calls == []
     [waiting] = report(state, library)
     assert (waiting.built_through, waiting.cost_usd, waiting.state) == (
         0, Decimal(0), "waiting for tomorrow")
@@ -945,6 +962,8 @@ def test_three_unremembered_chapters_in_a_row_stop_a_book_for_the_library_and_fo
         writer = Writer(own, monkeypatch, reject={2, 3, 4})
         someone = Reader(client, tokens, "u", people["u"])
         book = read_map_gate.upload(client, tokens, "u", another_file_of_the_same_title())
+        page = someone.call("PUT", f"/api/books/{book}/read-page", tpage(1, 1, 2))
+        assert page.status_code == 200, page.text           # a page read (ADR 0044 step 4)
         someone.mark(book, list(range(1, 9)))
         drain(worker(app, own, worker_dsn), 60)
         assert built_for(database, someone.owner, book) == [
@@ -1123,11 +1142,15 @@ def test_the_door_refuses_a_reader_whose_split_differs_from_the_editions_or_is_u
     alone: putting the fingerprint back hands the reader exactly what it did before. Refused
     means handed nothing: no row for a reader's book with no fingerprint, else the empty row of a
     book with no edition (ADR 0044 step 2). For a free-library add and an upload alike."""
-    account, *_ = built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
+    account, _models, _extraction, work = built_edition(shelf, library_dsn, worker_dsn,
+                                                        monkeypatch)
     edition = _library_book(tenant_dsn, account)
     a = reader(shelf, "r5a")
     book = acquire(shelf, a, how)
     a.mark(book, [1, 2, 3])
+    # ADR 0044 step 4: the marks asked for the reader's job; run (no page read), it builds
+    # nothing, and the screens again have nothing to show.
+    drain(work, 60)
     file_hash, split_hash = fingerprints(database, a.owner, book)
     assert fingerprints(database, account, edition) == (file_hash, split_hash)
     before = door(tenant_dsn, a.owner, book)
@@ -1167,6 +1190,9 @@ def test_the_door_refuses_a_reader_whose_split_differs_from_the_editions_or_is_u
     assert fingerprints(database, later.owner, shifted)[0] == file_hash
     assert fingerprints(database, later.owner, shifted)[1] not in (split_hash, None)
     later.mark(shifted, [1, 2, 3, 4])
+    # ADR 0044 step 4: the marks asked for the reader's job; run (no page read), it builds
+    # nothing, and the screens again have nothing to show.
+    drain(work, 60)
     assert empty_row(door(tenant_dsn, later.owner, shifted))
     assert empty_row(door(database, later.owner, shifted))
     assert get(later, f"/api/books/{shifted}/graph").status_code == 404
@@ -1260,7 +1286,9 @@ def test_with_the_edition_one_chapter_past_the_furthest_reader_no_reader_gets_pa
     books = {"r2a": upload(shelf, behind), "r5a": upload(shelf, furthest)}
     behind.mark(books["r2a"], [1, 2])
     furthest.mark(books["r5a"], [1, 2, 3, 4, 5])
-    assert drain(work, 6) == 6
+    # Six runs of the operator's build, and the two readers' own runs, which their marks asked
+    # for (ADR 0044 step 4) and which, with no page read, build nothing.
+    assert drain(work, 8) == 8
     assert built(database, account) == [(n, "body") for n in range(1, 7)]
     with psycopg.connect(database) as conn:
         assert conn.execute("SELECT count(*) FROM entity_state WHERE owner_id=%s"
@@ -1329,12 +1357,15 @@ def test_a_reader_of_another_file_of_the_same_title_is_handed_nothing(
     for an upload). The break it catches: the door matching a title, an author or a catalogue
     entry rather than the file, so another edition's chapters reach this reader; or "nothing"
     told apart from an edition read at place 0."""
-    built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
+    *_built, work = built_edition(shelf, library_dsn, worker_dsn, monkeypatch)
     starting = reader(shelf, "r5a")
     fresh = upload(shelf, starting)
     other = reader(shelf, "u")
     another = upload(shelf, other, another_file_of_the_same_title())
     other.mark(another, [1, 2, 3])
+    # ADR 0044 step 4: the marks asked for the reader's job; run (no page read), it builds
+    # nothing, and the screens again have nothing to show.
+    drain(work, 60)
     for dsn in (tenant_dsn, database):
         assert empty_row(door(dsn, other.owner, another))
     assert door_bytes(tenant_dsn, other.owner, another) \

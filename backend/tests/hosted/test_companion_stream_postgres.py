@@ -67,7 +67,8 @@ def restore_caps():
     yield
     set_spend_limits(reader_usd_per_day=before.reader_usd_per_day,
                      reader_usd_per_month=before.reader_usd_per_month,
-                     platform_usd_per_day=before.platform_usd_per_day)
+                     platform_usd_per_day=before.platform_usd_per_day,
+                     notes_usd_per_day=before.notes_usd_per_day)
 
 
 @pytest.fixture()
