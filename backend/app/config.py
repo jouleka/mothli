@@ -159,6 +159,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
+        # Hosted mode with neither of the platform's AI accounts (no writer key and no TypeSafe
+        # key; a line left empty counts as none) runs without Mothli's chat, whatever the chat's
+        # switches say: the server starts, readers read, and the app is told there is no chat
+        # (``companion_chat``), so it shows none. One account without the other is refused below.
+        if self.deployment_mode == "hosted" and not (
+                self.openai_api_key or self.anthropic_api_key
+                or (self.typesafe_api_key and self.typesafe_api_key.get_secret_value())):
+            self.openai_api_key = self.anthropic_api_key = self.typesafe_api_key = None
+            self.jev_enabled = self.reader_conversation_jev = False
+            self.reader_conversation_stream = False
         if not self.reader_memory_ingest and (self.deployment_mode != "local" or not self.reader_page_context):
             raise ValueError("deferred memory ingestion requires local page context")
         if self.reader_conversation_stream is None:

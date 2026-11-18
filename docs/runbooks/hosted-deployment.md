@@ -48,9 +48,11 @@ step 2, never into an email, a chat or a document.
      `https://your-tenant.us.auth0.com/`). In the application's settings, set the token
      endpoint authentication method to **Basic**: Mothli sends the client secret that way,
      and sign-in will not work with any other choice.
-7. **The AI accounts** (OpenAI or Anthropic, and TypeSafe for Jev), only to switch on Mothli's
-   chat inside a book. Mothli runs without them; the AI section of `deploy/app.env` says which
-   lines to fill in to switch the chat on.
+7. **The two AI accounts, for Mothli's chat** (optional): the **writer**, which writes Mothli's
+   replies (an OpenAI key, or an Anthropic key instead), and the **checker**, Jev, run by
+   TypeSafe, which checks every sentence against what the reader has read before it is shown (a
+   TypeSafe key). You pay for both. Mothli runs without them: readers read, keep their place,
+   highlights, notes and bookmarks, and use the free library, and the app shows no chat at all.
 
 ## 2. First deployment
 
@@ -81,6 +83,17 @@ step 2, never into an email, a chat or a document.
    nano deploy/.env
    nano deploy/app.env
    ```
+   **For Mothli's chat**, also fill in the two AI keys in `deploy/app.env`: `OPENAI_API_KEY` (or
+   `ANTHROPIC_API_KEY` instead) and `TYPESAFE_API_KEY`. Everything else the chat needs is already
+   set there; leave it as it is. Then turn on the job worker, which writes Mothli's notes on
+   finished chapters and what it remembers about readers: in `deploy/.env`, remove the `#` in
+   front of this line:
+   ```
+   COMPOSE_PROFILES=worker
+   ```
+   Leave both keys empty and the server starts without a chat (and without the worker line).
+   Fill in only one and the web process stops at startup with a line naming the missing one
+   (step 7 below).
 6. **Copy both files somewhere safe and offline now** (a password manager or an encrypted USB
    stick). Without `HOSTED_STORAGE_FILESYSTEM_KEY` no book can ever be read again, backups
    included.
@@ -263,7 +276,13 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
     the check that failed. Then `docker compose -f deploy/compose.yaml restart web`.
 - **The web process stops right after starting.** `docker compose -f deploy/compose.yaml logs
   --tail 50 web`. A line `hosted mode requires NAME` names a missing setting in
-  `deploy/app.env`.
+  `deploy/app.env`; `the streamed chat in hosted mode requires NAME` means one AI key is filled in
+  and the other is not (fill in both, or empty both).
+- **Readers see no chat.** Both AI keys in `deploy/app.env` are empty (or the file was made from
+  an older template whose chat lines were commented out: copy the chat section from
+  `deploy/app.env.example`). Fill them in, then
+  `docker compose -f deploy/compose.yaml up -d --wait`; readers see the chat after their next
+  sign-in or page reload.
 - **A reader is stuck at a limit.** See their limits (leave out `--owner READER_ID` to list
   everyone; the ids are also in the audit log):
   ```
@@ -289,7 +308,8 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
   cache rule.
 - The server and its size.
 - The sign-in service: which one, and its issuer, client ID and client secret (`OIDC_*`).
-- The AI accounts and keys, once the companion is switched on (names in `deploy/app.env`).
+- The two AI accounts and their keys, for Mothli's chat: the writer (`OPENAI_API_KEY`, or
+  `ANTHROPIC_API_KEY`) and the checker, TypeSafe (`TYPESAFE_API_KEY`), in `deploy/app.env`.
 - The spending caps: $0.10 per reader per day, $2.00 per reader per month and $5.00 per day for
   the whole platform are placeholders to confirm or change.
 - How long backups are kept, and where the off-server copies go. That is also how long a deleted
