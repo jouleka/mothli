@@ -85,6 +85,13 @@ WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     # ADR 0042 part 5: whether a claimed job is the library account's (since ADR 0044 step 2,
     # the notes account's), whose editions are built whole rather than up to a read map.
     "notes_account": frozenset({"SELECT"}),
+    # ADR 0044 step 3: a run builds into the edition of its reader's file. SELECT to read the
+    # claimed book's two fingerprints and find the edition with the same; INSERT to make the
+    # edition (a books row of the notes account, no file) on its first chapter. The edition's
+    # notes are read with the SELECT already held on the memory tables above, below the chapter
+    # being built. Nothing on source_objects: an edition never has a file, and a chapter's text
+    # is read from the reader's own copy through the tenant role.
+    "books": frozenset({"SELECT", "INSERT"}),
 }
 
 # ADR 0041 part 3 (migration 0020): the platform's day total is reached only through these two

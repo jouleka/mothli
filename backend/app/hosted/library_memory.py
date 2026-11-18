@@ -249,6 +249,21 @@ async def _add(state, account: uuid.UUID, entry: dict) -> str | None:
     return None
 
 
+def _mark(conn, account: uuid.UUID, book: uuid.UUID) -> None:
+    """Make the account's copy of a title the edition of its file (ADR 0044 step 3, migration
+    0033), unless the file has a live edition already (one a reader's run made first): then the
+    build goes into that one, by the same path as a reader's. Until step 6 a library edition is
+    the operator's copy, with its file."""
+    try:
+        with conn.transaction():
+            conn.execute(
+                "UPDATE public.books SET edition_of=owner_id WHERE owner_id=%s AND id=%s"
+                " AND edition_of IS NULL AND deleted_at IS NULL AND file_hash IS NOT NULL"
+                " AND split_hash IS NOT NULL", (account, book))
+    except psycopg.errors.UniqueViolation:
+        pass
+
+
 def build(state, library: PostgresLibraryAccount, entry_ids: list[str]) -> list[Edition]:
     """Add and queue each entry's edition (see the module's text); how each stands now."""
     account = library.ensure_account()
@@ -269,6 +284,7 @@ def build(state, library: PostgresLibraryAccount, entry_ids: list[str]) -> list[
                     "SELECT id FROM public.books WHERE owner_id=%s AND source_kind=%s"
                     " AND deleted_at IS NULL ORDER BY created_at,id LIMIT 1",
                     (account, source_tag(entry))).fetchone()
+                _mark(conn, account, book["id"])
             StoryMemoryQueue(state.companion_dsn, OwnerId(account)).ensure(str(book["id"]))
             now = edition(state, account, entry_id, entry)
         results.append(now)
