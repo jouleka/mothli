@@ -74,7 +74,6 @@ LEFT_OUT = {
     "book_search_documents": "the books' own text, indexed for search, not yours",
     "skimmed_ranges": "pages you turned through quickly: never counted as read",
     "recollection_cursors": "how far Mothli has looked through a chat: internal",
-    "local_library_migrations": "the record of a library moved in from a computer: internal",
     "chapters": "what Mothli learned from a book's own pages, not yours",
     "ingested_chapters": "what Mothli learned from a book's own pages, not yours",
     "chapter_summaries": "what Mothli learned from a book's own pages, not yours",

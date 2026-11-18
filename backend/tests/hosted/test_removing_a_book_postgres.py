@@ -67,8 +67,6 @@ KEPT = {
     "cost_ledger": "what the book's replies cost: the owner's money record",
     "cost_reservations": "what the book's replies held against the caps: the owner's money record",
     "jobs": "its background work, cancelled; the money records refer to it; no words in it",
-    "local_library_migrations": "the operator's record of a local book moved in: counts and "
-                                "checksums only; the tenant role cannot reach it",
 }
 
 
@@ -141,8 +139,8 @@ def everything_of(dsn: str, owner: uuid.UUID) -> dict[str, list[str]]:
 
 
 def story_memory(dsn: str, owner: uuid.UUID, book: str) -> None:
-    """A row in every table of a book's story memory, as extraction (or a local library moved in)
-    would write them, made up, as the database owner."""
+    """A row in every table of a book's story memory, as extraction would write them, made up, as
+    the database owner."""
     with psycopg.connect(dsn) as conn:
         incarnation = conn.execute("SELECT incarnation FROM books WHERE owner_id=%s AND id=%s",
                                    (owner, uuid.UUID(book))).fetchone()[0]
@@ -288,7 +286,7 @@ def test_removing_a_book_erases_its_reading_keeps_the_money_and_never_brings_it_
     # Every table that is erased holds something of this book first, the kept ones included
     # where this book has them, so "nothing afterwards" is a real change.
     empty = {table for table, found in held.items() if not found}
-    assert empty <= {"local_library_migrations", "cost_reservations"}, sorted(empty)
+    assert empty <= {"cost_reservations"}, sorted(empty)
     costs = held["cost_ledger"]
 
     assert a.call("DELETE", f"/api/books/{lamps}").status_code == 204
