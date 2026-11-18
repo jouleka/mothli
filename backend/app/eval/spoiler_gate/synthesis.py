@@ -1,5 +1,5 @@
 """LIT-8 vector 3 — synthesis over-reach (the deterministic post-generation scorer) + the pinned D-A9
-RUNTIME GATE. Lifted near-verbatim from ``spikes/lit-8-spoiler-eval/harness.py`` per ADR 0007 D-A1
+RUNTIME GATE. Lifted near-verbatim from the removed ``spikes/lit-8-spoiler-eval/harness.py`` per ADR 0007 D-A1
 group (a): these deterministic functions are SHARED by the eval harness AND the runtime synthesis /
 recap-cache paths, so production enforcement and the merge gate use IDENTICAL logic.
 

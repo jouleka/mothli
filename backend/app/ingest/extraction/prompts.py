@@ -1,5 +1,5 @@
 """LIT-6 extraction prompts — lifted near-verbatim from the spike
-(``spikes/lit-6-extraction/extract_schema.py``). The anti-foreshadow framing and the Russian-name
+(the removed ``spikes/lit-6-extraction/extract_schema.py``). The anti-foreshadow framing and the Russian-name
 guidance are LOAD-BEARING (ADR 0003/0004): the system prompt forbids outside knowledge / later events,
 and the roster + the "REUSE its exact canonical_name and set matched_roster=true" instruction are what
 make the resolver link forward instead of duplicating the cast.

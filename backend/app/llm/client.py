@@ -1,6 +1,6 @@
 """LIT-20 / LIT-6 — the ONE provider-agnostic LLM + embedding client.
 
-Re-ported (ADR 0007 D-A1 group (b), D-A5) from ``spikes/lit-6-extraction/llm.py`` with named,
+Re-ported (ADR 0007 D-A1 group (b), D-A5) from the removed ``spikes/lit-6-extraction/llm.py`` with named,
 behaviour-relevant changes:
 
   * **Pydantic models are the schema source of truth.** ``complete(..., schema=<PydanticModel>)``

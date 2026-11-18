@@ -1,4 +1,4 @@
-"""LIT-4 EPUB segmentation, productionized from spikes/lit-4-segmentation/segment.py (ADR 0001) with
+"""LIT-4 EPUB segmentation, productionized from the removed spikes/lit-4-segmentation/segment.py (ADR 0001) with
 the ADR-0007 D-A8 divider-merge implemented for real, and parsing hardened with lxml.
 
 Hardening vs the spike's ElementTree: a recovering lxml parser (so imperfect XHTML yields a chapter

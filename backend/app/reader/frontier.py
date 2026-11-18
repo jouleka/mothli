@@ -1,5 +1,5 @@
 """LIT-12 — the sub-chapter spoiler frontier. Lifted VERBATIM (pure, stdlib) from
-``spikes/lit-12-frontier/frontier.py`` per ADR 0007 D-A1 group (a). Maps the reader's continuous
+the removed ``spikes/lit-12-frontier/frontier.py`` per ADR 0007 D-A1 group (a). Maps the reader's continuous
 position to the INTEGER bookmark the LIT-5 DAL consumes, so the in-progress chapter can never leak its
 unread remainder.
 

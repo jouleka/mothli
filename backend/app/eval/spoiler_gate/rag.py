@@ -1,5 +1,5 @@
 """LIT-8 vector 2 — RAG / quote-path leak eval. Lifted near-verbatim from
-``spikes/lit-8-spoiler-eval/harness.py`` (ADR 0007 D-A1 group (a)).
+the removed ``spikes/lit-8-spoiler-eval/harness.py`` (ADR 0007 D-A1 group (a)).
 
 ``search()`` must never return a chunk with ``revealed_at > bookmark``. In-text foreshadow inside an
 ALREADY-READ chunk ("...which I shall describe later") is reader-parity-safe (the reader read it too) —

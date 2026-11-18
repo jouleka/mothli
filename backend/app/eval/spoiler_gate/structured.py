@@ -1,5 +1,5 @@
 """LIT-8 vector 1 — structured-read leak eval. Lifted near-verbatim from
-``spikes/lit-8-spoiler-eval/harness.py`` (ADR 0007 D-A1 group (a)).
+the removed ``spikes/lit-8-spoiler-eval/harness.py`` (ADR 0007 D-A1 group (a)).
 
 For every bookmark and EVERY ``BookmarkView`` read method, assert no surfaced row OR referenced entity
 has ``revealed_at > bookmark`` — re-validating LIT-5 referential closure as a scored eval. Returns

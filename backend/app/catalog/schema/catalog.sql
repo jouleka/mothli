@@ -1,5 +1,5 @@
 -- LIT-18 — global catalog database (catalog.db). Lifted near-verbatim from the spike
--- (spikes/lit-5-schema/catalog.sql) per ADR 0007 D-A1. All DDL is IF NOT EXISTS (idempotent on open).
+-- (the removed spikes/lit-5-schema/catalog.sql) per ADR 0007 D-A1. All DDL is IF NOT EXISTS (idempotent on open).
 -- =============================================================================
 -- ONE small global DB for the whole app: the shelf, the MUTABLE reading state (bookmark/CFI/ingest),
 -- and the cost ledger. The per-book memory.db files are IMMUTABLE ground truth and deliberately do NOT

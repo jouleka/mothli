@@ -1,6 +1,6 @@
 """LIT-20 — model identity + version-pinning + safe-swap policy on top of the one provider-agnostic
 LLM/embedding interface (``app.llm.client``). Lifted near-verbatim from
-``spikes/lit-20-llm-interface/versioning.py`` (ADR 0007 D-A1 group (a): pure, behaviour-defining
+the removed ``spikes/lit-20-llm-interface/versioning.py`` (ADR 0007 D-A1 group (a): pure, behaviour-defining
 safety logic). Stdlib only.
 
 THE PROBLEM: the pluggable interface makes swapping a provider/model an env change — operationally

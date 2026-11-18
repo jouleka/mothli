@@ -213,7 +213,6 @@ backend/    FastAPI API, local memory engine, hosted foundation, and tests
 frontend/   React/TypeScript reader, PWA support, and vendored Foliate renderer
 docs/       Product design, ADRs, accessibility notes, and public runbooks
 scripts/    Optional loopback-only local service helpers
-spikes/     Reproducible research experiments and their synthetic/public fixtures
 ```
 
 ## Privacy and security

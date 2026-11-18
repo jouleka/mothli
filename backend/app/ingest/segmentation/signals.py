@@ -1,6 +1,6 @@
 """LIT-4 explicit-signal classification (ADR 0001) — front / back / body by EXPLICIT signals only,
 NEVER by position. EPUB3 `epub:type` is authoritative and fail-closed; legacy EPUB2/NCX falls back to
-heuristic signals. Lifted near-verbatim from spikes/lit-4-segmentation/segment.py (the classifier is
+heuristic signals. Lifted near-verbatim from the removed spikes/lit-4-segmentation/segment.py (the classifier is
 the spoiler-relevant safety surface: a misclassified cast-list = a chapter-1 leak), hardened over three
 review passes:
   * pass-1 BLOCKER: the exact-anchored front allowlist let real labels ("Principal Characters in the
