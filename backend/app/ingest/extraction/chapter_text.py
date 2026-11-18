@@ -31,6 +31,7 @@ END/license tail so a chapter's text is the prose only (handles the segmenter's 
 """
 import hashlib
 import io
+import json
 import re
 import zipfile
 from collections import Counter
@@ -55,6 +56,23 @@ def content_hash_of(text):
     """The append-once content fingerprint (ADR 0007 D-A3). Computed here so chapter_text and the
     pipeline cannot drift on what 'unchanged content' means."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def split_hash_of(chapters, book_id):
+    """The split fingerprint of one import (ADR 0044 section 1): SHA-256 over the ordered list of
+    (chapter number, the file part of the chapter key, SHA-256 of the chapter's text), as compact
+    JSON. The book id is left out, so two imports of one file split by one version of this code
+    have the same fingerprint; a chapter cut, numbered, named, ordered or filled differently gives
+    another. ``chapters`` is ``segment_for_ingest``'s list for ``book_id``."""
+    prefix = f"{book_id}:"
+    listed = []
+    for chapter in chapters:
+        if not chapter["key"].startswith(prefix):
+            raise ValueError("a chapter key of another book")
+        listed.append([chapter["ordinal"], chapter["key"][len(prefix):],
+                       hashlib.sha256(chapter["text"].encode("utf-8")).hexdigest()])
+    encoded = json.dumps(listed, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _body_el(root):

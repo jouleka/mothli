@@ -39,7 +39,7 @@ from app.hosted.tenant.models import (
     StalePositionEpochError,
 )
 from app.ingest.book_type import detect_book_type
-from app.ingest.extraction.chapter_text import segment_for_ingest
+from app.ingest.extraction.chapter_text import segment_for_ingest, split_hash_of
 from app.ingest.segmentation.epub_segmenter import EpubDrmError
 
 router = APIRouter(prefix="/api", tags=["hosted-library"])
@@ -331,6 +331,9 @@ async def store_epub(
     title = result.title or fallback_title
     author = result.author or fallback_author
     checksum = hashlib.sha256(blob).hexdigest()
+    # How the file was split into chapters (ADR 0044 section 1): two copies are one book only when
+    # both this and the file's own hash are equal, since story memory is stamped by chapter number.
+    split_hash = split_hash_of(chapters, str(book_id))
     char_start = 0
     search_documents = []
     for _atom, chapter in zip(result.atoms, chapters, strict=True):
@@ -372,6 +375,7 @@ async def store_epub(
                 title=title,
                 author=author,
                 file_hash=checksum,
+                split_hash=split_hash,
                 content_language=result.content_language,
                 book_type=profile.book_type,
                 object_id=ref.object_id,
