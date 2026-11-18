@@ -1661,13 +1661,11 @@ class PostgresTenantRepository:
                 """
                 UPDATE public.jobs
                 SET cancellation_requested_at=COALESCE(cancellation_requested_at,now()),
-                    state=CASE WHEN state IN ('waiting_configuration','pending')
-                               THEN 'cancelled' ELSE state END,
-                    completed_at=CASE WHEN state IN ('waiting_configuration','pending')
-                                      THEN now() ELSE completed_at END,
+                    state=CASE WHEN state='pending' THEN 'cancelled' ELSE state END,
+                    completed_at=CASE WHEN state='pending' THEN now() ELSE completed_at END,
                     updated_at=now()
                 WHERE owner_id=%s
-                  AND state IN ('waiting_configuration','pending','leased','running')
+                  AND state IN ('pending','leased','running')
                 """,
                 (owner_id.value,),
             )
@@ -1767,13 +1765,11 @@ class PostgresTenantRepository:
                 """
                 UPDATE public.jobs
                 SET cancellation_requested_at=COALESCE(cancellation_requested_at,now()),
-                    state=CASE WHEN state IN ('waiting_configuration','pending')
-                               THEN 'cancelled' ELSE state END,
-                    completed_at=CASE WHEN state IN ('waiting_configuration','pending')
-                                      THEN now() ELSE completed_at END,
+                    state=CASE WHEN state='pending' THEN 'cancelled' ELSE state END,
+                    completed_at=CASE WHEN state='pending' THEN now() ELSE completed_at END,
                     updated_at=now()
                 WHERE owner_id=%s AND book_id=%s AND book_incarnation=%s
-                  AND state IN ('waiting_configuration','pending','leased','running')
+                  AND state IN ('pending','leased','running')
                 """,
                 (owner_id.value, book_id, row["incarnation"]),
             )

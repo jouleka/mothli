@@ -61,7 +61,7 @@ def inspect_limits(dsn: str, owner_id: uuid.UUID | None = None) -> list[dict]:
                     WHERE object.owner_id=limits.owner_id AND object.deleted_at IS NULL),0)
                      AS library_bytes,
                    (SELECT count(*) FROM jobs AS job WHERE job.owner_id=limits.owner_id
-                    AND job.state IN ('waiting_configuration','pending','leased','running'))
+                    AND job.state IN ('pending','leased','running'))
                      AS active_jobs,
                    COALESCE((SELECT sum(entry.usd) FROM cost_ledger AS entry
                     WHERE entry.owner_id=limits.owner_id),0) AS spend_usd,
@@ -82,7 +82,6 @@ def update_limits(dsn: str, owner_id: uuid.UUID, updates: dict[str, object]) -> 
         "max_upload_bytes",
         "max_library_bytes",
         "max_books",
-        "max_active_jobs",
         "requests_per_window",
         "request_window_seconds",
         "max_provider_concurrency",
@@ -119,7 +118,6 @@ def main(argv: list[str] | None = None) -> int:
         "max_upload_bytes",
         "max_library_bytes",
         "max_books",
-        "max_active_jobs",
         "requests_per_window",
         "request_window_seconds",
         "max_provider_concurrency",
@@ -145,7 +143,6 @@ def main(argv: list[str] | None = None) -> int:
         "max_upload_bytes",
         "max_library_bytes",
         "max_books",
-        "max_active_jobs",
         "requests_per_window",
         "request_window_seconds",
         "max_provider_concurrency",

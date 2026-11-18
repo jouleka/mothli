@@ -430,26 +430,6 @@ def test_optional_spend_ceiling_requires_atomic_preflight_reservations(
         )
 
 
-def test_ingestion_job_payload_requires_progress(database: str, corpus: dict) -> None:
-    """Only the retired ``ingest_book`` kind had to carry a chapter count."""
-    with pytest.raises(psycopg.errors.CheckViolation):
-        with psycopg.connect(database) as conn:
-            conn.execute(
-                """
-                INSERT INTO jobs
-                  (owner_id,id,book_id,book_incarnation,kind,idempotency_key,payload_metadata)
-                VALUES (%s,%s,%s,%s,'ingest_book',%s,'{}'::jsonb)
-                """,
-                (
-                    corpus["owner_a"],
-                    uuid.uuid4(),
-                    corpus["book_a"],
-                    corpus["incarnation_a"],
-                    f"ingest:{uuid.uuid4().hex}",
-                ),
-            )
-
-
 def test_job_payload_rejects_credentials(database: str, corpus: dict) -> None:
     with pytest.raises(psycopg.errors.CheckViolation):
         with psycopg.connect(database) as conn:
