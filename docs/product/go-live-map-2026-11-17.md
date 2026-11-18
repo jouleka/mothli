@@ -68,7 +68,7 @@ File and line references are to 6971f14. "Local" is `DEPLOYMENT_MODE=local` (the
 - **Migrations.** `python -m app.hosted.migrations` reads `DATABASE_URL`, applies each pending file in its own transaction under an advisory lock, records a checksum, and refuses gaps, edited files and transaction statements (`backend/app/hosted/migrations.py:32-55,58-113`). **Version numbers must be contiguous** (`migrations.py:51-54`): two parts adding `0018` in parallel will collide, so numbers must be handed out in advance. Database roles and grants are not in migrations; they are "provisioned outside migrations" (`backend/README.md`, section "Hosted OIDC and sessions"), and the only grant statements in the repository are in test fixtures.
 - **Book files.** Uploaded EPUBs go to object storage under the owner and an opaque id: encrypted filesystem (AES-256-GCM) or S3 with server-side encryption (`backend/app/hosted/storage.py:120,285,465`; settings `config.py:136-147`). Metadata in `source_objects` (`schema/0002...sql:30-48`).
 - **Chapter text.** At upload the server segments the EPUB and stores each chapter's full text in `book_search_documents.content`, per owner (`tenant/api.py:549-564`, `schema/0016_owner_scoped_book_search.sql:2-19`). This is the hosted source for anything that needs chapter text.
-- **Story memory.** There is no `memory.db` and no `store.book(...)` in hosted mode. The per-book memory is Postgres tables (`chapters`, `ingested_chapters`, `entities`, `aliases`, `edges`, `events`, `chunks`, `chunk_embeddings`, ..., `schema/0002...sql`), all per owner. They are filled only by the extraction worker (B5) or by importing a local archive (`backend/app/hosted/local_migration.py`).
+- **Story memory.** There is no `memory.db` and no `store.book(...)` in hosted mode. The per-book memory is Postgres tables (`chapters`, `ingested_chapters`, `entities`, `aliases`, `edges`, `events`, `chunks`, `chunk_embeddings`, ..., `schema/0002...sql`), all per owner. They are filled only by the extraction worker (B5) or, on 17 November, by importing a local archive (`backend/app/hosted/local_migration.py`, removed on 18 November with the move from the local app, ADR 0043).
 - **Covers.** Not found for hosted (no cover route in `tenant/api.py`; local has `/api/books/{id}/cover`, `api/books.py:164`).
 - **Per reader versus shared.** Everything is per reader: two readers uploading the same EPUB get two books, two files, two memories. The only shared data is service metadata (`provider_capabilities`, `schema/0001...sql:64-71`). The classics catalogue would be shared, but classics are not in hosted mode.
 
@@ -92,7 +92,7 @@ File and line references are to 6971f14. "Local" is `DEPLOYMENT_MODE=local` (the
 | Reading history imports | absent | router not mounted (`main.py:501`) |
 | Costs view | works, per owner | `tenant/api.py:1643` |
 | Background jobs list and cancel | works, but jobs never run (B5) | `tenant/api.py:631-670` |
-| Moving the owner's local library up | exists as a command with a runbook | `hosted/local_migration.py:969`, `docs/runbooks/local-to-hosted-migration.md` |
+| Moving the owner's local library up | absent: the command and its runbook were removed on 18 November (ADR 0043, D3) | was `hosted/local_migration.py:969`, `docs/runbooks/local-to-hosted-migration.md` |
 
 ### B5. The gap
 
@@ -162,7 +162,7 @@ Background work in hosted mode: there are **no in-process threads**. Upload inse
 **Cost ledgers and ceilings.**
 - Local: per book, by tokens and dollars (`config.py:110-116`, `cost/limits.py:229-231,288-290`); the home chat is charged to the first book on the shelf, or to `HOME_SPEND` when the shelf is empty (`home_conversation.py:363`, `recollections.py:440-444`).
 - Hosted: per owner. One lifetime dollar cap `owner_limits.max_spend_usd`, **NULL (no cap) by default** (`schema/0011_owner_limits.sql:13-14`), checked atomically with a concurrency limit of 2 calls at once (`repository.py:604-680`). Per call, the input token ceiling applies (`provider_runtime.py:59-68`). There is no per-book, per-day or per-month ceiling in hosted mode. The spend is on the reader's own provider account (`tenant/api.py:853`).
-- The local-to-hosted migration carries `books`, `reading_state`, `cost_ledger` and memory, not the new tables (`local_migration.py:292,628`; per-book archive tables `lifecycle/archive.py:43`).
+- The local-to-hosted migration carried `books`, `reading_state`, `cost_ledger` and memory, not the new tables (`local_migration.py:292,628`; per-book archive tables `lifecycle/archive.py:43`). It was removed on 18 November (ADR 0043, D3).
 
 ### B6. Models and money in hosted mode
 
@@ -185,8 +185,8 @@ Background work in hosted mode: there are **no in-process threads**. Upload inse
 | HTTPS and hosts | cookies are Secure (`auth/api.py:58`); `TRUSTED_HOSTS` must be explicit (`config.py:189-191`); OIDC URLs must be HTTPS (`config.py:209-217`). TLS itself is left to whatever sits in front |
 | Security headers | applied in both modes (`main.py:41-84`); API responses marked no-store in hosted (`main.py:234-252`) |
 | Logging | plain Python logging; content-free by design (`audit.py`, `main.py:87-106`); no shipping or metrics found |
-| Backups | local only (`hosted/local_migration.py:936`, ADR 0009); for Postgres and object storage, none: "Backups, restore drills, deployment configuration, monitoring ... remain operator responsibilities" (`README.md:10-13` on 17 November; that sentence went when the README was rewritten for one hosted product, ADR 0043) |
-| Local run script | `scripts/run-local-production.sh` is local mode only |
+| Backups | local only (`hosted/local_migration.py:936` on 17 November, removed with the move from the local app, ADR 0043; ADR 0009); for Postgres and object storage, none: "Backups, restore drills, deployment configuration, monitoring ... remain operator responsibilities" (`README.md:10-13` on 17 November; that sentence went when the README was rewritten for one hosted product, ADR 0043) |
+| Local run script | none: `scripts/run-local-production.sh` was local mode only, and was removed on 18 November (ADR 0043, D4) |
 
 ### B8. Tests
 
@@ -226,7 +226,7 @@ Background work in hosted mode: there are **no in-process threads**. Upload inse
 | Terms and privacy | Must name the AI providers and the checker that see reader text | None in the repository |
 | Shared chapter notes | Per reader, or shared per identical file | Per reader |
 | Session length | Longer sessions for a reading app | 30 minutes idle |
-| Moving the owner's own local library | `local_migration.py` and its runbook | Carries books, position, ledger, memory; not notes, turns, read map or recollections |
+| Moving the owner's own local library | `local_migration.py` and its runbook, both removed on 18 November: the owner needs nothing from the local copy (ADR 0043, D3) | Carried books, position, ledger, memory; not notes, turns, read map or recollections |
 
 ### B11. The parts
 
