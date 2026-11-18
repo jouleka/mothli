@@ -1533,6 +1533,7 @@ class PostgresTenantRepository:
         title: str,
         author: str | None,
         file_hash: str,
+        split_hash: str,
         content_language: str,
         book_type: str,
         object_id: uuid.UUID,
@@ -1550,7 +1551,10 @@ class PostgresTenantRepository:
         ``source_kind`` is ``upload`` for a reader's own file, or the free-library entry's tag
         (``gutenberg:<number>``, the local catalog's ``source``) for a book added from the library;
         a second live book from the same entry is refused with ``AlreadyOnShelfError``, as the
-        local library refuses it, under the same owner lock as the limits."""
+        local library refuses it, under the same owner lock as the limits.
+
+        ``split_hash`` is how the file was split into chapters (``split_hash_of``, ADR 0044
+        section 1); with ``file_hash`` it is what the door matches a library edition on."""
         async with self._transaction(owner_id) as conn:
             await conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s::text,47))",
@@ -1574,9 +1578,9 @@ class PostgresTenantRepository:
                 await conn.execute(
                     """
                     INSERT INTO public.books
-                      (owner_id,id,incarnation,title,author,source_kind,file_hash,schema_version,
-                       content_language,book_type)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s,%s)
+                      (owner_id,id,incarnation,title,author,source_kind,file_hash,split_hash,
+                       schema_version,content_language,book_type)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,1,%s,%s)
                     RETURNING id,title,author,content_language,book_type,created_at
                     """,
                     (
@@ -1587,6 +1591,7 @@ class PostgresTenantRepository:
                         author,
                         source_kind,
                         file_hash,
+                        split_hash,
                         content_language,
                         book_type,
                     ),
@@ -1813,7 +1818,7 @@ class PostgresTenantRepository:
                 """
                 UPDATE public.books
                 SET deleted_at=now(),updated_at=now(),title='',author=NULL,source_kind=NULL,
-                    source_id=NULL,file_hash=NULL
+                    source_id=NULL,file_hash=NULL,split_hash=NULL
                 WHERE owner_id=%s AND id=%s AND incarnation=%s AND deleted_at IS NULL
                 """,
                 (owner_id.value, book_id, row["incarnation"]),
