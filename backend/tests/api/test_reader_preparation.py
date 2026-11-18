@@ -1,9 +1,6 @@
 """Prepared full answers must remain reviewed, frontier-bound, durable and nonblocking."""
 import copy
 import json
-import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -16,7 +13,6 @@ from app.llm.jev import JevUnavailable
 from app.reader_prepare import (
     GuardedCache, PreparationCatalog, PreparationScope, PreparationStale, preparation_key, prepare,
 )
-from app.recap_warm import RecapPrewarmer
 
 
 def payload():
@@ -141,83 +137,12 @@ def test_preparation_budget_includes_pending_calls_and_checks_reset_atomically(e
             max_preparation_usd=.10)
 
 
-def test_background_model_io_does_not_block_position_or_reset_and_coalesces(env, monkeypatch):
-    api, bid, app, atoms = env
-    entered, release = threading.Event(), threading.Event()
-    scopes = []
-    def blocked_prepare(_app, scope):
-        scopes.append(scope)
-        entered.set()
-        assert release.wait(5)
-        scope.check(app, snapshot=True)
-    monkeypatch.setattr("app.recap_warm.prepare", blocked_prepare)
-    app.state.settings.reader_prepare_delay_seconds = 0
-    async def start():
-        app.state.recap_warmer = RecapPrewarmer(app)
-    api.portal.call(start)
-    warmer = app.state.recap_warmer
-    incarnation = app.state.catalog.get_book(bid)["incarnation"]
-    warmer.notify(bid, incarnation)
-    assert entered.wait(2)
-    try:
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            position = pool.submit(api.put, f"/api/books/{bid}/position", json={
-                "cfi": "page-turn", "offset": sum(a["char_len"] for a in atoms[:2])+2,
-                "position_epoch": 0}).result(timeout=1)
-            assert position.status_code == 200
-            for _ in range(30):
-                warmer.notify(bid, incarnation)
-            reset = pool.submit(api.post, f"/api/books/{bid}/position/reset",
-                                json={"position_epoch": 0}).result(timeout=1)
-            assert reset.status_code == 200
-    finally:
-        release.set()
-        api.portal.call(warmer.queue.join)
-        api.portal.call(warmer.close)
-        app.state.recap_warmer = None
-    assert len(scopes) == 1
-
-
-def test_preparation_retries_once_for_new_frontier_arriving_during_active_work(env, monkeypatch):
-    api, bid, app, _ = env
-    entered, release = threading.Event(), threading.Event()
-    calls = []
-    def work(_app, scope):
-        calls.append(scope.frontier)
-        if len(calls) == 1:
-            entered.set()
-            assert release.wait(5)
-    monkeypatch.setattr("app.recap_warm.prepare", work)
-    app.state.settings.reader_prepare_delay_seconds = 0
-    async def start(): app.state.recap_warmer = RecapPrewarmer(app)
-    api.portal.call(start)
-    warmer = app.state.recap_warmer
-    incarnation = app.state.catalog.get_book(bid)["incarnation"]
-    warmer.notify(bid, incarnation)
-    assert entered.wait(2)
-    try:
-        # A source correction at the same frontier must also schedule fresh work.
-        warmer.notify(bid, incarnation, force=True)
-        time.sleep(.02)
-        release.set()
-        api.portal.call(warmer.queue.join)
-        assert calls == [2, 2]
-        warmer.notify(bid, incarnation)
-        api.portal.call(warmer.queue.join)
-        assert calls == [2, 2]
-    finally:
-        release.set()
-        api.portal.call(warmer.close)
-        app.state.recap_warmer = None
-
-
 def test_preparation_uses_only_completed_facts_and_normal_reviewed_answer_route(env, monkeypatch):
     _, bid, app, _ = env
     scope = capture(app, bid)
     app.state.settings.reader_prepare_enabled = True
     app.state.settings.reader_answer_cache = True
     app.state.settings.reader_prepare_max_questions = 2
-    app.state.settings.recap_prewarm = True
     questions, inputs, order = [], [], []
     monkeypatch.setattr("app.api.views.catch_me_up", lambda *args: order.append("recap"))
     def plan(*args, **kwargs):
@@ -237,7 +162,7 @@ def test_preparation_uses_only_completed_facts_and_normal_reviewed_answer_route(
     monkeypatch.setattr("app.reader_prepare.budgeted_completion", plan)
     monkeypatch.setattr("app.api.views.ask_the_book", reviewed)
     prepare(app, scope)
-    assert order[0] == "recap" and "question" in order[1:]
+    assert "question" in order and "recap" not in order
     prepare(app, scope)
     assert len(inputs) == 2 and len(questions) == 2
     assert "Corvus" not in json.dumps(inputs)

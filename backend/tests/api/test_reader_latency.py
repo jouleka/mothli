@@ -86,18 +86,19 @@ def test_reviewed_answer_cache_is_free_and_frontier_and_reset_scoped(env, monkey
 
 
 @pytest.mark.parametrize("assist_path", ["/ask", "/chapter-closeout", "/selection-action", "/people", "/ingest/retry"])
-def test_preparation_and_answers_share_reads_but_reset_waits_and_cancel_releases(assist_path):
+def test_slow_recap_and_answers_share_reads_but_reset_waits_and_cancel_releases(assist_path):
     async def scenario():
         app = SimpleNamespace(state=SimpleNamespace(book_request_locks={}))
         gate = asynccontextmanager(book_lifecycle)
         def request(method, path):
             return SimpleNamespace(app=app, method=method, url=SimpleNamespace(path=path))
-        preparation = SimpleNamespace(app=app, recap_preparation=True)
+        # A slow catch-up summary: a shared read, as the removed background preparation was.
+        recap = request("GET", "/api/books/book/catch-me-up")
         warm_entered, release_warm = asyncio.Event(), asyncio.Event()
         answer_entered, release_answer = asyncio.Event(), asyncio.Event()
         reset_entered = asyncio.Event()
         async def warm():
-            async with gate("book", preparation):
+            async with gate("book", recap):
                 warm_entered.set()
                 await release_warm.wait()
         async def ask():
@@ -120,7 +121,7 @@ def test_preparation_and_answers_share_reads_but_reset_waits_and_cancel_releases
             await answer
         except asyncio.CancelledError:
             pass
-        assert not reset_entered.is_set()  # The preparation still protects its snapshot.
+        assert not reset_entered.is_set()  # The recap still protects its snapshot.
         release_warm.set()
         await asyncio.gather(warmer, mutation)
         assert reset_entered.is_set() and not app.state.book_request_locks

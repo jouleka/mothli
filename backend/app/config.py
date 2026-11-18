@@ -50,8 +50,6 @@ class Settings(BaseSettings):
     jev_recap_enabled: bool = False  # Experimental: conservative routing added latency in live QA.
     jev_min_probability: float = Field(default=0.95, ge=0.9, le=1)
     jev_min_confidence: float = Field(default=0.85, ge=0.8, le=1)
-    recap_prewarm: bool = False
-    recap_disk_cache: bool = False
     reader_answer_cache: bool = False
     reader_conversation_pipeline: bool = False
     reader_page_context: bool = False
@@ -250,7 +248,6 @@ class Settings(BaseSettings):
             "ALLOW_STUB": self.allow_stub,
             "JEV_WINDOWS_CREDENTIAL": self.jev_windows_credential,
             "READER_ANSWER_CACHE": self.reader_answer_cache,
-            "RECAP_DISK_CACHE": self.recap_disk_cache,
             "READER_PREPARE_ENABLED": self.reader_prepare_enabled,
         }
         on = [name for name, value in refused.items() if value]

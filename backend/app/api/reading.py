@@ -244,9 +244,6 @@ def put_position(book_id: str, pos: PositionIn, request: Request, catalog=Depend
         # The worker validates explicit v2 completion markers even when legacy catalog progress
         # already reaches this bookmark; matching durable receipts replay idempotently.
         worker.enqueue(book_id, bookmark)
-    warmer = request.app.state.recap_warmer
-    if warmer is not None:
-        warmer.notify(book_id, catalog.get_book(book_id)["incarnation"], foreground=True)
     if bookmark > prev and settings.reader_story_notes and settings.reader_conversation_jev:
         request.app.state.notes_builder.ensure(book_id)      # a chapter was just finished
     return {
@@ -277,9 +274,6 @@ def reset_position(book_id: str, reset: PositionResetIn, request: Request, catal
         except (LookupError, ValueError, AtomSetMismatch) as exc:
             raise HTTPException(409, "read map could not be verified against the source") from exc
         state = {**state, "bookmark": catalog.high_water(book_id)}
-    warmer = request.app.state.recap_warmer
-    if warmer is not None:
-        warmer.notify(book_id, catalog.get_book(book_id)["incarnation"], foreground=True)
     return {
         "bookmark": state["bookmark"],
         "cfi": state["cfi"],

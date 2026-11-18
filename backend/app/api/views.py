@@ -295,9 +295,6 @@ def correct_memory(book_id: str, body: EntityCorrectionRequest, request: Request
             items = mem.entity_correction_history(eff)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    warmer = request.app.state.recap_warmer
-    if warmer is not None:
-        warmer.notify(book_id, catalog.get_book(book_id)["incarnation"], force=True)
     return {"as_of_chapter": eff, **result, "items": items}
 
 

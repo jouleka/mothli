@@ -138,7 +138,7 @@ class GuardedCache:
 
 def prepare(app, scope):
     """Run outside request gates: scrolling/reset/delete may proceed during every provider call."""
-    from app.api.views import ask_the_book, catch_me_up
+    from app.api.views import ask_the_book
     st = app.state
     store = ContentStore(st.store, st.settings.data_dir)
     scope.check(app)
@@ -148,17 +148,6 @@ def prepare(app, scope):
     client.answers = GuardedCache(st.reader_client.answers, app, scope)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
         recaps=GuardedCache(st.recaps, app, scope))))
-    def warm_recap():
-        if not st.settings.recap_prewarm:
-            return
-        try:
-            catch_me_up(scope.book_id, request, scope.frontier, catalog, store,
-                        st.settings, client, st.worker)
-        except Exception:
-            scope.check(app)  # A failed recap does not prevent independently reviewed answers.
-    # The recap is the first thing a returning reader opens. Do not put eight multi-call
-    # question preparations ahead of it (which could postpone warming for several minutes).
-    warm_recap()
     scope.check(app)
     if not st.settings.reader_prepare_enabled or not st.settings.reader_answer_cache:
         return

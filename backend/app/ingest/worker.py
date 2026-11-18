@@ -69,7 +69,6 @@ def _usd_of(model, usage):
 class IngestWorker:
     def __init__(self, store, catalog, client, settings, executor=None, sleep=None):
         from app.content_scope import ContentStore
-        self.on_complete = None
         self._store = ContentStore(store, settings.data_dir) if store is not None else None
         self._catalog = catalog
         self._client = client
@@ -265,11 +264,6 @@ class IngestWorker:
                         self._state[book_id]["error"] = None      # a successful run clears stale errors
                         self._running.discard(book_id)
                         break
-            if self.on_complete is not None:
-                try:
-                    self.on_complete(book_id, incarnation)
-                except Exception:
-                    pass  # Best-effort preparation cannot change durable ingestion success.
         except _IngestStopping:
             with self._mu:
                 self._running.discard(book_id)
