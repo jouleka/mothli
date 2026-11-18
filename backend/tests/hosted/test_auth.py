@@ -25,8 +25,6 @@ def test_hosted_mode_requires_https_oidc_urls() -> None:
         "oidc_client_id": "litlet",
         "oidc_client_secret": "secret",
         "oidc_redirect_uri": "https://reader.example/api/auth/callback",
-        "hosted_credential_master_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        "hosted_credential_key_version": "test-v1",
     }
     with pytest.raises(ValidationError, match="HTTPS"):
         Settings(_env_file=None, **values)
@@ -41,8 +39,6 @@ def test_hosted_mode_rejects_a_wildcard_host_allowlist() -> None:
         "oidc_client_id": "litlet",
         "oidc_client_secret": "not-a-real-secret",
         "oidc_redirect_uri": "https://reader.example/api/auth/callback",
-        "hosted_credential_master_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        "hosted_credential_key_version": "test-v1",
         "trusted_hosts": "*",
     }
     with pytest.raises(ValidationError, match="TRUSTED_HOSTS"):

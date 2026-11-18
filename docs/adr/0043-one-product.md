@@ -364,6 +364,62 @@ a test database, frontend tests and build, `ruff check app tests scripts`).
   `HOSTED_READER_KEYS`, the key settings, grants, roles, `export.py`, `deploy/app.env.example`,
   the backend README's provider-configuration section and the `pyproject.toml` entry naming
   `hosted.credentials`.
+- Built on 18 November 2026 in PR #119: step 8 as designed, in four commits (the code and tests,
+  the migration, the deployment files and runbook, these docs), except (1) besides
+  `credentials.py` and its test, the two `pyproject.toml` commands (`mothli-credential-rewrap` and
+  its alias) went, since nothing else used them; (2) the migration is
+  `0029_drop_the_reader_key_tables.sql`: each table's row security policy and index by name, then
+  the table, and on `jobs` its link to the keys (`jobs_owner_id_credential_id_fkey`), 0028's
+  `jobs_names_no_credential_ck` and the column; nothing cascades. The record's "index" on
+  `jobs.credential_id` never existed (0003 made none). A stored key, if one existed, is erased
+  with its table, which its comment says is the right outcome; (3) of the places listed,
+  `scripts/hosted_roles.py` (it reads `grants.py`), the repository, `endpoints.json`, account
+  erasure and book removal (both find tables from the catalogue) named neither table, and no
+  compose file, Dockerfile or shell script named a key setting: only `grants.py`, `export.py`,
+  `config.py`, `deploy/app.env.example`, the runbook and the tests changed; the catalogue tests
+  were checked to fail with a dropped table still listed; (4) `HOSTED_PROVIDER_ALLOWED_ORIGINS`
+  stays: it is the only check on `OPENAI_BASE_URL` in hosted mode (`config.py:252-260`), the
+  address the owner's writer key is sent to with every reply; (5) `commit_chapter` and
+  `reserve_spend` went: they were the book job's chapter commit and spend reservation, and no
+  living job used them (the companion reserves and settles through `companion/spend.py` on the
+  tenant role, and story memory publishes through `commit_chapter_memory`); deleted with them
+  `test_jobs_postgres.py::test_optional_spend_ceiling_requires_atomic_preflight_reservations` (equal:
+  `test_companion_spend_postgres.py::test_each_cap_refuses_a_call_once_it_is_reached_before_the_provider_is_called`,
+  which covers the lifetime cap) and `::test_chapter_memory_receipt_and_cost_commit_is_atomic_and_idempotent`
+  (equals: `test_story_memory_postgres.py::test_a_chapter_is_published_once_and_a_second_publish_changes_nothing`,
+  `::test_a_publish_cut_off_before_it_commits_leaves_nothing_and_is_never_seen_half`); trimmed
+  `::test_worker_claim_is_owner_and_book_fenced_against_foreign_identifiers` (the foreign-owner
+  reservation and the foreign-book commit; every other assertion stays, and a claim turned on
+  another reader's book is refused at the publish by
+  `test_story_memory_postgres.py::test_one_readers_chapter_never_reads_or_writes_anothers_rows`) and
+  `::test_worker_role_is_bypassrls_and_exactly_privileged` (the commit; the role check stays, and
+  `test_story_memory_postgres.py::test_the_worker_role_holds_exactly_what_a_publish_needs` writes on
+  that role); (6) the worker role keeps INSERT on `cost_ledger` and INSERT and UPDATE on
+  `cost_reservations`, which only those two methods used; narrowing a role was not asked for and
+  is left to the owner; (7) the refusal of `HOSTED_READER_KEYS=true` became
+  `test_platform_pays.py::test_hosted_mode_starts_without_the_reader_key_settings_and_ignores_old_lines`
+  (none of the five names is a setting; hosted mode starts without them, with and without the
+  chat; old lines in a file and the environment change nothing); the worker's companion dispatcher
+  is shown starting without them (`test_worker.py::test_the_companion_dispatcher_starts_without_the_reader_key_settings`)
+  and no deployment file or the runbook names them (`test_deploy.py::test_no_deployment_file_asks_for_the_removed_reader_key_settings`;
+  the template check no longer allows the placeholder `v1`); (8) the 0028 test that inserts a job
+  naming a credential now applies migrations through 0028 only, and four tests that read
+  `jobs.credential_id` to see it empty (`test_companion_notes_postgres.py`,
+  `test_companion_recollections_postgres.py`, `test_story_memory_jobs_postgres.py`,
+  `test_free_library_postgres.py`) no longer read it, since no job can have one; (9) tests: hosted and parity 413
+  on `main`, 406 here (-8 `test_credentials.py`, -2 in `test_migrations.py` and +2 for 0029, -2 in
+  `test_jobs_postgres.py`, +1 in `test_platform_pays.py` (one test in place of one, run twice),
+  +1 in `test_worker.py`, +1 in `test_deploy.py`); non-hosted suite unchanged; (10) left alone:
+  the service table `provider_capabilities` (0001; nothing reads it, and it holds no key), 0008's
+  check that keeps keys out of a job's payload, the tenant routes' refusal of a `credentialid`
+  query parameter, and ADRs 0025 and 0026 and `DECISIONS.md` as history.
+
+All eight steps are done (18 November 2026). Left for later on purpose: the non-streamed local
+reply (K5) and the roughly 30 spoiler tests to move before it can go; the experimental checker
+switches; the worker role's INSERT and UPDATE on the cost tables, unused since step 8; the unused
+`provider_capabilities` table; and the hosted chat's fall-back to the removed `/ask` route when
+streamed replies are off (a reader there is told "I couldn't get a reply"), reported with PR
+#119 for the owner to decide.
 
 If question 1 is no, steps 6 and 8 are skipped and step 7 keeps the worker's key lookup.
 

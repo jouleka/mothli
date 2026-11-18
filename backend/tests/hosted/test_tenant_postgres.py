@@ -311,8 +311,6 @@ def tenant_app(tenant_dsn: str, corpus: dict, tmp_path):
         hosted_storage_backend="filesystem",
         hosted_storage_filesystem_root=str(tmp_path / "objects"),
         hosted_storage_filesystem_key=base64.b64encode(b"t" * 32).decode("ascii"),
-        hosted_credential_master_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        hosted_credential_key_version="test-v1",
     )
     app = create_app(
         settings,

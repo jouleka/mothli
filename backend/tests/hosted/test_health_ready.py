@@ -24,8 +24,6 @@ def settings() -> Settings:
         oidc_client_id="mothli",
         oidc_client_secret="not-a-real-secret",
         oidc_redirect_uri="https://reader.example/api/auth/callback",
-        hosted_credential_master_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        hosted_credential_key_version="test-v1",
     )
 
 

@@ -144,7 +144,7 @@ def held(dsn: str, owner: uuid.UUID) -> dict:
                            "WHERE owner_id=%s ORDER BY created_at,id", owner),
         "objects": rows(dsn, "SELECT book_id,storage_key,byte_size,sha256,deleted_at "
                              "FROM source_objects WHERE owner_id=%s ORDER BY created_at", owner),
-        "jobs": rows(dsn, "SELECT book_id,kind,state,credential_id FROM jobs WHERE owner_id=%s "
+        "jobs": rows(dsn, "SELECT book_id,kind,state FROM jobs WHERE owner_id=%s "
                           "ORDER BY created_at", owner),
         "search": rows(dsn, "SELECT book_id,ordinal FROM book_search_documents "
                             "WHERE owner_id=%s ORDER BY book_id,ordinal", owner),

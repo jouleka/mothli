@@ -112,9 +112,9 @@ def test_local_mode_builds_exactly_the_clients_it_built_before(values, tmp_path)
     assert _described(through_build_state, settings) == before
 
 
-def hosted_settings(tmp_path, **values) -> Settings:
+def hosted_settings(tmp_path, env_file=None, **values) -> Settings:
     return Settings(
-        _env_file=None,
+        _env_file=env_file,
         deployment_mode="hosted",
         hosted_auth_dsn="postgresql://unused.invalid/litlet",
         hosted_tenant_dsn="postgresql://unused.invalid/litlet",
@@ -126,8 +126,6 @@ def hosted_settings(tmp_path, **values) -> Settings:
         hosted_storage_backend="filesystem",
         hosted_storage_filesystem_root=str(tmp_path / "objects"),
         hosted_storage_filesystem_key=base64.b64encode(b"t" * 32).decode("ascii"),
-        hosted_credential_master_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        hosted_credential_key_version="test-v1",
         reader_page_context=True,
         reader_read_map=True,
         **values,
@@ -139,12 +137,10 @@ PAID = {"openai_api_key": KEY_CANARY, "jev_enabled": True, "typesafe_api_key": J
 
 def test_the_cap_settings_have_the_owners_provisional_defaults(tmp_path) -> None:
     """The break it catches: a cap default drifting from the amounts the owner was told (to be
-    confirmed by the owner: $0.10 per reader per day, $2.00 per month, $5.00 platform per day), or
-    reader keys switched on by default."""
+    confirmed by the owner: $0.10 per reader per day, $2.00 per month, $5.00 platform per day)."""
     settings = hosted_settings(tmp_path)
     assert (settings.hosted_reader_usd_per_day, settings.hosted_reader_usd_per_month,
             settings.hosted_platform_usd_per_day) == (0.10, 2.00, 5.00)
-    assert settings.hosted_reader_keys is False
 
 
 @pytest.mark.parametrize("setting, value", [
@@ -291,11 +287,35 @@ def test_the_reader_key_paths_do_not_exist_in_hosted_mode_whatever_the_settings(
         assert client.get("/api/limits").status_code == 401         # the rest is still there
 
 
-def test_hosted_settings_refuse_reader_keys_rather_than_switch_on_half_a_feature(tmp_path) -> None:
-    """The break it catches: HOSTED_READER_KEYS=true left in an old .env starting hosted mode with
-    what is left of the reader-key feature (an upload's extraction job that nothing runs, which
-    counts against the reader's job limit for good). The message names the setting and why."""
-    for values in ({}, CHAT_ON):
-        with pytest.raises(ValueError, match="HOSTED_READER_KEYS was removed"):
-            hosted_settings(tmp_path, **values, hosted_reader_keys=True)
-    assert hosted_settings(tmp_path).hosted_reader_keys is False
+# The settings of readers paying with their own AI key, removed with the key tables (ADR 0043
+# step 8). An old line naming one is read and dropped (Settings ignores unknown names).
+REMOVED_SETTINGS = {
+    "HOSTED_READER_KEYS": "true",
+    "HOSTED_CREDENTIAL_MASTER_KEY": base64.b64encode(b"m" * 32).decode("ascii"),
+    "HOSTED_CREDENTIAL_KEY_VERSION": "v1",
+    "HOSTED_CREDENTIAL_PREVIOUS_MASTER_KEYS": '{"v0": "' + base64.b64encode(b"o" * 32).decode()
+                                              + '"}',
+    "HOSTED_PROVIDER_VALIDATION_TIMEOUT_SECONDS": "99",
+}
+
+
+@pytest.mark.parametrize("values", [{}, CHAT_ON], ids=["nothing-paid", "chat"])
+def test_hosted_mode_starts_without_the_reader_key_settings_and_ignores_old_lines(
+    values, tmp_path, monkeypatch
+) -> None:
+    """The break it catches: hosted mode still asking for the master key that wrapped readers'
+    keys (or its version) before it starts, or one of the removed names becoming a setting again,
+    so that an old line left in a settings file could switch something on."""
+    for name in REMOVED_SETTINGS:
+        assert name.lower() not in Settings.model_fields, name
+    without = hosted_settings(tmp_path, **values)
+    with TestClient(hosted_app(without), base_url="https://reader.example") as client:
+        assert client.get("/api/limits").status_code == 401           # up, and asks for sign-in
+
+    old_file = tmp_path / "old.env"
+    old_file.write_text("".join(f"{name}={value}\n" for name, value in REMOVED_SETTINGS.items()),
+                        encoding="utf-8")
+    for name, value in REMOVED_SETTINGS.items():
+        monkeypatch.setenv(name, value)
+    with_old_lines = hosted_settings(tmp_path, env_file=old_file, **values)
+    assert with_old_lines.model_dump() == without.model_dump()

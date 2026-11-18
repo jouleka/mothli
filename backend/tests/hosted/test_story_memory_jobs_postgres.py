@@ -240,8 +240,8 @@ def test_a_finished_chapter_makes_one_waiting_job_and_each_run_builds_one_chapte
                        read_map_gate.page(1, 60, 60, to_chapter=2))
     assert finishing.status_code == 200, finishing.text   # part 2 read from its heading on
     [job] = jobs_of(database, a.owner)
-    assert (job["state"], str(job["book_id"]), job["credential_id"], job["payload_metadata"],
-            job["priority"]) == ("pending", book, None, {}, 5)
+    assert (job["state"], str(job["book_id"]), job["payload_metadata"],
+            job["priority"]) == ("pending", book, {}, 5)
     queue = StoryMemoryQueue(app.state.companion_dsn, OwnerId(a.owner))
     assert queue.ensure(book) is False
     a.mark(book, [2])                                     # asks again: nothing more waits
@@ -856,8 +856,8 @@ def test_with_a_readers_own_story_memory_off_nothing_is_made_or_spent(
 
 def test_story_memory_jobs_are_well_formed_or_refused_by_the_schema(memory_app, readers,
                                                                     database):
-    """The break it catches: a story-memory job naming no book or carrying a credential, a
-    second one waiting for the same book inserted around the queue, or a failure code outside
+    """The break it catches: a story-memory job naming no book (none can name a credential: the
+    column went in migration 0029), a second one waiting for the same book inserted around the queue, or a failure code outside
     the reviewed vocabulary."""
     a, book = opened(memory_app, readers)
     a.mark(book, [1])

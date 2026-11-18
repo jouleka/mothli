@@ -163,8 +163,9 @@ Recap cache keys follow the actual configured synthesis provider/model, not the 
 `app/hosted/schema/` is a separate, dormant hosted migration stream. It does not alter local
 composition: FastAPI still opens the existing SQLite catalog/per-book stores, and no local library is
 dual-written or migrated. The PostgreSQL schema carries non-null owner scope through composite
-resource keys, bitemporal facts, deferred chapter receipts, jobs/costs, envelope-encrypted credential
-fields, reader notes, and audit foundations. Full raw chapters remain local-only; hosted source bytes
+resource keys, bitemporal facts, deferred chapter receipts, jobs/costs, reader notes, and audit
+foundations (the envelope-encrypted credential fields it once carried were dropped by migration
+0029, ADR 0043). Full raw chapters remain local-only; hosted source bytes
 belong behind the later object-storage boundary.
 
 The pgvector baseline intentionally has no global ANN index. `search_chunks_prefiltered` materializes
@@ -284,27 +285,20 @@ Choose one hosted storage backend:
 
 See [`../docs/adr/0023-filesystem-s3-source-object-storage.md`](../docs/adr/0023-filesystem-s3-source-object-storage.md).
 
-## Hosted provider configuration (LIT-45/LIT-46)
+## Hosted AI provider
 
-Hosted credential APIs are write-only for secret material and return masked metadata. Each owner then
-selects a provider, model, credential, and HTTPS base URL independently for extraction, synthesis,
-embedding, and spoiler review. Recommendations are display-only. (No upload waits on that selection
-any more: the reader-key extraction job and its `waiting_configuration` state were retired in ADR
-0043 step 7.) Validation checks provider
-model availability without generating tokens and returns only fixed, secret-free outcome codes.
+In hosted mode the platform pays for every model call, with the owner's own keys and caps (ADR 0041
+section 6). Readers never give Mothli an AI key of their own: that feature (ADR 0025, ADR 0026) was
+removed in ADR 0043, with its routes, its encrypted key and model-choice tables (migration 0029)
+and its settings, `HOSTED_CREDENTIAL_MASTER_KEY` and `HOSTED_CREDENTIAL_KEY_VERSION` among them.
+An old line naming one of those settings is ignored.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `HOSTED_CREDENTIAL_MASTER_KEY` | required in hosted mode | Base64 AES-256-GCM key that wraps per-credential data keys |
-| `HOSTED_CREDENTIAL_KEY_VERSION` | required in hosted mode | Active master-key version label |
-| `HOSTED_CREDENTIAL_PREVIOUS_MASTER_KEYS` | empty | Temporary version-to-key map used during DEK rewrap |
-| `HOSTED_PROVIDER_ALLOWED_ORIGINS` | OpenAI and Anthropic HTTPS origins | Comma-separated HTTPS origin allow-list for provider validation |
-| `HOSTED_PROVIDER_VALIDATION_TIMEOUT_SECONDS` | `5.0` | Bounded model-availability request timeout (maximum 15 seconds) |
+| `HOSTED_PROVIDER_ALLOWED_ORIGINS` | OpenAI and Anthropic HTTPS origins | Comma-separated HTTPS origins `OPENAI_BASE_URL` may point at in hosted mode |
 
-Keep the origin allow-list narrow: it is the SSRF boundary and the deployment's explicit trust decision
-for OpenAI-compatible endpoints. Provider validation disables redirects and environment proxy use. See
-[`../docs/adr/0025-encrypted-provider-credential-vault.md`](../docs/adr/0025-encrypted-provider-credential-vault.md)
-and [`../docs/adr/0026-owner-provider-and-model-configuration.md`](../docs/adr/0026-owner-provider-and-model-configuration.md).
+Keep the origin allow-list narrow: the owner's writer key is sent to that address with every reply.
+The platform's model settings are listed in `../deploy/app.env.example`.
 
 ## Hosted owner limits (LIT-47)
 

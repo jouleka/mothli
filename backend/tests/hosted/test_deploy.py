@@ -168,8 +168,25 @@ def test_every_setting_hosted_startup_requires_has_a_place_in_the_deployment() -
             if re.match(r"^[A-Z_]+=", line):
                 value = line.split("=", 1)[1]
                 assert (value.startswith(("GENERATE_WITH_", "OWNER_MUST_FILL_IN", "https://OWNER"))
-                        or value in {"v1", "0.10", "2.00", "5.00", "local-placeholder"}
+                        or value in {"0.10", "2.00", "5.00", "local-placeholder"}
                         or value.endswith("OWNER_MUST_FILL_IN.example")), line
+
+
+def test_no_deployment_file_asks_for_the_removed_reader_key_settings() -> None:
+    """The break it catches: a template, compose file or runbook still telling the owner to make,
+    store, back up or rotate the master key that wrapped readers' own AI keys, or to set any other
+    setting of that removed feature (ADR 0043 step 8). The book files' key stays."""
+    removed = ("HOSTED_READER_KEYS", "HOSTED_CREDENTIAL_MASTER_KEY",
+               "HOSTED_CREDENTIAL_KEY_VERSION", "HOSTED_CREDENTIAL_PREVIOUS_MASTER_KEYS",
+               "HOSTED_PROVIDER_VALIDATION_TIMEOUT_SECONDS", "credential-rewrap")
+    files = [*DEPLOY.glob("*.example"), *DEPLOY.glob(".*.example"), *DEPLOY.glob("*.yaml"),
+             *DEPLOY.glob("*.sh"), DEPLOY / "Dockerfile",
+             REPO / "docs" / "runbooks" / "hosted-deployment.md"]
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        assert not [name for name in removed if name in text], path.name
+    assert "HOSTED_STORAGE_FILESYSTEM_KEY=" in (DEPLOY / "app.env.example").read_text(
+        encoding="utf-8")
 
 
 def test_the_real_settings_files_are_never_committed() -> None:

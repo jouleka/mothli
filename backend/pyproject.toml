@@ -29,10 +29,8 @@ dev = ["bandit>=1.9.4", "pip-audit>=2.10.1", "pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 mothli-hosted-worker = "app.hosted.worker:main"
-mothli-credential-rewrap = "app.hosted.credentials:main"
-# Compatibility aliases for existing deployments.
+# Compatibility alias for existing deployments.
 reading-companion-hosted-worker = "app.hosted.worker:main"
-reading-companion-credential-rewrap = "app.hosted.credentials:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

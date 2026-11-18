@@ -34,8 +34,6 @@ TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "cost_ledger": frozenset({"SELECT", "INSERT"}),
     "cost_reservations": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "jobs": frozenset({"SELECT", "INSERT", "UPDATE"}),
-    "provider_credentials": frozenset({"SELECT", "INSERT", "UPDATE"}),
-    "provider_model_settings": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "owner_limits": frozenset({"SELECT"}),
     "owner_request_windows": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "audit_events": frozenset({"INSERT"}),
@@ -56,8 +54,9 @@ TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
 
 # The job worker (ADR 0024): BYPASSRLS, because it schedules across owners. Every owner's
 # companion work after a claim goes through the tenant role instead (ADR 0041 section 5); the
-# worker itself only claims, leases, finishes and pauses jobs, commits extraction chapters, and
-# publishes a chapter's story memory under the job's lease (ADR 0042 part 2).
+# worker itself only claims, leases, finishes and pauses jobs (reading an owner's spend to hold
+# back a capped owner's companion job), and publishes a chapter's story memory under the job's
+# lease (ADR 0042 part 2).
 WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "jobs": frozenset({"SELECT", "UPDATE"}),
     "job_attempts": frozenset({"SELECT", "INSERT", "UPDATE"}),
@@ -65,8 +64,6 @@ WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "chapter_summaries": frozenset({"INSERT"}),
     "cost_ledger": frozenset({"SELECT", "INSERT"}),
     "ingested_chapters": frozenset({"SELECT", "INSERT"}),
-    "provider_credentials": frozenset({"SELECT"}),
-    "provider_model_settings": frozenset({"SELECT"}),
     "owner_limits": frozenset({"SELECT"}),
     "cost_reservations": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "audit_events": frozenset({"INSERT"}),

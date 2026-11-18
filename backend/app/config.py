@@ -134,15 +134,12 @@ class Settings(BaseSettings):
     hosted_s3_sse_algorithm: Literal["AES256", "aws:kms"] = "AES256"
     hosted_s3_kms_key_id: str | None = None
     hosted_s3_expected_bucket_owner: str | None = None
-    # LIT-45 envelope-encryption keyring. The active key encrypts only per-credential data keys;
-    # previous version->base64 keys remain available solely while envelopes are being rewrapped.
-    hosted_credential_master_key: SecretStr | None = None
-    hosted_credential_key_version: str | None = None
-    hosted_credential_previous_master_keys: SecretStr | None = None
+    # The origins the platform's writer address (OPENAI_BASE_URL) may point at in hosted mode: the
+    # owner's writer key is sent there with every reply. (Readers' own keys, and the master key
+    # that wrapped them, were removed: ADR 0043.)
     hosted_provider_allowed_origins: str = (
         "https://api.openai.com,https://api.anthropic.com"
     )
-    hosted_provider_validation_timeout_seconds: float = Field(default=5.0, gt=0, le=15)
     # The most database connections the hosted companion adapters hold at once in one process
     # (ADR 0041 section 2): a burst of page reports cannot exceed Postgres max_connections.
     hosted_companion_db_connections: int = Field(default=20, ge=1, le=1000)
@@ -153,11 +150,6 @@ class Settings(BaseSettings):
     hosted_reader_usd_per_day: float = Field(default=0.10, ge=0, le=1000, allow_inf_nan=False)
     hosted_reader_usd_per_month: float = Field(default=2.00, ge=0, le=10000, allow_inf_nan=False)
     hosted_platform_usd_per_day: float = Field(default=5.00, ge=0, le=100000, allow_inf_nan=False)
-    # Readers paying with their own AI key was removed (ADR 0043): the platform pays. Its routes
-    # and settings screen are gone, and the upload's extraction job it last gated went in step 7,
-    # so it switches nothing on; hosted mode still refuses it being on. The name itself goes with
-    # the key tables (ADR 0043 step 8).
-    hosted_reader_keys: bool = False
     # ADR 0042 sections 3 and 6: story memory in hosted mode, built by the worker's story_memory
     # jobs and paid by the owner. HOSTED_STORY_MEMORY turns the feature on at all;
     # HOSTED_READER_STORY_MEMORY decides whether a reader's own book gets its own memory (off:
@@ -217,10 +209,6 @@ class Settings(BaseSettings):
         if self.deployment_mode != "hosted":
             return self
 
-        if self.hosted_reader_keys:
-            raise ValueError(
-                "HOSTED_READER_KEYS was removed: readers cannot pay with their own AI key, the "
-                "platform pays (ADR 0043). Delete the setting.")
         hosts = self.trusted_host_values()
         if not hosts or "*" in hosts:
             raise ValueError("hosted mode requires an explicit TRUSTED_HOSTS allowlist")
@@ -232,8 +220,6 @@ class Settings(BaseSettings):
             "OIDC_CLIENT_ID": self.oidc_client_id,
             "OIDC_CLIENT_SECRET": self.oidc_client_secret,
             "OIDC_REDIRECT_URI": self.oidc_redirect_uri,
-            "HOSTED_CREDENTIAL_MASTER_KEY": self.hosted_credential_master_key,
-            "HOSTED_CREDENTIAL_KEY_VERSION": self.hosted_credential_key_version,
         }
         missing = [name for name, value in required.items() if value is None or value == ""]
         if missing:

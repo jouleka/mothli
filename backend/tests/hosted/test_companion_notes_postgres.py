@@ -194,8 +194,8 @@ def test_a_finished_chapter_gets_checked_notes_through_a_durable_job(notes_app, 
     models = NotesModels(app.state.platform_client, monkeypatch, reply=line(1, 2))
     a, book = opened(notes_app, readers)
     [job] = jobs_of(database, a.owner)
-    assert (job["state"], str(job["book_id"]), job["credential_id"], job["payload_metadata"],
-            job["priority"]) == ("pending", book, None, {}, 10)
+    assert (job["state"], str(job["book_id"]), job["payload_metadata"],
+            job["priority"]) == ("pending", book, {}, 10)
 
     assert drain(worker(app, worker_dsn)) == 1
     assert [row["state"] for row in jobs_of(database, a.owner)] == ["succeeded"]
@@ -702,8 +702,8 @@ def test_tenant_and_worker_roles_hold_exactly_the_part_6_grants(tenant_dsn: str,
 
 
 def test_a_companion_job_is_well_formed_or_refused_by_the_schema(notes_app, readers, database):
-    """The break it catches: a companion job carrying a credential (the platform pays), a notes
-    job naming no book, or a second job waiting for the same book inserted around the queue."""
+    """The break it catches: a notes job naming no book (none can name a credential: the column
+    went in migration 0029), or a second job waiting for the same book inserted around the queue."""
     a, book = opened(notes_app, readers)
     incarnation = rows(database, "SELECT incarnation FROM books WHERE id=%s", book)[0]["incarnation"]
     with psycopg.connect(database, autocommit=True) as conn:

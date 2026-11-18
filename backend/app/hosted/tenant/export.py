@@ -62,8 +62,6 @@ LEFT_OUT = {
     "external_identities": "the sign-in service's ids for you: security records",
     "sessions": "sign-in sessions: security records",
     "audit_events": "the security audit trail: internal records",
-    "provider_credentials": "encrypted keys: secrets",
-    "provider_model_settings": "settings for keys hosted mode does not take",
     "owner_limits": "limits the owner of Mothli sets; not shown anywhere in the app",
     "owner_request_windows": "a request counter, used to slow down floods",
     "cost_ledger": "what replies cost: the app does not show it to readers",

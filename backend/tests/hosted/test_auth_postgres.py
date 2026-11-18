@@ -191,8 +191,6 @@ def _settings(auth_dsn: str, **overrides) -> Settings:
         "oidc_client_secret": CLIENT_SECRET,
         "oidc_redirect_uri": REDIRECT_URI,
         "trusted_hosts": "reader.example",
-        "hosted_credential_master_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        "hosted_credential_key_version": "test-v1",
         "session_absolute_ttl_seconds": 3600,
         "session_idle_ttl_seconds": 300,
     }

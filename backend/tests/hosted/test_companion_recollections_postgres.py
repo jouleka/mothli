@@ -498,8 +498,7 @@ def test_a_reply_asks_for_its_conversation_to_be_distilled_and_the_job_keeps_che
     assert jobs_of(database, a.owner) == []                  # five messages: not enough yet
     a.ask(lamps, NIGHT)
     [job] = jobs_of(database, a.owner)
-    assert (job["state"], str(job["book_id"]), job["credential_id"], job["priority"]) == (
-        "pending", lamps, None, 10)
+    assert (job["state"], str(job["book_id"]), job["priority"]) == ("pending", lamps, 10)
     assert drain(worker(app, worker_dsn)) == 1
     assert [row["state"] for row in jobs_of(database, a.owner)] == ["succeeded"]
     [prompt] = models.distils
@@ -932,8 +931,8 @@ def test_tenant_and_worker_roles_hold_exactly_the_part_7_grants(tenant_dsn: str,
 
 
 def test_a_recollect_job_is_well_formed_or_refused_by_the_schema(home_app, readers, database):
-    """The break it catches: a recollect job carrying a credential (the platform pays), or a
-    second waiting job for the same conversation inserted around the queue."""
+    """The break it catches: a second waiting recollect job (none can name a credential: the
+    column went in migration 0029) for the same conversation inserted around the queue."""
     _client, _tokens, app = home_app
     a, lamps, _carts, _unread = shelf(home_app, readers)
     said(app, a.owner, None, *chatter(6))

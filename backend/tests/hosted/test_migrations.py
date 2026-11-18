@@ -10,8 +10,6 @@ import pytest
 from psycopg import conninfo
 
 from app.hosted.migrations import apply_migrations, discover_migrations
-from app.hosted.credentials import CredentialCipher, rewrap_credentials
-from app.hosted.tenant.models import OwnerId
 
 
 pytestmark = pytest.mark.postgres
@@ -112,8 +110,6 @@ def test_every_tenant_table_has_non_null_owner_and_rls(database: str) -> None:
         "entity_corrections",
         "chunks",
         "chunk_embeddings",
-        "provider_credentials",
-        "provider_model_settings",
         "jobs",
         "job_attempts",
         "cost_ledger",
@@ -278,75 +274,6 @@ def test_reader_marks_require_portable_bounded_anchors_and_versions(database: st
         "annotations_body_bounded",
         "bookmarks_label_bounded",
     } <= constraints
-
-
-def test_provider_credentials_have_ciphertext_not_plaintext_fields(database: str) -> None:
-    apply_migrations(database)
-    with psycopg.connect(database) as conn:
-        columns = {
-            row[0]
-            for row in conn.execute(
-                """
-                SELECT column_name FROM information_schema.columns
-                WHERE table_schema = 'public' AND table_name = 'provider_credentials'
-                """
-            )
-        }
-
-    assert {"ciphertext", "encrypted_data_key", "key_version", "nonce"} <= columns
-    assert {"plaintext", "api_key", "secret", "token"}.isdisjoint(columns)
-
-
-def test_provider_credential_master_key_rotation_rewraps_without_plaintext(database: str) -> None:
-    apply_migrations(database)
-    owner = OwnerId(uuid.uuid4())
-    credential_id = uuid.uuid4()
-    old_cipher = CredentialCipher({"old": b"o" * 32}, active_version="old")
-    envelope = old_cipher.encrypt(owner, credential_id, "anthropic", "rotation-canary")
-    with psycopg.connect(database) as conn:
-        conn.execute("INSERT INTO users (id,display_name) VALUES (%s,'Rotation Owner')", (owner.value,))
-        conn.execute(
-            """
-            INSERT INTO provider_credentials
-              (owner_id,id,provider,masked_label,ciphertext,encrypted_data_key,
-               encryption_algorithm,key_version,nonce)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """,
-            (
-                envelope.owner_id,
-                envelope.credential_id,
-                envelope.provider,
-                envelope.masked_label,
-                envelope.ciphertext,
-                envelope.encrypted_data_key,
-                envelope.encryption_algorithm,
-                envelope.key_version,
-                envelope.nonce,
-            ),
-        )
-
-    active = CredentialCipher(
-        {"old": b"o" * 32, "new": b"n" * 32}, active_version="new"
-    )
-    assert rewrap_credentials(database, active, batch_size=1) == 1
-    assert rewrap_credentials(database, active, batch_size=1) == 0
-    with psycopg.connect(database) as conn:
-        row = conn.execute(
-            """
-            SELECT owner_id,id,provider,masked_label,ciphertext,encrypted_data_key,
-                   encryption_algorithm,key_version,nonce
-            FROM provider_credentials WHERE owner_id=%s AND id=%s
-            """,
-            (owner.value, credential_id),
-        ).fetchone()
-    rotated = type(envelope)(
-        owner_id=row[0],credential_id=row[1],provider=row[2],masked_label=row[3],
-        ciphertext=bytes(row[4]),encrypted_data_key=bytes(row[5]),
-        encryption_algorithm=row[6],key_version=row[7],nonce=bytes(row[8]),
-    )
-    assert rotated.key_version == "new" and rotated.ciphertext == envelope.ciphertext
-    with active.decrypt(rotated) as resolved:
-        assert resolved.get_secret_value() == "rotation-canary"
 
 
 def test_source_object_rows_require_opaque_encrypted_verified_epub_metadata(database: str) -> None:
@@ -663,7 +590,8 @@ def test_retiring_the_book_job_deletes_its_jobs_and_leaves_every_other(
         world = _book_job_world(conn)
         living = conn.execute("SELECT id, kind, state, book_id FROM jobs WHERE kind<>'ingest_book' "
                               "ORDER BY id").fetchall()
-    apply_migrations(database)
+    # Through 0028 only: 0029 drops the column the last refusal below names.
+    _apply_before(database, RETIRE_BOOK_JOB + 1, monkeypatch)
 
     owner, book, incarnation = world["owner"], world["book"], world["incarnation"]
     with psycopg.connect(database) as conn:
@@ -721,6 +649,98 @@ def test_retiring_the_book_job_stops_rather_than_lose_a_cost_or_misplace_a_job(
         apply_migrations(database)
     with psycopg.connect(database) as conn:
         assert conn.execute("SELECT count(*) FROM jobs WHERE kind='ingest_book'").fetchone()[0] == 1
+
+
+# ---- 0029: the reader-key tables (ADR 0043 step 8) --------------------------------------------
+
+DROP_KEY_TABLES = 29
+KEY_TABLES = ("provider_credentials", "provider_model_settings")
+
+
+def _stored_key_world(conn) -> dict:
+    """One reader with a book, a stored key, a model choice naming it, a living job and what it
+    cost, as a database made before 0029 could hold them."""
+    owner, book, incarnation = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    key, job = uuid.uuid4(), uuid.uuid4()
+    _seed_owner_and_book(conn, owner, book, incarnation)
+    conn.execute(
+        "INSERT INTO provider_credentials (owner_id, id, provider, masked_label, ciphertext, "
+        "encrypted_data_key, encryption_algorithm, key_version, nonce) "
+        "VALUES (%s, %s, 'openai', 'sk-...7Rq2', %s, %s, 'AES-256-GCM/AES-256-GCM', 'v1', %s)",
+        (owner, key, b"stored-key-canary-" + b"c" * 16, b"k" * 60, b"n" * 12))
+    conn.execute(
+        "INSERT INTO provider_model_settings (owner_id, provider, capability, credential_id, "
+        "model, base_url) VALUES (%s, 'openai-compatible', 'synthesis', %s, 'gpt-x', "
+        "'https://api.openai.com/v1')", (owner, key))
+    conn.execute(
+        "INSERT INTO jobs (owner_id, id, book_id, book_incarnation, kind, idempotency_key) "
+        "VALUES (%s, %s, %s, %s, 'chapter_notes', %s)",
+        (owner, job, book, incarnation, f"chapter-notes:{uuid.uuid4().hex}"))
+    conn.execute(
+        "INSERT INTO cost_ledger (owner_id, id, book_id, book_incarnation, job_id, phase, "
+        "provider, model, input_tokens, output_tokens, usd, idempotency_key) "
+        "VALUES (%s, %s, %s, %s, %s, 'synthesis', 'openai-compatible', 'gpt-x', 10, 2, 0.01, "
+        "'cost-of-a-living-job')", (owner, uuid.uuid4(), book, incarnation, job))
+    return {"owner": owner, "book": book, "incarnation": incarnation}
+
+
+def _kept_rows(conn) -> dict:
+    return {table: conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall()
+            for table in ("users", "books", "cost_ledger")} | {
+        "jobs": conn.execute("SELECT owner_id, id, book_id, kind, state, idempotency_key "
+                             "FROM jobs ORDER BY id").fetchall()}
+
+
+def test_dropping_the_key_tables_erases_a_stored_key_and_keeps_every_other_row(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches: the migration failing on a database that holds a reader's stored
+    key or a model choice naming it, leaving either table, its row security policy or its index
+    behind, leaving the jobs column or its link, or touching an account, a book, a job or a cost.
+    A stored key is a secret a reader gave for a feature that is gone: it is erased, not kept."""
+    _apply_before(database, DROP_KEY_TABLES, monkeypatch)
+    with psycopg.connect(database) as conn:
+        world = _stored_key_world(conn)
+        kept = _kept_rows(conn)
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        assert _kept_rows(conn) == kept
+        tables = {row[0] for row in conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname='public'")}
+        assert not set(KEY_TABLES) & tables
+        assert not conn.execute("SELECT 1 FROM pg_policies WHERE tablename = ANY(%s)",
+                                (list(KEY_TABLES),)).fetchall()
+        assert not conn.execute(
+            "SELECT 1 FROM pg_indexes WHERE indexname IN "
+            "('ix_provider_credentials_owner_live', 'ix_provider_settings_owner_credential')"
+        ).fetchall()
+        assert not conn.execute("SELECT table_name FROM information_schema.columns WHERE "
+                                "table_schema='public' AND column_name='credential_id'").fetchall()
+        # Of the checks that name a credential, only the one that keeps keys out of a job's
+        # payload (0008) is left, and it stays.
+        assert [row[0] for row in conn.execute(
+            "SELECT conname FROM pg_constraint WHERE conname LIKE '%credential%'")] == [
+            "jobs_payload_has_no_credentials_ck"]
+    # The first half of 0028's rule stays: a book's companion job names its book.
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with psycopg.connect(database) as conn:
+            conn.execute("INSERT INTO jobs (owner_id, kind, idempotency_key) "
+                         "VALUES (%s, 'chapter_notes', 'no-book')", (world["owner"],))
+
+
+def test_the_key_tables_are_gone_from_a_new_database_and_named_nowhere(database: str) -> None:
+    """The break it catches: a grant, the export's list or the code still naming a dropped table,
+    which would stop the deployment's role script or the export at its first run."""
+    from app.hosted.tenant.export import IN_THE_COPY, LEFT_OUT
+    from app.hosted.tenant.grants import TENANT_TABLE_PRIVILEGES, WORKER_TABLE_PRIVILEGES
+
+    apply_migrations(database)
+    with psycopg.connect(database) as conn:
+        assert not conn.execute("SELECT 1 FROM pg_tables WHERE tablename = ANY(%s)",
+                                (list(KEY_TABLES),)).fetchall()
+    for listed in (TENANT_TABLE_PRIVILEGES, WORKER_TABLE_PRIVILEGES, IN_THE_COPY, LEFT_OUT):
+        assert not set(KEY_TABLES) & set(listed)
 
 
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:

@@ -37,8 +37,6 @@ def _settings(issuer: str) -> Settings:
         oidc_client_id=CLIENT_ID,
         oidc_client_secret="not-a-real-secret",
         oidc_redirect_uri=REDIRECT_URI,
-        hosted_credential_master_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        hosted_credential_key_version="test-v1",
     )
 
 
