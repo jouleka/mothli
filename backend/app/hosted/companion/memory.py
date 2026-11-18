@@ -133,11 +133,24 @@ FROM public.books AS book
 WHERE book.owner_id=%(owner)s AND book.id=%(book)s AND book.deleted_at IS NULL
 """
 
-# The door (ADR 0042 section 3, migration 0026): for a reader's free-library book whose file is
-# exactly a built library edition's, the edition's rows up to the reader's own place, worked out
-# in the database from the reader's rows, in the shape of ``_LOAD``. No row for any other book.
-# It takes the book and nothing else; the reader is the transaction's owner setting.
-DOOR = "SELECT * FROM public.library_story_memory(%(book)s)"
+# The door (ADR 0042 section 3, ADR 0044 section 4, migration 0032): for any live book of the
+# reader whose file matches an edition on both fingerprints, the edition's rows up to the
+# reader's own place, worked out in the database from the reader's rows, in the shape of
+# ``_LOAD``. For a live book of theirs with no edition, one row with every list empty: the same
+# answer as an edition read at place 0. It takes the book and nothing else; the reader is the
+# transaction's owner setting.
+DOOR = "SELECT * FROM public.story_memory_door(%(book)s)"
+
+# The door's lists. It has served a book when it hands anything in one of them.
+DOOR_LISTS = ("chapters", "completed", "entities", "aliases", "themes", "events", "summaries",
+              "edges", "states")
+
+
+def door_served(payload) -> bool:
+    """Whether the door's answer holds anything of an edition. An answer with every list empty
+    (a book with no edition, or one read to place 0) serves nothing, and the two cannot be told
+    apart."""
+    return payload is not None and any(payload[name] for name in DOOR_LISTS)
 
 
 class StoryMemoryUnavailable(Exception):
@@ -293,9 +306,10 @@ class StoryMemorySnapshot:
         return SnapshotView(self, bookmark)
 
     def has_rows(self):
-        """Whether this book has story memory: a chapter of it was written, or it is a library
-        edition's (``shared``), which every reader of that file has from before they start, so
-        a reader at the first page sees an empty cast rather than "none kept"."""
+        """Whether this book has story memory: a chapter of it was written, or the door hands
+        this reader something of an edition (``shared``). Before the first chapter the door hands
+        nothing whether or not an edition exists (ADR 0044 section 4), so that reader is told
+        the same as for a book with no edition."""
         return self.shared or bool(self._chapters)
 
     def _audit_all(self, table):
@@ -515,17 +529,22 @@ class HostedBookStore(OwnerBoundAdapter):
             return snapshot
 
     def shared(self, book_id) -> bool:
-        """Whether this reader's book is served through the door: a free-library book whose file
-        is exactly a built library edition's. Raises ``LookupError`` for a book not theirs."""
+        """Whether this reader's book is served through the door: the door hands them something
+        of an edition of their file (``door_served``). Raises ``LookupError`` for a book not
+        theirs."""
         return self._snapshot(book_id).shared
 
     def _load(self, book) -> StoryMemorySnapshot:
-        """The door's answer for a library book, else this reader's own rows: never both, and
-        never the library's rows by any other way (row-level security hides them)."""
+        """The door's answer when it hands anything, else this reader's own rows: never both,
+        and never an edition's rows by any other way (row-level security hides them). The door
+        comes first (ADR 0044 section 4): a book with its own rows and an edition the door
+        serves is answered by the door alone. Where the door hands nothing (no edition, or
+        place 0), a reader's own rows, built only while ``HOSTED_READER_STORY_MEMORY`` is on,
+        answer as before; without them the answer is the same empty memory either way."""
         try:
             with self._transaction() as conn:
                 payload = conn.execute(DOOR, {"book": book}).fetchone()
-                shared = payload is not None
+                shared = door_served(payload)
                 if not shared:
                     payload = conn.execute(_LOAD, {"owner": self._owner.value,
                                                    "book": book}).fetchone()

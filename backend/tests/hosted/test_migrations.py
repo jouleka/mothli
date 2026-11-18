@@ -87,7 +87,7 @@ def test_applied_migration_checksum_and_history_are_immutable(database: str) -> 
 def test_every_tenant_table_has_non_null_owner_and_rls(database: str) -> None:
     apply_migrations(database)
     service_tables = {"app_schema_migrations", "oidc_login_attempts",
-                      "platform_spend_days", "provider_pauses", "library_account"}
+                      "platform_spend_days", "provider_pauses", "notes_account"}
     expected_tables = {
         "users",
         "external_identities",
@@ -686,9 +686,14 @@ def _stored_key_world(conn) -> dict:
 
 def _kept_rows(conn) -> dict:
     # A column a later migration adds is no change to a book: 0031's split fingerprint comes
-    # empty on rows already there, which its own test checks.
-    return {table: conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall()
-            for table in ("users", "cost_ledger")} | {
+    # empty on rows already there, which its own test checks. Nor is the notes account 0032
+    # makes on a database without one a change to anyone's account (its own test checks it).
+    account = "notes_account" if conn.execute(
+        "SELECT to_regclass('public.notes_account')").fetchone()[0] else "library_account"
+    return {"users": conn.execute(
+        f"SELECT * FROM users WHERE id NOT IN (SELECT account_id FROM {account}) "
+        "ORDER BY 1, 2").fetchall(),
+        "cost_ledger": conn.execute("SELECT * FROM cost_ledger ORDER BY 1, 2").fetchall()} | {
         "books": conn.execute("SELECT to_jsonb(book) - 'split_hash' FROM books AS book "
                               "ORDER BY owner_id, id").fetchall()} | {
         "jobs": conn.execute("SELECT owner_id, id, book_id, kind, state, idempotency_key "
@@ -818,7 +823,8 @@ def test_the_split_fingerprint_starts_unknown_and_the_door_changes_only_its_matc
             conn.execute("CREATE ROLE lit38_door_reader NOLOGIN")
         conn.execute(f"GRANT EXECUTE ON FUNCTION {_DOOR_FUNCTION} TO lit38_door_reader")
         record, body = _door_record(conn), _door_body(conn)
-    apply_migrations(database)
+    # Up to 0031 only: 0032 replaces this door with another (its own test below).
+    _apply_before(database, NOTES_ACCOUNT, monkeypatch)
 
     with psycopg.connect(database) as conn:
         assert conn.execute(f"SELECT {columns} FROM books ORDER BY id").fetchall() == books
@@ -845,6 +851,137 @@ def test_the_split_fingerprint_starts_unknown_and_the_door_changes_only_its_matc
         with pytest.raises(psycopg.errors.CheckViolation):
             with psycopg.connect(database) as conn:
                 conn.execute("UPDATE books SET split_hash=%s", (wrong,))
+
+
+# ---- 0032: the notes account and the door for every book (ADR 0044 step 2) ---------------------
+
+NOTES_ACCOUNT = 32
+_NEW_DOOR = "story_memory_door(uuid)"
+
+# Every line of the door's body 0032 changes, as (0031's text, 0032's text): the book needs both
+# fingerprints, not a free-library tag; the edition is the notes account's live book with both
+# fingerprints equal; a book with no edition gets the one row with empty lists. Nothing else: the
+# place, every predicate, the hidden later ends and the key rewrite stay byte for byte.
+_DOOR_CHANGES = [
+    ("    SELECT mine.owner_id, mine.id, mine.incarnation, mine.content_language, mine.source_kind,\n"
+     "           mine.file_hash, mine.split_hash\n",
+     "    SELECT mine.owner_id, mine.id, mine.incarnation, mine.content_language, mine.file_hash,\n"
+     "           mine.split_hash\n"),
+    ("      AND mine.id = library_story_memory.book\n",
+     "      AND mine.id = story_memory_door.book\n"),
+    ("      AND mine.source_kind LIKE 'gutenberg:%'\n", ""),
+    ("      AND NOT EXISTS (SELECT 1 FROM public.library_account AS library\n"
+     "                      WHERE library.account_id = mine.owner_id)\n",
+     "      AND NOT EXISTS (SELECT 1 FROM public.notes_account AS notes\n"
+     "                      WHERE notes.account_id = mine.owner_id)\n"),
+    ("    JOIN public.library_account AS library ON true\n"
+     "    JOIN public.books AS built\n"
+     "      ON built.owner_id = library.account_id\n"
+     "     AND built.source_kind = reader.source_kind\n",
+     "    JOIN public.notes_account AS notes ON true\n"
+     "    JOIN public.books AS built\n"
+     "      ON built.owner_id = notes.account_id\n"),
+    ("  FROM reader, edition, place\n",
+     "  FROM reader CROSS JOIN place LEFT JOIN edition ON true\n"),
+]
+
+# The database's SECURITY DEFINER functions: the platform day's two (migration 0020) and the
+# one door. A second way into story memory would show here.
+_DEFINERS = {"companion_platform_adjust(date,numeric,numeric)",
+             "companion_platform_reserve(numeric,numeric)", _NEW_DOOR}
+
+
+def _definers(conn) -> set[str]:
+    return {row[0] for row in conn.execute(
+        "SELECT p.oid::regprocedure::text FROM pg_proc AS p "
+        "JOIN pg_namespace AS n ON n.oid = p.pronamespace "
+        "WHERE n.nspname = 'public' AND p.prosecdef").fetchall()}
+
+
+def _edition(conn, owner) -> uuid.UUID:
+    book = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO books (owner_id, id, incarnation, title, schema_version, source_kind, "
+        "file_hash, split_hash) VALUES (%s, %s, %s, 'A book', 1, 'upload', "
+        "repeat('a', 64), repeat('b', 64))", (owner, book, uuid.uuid4()))
+    return book
+
+
+def test_the_notes_account_is_the_library_account_renamed_and_the_door_changes_only_its_match(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0032 with a library account and a built
+    edition: the account or its edition lost or changed by the rename, a second account made
+    beside it, a reader's two copies of one file refused, the old door left beside the new one,
+    or the new door changing anything but how
+    the edition is found and the empty row: its body beyond the listed lines, its security, its
+    settings, its arguments or result, or EXECUTE for PUBLIC."""
+    _apply_before(database, NOTES_ACCOUNT, monkeypatch)
+    account, reader = uuid.uuid4(), uuid.uuid4()
+    with psycopg.connect(database) as conn:
+        conn.execute("INSERT INTO users (id, display_name, status) "
+                     "VALUES (%s, 'Mothli library', 'suspended')", (account,))
+        conn.execute("INSERT INTO library_account (account_id) VALUES (%s)", (account,))
+        conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (reader,))
+        edition = _edition(conn, account)
+        conn.execute("UPDATE books SET source_kind = 'gutenberg:1342' WHERE id = %s", (edition,))
+        _edition(conn, reader)
+        _edition(conn, reader)                   # a reader may hold two copies of one file
+        users = conn.execute("SELECT * FROM users ORDER BY id").fetchall()
+        books = conn.execute("SELECT * FROM books ORDER BY id").fetchall()
+        limits = conn.execute("SELECT * FROM owner_limits ORDER BY owner_id").fetchall()
+        record = conn.execute(
+            "SELECT proowner::regrole::text, prosecdef, provolatile, proconfig, "
+            "pg_get_function_identity_arguments(oid), pg_get_function_result(oid) "
+            "FROM pg_proc WHERE oid = %s::regprocedure", (_DOOR_FUNCTION,)).fetchone()
+        body = _door_body(conn)
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT to_regclass('public.library_account')").fetchone()[0] is None
+        assert conn.execute("SELECT account_id FROM notes_account").fetchall() == [(account,)]
+        assert conn.execute("SELECT * FROM users ORDER BY id").fetchall() == users
+        assert conn.execute("SELECT * FROM books ORDER BY id").fetchall() == books
+        assert conn.execute("SELECT * FROM owner_limits ORDER BY owner_id").fetchall() == limits
+        assert conn.execute("SELECT count(*) FROM pg_proc WHERE proname = "
+                            "'library_story_memory'").fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT proowner::regrole::text, prosecdef, provolatile, proconfig, "
+            "pg_get_function_identity_arguments(oid), pg_get_function_result(oid) "
+            "FROM pg_proc WHERE oid = %s::regprocedure", (_NEW_DOOR,)).fetchone() == record
+        assert record[1:4] == (True, "s", ["search_path=pg_catalog, public, pg_temp"])
+        assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
+                                (_NEW_DOOR,)).fetchone()[0]
+        assert _definers(conn) == _DEFINERS
+        expected = body
+        for before, after in _DOOR_CHANGES:
+            assert expected.count(before) == 1, before
+            expected = expected.replace(before, after)
+        assert conn.execute("SELECT prosrc FROM pg_proc WHERE oid = %s::regprocedure",
+                            (_NEW_DOOR,)).fetchone()[0] == expected
+
+
+def test_a_new_database_has_one_notes_account_that_never_signs_in(database: str) -> None:
+    """The break it catches: a fresh database with no notes account (the door would serve no
+    one and the builds of step 3 would have nowhere to write), a second one made when the
+    migrations run again, or one that could sign in, holds a sign-in identity or an address, or
+    has no limits of its own."""
+    apply_migrations(database)
+    with psycopg.connect(database) as conn:
+        [(account,)] = conn.execute("SELECT account_id FROM notes_account").fetchall()
+        assert conn.execute("SELECT status, email, display_name, erase_after, deleted_at "
+                            "FROM users WHERE id = %s", (account,)).fetchone() == (
+            "suspended", None, "Mothli library", None, None)
+        assert conn.execute("SELECT count(*) FROM external_identities WHERE owner_id = %s",
+                            (account,)).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM owner_limits WHERE owner_id = %s",
+                            (account,)).fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM books WHERE owner_id = %s",
+                            (account,)).fetchone()[0] == 0
+        assert _definers(conn) == _DEFINERS
+    apply_migrations(database)
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT account_id FROM notes_account").fetchall() == [(account,)]
 
 
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:

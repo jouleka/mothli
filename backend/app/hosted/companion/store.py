@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 
 from app.hosted.companion import OwnerBoundAdapter, as_uuid, check_position
+from app.hosted.companion.memory import DOOR, door_served
 from app.hosted.companion.spend import SpendStore
 from app.hosted.companion.store_notes import NotesStore
 from app.hosted.companion.store_read_map import ReadMapStore
@@ -70,8 +71,9 @@ class _BookStore(OwnerBoundAdapter):
 
         ``ingest_progress`` counts the chapters, from the first, whose story memory is built: a
         live receipt for a live chapter at every ordinal up to it (0 before extraction). For a
-        library book they are the receipts the door hands this reader, so it never passes their
-        place.
+        book the door serves they are the receipts it hands this reader, so it never passes
+        their place; where it hands nothing, the reader's own receipts, as ``HostedBookStore``
+        reads them.
         """
         try:
             book = as_uuid(book_id)
@@ -95,9 +97,8 @@ class _BookStore(OwnerBoundAdapter):
                 (self._owner.value, book)).fetchone()
             if row is None:
                 return None
-            door = conn.execute("SELECT completed FROM public.library_story_memory(%s)",
-                                (book,)).fetchone()
-            if door is not None:
+            door = conn.execute(DOOR, {"book": book}).fetchone()
+            if door_served(door):
                 built = sorted(receipt["ordinal"] for receipt in door["completed"])
             else:
                 built = [receipt["revealed_at"] for receipt in conn.execute(

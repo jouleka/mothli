@@ -7,8 +7,10 @@
 It needs HOSTED_LIBRARY_DSN (its own role, below), HOSTED_TENANT_DSN and the storage settings of
 app.env, and the free library's network (it fetches each book as a reader's add does).
 
-``build`` makes the **library account** once: one reserved user that never signs in (no sign-in
-identity, and suspended, which every session check refuses), recorded in ``library_account``. For
+``build`` uses the **library account**: one reserved user that never signs in (no sign-in
+identity, and suspended, which every session check refuses), recorded in ``notes_account`` (ADR
+0044 step 2: the library account is the notes account, made by migration 0032 and found here; a
+database without one still gets it made here once). For
 each catalogue entry it then adds the book to that account by the very path a reader's add takes
 (``app.hosted.tenant.classics.add_entry``: the guarded fetch, the upload's validation, encryption,
 storage and limits) and asks for its story memory with the reader's own queue
@@ -23,7 +25,7 @@ one half built carries on, and one stopped (three chapters in a row that could n
 stays stopped and is reported. Nothing is logged; the report names titles, numbers and codes only.
 
 Its database role reaches two tables: it adds the account's user row and reads and adds the one
-``library_account`` row, with row-level security on (it sets the new account as the owner for its
+``notes_account`` row, with row-level security on (it sets the new account as the owner for its
 own insert). Everything else goes through the tenant role, bound to the library account.
 """
 
@@ -57,7 +59,7 @@ class LibraryConfigurationError(RuntimeError):
 
 @dataclass(slots=True)
 class PostgresLibraryAccount:
-    """The library role: the library account's user row and its ``library_account`` row."""
+    """The library role: the library account's user row and its ``notes_account`` row."""
 
     _dsn: str = field(repr=False)
 
@@ -100,7 +102,7 @@ class PostgresLibraryAccount:
 
     def account(self) -> uuid.UUID | None:
         with self._connect() as conn:
-            row = conn.execute("SELECT account_id FROM public.library_account").fetchone()
+            row = conn.execute("SELECT account_id FROM public.notes_account").fetchone()
         return None if row is None else row["account_id"]
 
     def ensure_account(self) -> uuid.UUID:
@@ -108,7 +110,7 @@ class PostgresLibraryAccount:
         with self._connect() as conn:
             # Two builds at once make one account: the second waits here, then finds it.
             conn.execute("SELECT pg_advisory_xact_lock(hashtextextended('library_account', 49))")
-            row = conn.execute("SELECT account_id FROM public.library_account").fetchone()
+            row = conn.execute("SELECT account_id FROM public.notes_account").fetchone()
             if row is not None:
                 return row["account_id"]
             account = uuid.uuid4()
@@ -116,7 +118,7 @@ class PostgresLibraryAccount:
             conn.execute(
                 "INSERT INTO public.users (id, display_name, status) VALUES (%s, %s, 'suspended')",
                 (account, ACCOUNT_NAME))
-            conn.execute("INSERT INTO public.library_account (account_id) VALUES (%s)",
+            conn.execute("INSERT INTO public.notes_account (account_id) VALUES (%s)",
                          (account,))
         return account
 
