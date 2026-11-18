@@ -6,10 +6,15 @@ Here: a chapter is never published twice and never in part, and nothing of it is
 receipt; a lost or cancelled lease publishes nothing; a reader's correction during extraction makes
 the publish refuse and the chapter be prepared again against the corrected roster; a crash before
 the chapter's calls are settled is settled once by the next run; no chapter text, passage or
-vector reaches Postgres; two readers with the same book file never touch each other's rows, on
-the row-security role and through a superuser connection; removing the book and erasing the
-account leave nothing; the worker role holds exactly its grants; and the chapter is paid within
-the reader's allowance, admitted whole. Stand-in models only: nothing is called and nothing paid.
+vector reaches Postgres; two readers of two files never touch each other's notes, on the
+row-security role and through a superuser connection; removing the book and erasing the account
+leave nothing of the reader's; the worker role holds exactly its grants; and the chapter is paid
+within the reader's allowance, admitted whole. Stand-in models only: nothing is called and nothing
+paid.
+
+ADR 0044 step 3: every chapter is built into the edition of the reader's file (the notes
+account's book with the same two fingerprints) and the reader owns no story memory row; the
+reader is handed the edition's notes through the door, up to their place.
 """
 
 from __future__ import annotations
@@ -88,6 +93,50 @@ def memory_of(dsn: str, owner: uuid.UUID) -> dict[str, list[str]]:
             (owner,)).fetchall()) for table in MEMORY_TABLES}
 
 
+# ADR 0044 step 3: a reader's runs build the edition of their file, the notes account's live book
+# with the same two fingerprints, and the reader owns no story memory row of their own.
+_EDITION_OF = """
+SELECT edition.owner_id, edition.id FROM books AS mine
+JOIN books AS edition ON edition.file_hash = mine.file_hash AND edition.split_hash = mine.split_hash
+JOIN notes_account AS notes ON notes.account_id = edition.owner_id
+WHERE mine.owner_id = %s AND mine.id = %s AND edition.deleted_at IS NULL
+"""
+
+
+def edition_of(dsn: str, owner: uuid.UUID, book) -> tuple[uuid.UUID, uuid.UUID] | None:
+    """(notes account, edition) of the live edition of a reader's book's file, or None; read
+    past row-level security. One file has one live edition at most."""
+    with psycopg.connect(dsn) as conn:
+        found = conn.execute(_EDITION_OF, (owner, book)).fetchall()
+    assert len(found) <= 1, "two live editions of one file"
+    return tuple(found[0]) if found else None
+
+
+def book_memory(dsn: str, scope: tuple | None) -> dict[str, list[str]]:
+    """Every story memory row of one (owner, book), read past row-level security."""
+    if scope is None:
+        return {table: [] for table in MEMORY_TABLES}
+    with psycopg.connect(dsn) as conn:
+        return {table: sorted(row[0] for row in conn.execute(
+            sql.SQL("SELECT t::text FROM {} AS t WHERE owner_id=%s AND book_id=%s").format(
+                sql.Identifier(table)), scope).fetchall()) for table in MEMORY_TABLES}
+
+
+def edition_memory(dsn: str, owner: uuid.UUID, book) -> dict[str, list[str]]:
+    """Every story memory row of the edition of a reader's book's file (empty with none)."""
+    return book_memory(dsn, edition_of(dsn, owner, book))
+
+
+def no_memory_of_their_own(dsn: str, owner: uuid.UUID) -> bool:
+    return all(rows == [] for rows in memory_of(dsn, owner).values())
+
+
+def read_to(hosted_app, owner: uuid.UUID, book: str, through: int, label: str = "a") -> None:
+    """The reader marks chapters 1 to ``through`` read, so the door hands them what is built."""
+    client, tokens, _app = hosted_app
+    Reader(client, tokens, label, owner).mark(book, list(range(1, through + 1)))
+
+
 def spend_of(dsn: str, owner: uuid.UUID) -> tuple[list[dict], list[dict]]:
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         return (conn.execute("SELECT * FROM cost_reservations WHERE owner_id=%s "
@@ -131,19 +180,21 @@ def harbour(hosted_app, readers, monkeypatch):
 # ---- 2: never twice, never half, nothing seen before the receipt ---------------------------------
 
 def test_a_publish_cut_off_before_it_commits_leaves_nothing_and_is_never_seen_half(
-        harbour, worker_dsn, database, tenant_dsn, monkeypatch):
+        hosted_app, harbour, worker_dsn, database, tenant_dsn, monkeypatch):
     """The break it catches: rows published in more than one transaction, or the receipt not
     last, so a reply could read a chapter's people without its receipt, or a worker that dies
-    mid-publish leaves half a chapter."""
+    mid-publish leaves half a chapter. The reader has read chapter 1, so the door would hand
+    them anything of it that could be seen (ADR 0044 step 3: the chapter is the edition's)."""
     app, client, extractor, owner, book = harbour
+    read_to(hosted_app, owner, book, 1)
     seen = []
     real_event = jobs_module.record_event
 
     def dies_in_the_publish(conn, **values):
         if values["action"] == "memory.publish":
             # Every row and the receipt are written in this transaction, not yet committed.
-            assert conn.execute("SELECT count(*) FROM entities WHERE owner_id=%s",
-                                (owner,)).fetchone()["count"] == 2
+            assert conn.execute("SELECT count(*) FROM entities WHERE owner_id=%s AND book_id=%s",
+                                edition_of(database, owner, book)).fetchone()["count"] == 2
             for dsn in (tenant_dsn, database):
                 with HostedBookStore(dsn, OwnerId(owner)).book(book) as mem:
                     seen.append((mem._audit_all("entities"), mem.view(9).chapters()))
@@ -154,7 +205,8 @@ def test_a_publish_cut_off_before_it_commits_leaves_nothing_and_is_never_seen_ha
     with pytest.raises(RuntimeError, match="died here"):
         remember(app, worker_dsn, owner, book, client, 1)
     assert seen == [([], []), ([], [])]
-    assert all(rows == [] for rows in memory_of(database, owner).values())
+    assert all(rows == [] for rows in edition_memory(database, owner, book).values())
+    assert no_memory_of_their_own(database, owner)
     reservations, _ledger = spend_of(database, owner)
     assert {row["purpose"] for row in settled_once(database, owner)} >= {
         "extraction-commit-aborted", "extraction-review"}
@@ -180,8 +232,8 @@ def test_a_chapter_is_published_once_and_a_second_publish_changes_nothing(
 
     monkeypatch.setattr(PostgresWorkerRepository, "commit_chapter_memory", recorded)
     assert remember(app, worker_dsn, owner, book, client, 1) is True
-    before, calls, spend = memory_of(database, owner), list(extractor.calls), spend_of(
-        database, owner)
+    before, calls, spend = edition_memory(database, owner, book), list(extractor.calls), \
+        spend_of(database, owner)
 
     # The same publish again, as a worker that lost track of its first would send it.
     repository, claim = claimed(app, worker_dsn, owner, book)
@@ -190,10 +242,11 @@ def test_a_chapter_is_published_once_and_a_second_publish_changes_nothing(
     repository.succeed(claim)
     # And the chapter run again: nothing to extract, nothing to pay, nothing written.
     assert remember(app, worker_dsn, owner, book, client, 1) is False
-    assert memory_of(database, owner) == before
+    assert edition_memory(database, owner, book) == before
     assert extractor.calls == calls
     assert spend_of(database, owner) == spend
     assert len(before["ingested_chapters"]) == 1 and len(before["entities"]) == 2
+    assert no_memory_of_their_own(database, owner)
 
     # Out of order: chapter 3 before chapter 2 is refused before anything is spent.
     with pytest.raises(ChapterOutOfOrder):
@@ -223,7 +276,8 @@ def test_a_lease_another_worker_took_spends_and_publishes_nothing(harbour, worke
         remember(app, worker_dsn, owner, book, client, 1, claim=(repository, first))
     assert extractor.calls == []
     assert spend_of(database, owner) == ([], [])
-    assert all(rows == [] for rows in memory_of(database, owner).values())
+    assert all(rows == [] for rows in edition_memory(database, owner, book).values())
+    assert no_memory_of_their_own(database, owner)
 
 
 @pytest.mark.parametrize("how", ["expired", "cancelled"])
@@ -247,7 +301,8 @@ def test_a_lease_lost_during_the_chapter_is_refused_at_the_publish(harbour, work
     with pytest.raises(LostLeaseError):
         remember(app, worker_dsn, owner, book, client, 1, hold=lambda: None)
     assert extractor.calls.count("Extraction") == 1
-    assert all(rows == [] for rows in memory_of(database, owner).values())
+    assert all(rows == [] for rows in edition_memory(database, owner, book).values())
+    assert no_memory_of_their_own(database, owner)
     assert {row["purpose"] for row in settled_once(database, owner)} >= {
         "extraction-commit-aborted"}
 
@@ -260,23 +315,40 @@ def test_a_correction_during_extraction_is_respected_and_the_chapter_prepared_ag
     correction published as it was prepared, tying its events and her new state to the identity
     the reader just retired (invisible from the correction on), so the chapter's facts about her
     are lost and the correction undone. Local mode prepares again on ``StalePreparedRoster``;
-    hosted mode must too, and without paying for the extraction again."""
+    hosted mode must too, and without paying for the extraction again.
+
+    ADR 0044 step 3: the chapter is the edition's, and no reader corrects an edition (the route
+    refuses a book the door serves, ``test_library_story_memory_postgres.py``). The publish's
+    check that the memory below the chapter reads as it was copied stays (ADR 0044 section 7:
+    it also catches two publishes a bug let through); it is shown here with the very same
+    correction, made on the edition by the tenant role bound to the notes account, at a place
+    given to the edition for it."""
     app, client, extractor, owner, book = harbour
     http, tokens, _app = hosted_app
     a = Reader(http, tokens, "a", owner)
     for ordinal in (1, 2, 3):
         assert remember(app, worker_dsn, owner, book, client, ordinal) is True
     a.mark(book, [1, 2, 3])
-    mara = entity_id(database, owner, "Mara")
+    refused = a.call("POST", f"/api/books/{book}/memory-corrections",
+                     {"source_entity_id": str(uuid.uuid4()), "canonical_name": "Marabel",
+                      "reason": "her full name", "bookmark": 3})
+    assert refused.status_code == 409                 # the reader's own route: refused
+    account, edition = edition_of(database, owner, book)
+    with psycopg.connect(database) as conn:
+        [(incarnation,)] = conn.execute("SELECT incarnation FROM books WHERE owner_id=%s"
+                                        " AND id=%s", (account, edition)).fetchall()
+        conn.execute("INSERT INTO reading_state (owner_id,book_id,book_incarnation,bookmark)"
+                     " VALUES (%s,%s,%s,3)", (account, edition, incarnation))
+    mara = entity_id(database, account, "Mara")
     corrected = []
 
     def correct(marker):
         if marker == "rescued" and not corrected:
-            response = a.call("POST", f"/api/books/{book}/memory-corrections",
-                              {"source_entity_id": str(mara), "canonical_name": "Marabel",
-                               "reason": "her full name", "bookmark": 3})
-            assert response.status_code == 200, response.text
-            corrected.append(response.json())
+            result = asyncio.run(PostgresTenantRepository(tenant_dsn).replace_memory_entity(
+                OwnerId(account), edition, source_entity_id=mara, canonical_name="Marabel",
+                reason="her full name", bookmark=3))
+            assert result is not None
+            corrected.append(result)
 
     outcomes = []
     real_commit = PostgresWorkerRepository.commit_chapter_memory
@@ -297,22 +369,24 @@ def test_a_correction_during_extraction_is_respected_and_the_chapter_prepared_ag
     assert corrected and outcomes == [StoryMemoryMoved, "published"]
     assert extractor.calls[calls:].count("Extraction") == 1          # not paid for again
 
-    marabel = entity_id(database, owner, "Marabel")
+    marabel = entity_id(database, account, "Marabel")
     with psycopg.connect(database, row_factory=dict_row) as conn:
         at_four = conn.execute(
             "SELECT 'state' AS kind,entity_id FROM entity_state"
-            " WHERE owner_id=%(o)s AND revealed_at=4"
+            " WHERE owner_id=%(o)s AND book_id=%(b)s AND revealed_at=4"
             " UNION ALL SELECT 'participant',entity_id FROM event_participants"
-            " WHERE owner_id=%(o)s AND revealed_at=4", {"o": owner}).fetchall()
+            " WHERE owner_id=%(o)s AND book_id=%(b)s AND revealed_at=4",
+            {"o": account, "b": edition}).fetchall()
         closed = conn.execute("SELECT entity_id FROM entity_state WHERE owner_id=%s"
-                              " AND invalid_at=4", (owner,)).fetchall()
+                              " AND book_id=%s AND invalid_at=4", (account, edition)).fetchall()
         named = conn.execute("SELECT canonical_name FROM entities WHERE owner_id=%s"
-                             " AND revealed_at=4", (owner,)).fetchall()
+                             " AND book_id=%s AND revealed_at=4", (account, edition)).fetchall()
     assert {("state", marabel), ("participant", marabel)} <= {
         (row["kind"], row["entity_id"]) for row in at_four}
     assert mara not in {row["entity_id"] for row in at_four}
     assert [row["entity_id"] for row in closed] == [marabel]      # the state copied to her
     assert [row["canonical_name"] for row in named] == ["Rose"]   # no second Mara made
+    a.mark(book, [4])
     with HostedBookStore(tenant_dsn, OwnerId(owner)).book(book) as mem:
         view = mem.view(4)
         assert [row["canonical_name"] for row in view.characters()] == [
@@ -340,7 +414,7 @@ def test_a_crash_after_the_publish_is_settled_once_by_the_next_run(harbour, work
     left = [row for row in reservations if row["state"] == "reserved"]
     assert [row["purpose"] for row in left] == ["extraction"]
     assert left[0]["actual_usd"] == left[0]["reserved_usd"]           # its noted size
-    assert len(memory_of(database, owner)["ingested_chapters"]) == 1   # published
+    assert len(edition_memory(database, owner, book)["ingested_chapters"]) == 1   # published
 
     monkeypatch.setattr(ChapterCatalog, "finalize_ingest", real_finalize)
     calls = len(extractor.calls)
@@ -375,16 +449,19 @@ def test_a_run_that_died_mid_chapter_is_settled_and_the_chapter_done_on_the_next
 
 def test_no_chapter_text_passage_or_vector_is_published(harbour, worker_dsn, database):
     """The break it catches: the working copy's raw chapter text, its passages or their vectors
-    (all of which the shared commit writes locally) copied into Postgres with the memory."""
+    (all of which the shared commit writes locally) copied into Postgres with the memory, under
+    the reader or under the notes account that holds the edition (ADR 0044 step 3)."""
     app, client, extractor, owner, book = harbour
     with psycopg.connect(database) as conn:
         tables = owner_tables(conn)
+        [(account,)] = conn.execute("SELECT account_id FROM notes_account").fetchall()
 
     def everything():
         with psycopg.connect(database) as conn:
             return {table: {row[0] for row in conn.execute(
-                sql.SQL("SELECT t::text FROM {} AS t WHERE owner_id=%s").format(
-                    sql.Identifier(table)), (owner,)).fetchall()} for table in tables}
+                sql.SQL("SELECT t::text FROM {} AS t WHERE owner_id=ANY(%s)").format(
+                    sql.Identifier(table)), ([owner, account],)).fetchall()}
+                for table in tables}
 
     before = everything()
     for ordinal in (1, 2, 3, 4):
@@ -397,12 +474,14 @@ def test_no_chapter_text_passage_or_vector_is_published(harbour, worker_dsn, dat
         for first, second in zip(sentences, sentences[1:] + sentences[:1]):
             passage = f"{first} {second}"                              # any run of two sentences
             assert not any(passage in row for row in added), passage
-    stored = memory_of(database, owner)
+    stored = edition_memory(database, owner, book)
     assert stored["chunks"] == [] and stored["chunk_embeddings"] == []
+    assert no_memory_of_their_own(database, owner)
     assert after["book_search_documents"] == before["book_search_documents"]
+    assert after["source_objects"] == before["source_objects"]      # the edition has no file
     with psycopg.connect(database) as conn:
-        assert conn.execute("SELECT count(*) FROM entity_corrections WHERE owner_id=%s",
-                            (owner,)).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM entity_corrections WHERE owner_id=ANY(%s)",
+                            ([owner, account],)).fetchone()[0] == 0
 
 
 # ---- 7: two readers with the same book file -----------------------------------------------------
@@ -410,39 +489,47 @@ def test_no_chapter_text_passage_or_vector_is_published(harbour, worker_dsn, dat
 def test_one_readers_chapter_never_reads_or_writes_anothers_rows(hosted_app, readers, worker_dsn,
                                                                  database, tenant_dsn,
                                                                  monkeypatch):
-    """The break it catches: a working copy or a publish that misses an owner predicate, so
-    reader A's chapter is extracted against reader B's people (both have the same book file) or
-    lands in B's book; checked with row-level security and, through a superuser connection,
-    with the code's own predicates alone."""
-    _client, _tokens, app = hosted_app
+    """The break it catches: a working copy or a publish that misses an owner or edition
+    predicate, so reader A's chapter is extracted against the people of another file's notes
+    (reader B's file differs from A's by its title alone, so the chapters are the same and only
+    the fingerprints tell them apart) or lands in that file's edition, or anything is written
+    under either reader; checked with row-level security and, through a superuser connection,
+    with the code's own predicates alone. ADR 0044 step 3: two readers of one and the same file
+    share its edition by design (``test_story_memory_editions_postgres.py``)."""
+    http, tokens, app = hosted_app
     client = extraction_client()
     Extractor(client, monkeypatch)
     a, b = readers["a"], readers["b"]
     a_book = hosted_book(hosted_app, "a", harbour_book())
-    b_book = hosted_book(hosted_app, "b", harbour_book())
+    b_book = hosted_book(hosted_app, "b", harbour_book("The Harbour Book, Second Printing"))
     for ordinal in (1, 2, 3):
         assert remember(app, worker_dsn, b, b_book, client, ordinal) is True
-    b_rows = memory_of(database, b)
+    b_edition = edition_of(database, b, b_book)
+    b_rows = book_memory(database, b_edition)
 
     # Chapter 1 through a superuser connection (the code's own predicates alone), the rest on
     # the tenant role with row-level security.
     assert remember(app, worker_dsn, a, a_book, client, 1, tenant=database) is True
     assert remember(app, worker_dsn, a, a_book, client, 2) is True
     assert remember(app, worker_dsn, a, a_book, client, 3) is True
+    a_edition = edition_of(database, a, a_book)
+    assert a_edition[0] == b_edition[0] and a_edition[1] != b_edition[1]
 
-    assert memory_of(database, b) == b_rows
+    assert book_memory(database, b_edition) == b_rows
+    assert no_memory_of_their_own(database, a) and no_memory_of_their_own(database, b)
     with psycopg.connect(database) as conn:
         for table in MEMORY_TABLES:
             mixed = conn.execute(
-                sql.SQL("SELECT count(*) FROM {} WHERE (owner_id=%s AND book_id<>%s)"
-                        " OR (owner_id=%s AND book_id<>%s)").format(sql.Identifier(table)),
-                (a, uuid.UUID(a_book), b, uuid.UUID(b_book))).fetchone()[0]
+                sql.SQL("SELECT count(*) FROM {} WHERE owner_id=%s AND book_id<>ALL(%s)").format(
+                    sql.Identifier(table)),
+                (a_edition[0], [a_edition[1], b_edition[1]])).fetchone()[0]
             assert mixed == 0, table
-        # A's chapter 3 merged "the Keeper" into A's own Mara, never B's.
-        rows = conn.execute("SELECT alias.owner_id,entity.owner_id FROM aliases AS alias"
+        # A's chapter 3 merged "the Keeper" into the Mara of A's file, never into B's file's.
+        rows = conn.execute("SELECT alias.book_id,entity.book_id FROM aliases AS alias"
                             " JOIN entities AS entity ON entity.id=alias.entity_id"
                             " WHERE alias.surface_form='the Keeper'").fetchall()
-    assert sorted(rows) == sorted([(a, a), (b, b)])
+    assert sorted(rows) == sorted([(a_edition[1], a_edition[1]), (b_edition[1], b_edition[1])])
+    Reader(http, tokens, "b", b).mark(b_book, [1, 2, 3, 4])
     for dsn in (tenant_dsn, database):
         with HostedBookStore(dsn, OwnerId(b)).book(b_book) as mem:
             assert len(mem._audit_all("entities")) == 3
@@ -450,20 +537,28 @@ def test_one_readers_chapter_never_reads_or_writes_anothers_rows(hosted_app, rea
             with HostedBookStore(dsn, OwnerId(b)).book(a_book):
                 pass
 
-    # A claim of A's job cannot be turned on B's book, by the run or by the publish.
+    # A claim of A's job cannot be turned on B's book, by the run or by the publish, nor publish
+    # into the edition of B's file.
+    from app.hosted.jobs import Edition
+
     repository, claim = claimed(app, worker_dsn, a, a_book)
     from dataclasses import replace
     forged = replace(claim, book_id=uuid.UUID(b_book))
     with pytest.raises(LookupError):
         remember(app, worker_dsn, a, a_book, client, 4, claim=(repository, forged))
-    with pytest.raises(JobIdempotencyError):
-        repository.commit_chapter_memory(
-            claim, book_id=uuid.UUID(b_book), book_incarnation=claim.book_incarnation,
-            copied="", chapter={"ordinal": 4, "key": "x"}, receipt={},
-            rows={name: [] for name in ("summaries", "entities", "aliases", "states",
-                                        "closed_states", "edges", "events", "participants",
-                                        "themes")})
-    assert memory_of(database, b) == b_rows
+    repository, claim = claimed(app, worker_dsn, a, a_book)      # that run's job has failed
+    with psycopg.connect(database) as conn:
+        b_file = conn.execute("SELECT owner_id,id,incarnation,file_hash,split_hash FROM books"
+                              " WHERE owner_id=%s AND id=%s", b_edition).fetchone()
+    nothing = {name: [] for name in ("summaries", "entities", "aliases", "states",
+                                     "closed_states", "edges", "events", "participants",
+                                     "themes")}
+    for key in (f"{a_book}:c9.xhtml", f"{b_book}:c9.xhtml", "x"):
+        with pytest.raises(JobIdempotencyError):
+            repository.commit_chapter_memory(
+                claim, edition=Edition(*b_file), copied="",
+                chapter={"ordinal": 4, "key": key}, receipt={}, rows=nothing)
+    assert book_memory(database, b_edition) == b_rows
 
 
 # ---- 8: erasure still works ----------------------------------------------------------------------
@@ -472,27 +567,37 @@ def test_removing_the_book_and_erasing_the_account_leave_no_memory_row(
         hosted_app, harbour, worker_dsn, database, tenant_dsn, admin_dsn):
     """The break it catches: a published row that does not hang from its chapter's receipt (or
     lands under another chapter or owner), so removing the book or erasing the account leaves
-    a reader's story memory behind."""
+    a reader's story memory behind. ADR 0044 step 3: what the runs publish is the edition's;
+    removing the book and erasing the account leave nothing of the reader's and leave the
+    edition as it is (ADR 0044 section 6), so a second copy of the same file gets it again
+    without anything being extracted."""
     app, client, extractor, owner, book = harbour
     for ordinal in (1, 2, 3, 4):
         assert remember(app, worker_dsn, owner, book, client, ordinal) is True
-    assert memory_of(database, owner)["aliases"]
+    edition = edition_of(database, owner, book)
+    assert book_memory(database, edition)["aliases"]
+    built = book_memory(database, edition)
+    assert no_memory_of_their_own(database, owner)
     assert asyncio.run(PostgresTenantRepository(tenant_dsn).remove_book(
         OwnerId(owner), uuid.UUID(book)))
-    assert all(rows == [] for rows in memory_of(database, owner).values())
+    assert no_memory_of_their_own(database, owner)
+    assert book_memory(database, edition) == built
 
-    # A second book, built again, and the account erased by the purge under its own role.
+    # A second copy of the file: its edition is there, nothing is extracted again; and the
+    # account erased by the purge under its own role.
     second = hosted_book(hosted_app, "a", harbour_book())
+    calls = list(extractor.calls)
     for ordinal in (1, 2, 3):
-        assert remember(app, worker_dsn, owner, second, client, ordinal) is True
-    assert memory_of(database, owner)["entities"]
+        assert remember(app, worker_dsn, owner, second, client, ordinal) is False
+    assert extractor.calls == calls and edition_of(database, owner, second) == edition
     with psycopg.connect(database) as conn:
         tables = purge_grants(owner_tables(conn))
         conn.execute("UPDATE users SET status='deleting',erase_after=now()-interval '1 day'"
                      " WHERE id=%s", (owner,))
     with _role(admin_dsn, database, bypass=True, tables=tables) as purge_dsn:
         assert purge_account(PostgresAccountPurge(purge_dsn), app.state.object_storage, owner)
-    assert all(rows == [] for rows in memory_of(database, owner).values())
+    assert no_memory_of_their_own(database, owner)
+    assert book_memory(database, edition) == built
 
 
 # ---- 9: the worker's grants ------------------------------------------------------------------------
@@ -507,7 +612,9 @@ def held_privileges(dsn: str, role: str, table: str) -> set[str]:
 def test_the_worker_role_holds_exactly_what_a_publish_needs(worker_dsn, database, tenant_dsn):
     """The break it catches: a worker role that can read or change more of a reader's story
     memory than a publish needs (or less, so the publish fails in production), or a startup
-    check that would not notice one privilege more or fewer."""
+    check that would not notice one privilege more or fewer. ADR 0044 step 3: it reads the
+    claimed book's fingerprints and makes an edition (SELECT and INSERT on books), and reads
+    no file (nothing on source_objects)."""
     role = conninfo.conninfo_to_dict(worker_dsn)["user"]
     expected = {
         "chapters": {"SELECT", "INSERT"}, "ingested_chapters": {"SELECT", "INSERT"},
@@ -515,7 +622,7 @@ def test_the_worker_role_holds_exactly_what_a_publish_needs(worker_dsn, database
         "aliases": {"SELECT", "INSERT"}, "entity_state": {"SELECT", "INSERT", "UPDATE"},
         "edges": {"INSERT"}, "events": {"INSERT"}, "event_participants": {"INSERT"},
         "themes": {"INSERT"}, "entity_corrections": set(), "chunks": set(),
-        "chunk_embeddings": set(),
+        "chunk_embeddings": set(), "books": {"SELECT", "INSERT"}, "source_objects": set(),
     }
     for table, privileges in expected.items():
         assert WORKER_TABLE_PRIVILEGES.get(table, frozenset()) == privileges, table
@@ -533,6 +640,9 @@ def test_the_worker_role_holds_exactly_what_a_publish_needs(worker_dsn, database
         ("GRANT SELECT ON themes TO {}", "REVOKE SELECT ON themes FROM {}"),
         ("REVOKE INSERT ON event_participants FROM {}", "GRANT INSERT ON event_participants TO {}"),
         ("REVOKE UPDATE ON entity_state FROM {}", "GRANT UPDATE ON entity_state TO {}"),
+        ("GRANT UPDATE ON books TO {}", "REVOKE UPDATE ON books FROM {}"),
+        ("GRANT SELECT ON source_objects TO {}", "REVOKE SELECT ON source_objects FROM {}"),
+        ("REVOKE INSERT ON books FROM {}", "GRANT INSERT ON books TO {}"),
     ):
         with psycopg.connect(database, autocommit=True) as conn:
             conn.execute(sql.SQL(grant).format(sql.Identifier(role)))
@@ -567,7 +677,7 @@ def test_a_chapter_is_paid_within_the_allowance_admitted_whole(hosted_app, reade
     monkeypatch.setattr(story_memory_module, "ChapterCatalog", HostedCompanionCatalog)
     with pytest.raises(CostCeilingExceeded):
         remember(app, worker_dsn, b, b_book, client, 1)
-    assert memory_of(database, b)["ingested_chapters"] == []
+    assert edition_memory(database, b, b_book)["ingested_chapters"] == []
     monkeypatch.setattr(story_memory_module, "ChapterCatalog", ChapterCatalog)
 
     # Admitted whole: the same chapter for A is finished, past the cap by that one chapter.

@@ -596,6 +596,60 @@ can be built side by side.
   operator's command, chapter by chapter, not by readers' runs; (8) the correction refusal for an
   upload the door serves still gives the free-library line; no upload is served before step 3,
   and step 7 replaces the line.
+- Built on 18 November 2026 in PR #124: step 3, builds into the edition, as designed, except
+  (1) **one live edition per file is the database's rule** (step 2's missing index): migration
+  `0033_one_build_per_chapter.sql` adds `books.edition_of`, a mark only the notes account's rows
+  can carry (a foreign key to `notes_account` and a check that it equals the row's owner and
+  that both fingerprints are set), and a unique index on (owner, `file_hash`, `split_hash`) over
+  live marked rows; there is one notes account, so that is one live edition per file. A run
+  makes the edition with `INSERT ... ON CONFLICT DO NOTHING` and reads the winner's row; proven
+  with two threads making it at once ten times over, and with a second insert held by an
+  uncommitted first and then refused. The door gains one line, `AND built.edition_of IS NOT
+  NULL` (its only change, checked by `test_migrations.py`), so an unmarked book of the notes
+  account is never an edition; the migration marks the first live book of the notes account of
+  each file. (2) The build slot is the unique index `ux_jobs_one_build_per_chapter` on
+  `payload_metadata->>'edition'` and `->>'chapter'` of `story_memory` jobs `leased` or
+  `running` (the record's unverified point 1: Postgres accepts it). The claim takes `edition`
+  out of a job's payload when it leases it, so a job put back to wait never carries an old slot
+  into its next attempt. A run that finds the slot taken spends nothing, its job succeeds, and
+  it asks for its reader's next run two minutes later (`CHAPTER_TAKEN_WAIT`, a waiting job with
+  a later `run_after`). (3) **When the slot frees after a lease expires** (unverified point 1,
+  now read and tested): not at the expiry. The job stays `running` until `_recover_expired`,
+  which every `claim_next` of any worker, for any kinds, runs first, puts it back to wait (or
+  fails it once its attempts are spent, or cancels it if cancellation was asked); its rows are
+  taken `FOR UPDATE SKIP LOCKED`, so a job locked at that moment is left to the next claim. So
+  the slot frees at the first claim after the lease's end. (4) The worker reads the edition with
+  `COPY_SQL`, which now reads `revealed_at < %(before)s` on chapters, people, other names and
+  states and an end at or after that chapter as no end; the next chapter is looked for among
+  chapters 1 to the reader's target only, and the stop among the three before it. (5) The
+  reader's copy must have the edition's file hash and, computed again from the copy itself, its
+  split hash, or the run fails `source_integrity` before anything is spent. (6) The chapter key
+  is published as `<edition id>:<file part>`; a publish whose rows name the reader's account,
+  book or incarnation anywhere else is refused whole; inside its transaction the publish checks
+  that the edition is the live marked edition of the claimed reader's live book. (7) The worker
+  gains `SELECT` and `INSERT` on `books` (`grants.py`), nothing on `source_objects`; the tenant
+  role gains nothing. (8) Spend is recorded as before, against the reader whose run made the
+  call; since another reader's run may now build a chapter a run of this reader died on, each
+  run first settles this reader's calls left open on chapters the edition already holds
+  (`settle_left_open`), once. (9) **A reader's own rows** from before (built while their own
+  story memory was on; only in tests) are left exactly as they are: no run reads, writes or
+  removes them (the shared extraction is told the edition's progress below the chapter, not the
+  reader's), the edition is built from its own chapter 1 beside them, and the door answers
+  for the book once it hands anything (step 2's rule) until step 5 removes the fallback.
+  (10) `StoryMemoryQueue.ensure` no longer refuses a book the door serves (its edition is built
+  further by its readers' runs); the setting, the trigger, the target and spend are unchanged.
+  (11) The library account's books take the same path, with the book's last chapter as target;
+  `library_memory build` marks the account's copy of a title as the edition of its file
+  (through the tenant role bound to the notes account), unless a reader's run made that edition
+  first, in which case the build goes into theirs. Until step 6 a library edition is therefore
+  the operator's copy, with its file, title and source; only editions made by runs are bare.
+  (12) The "two failures" count reads every reader's failed runs of that edition and chapter
+  (`payload_metadata->>'edition'`); the stop reads the edition's chapters. (13) The chat half of
+  `test_story_memory_jobs_postgres.py::test_an_unremembered_chapter_is_never_looser_than_local_mode_on_the_spoiler_probes`
+  now expects, at each place, what the door hands there (only foreshadowing dropped by the fixed
+  checks, as in the library door's own probe test), because a reader no longer has unclamped
+  rows of their own; it still checks it is never looser than local mode. Every changed test is
+  listed in the pull request.
 
 **The sentence for the terms and privacy pages** (replaces the free-library one, open items line 254):
 "Mothli's notes on a book's story (who's who and what has happened, chapter by chapter) are made once for

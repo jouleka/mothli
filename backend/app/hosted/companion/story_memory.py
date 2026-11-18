@@ -1,31 +1,43 @@
-"""Story memory for one chapter of one hosted reader's book (ADR 0042 section 1, part 2).
+"""Story memory for one chapter of the edition of one hosted reader's file (ADR 0042 section 1,
+part 2; ADR 0044 step 3).
 
-The local extraction runs unchanged; only where its memory lives differs. For one chapter:
+The local extraction runs unchanged; only where its memory lives differs. The notes are the
+**edition's** (ADR 0044 section 2): the notes account's marked book of the reader's exact file,
+shared by every reader of that file through the door. For chapter *n*, built because this reader
+finished it:
 
-1. a throw-away **working copy** of the book's memory is built in memory (an SQLite ``MemoryDB``
-   at ``:memory:``, nothing on disk) from this owner's Postgres rows, read through the tenant
-   role: the live chapters that have a receipt, with their text from ``HostedBookSource`` (each
-   checked against the published SHA-256, so a stale row fails closed), the people, their other
-   names and their states, and the pinned extraction model. Postgres ids map to local integer
-   ids, in the order the rows were recorded, which is the order local mode wrote them;
-2. ``ChapterExtraction.ingest_through`` (``app/ingest/chapter_extraction.py``) runs on it,
+1. the chapter's text comes from **this reader's own copy** of the file (``HostedBookSource``,
+   checked against its fingerprint), whose two fingerprints must be the edition's, or nothing is
+   done (the split is computed again from the copy itself, so a copy split another way fails
+   closed);
+2. a throw-away **working copy** of the edition's notes is built in memory (an SQLite
+   ``MemoryDB`` at ``:memory:``, nothing on disk) from the edition's Postgres rows **stamped
+   before chapter n**, read by the worker role with that bound in the statement
+   (``COPY_SQL``; an end at chapter *n* or later is read as no end): the live chapters that have
+   a receipt, with their text from the reader's copy (each checked against the published
+   SHA-256, so a stale or foreign row fails closed), the people, their other names and their
+   states, and the pinned extraction model. The edition's chapter keys are read as the reader's
+   own (the door's rewrite). Postgres ids map to local integer ids, in the order the rows were
+   recorded, which is the order local mode wrote them. Since the run builds *n* only when its
+   reader has finished *n*, nothing it holds is past that reader's place;
+3. ``ChapterExtraction.ingest_through`` (``app/ingest/chapter_extraction.py``) runs on it,
    unchanged: extraction and its one repair, the review, identity preparation, and
    ``ingest_chapter``, which stamps every row with the chapter it becomes visible at;
-3. inside the working copy's commit, before it is committed, exactly what that chapter added is
-   read back (its new rows, and the earlier states it closed) and **published** by
-   ``PostgresWorkerRepository.commit_chapter_memory`` in one transaction fenced by the job's
-   lease, with the receipt last. The publish refuses when the memory in Postgres no longer reads
-   as it did when the copy was taken (a reader's correction arrived meanwhile): the copy is then
+4. inside the working copy's commit, before it is committed, exactly what that chapter added is
+   read back (its new rows, and the earlier states it closed) and **published** into the edition
+   by ``PostgresWorkerRepository.commit_chapter_memory`` in one transaction fenced by the job's
+   lease, with the receipt last and the chapter key the edition's. The publish refuses when the
+   edition below the chapter no longer reads as it did when the copy was taken: the copy is then
    rebuilt and the refusal reaches the shared loop as ``StalePreparedRoster``, so the chapter is
-   prepared again against the corrected roster, without paying for the extraction again, exactly
-   as local mode does when a correction lands between preparation and commit;
-4. the shared loop then calls ``finalize_ingest``, which settles the chapter's deferred
-   extraction calls; a crash before that leaves them open, and the next run, finding the
-   receipt, settles them;
-5. the working copy is dropped.
+   prepared again against the memory as it is, without paying for the extraction again;
+5. the shared loop then calls ``finalize_ingest``, which settles the chapter's deferred
+   extraction calls (the reader's own, as before: spend is recorded as it was); a crash before
+   that leaves them open, and the next run settles them;
+6. the working copy is dropped.
 
-Nothing that must stay out reaches Postgres: no chapter text, no passages, no vectors. Nothing
-here decides what is extracted, what passes review, or at which chapter a fact becomes visible.
+Nothing that must stay out reaches Postgres: no chapter text, no passages, no vectors, nothing
+naming the reader. Nothing here decides what is extracted, what passes review, or at which chapter
+a fact becomes visible.
 """
 
 from __future__ import annotations
@@ -38,12 +50,12 @@ import uuid
 from contextlib import contextmanager, nullcontext
 
 from app.content_scope import ContentMemory
-from app.hosted.companion import OwnerBoundAdapter, as_uuid
 from app.hosted.companion.source import HostedBookSource
 from app.hosted.companion.store import ChapterCatalog
-from app.hosted.jobs import ClaimedJob, PostgresWorkerRepository, StoryMemoryMoved
+from app.hosted.jobs import ClaimedJob, Edition, PostgresWorkerRepository, StoryMemoryMoved
 from app.hosted.tenant.models import OwnerId
 from app.ingest.chapter_extraction import ChapterExtraction, _empty_extraction
+from app.ingest.extraction import chapter_text
 from app.ingest.extraction.chapter_text import content_hash_of
 from app.ingest.extraction.pipeline import StalePreparedRoster
 from app.ingest.manifest import assert_matches_store
@@ -54,11 +66,12 @@ from app.memory import dal
 CHAPTER_PURPOSES = ("extraction", "extraction-review", "embedding", "identity-review",
                     "jev-identity", "jev-extraction-screen")
 
-# What a working copy is built from, read in one statement (one database moment): the live
-# chapters with a live receipt for their content, and every person, other name and state of the
-# book's incarnation, in the order they were recorded. The tenant role reads it to build the copy;
-# the worker reads it again inside the publish to refuse a copy that moved meanwhile. Both name
-# the owner; the tenant's transaction sets it for row-level security as well.
+# What a working copy for chapter %(before)s is built from, read in one statement (one database
+# moment) by the worker role: the edition's live chapters with a live receipt for their content,
+# and every person, other name and state of the edition, in the order they were recorded; of
+# each, only what is stamped BEFORE that chapter, and an end at that chapter or later is read as
+# no end. So a run for chapter n holds nothing of chapter n or later, whoever built it. The worker
+# reads it again inside the publish to refuse a copy that moved meanwhile.
 COPY_SQL = """
 SELECT
   COALESCE((SELECT json_agg(json_build_object(
@@ -76,17 +89,20 @@ SELECT
                = (chapter.owner_id, chapter.book_id, chapter.book_incarnation, chapter.id)
             WHERE chapter.owner_id=%(owner)s AND chapter.book_id=%(book)s
               AND chapter.book_incarnation=%(incarnation)s
+              AND chapter.revealed_at < %(before)s
               AND chapter.retracted_at IS NULL AND receipt.retracted_at IS NULL
               AND receipt.content_hash=chapter.content_hash), '[]'::json) AS chapters,
   COALESCE((SELECT json_agg(json_build_object(
               'id', entity.id, 'name', entity.canonical_name, 'type', entity.entity_type,
-              'revealed_at', entity.revealed_at, 'invalid_at', entity.invalid_at,
+              'revealed_at', entity.revealed_at,
+              'invalid_at', CASE WHEN entity.invalid_at < %(before)s THEN entity.invalid_at END,
               'extractor_version', entity.extractor_version,
               'recorded_at', entity.recorded_at, 'retracted_at', entity.retracted_at)
             ORDER BY entity.recorded_at, entity.id)
             FROM public.entities AS entity
             WHERE entity.owner_id=%(owner)s AND entity.book_id=%(book)s
-              AND entity.book_incarnation=%(incarnation)s), '[]'::json) AS entities,
+              AND entity.book_incarnation=%(incarnation)s
+              AND entity.revealed_at < %(before)s), '[]'::json) AS entities,
   COALESCE((SELECT json_agg(json_build_object(
               'id', alias.id, 'entity_id', alias.entity_id, 'surface_form', alias.surface_form,
               'revealed_at', alias.revealed_at, 'recorded_at', alias.recorded_at,
@@ -94,16 +110,19 @@ SELECT
             ORDER BY alias.recorded_at, alias.id)
             FROM public.aliases AS alias
             WHERE alias.owner_id=%(owner)s AND alias.book_id=%(book)s
-              AND alias.book_incarnation=%(incarnation)s), '[]'::json) AS aliases,
+              AND alias.book_incarnation=%(incarnation)s
+              AND alias.revealed_at < %(before)s), '[]'::json) AS aliases,
   COALESCE((SELECT json_agg(json_build_object(
               'id', state.id, 'entity_id', state.entity_id, 'status', state.status,
-              'revealed_at', state.revealed_at, 'invalid_at', state.invalid_at,
+              'revealed_at', state.revealed_at,
+              'invalid_at', CASE WHEN state.invalid_at < %(before)s THEN state.invalid_at END,
               'extractor_version', state.extractor_version,
               'recorded_at', state.recorded_at, 'retracted_at', state.retracted_at)
             ORDER BY state.recorded_at, state.id)
             FROM public.entity_state AS state
             WHERE state.owner_id=%(owner)s AND state.book_id=%(book)s
-              AND state.book_incarnation=%(incarnation)s), '[]'::json) AS states
+              AND state.book_incarnation=%(incarnation)s
+              AND state.revealed_at < %(before)s), '[]'::json) AS states
 """
 
 
@@ -131,15 +150,18 @@ class WorkingCopyMismatch(ValueError):
     no book, person or text."""
 
 
-class _CopyReader(OwnerBoundAdapter):
-    """Reads one book's memory for the working copy, through the tenant role, for one owner."""
+class _EditionReader:
+    """Reads the edition's notes before one chapter for the working copy, by the worker role
+    (``PostgresWorkerRepository.read_edition``), with that chapter as the statement's bound. A
+    reader's tenant session cannot read an edition's rows at all (row-level security)."""
 
-    __slots__ = ()
+    __slots__ = ("_repository", "edition", "before")
 
-    def read(self, book_id, incarnation):
-        with self._transaction() as conn:
-            return conn.execute(COPY_SQL, {"owner": self._owner.value, "book": as_uuid(book_id),
-                                           "incarnation": as_uuid(incarnation)}).fetchone()
+    def __init__(self, repository: PostgresWorkerRepository, edition: Edition, before: int):
+        self._repository, self.edition, self.before = repository, edition, before
+
+    def read(self, _book_id, _incarnation):
+        return self._repository.read_edition(self.edition, before=self.before)
 
 
 # What the working copy's commit may touch, and the key each table's rows are known by.
@@ -203,15 +225,21 @@ class _WorkingCopy:
         self._uuids = {"entities": {}, "entity_state": {}}
         local = {"entities": {}, "entity_state": {}}
         models = set()
+        edition = f"{self._reader.edition.book_id}:"
         with memory.transaction():
             for row in payload["chapters"]:
                 source = self._text.get(row["ordinal"])
                 text = (source or {}).get("text") or ""
-                if source is None or source["key"] != row["key"] or _sha256(text) != row[
+                # The edition's key, read as this reader's own (the door's rewrite): the file
+                # part must be the reader's chapter's at the same ordinal.
+                if not row["key"].startswith(edition):
+                    raise WorkingCopyMismatch("published memory does not match the book's text")
+                key = f"{self._book_id}:{row['key'][len(edition):]}"
+                if source is None or source["key"] != key or _sha256(text) != row[
                         "content_hash"]:
                     raise WorkingCopyMismatch("published memory does not match the book's text")
                 short = content_hash_of(text)
-                memory._ins("chapters", chapter_key=row["key"], book_id=self._book_id,
+                memory._ins("chapters", chapter_key=key, book_id=self._book_id,
                             revealed_at=row["ordinal"],
                             href=row["href"] or source.get("href") or "",
                             fragment=row["fragment"] or "", title=row["title"],
@@ -219,11 +247,11 @@ class _WorkingCopy:
                             schema_version=dal.SCHEMA_VERSION,
                             extractor_version=row["extractor_version"],
                             recorded_at=row["recorded_at"], retracted_at=None)
-                memory._ins("raw_chapters", chapter_key=row["key"], book_id=self._book_id,
+                memory._ins("raw_chapters", chapter_key=key, book_id=self._book_id,
                             revealed_at=row["ordinal"], text=text, char_count=len(text),
                             content_hash=short, recorded_at=row["recorded_at"],
                             retracted_at=None)
-                memory._ins("ingested_chapters", chapter_key=row["key"], book_id=self._book_id,
+                memory._ins("ingested_chapters", chapter_key=key, book_id=self._book_id,
                             content_hash=short, cost_pending=0,
                             extractor_model=row["extractor_model"],
                             completed_at=row["completed_at"])
@@ -296,8 +324,7 @@ class _WorkingCopy:
             return
         chapter, receipt, rows = added
         self._repository.commit_chapter_memory(
-            self._claim, book_id=as_uuid(self._book_id),
-            book_incarnation=as_uuid(self._incarnation), copied=self._digest,
+            self._claim, edition=self._reader.edition, copied=self._digest,
             chapter=chapter, receipt=receipt, rows=rows)
         self.published = True
 
@@ -421,6 +448,54 @@ class _PublishingMemory(ContentMemory):
                 "story memory changed after it was copied; prepare the chapter again") from None
 
 
+def _settle_published(catalog, book_id, ordinal, incarnation) -> None:
+    """Settle this reader's calls left open on chapter ``ordinal``, which the edition holds: its
+    deferred extraction calls at their noted size (``finalize_ingest``, a crash after this
+    reader's publish), then anything a run of theirs that died on it left reserved, as
+    abandoned. Each is settled once; a reservation already settled is not open any more."""
+    catalog.finalize_ingest(book_id, ordinal, incarnation=incarnation)
+    for purpose in CHAPTER_PURPOSES:
+        for reservation in catalog.cost_reservation_ids(book_id, phase=purpose,
+                                                        chapter_ordinal=ordinal):
+            catalog.settle_cost(book_id, reservation, phase="extraction-abandoned")
+
+
+def settle_left_open(claim: ClaimedJob, *, tenant_dsn: str, before: int) -> None:
+    """Settle the claimed reader's calls left open on chapters before ``before``, every one of
+    which the edition holds (ADR 0044 step 3): a run of theirs that died, or crashed after its
+    publish, may have left them, and the chapter may since have been built by another reader's
+    run, so no run of this reader's comes back to it. Spend stays where it was recorded."""
+    catalog = ChapterCatalog(tenant_dsn, OwnerId(claim.owner_id))
+    book_id, incarnation = str(claim.book_id), str(claim.book_incarnation)
+    chapters = sorted({row["chapter_ordinal"] for row in catalog.get_cost_reservations(book_id)
+                       if row["chapter_ordinal"] is not None
+                       and 1 <= row["chapter_ordinal"] < before})
+    for ordinal in chapters:
+        _settle_published(catalog, book_id, ordinal, incarnation)
+
+
+class _EditionCatalog:
+    """The reader's ``ChapterCatalog`` as the shared extraction sees it, except that the progress
+    it reports is the edition's below the chapter (what the working copy holds), never this
+    reader's own rows from before (ADR 0044 step 3: they are not the edition's). Everything
+    else, spend above all, is the reader's catalog unchanged."""
+
+    def __init__(self, catalog, copy) -> None:
+        self._catalog, self._copy = catalog, copy
+
+    def __getattr__(self, name):
+        return getattr(self._catalog, name)
+
+    def get_state(self, book_id):
+        state = self._catalog.get_state(book_id)
+        if state is None:
+            return None
+        built = 0
+        while built + 1 in self._copy.copied_ordinals:
+            built += 1
+        return {**state, "ingest_progress": built}
+
+
 UNREMEMBERED = "unremembered"
 
 
@@ -434,10 +509,17 @@ class _Unremembered(ChapterExtraction):
         return _empty_extraction(text)
 
 
-def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *, hold,
-                     tenant_dsn: str, settings, client, storage, sources, ordinal: int,
-                     unremembered: bool = False) -> bool:
-    """Extract chapter ``ordinal`` of the claimed book for the claimed reader and publish it.
+def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *,
+                     edition: Edition, hold, tenant_dsn: str, settings, client, storage, sources,
+                     ordinal: int, unremembered: bool = False) -> bool:
+    """Extract chapter ``ordinal`` of ``edition`` from the claimed reader's own copy of the file
+    and publish it into the edition (ADR 0044 step 3).
+
+    ``edition`` is the live edition of the claimed book's file
+    (``PostgresWorkerRepository.edition_of``). The chapter's text is read from the claimed
+    reader's copy and nothing else; the copy must be the edition's file, split the same way
+    (both fingerprints, the split computed again from the copy), or ``WorkingCopyMismatch`` is
+    raised before anything is spent. The edition's notes are read below ``ordinal`` only.
 
     ``hold`` is the job's lease check (``_Lease.hold`` of ``app.hosted.companion.jobs``): it is
     called before anything is spent and before every paid call, and raises ``LostLeaseError``
@@ -446,16 +528,17 @@ def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *,
     ``storage`` and ``sources`` are the object storage and the process's parse cache, as the
     companion dispatcher holds them.
 
-    Returns True when this run published the chapter, False when it was already published (its
-    deferred extraction calls, if a crash left any open, are settled now). Raises
-    ``ChapterOutOfOrder`` when an earlier chapter has no memory yet, ``LookupError`` when the
-    book is no longer the reader's, ``CostCeilingExceeded`` when the reader or the platform is at
-    a cap at the chapter's first call (nothing is spent then), ``ExtractionGroundingRejected``
-    when the chapter fails its review after the one repair, ``StalePreparedRoster`` when
-    corrections kept arriving through three preparations, ``ChapterAlreadyPublished`` when
-    another run published it meanwhile, ``ModelMigrationRequired`` when the platform's extraction
-    model is not the one the book was begun with, ``SelfRelation`` when the chapter ties a person
-    to themselves, and whatever the model calls raise.
+    Returns True when this run published the chapter, False when it was already published (this
+    reader's deferred extraction calls of it and of the chapter before, if a crash left any open,
+    are settled now; nothing is extracted). Raises ``ChapterOutOfOrder`` when an earlier chapter
+    has no memory yet, ``LookupError`` when the book is no longer the reader's,
+    ``CostCeilingExceeded`` when the reader or the platform is at a cap at the chapter's first
+    call (nothing is spent then), ``ExtractionGroundingRejected`` when the chapter fails its
+    review after the one repair, ``StalePreparedRoster`` when the edition kept moving through
+    three preparations, ``ChapterAlreadyPublished`` when another run published it meanwhile,
+    ``ModelMigrationRequired`` when the platform's extraction model is not the one the edition
+    was begun with, ``SelfRelation`` when the chapter ties a person to themselves, and whatever
+    the model calls raise.
 
     With ``unremembered`` the chapter is published as an unremembered chapter: no model call, the
     empty extraction, and ``chapters.kind`` = ``UNREMEMBERED`` as its marker.
@@ -477,8 +560,22 @@ def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *,
     manifest, chapters = HostedBookSource(storage, catalog, sources).verified_source(book_id, book)
     if ordinal not in {chapter["ordinal"] for chapter in chapters}:
         raise ValueError("the book has no such chapter")
-    copy = _WorkingCopy(_CopyReader(tenant_dsn, owner), repository, claim, book, manifest,
-                        chapters, client, ordinal, kind=UNREMEMBERED if unremembered else None)
+    # The reader's own copy is the edition's file, split as the edition was: checked on the copy
+    # itself, not on what the reader's row says, so a copy split another way (another version of
+    # the splitter) fails closed rather than number the edition's chapters differently.
+    if (book.get("file_hash") != edition.file_hash
+            or chapter_text.split_hash_of(chapters, book_id) != edition.split_hash):
+        raise WorkingCopyMismatch("the reader's copy is not the edition's file")
+    if repository.chapter_published(edition, ordinal):
+        # Built already (by another reader's run, or this one before a crash): nothing to
+        # extract; this reader's calls left open on it, and on the chapter before, are settled.
+        if ordinal > 1:
+            catalog.finalize_ingest(book_id, ordinal - 1, incarnation=incarnation)
+        _settle_published(catalog, book_id, ordinal, incarnation)
+        return False
+    copy = _WorkingCopy(_EditionReader(repository, edition, ordinal), repository, claim, book,
+                        manifest, chapters, client, ordinal,
+                        kind=UNREMEMBERED if unremembered else None)
     try:
         if not set(range(1, ordinal)) <= copy.copied_ordinals:
             raise ChapterOutOfOrder("an earlier chapter has no story memory yet")
@@ -501,7 +598,8 @@ def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *,
         # The chapter before is passed too, so its deferred calls are settled if a crash after
         # its publish left them open; every earlier chapter's run did the same for its own.
         extraction = _Unremembered if unremembered else ChapterExtraction
-        extraction(catalog, client, settings, hold, time.sleep).ingest_through(
+        extraction(_EditionCatalog(catalog, copy), client, settings, hold,
+                   time.sleep).ingest_through(
             book_id, [chapter for chapter in chapters if ordinal - 1 <= chapter["ordinal"]
                       <= ordinal],
             ordinal, store=copy, incarnation=incarnation, generation=0,

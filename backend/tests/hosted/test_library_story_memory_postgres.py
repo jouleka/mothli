@@ -16,8 +16,10 @@ ADR 0044 step 2 (the door for every book): the door is ``story_memory_door`` and
 reader's book whose file matches an edition on both fingerprints, however it came (a free-library
 add or an upload); a live book of the reader with no edition gets one row with empty lists, the
 same answer as an edition read at place 0. The door tests run for a free-library add and for an
-upload of the same file. Nothing builds an edition for an upload yet: the editions here are the
-notes account's (the old library account's), built by the operator's command, chapter by chapter.
+upload of the same file. The editions here are the notes account's (the old library account's),
+built by the operator's command, chapter by chapter; since ADR 0044 step 3 a reader's run builds
+an edition by the same path (``test_story_memory_editions_postgres.py``), and the command's copy
+of a title is marked as its file's edition.
 """
 
 from __future__ import annotations
@@ -81,6 +83,7 @@ from tests.hosted.test_story_memory_jobs_postgres import (
     PROBES,
     Lamps,
     built,
+    built_for,
     drain,
     fixed_check_drops,
     jobs_of,
@@ -934,26 +937,26 @@ def test_three_unremembered_chapters_in_a_row_stop_a_book_for_the_library_and_fo
     assert drain(work, 60) == 1 and models.calls == calls
     assert built(database, account)[-1] == (6, "unremembered")
 
-    # A reader's own book, with their own memory on: the same rule.
+    # A reader's book, with readers' story memory on: the same rule, for the edition its runs
+    # build (ADR 0044 step 3). Another file than the library's edition, so its own edition.
     client, tokens, app = memory_app_for(shelf.tenant_dsn, people, tmp_path / "own", **MEMORY)
     with client:
         own = extraction_client()
         writer = Writer(own, monkeypatch, reject={2, 3, 4})
         someone = Reader(client, tokens, "u", people["u"])
-        # Another file than the edition's: an upload of the edition's own file is served by the
-        # door (ADR 0044 step 2) and so gets no memory of its own.
         book = read_map_gate.upload(client, tokens, "u", another_file_of_the_same_title())
         someone.mark(book, list(range(1, 9)))
         drain(worker(app, own, worker_dsn), 60)
-        assert built(database, someone.owner) == [(1, "body"), *[(n, "unremembered")
-                                                                  for n in (2, 3, 4)]]
+        assert built_for(database, someone.owner, book) == [
+            (1, "body"), *[(n, "unremembered") for n in (2, 3, 4)]]
         assert writer.parts() == [1, *[2] * 4, *[3] * 4, *[4] * 4]
         assert {row["sanitized_error"]["code"] for row in jobs_of(database, someone.owner)
                 if row["state"] == "failed"} >= {"too_many_unremembered"}
         calls = list(writer.calls)
         someone.mark(book, [9])
         drain(worker(app, own, worker_dsn), 60)
-        assert writer.calls == calls and len(built(database, someone.owner)) == 4
+        assert writer.calls == calls and len(built_for(database, someone.owner, book)) == 4
+        assert built(database, someone.owner) == []          # the reader owns none of it
 
 
 def test_the_library_role_is_exactly_what_the_command_needs(library_dsn, database, admin_dsn):
@@ -1138,6 +1141,12 @@ def test_the_door_refuses_a_reader_whose_split_differs_from_the_editions_or_is_u
     other = hashlib.sha256(b"another split of the same file").hexdigest()
     for owner, which in ((a.owner, book), (account, edition)):
         for value in (other, None):
+            if owner == account and value is None:
+                # ADR 0044 step 3 (migration 0033): an edition without a split fingerprint is
+                # refused by the database itself, so it cannot be there to be matched.
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    set_split(owner, which, value)
+                continue
             set_split(owner, which, value)
             unknown = owner == a.owner and value is None
             for dsn in (tenant_dsn, database):

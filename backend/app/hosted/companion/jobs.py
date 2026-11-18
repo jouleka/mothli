@@ -14,9 +14,9 @@ are fully read, writes from those chapters alone and keeps only sentences that p
 ``recollect`` (part 7) is ``Recollector.catch_up`` around the unchanged ``pending`` and ``distil``,
 which read only the reader's own messages and keep only notes Jev finds the reader said; its
 queue, ``RecollectQueue``, is the ``recollector`` the chats are given. ``story_memory`` (ADR 0042
-part 3) is ``remember_chapter`` for the next chapter the reader has finished, one chapter per run;
-its queue, ``StoryMemoryQueue``, is asked where the notes queue is. Nothing here decides what a
-reader may be shown.
+part 3) is ``remember_chapter`` for the next chapter of the reader's file's edition (ADR 0044 step
+3) that the reader has finished, one chapter per run; its queue, ``StoryMemoryQueue``, is asked
+where the notes queue is. Nothing here decides what a reader may be shown: the door does.
 """
 
 from __future__ import annotations
@@ -33,16 +33,24 @@ from app.chapter_notes import NotesBuilder, build_missing
 from app.cost.limits import CostCeilingExceeded
 from app.home_conversation import HOME
 from app.hosted.companion import CompanionDatabaseBusy, OwnerBoundAdapter, as_uuid
-from app.hosted.companion.memory import HostedBookStore, StoryMemoryUnavailable
+from app.hosted.companion.memory import HostedBookStore
 from app.hosted.companion.source import HostedBookSource
 from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.companion.store_recollections import RecollectionCursorMoved
-from app.hosted.companion.story_memory import SelfRelation, WorkingCopyMismatch, remember_chapter
+from app.hosted.companion.story_memory import (
+    SelfRelation,
+    WorkingCopyMismatch,
+    remember_chapter,
+    settle_left_open,
+)
 from app.hosted.jobs import (
     CHAPTER_FAILURES,
+    CHAPTER_TAKEN_WAIT,
     PAUSABLE_PROVIDERS,
     ChapterAlreadyPublished,
+    ChapterTaken,
     ClaimedJob,
+    FileUnknown,
     LostLeaseError,
     PostgresWorkerRepository,
     UNREMEMBERED_IN_A_ROW,
@@ -74,26 +82,30 @@ class ChapterNotesQueue(OwnerBoundAdapter):
     __slots__ = ()
     KIND, KEY, PRIORITY = "chapter_notes", "chapter-notes", COMPANION_PRIORITY
 
-    def ensure(self, book_id) -> bool:
+    def ensure(self, book_id, *, after: timedelta | None = None) -> bool:
         """Insert a waiting job of this queue's kind for this reader's live book; True if one was
-        added. A job already waiting for the book, a book that is not this reader's, or a
-        database that cannot be reached adds nothing: as locally, the next page turn or reply
-        asks again, and the caller's answer never depends on it."""
+        added. With ``after``, the job waits that long before it may be claimed. A job already
+        waiting for the book, a book that is not this reader's, or a database that cannot be
+        reached adds nothing: as locally, the next page turn or reply asks again, and the
+        caller's answer never depends on it."""
         try:
             book = as_uuid(book_id)
         except LookupError:
             return False
+        wait = 0.0 if after is None else after.total_seconds()
         try:
             with self._transaction() as conn:
                 row = conn.execute(
                     """INSERT INTO public.jobs
-                         (owner_id,book_id,book_incarnation,kind,idempotency_key,priority)
-                       SELECT book.owner_id,book.id,book.incarnation,%s,%s,%s
+                         (owner_id,book_id,book_incarnation,kind,idempotency_key,priority,
+                          run_after)
+                       SELECT book.owner_id,book.id,book.incarnation,%s,%s,%s,
+                              now()+(%s*interval '1 second')
                        FROM public.books AS book
                        WHERE book.owner_id=%s AND book.id=%s AND book.deleted_at IS NULL
                        ON CONFLICT DO NOTHING
                        RETURNING id""",
-                    (self.KIND, f"{self.KEY}:{uuid.uuid4().hex}", self.PRIORITY,
+                    (self.KIND, f"{self.KEY}:{uuid.uuid4().hex}", self.PRIORITY, wait,
                      self._owner.value, book)).fetchone()
         except (psycopg.Error, CompanionDatabaseBusy):
             return False
@@ -101,22 +113,13 @@ class ChapterNotesQueue(OwnerBoundAdapter):
 
 
 class StoryMemoryQueue(ChapterNotesQueue):
-    """One hosted reader's story-memory queue (ADR 0042 part 3): ``ensure`` asks for the book's
-    memory to be carried on to the chapters they have finished, one chapter per run."""
+    """One hosted reader's story-memory queue (ADR 0042 part 3): ``ensure`` asks for the notes of
+    their book's file (its edition, ADR 0044 step 3) to be carried on to the chapters they have
+    finished, one chapter per run. A book the door already serves asks too: its edition is
+    built further by its readers' own runs."""
 
     __slots__ = ()
     KIND, KEY, PRIORITY = "story_memory", "story-memory", STORY_MEMORY_PRIORITY
-
-    def ensure(self, book_id) -> bool:
-        """As for notes, except that a book the door serves (it hands this reader something of
-        an edition, ADR 0042 section 3, ADR 0044 section 4) never gets a job of its reader's:
-        its memory is the edition's."""
-        try:
-            if HostedBookStore(self._dsn, self._owner).shared(book_id):
-                return False
-        except (LookupError, StoryMemoryUnavailable):
-            return False
-        return super().ensure(book_id)
 
 
 def _conversation(catalog, book_id):
@@ -295,7 +298,7 @@ def story_memory_failure(exc: Exception) -> SanitizedFailure | None:
     ceiling = isinstance(exc, CostCeilingExceeded) and exc.__cause__ is None
     if malformed or unreviewable or ceiling or isinstance(exc, SelfRelation):
         return SanitizedFailure("invalid_model_output", retryable=False)
-    if isinstance(exc, WorkingCopyMismatch):
+    if isinstance(exc, (WorkingCopyMismatch, FileUnknown)):
         return SanitizedFailure("source_integrity", retryable=False)
     if isinstance(exc, ModelMigrationRequired):
         return SanitizedFailure("internal_error", retryable=False)
@@ -412,20 +415,27 @@ class CompanionJobs:
 
     def _story_memory(self, claim: ClaimedJob, lease: _Lease,
                       repository: PostgresWorkerRepository) -> None:
-        """One chapter of the claimed book's story memory (ADR 0042 sections 2 and 6): the next
-        chapter without memory, only when the reader has finished it. The target is the read
-        map's ``finished_through``, read now through the tenant role, never the chapter counter
-        a device can push. After the chapter, the next run is asked for if the target lies
-        further on; a lowered target ("I haven't read this") stops the work at the next run.
+        """One chapter of the story memory of the claimed book's file (ADR 0042 sections 2 and 6,
+        ADR 0044 step 3): the next chapter of the file's **edition** without notes, only when this
+        reader has finished it, built from this reader's own copy and published into the edition
+        (made now, on its first chapter). The target is the read map's ``finished_through``, read
+        now through the tenant role, never the chapter counter a device can push. After the
+        chapter, the next run is asked for if the target lies further on; a lowered target ("I
+        haven't read this") stops the work at the next run. A book whose edition others built
+        past this reader's target costs nothing and reads nothing past it.
 
-        The library account's editions (ADR 0042 part 5) are built whole: their target is the
-        book's last chapter, and they run whatever ``HOSTED_READER_STORY_MEMORY`` says. A
-        reader's book that the door serves gets nothing of its own. A book with
-        ``UNREMEMBERED_IN_A_ROW`` chapters in a row kept unremembered is stopped, before anything
-        is spent, with ``too_many_unremembered``."""
+        One run of any reader builds a chapter: a run that finds the chapter's build slot taken
+        spends nothing and asks for this reader's next run ``CHAPTER_TAKEN_WAIT`` later. Two
+        failed runs on a chapter, of any readers of the file, keep it unremembered; an edition
+        with ``UNREMEMBERED_IN_A_ROW`` chapters in a row kept unremembered is stopped, for every
+        reader, before anything is spent, with ``too_many_unremembered``.
+
+        The library account's books (ADR 0042 part 5, until ADR 0044 step 6) take the same path;
+        only their target is the book's last chapter, and they run whatever
+        ``HOSTED_READER_STORY_MEMORY`` says."""
         library = repository.is_library_account(claim.owner_id)
         if not (library or self._settings.hosted_reader_story_memory):
-            return              # a reader's own book gets no memory of its own while this is off
+            return              # a reader's book gets no story memory while this is off
         owner = OwnerId(claim.owner_id)
         catalog = HostedCompanionCatalog(self._dsn, owner)
         book_id = str(claim.book_id)
@@ -442,24 +452,35 @@ class CompanionJobs:
                 book = catalog.get_book(book_id)
                 _manifest, chapters = source.verified_source(book_id, book)
                 target = max(chapter["ordinal"] for chapter in chapters)
-                state = catalog.get_state(book_id)
-            elif HostedBookStore(self._dsn, owner).shared(book_id):
-                return          # an edition's memory, through the door, serves this book
             else:
                 _point, _read, state, *_rest = read_snapshot(book_id, catalog, self._settings,
                                                              source)
                 target = state["finished_through"]
-            ordinal = state["ingest_progress"] + 1
+            edition = repository.edition_of(claim)
+            ordinal = 1 if edition is None else repository.next_chapter(edition, through=target)
+            if ordinal > 1:
+                # Every chapter before is the edition's: whatever this reader's runs left open
+                # on them (a run that died, perhaps since built by another reader) is settled.
+                settle_left_open(claim, tenant_dsn=self._dsn, before=ordinal)
             if ordinal > target:
                 return          # nothing finished past what is built: nothing to do or spend
-            if repository.unremembered_before(claim, ordinal) >= UNREMEMBERED_IN_A_ROW:
+            if edition is not None and repository.unremembered_before(
+                    edition, ordinal) >= UNREMEMBERED_IN_A_ROW:
                 raise _Stopped()
-            failed = repository.begin_story_memory_chapter(claim, ordinal)
-            remember_chapter(claim, repository, hold=lease.hold, tenant_dsn=self._dsn,
-                             settings=self._settings, client=self._extraction_client,
-                             storage=self._storage, sources=self._sources, ordinal=ordinal,
+            edition = edition or repository.edition_of(claim, create=True)
+            try:
+                failed = repository.begin_story_memory_chapter(claim, edition, ordinal)
+            except ChapterTaken:
+                # Another run, of any reader of this file, is building this chapter: nothing
+                # is spent here; this reader's next run comes a little later.
+                StoryMemoryQueue(self._dsn, owner).ensure(book_id, after=CHAPTER_TAKEN_WAIT)
+                return
+            remember_chapter(claim, repository, edition=edition, hold=lease.hold,
+                             tenant_dsn=self._dsn, settings=self._settings,
+                             client=self._extraction_client, storage=self._storage,
+                             sources=self._sources, ordinal=ordinal,
                              unremembered=failed >= UNREMEMBERED_AFTER)
-            if repository.unremembered_before(claim, ordinal + 1) >= UNREMEMBERED_IN_A_ROW:
+            if repository.unremembered_before(edition, ordinal + 1) >= UNREMEMBERED_IN_A_ROW:
                 raise _Stopped()
         except _Stopped:
             raise HandledJobFailure(
