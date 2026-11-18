@@ -167,11 +167,17 @@ export function ReaderPage({
   bookId,
   onBack,
   hosted = false,
+  chat = true,
 }: {
   bookId: string;
   onBack: () => void;
   /** Hosted mode (signed-in readers): some help this server may not offer is asked about first. */
   hosted?: boolean;
+  /** Whether this server has Mothli's chat (hosted mode says so at sign-in). Without it there is
+   * no moth, no panel, no "Tell me", no "/" shortcut and no tappable names, and nothing about a
+   * chat is asked of the server; hosted story memory needs the chat's settings, so there is none
+   * of it either. Reading, marks and the read map are untouched. */
+  chat?: boolean;
 }) {
   const holder = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -1504,7 +1510,8 @@ export function ReaderPage({
     lastSeenBookmark.current = bookmark;
     // Only for a chapter: never for a cover or Project Gutenberg's own page (finishedNoteFor).
     const finished = finishedNoteFor(manifest.atoms, previous, bookmark, unit);
-    if (!finished) return;
+    // No chat on this server: no "Want to hear what I noticed?" that nothing could answer.
+    if (!finished || !chat) return;
     const chapterTitle = finished.title;
     const noteId = `chapter-${bookmark}`;
     // Hosted mode has no chapter look-back route (ADR 0043): its chat is asked about the chapter,
@@ -1606,7 +1613,7 @@ export function ReaderPage({
     if (pendingJump || startOverOpen || modalOpen) return;
     if (event.key === "ArrowRight") viewRef.current?.next();
     else if (event.key === "ArrowLeft") viewRef.current?.prev();
-    else if (event.key === "/" && pos) {
+    else if (event.key === "/" && pos && chat) {
       event.preventDefault();
       if (!askOpen) openConversation();
     } else if (event.key === "n" || event.key === "N") {
@@ -1616,7 +1623,8 @@ export function ReaderPage({
   };
   const readerBookmark = Math.max(pos?.bookmark ?? 0, readFrontier?.available_chapter ?? 0);
   useEffect(() => {
-    if (readerBookmark < 1) {
+    // Without the chat there is no story memory to name anyone from (see `chat`).
+    if (readerBookmark < 1 || !chat) {
       setCast([]);
       return;
     }
@@ -1630,7 +1638,7 @@ export function ReaderPage({
     return () => {
       live = false;
     };
-  }, [bookId, readerBookmark, memoryRefresh]);
+  }, [bookId, readerBookmark, memoryRefresh, chat]);
   useEffect(() => {
     castRef.current = cast;
     nameMatcherRef.current = buildNameMatcher(nameTapsOn ? cast : []);
@@ -1773,7 +1781,7 @@ export function ReaderPage({
                 <span className="sr-only">Settings</span>
               </summary>
               <div className="reader-settings-body">
-                <ReaderControls preferences={preferences} onChange={changePreferences} status={preferenceStatus} nameTaps={nameTapsOn} onNameTapsChange={changeNameTaps} />
+                <ReaderControls preferences={preferences} onChange={changePreferences} status={preferenceStatus} nameTaps={nameTapsOn} onNameTapsChange={chat ? changeNameTaps : undefined} />
                 <ReaderTTS getView={() => viewRef.current} getVisibleRange={() => visibleRangeRef.current} inactive={modalOpen || startOverOpen} resetKey={bookId} />
                 {pos && pos.bookmark > 0 && (
                   <button
@@ -1914,7 +1922,7 @@ export function ReaderPage({
           </button>
         </footer>
 
-        {!askOpen && (
+        {!askOpen && chat && (
           <MothCorner
             note={latestNote}
             disabled={!pos}
@@ -1958,9 +1966,10 @@ export function ReaderPage({
           />
         )}
       </main>
-      {askOpen && (
+      {askOpen && chat && (
         <AskTheBook
           bookId={bookId}
+          hosted={hosted}
           bookmark={readerBookmark}
           prepareReadContext={prepareReadContext}
           onChaptersRead={() => void refreshReadShare()}

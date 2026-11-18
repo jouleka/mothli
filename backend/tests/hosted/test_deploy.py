@@ -8,11 +8,14 @@ import re
 import sys
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 from app.hosted.tenant.grants import (
     TENANT_FUNCTION_PRIVILEGES,
     TENANT_TABLE_PRIVILEGES,
     WORKER_TABLE_PRIVILEGES,
 )
+from tests.hosted.test_platform_pays import hosted_app
 
 BACKEND = Path(__file__).resolve().parents[2]
 REPO = BACKEND.parent
@@ -91,6 +94,12 @@ def test_the_role_script_matches_every_startup_check_as_written() -> None:
     assert [role.bypass_rls for role in roles.RUNTIME_ROLES] == [
         True, False, True, True, True, True, False]
     assert [role.key for role in roles.RUNTIME_ROLES if role.owner_tables] == ["purge"]
+    # The worker reads the money records for its cap check and writes none of them: every living
+    # job reserves, notes and settles its spend as the tenant role (companion/spend.py).
+    assert WORKER_TABLE_PRIVILEGES["cost_ledger"] == {"SELECT"}
+    assert WORKER_TABLE_PRIVILEGES["cost_reservations"] == {"SELECT"}
+    assert TENANT_TABLE_PRIVILEGES["cost_ledger"] >= {"SELECT", "INSERT"}
+    assert TENANT_TABLE_PRIVILEGES["cost_reservations"] >= {"SELECT", "INSERT", "UPDATE"}
 
 
 def test_the_role_script_grants_the_purge_role_the_owner_tables_and_its_few_others() -> None:
@@ -162,14 +171,19 @@ def test_every_setting_hosted_startup_requires_has_a_place_in_the_deployment() -
     from_template = set(re.findall(r"^([A-Z_]+)=", template, flags=re.M))
     assert required <= from_compose | from_template
     assert {"TRUSTED_HOSTS", "DEPLOYMENT_MODE"} <= from_compose
-    # Templates hold placeholders only.
+    # Templates hold placeholders only, beside the AI keys left empty (no chat until they are
+    # filled in) and the chat's switches set to the values it works with.
+    working = {"READER_PAGE_CONTEXT": "true", "READER_READ_MAP": "true", "JEV_ENABLED": "true",
+               "READER_CONVERSATION_JEV": "true", "OPENAI_API_KEY": "", "TYPESAFE_API_KEY": "",
+               "HOSTED_JOB_HANDLER": "app.hosted.companion.jobs:CompanionJobs"}
     for name in (".env.example", "app.env.example"):
         for line in (DEPLOY / name).read_text(encoding="utf-8").splitlines():
             if re.match(r"^[A-Z_]+=", line):
-                value = line.split("=", 1)[1]
+                setting, value = line.split("=", 1)
                 assert (value.startswith(("GENERATE_WITH_", "OWNER_MUST_FILL_IN", "https://OWNER"))
                         or value in {"0.10", "2.00", "5.00", "local-placeholder"}
-                        or value.endswith("OWNER_MUST_FILL_IN.example")), line
+                        or value.endswith("OWNER_MUST_FILL_IN.example")
+                        or (name == "app.env.example" and working.get(setting) == value)), line
 
 
 def test_no_deployment_file_asks_for_the_removed_reader_key_settings() -> None:
@@ -187,6 +201,89 @@ def test_no_deployment_file_asks_for_the_removed_reader_key_settings() -> None:
         assert not [name for name in removed if name in text], path.name
     assert "HOSTED_STORAGE_FILESYSTEM_KEY=" in (DEPLOY / "app.env.example").read_text(
         encoding="utf-8")
+
+
+def template_values() -> dict[str, str]:
+    """Every ``NAME=value`` line of deploy/app.env.example, as written."""
+    text = (DEPLOY / "app.env.example").read_text(encoding="utf-8")
+    return dict(line.split("=", 1) for line in text.splitlines() if re.match(r"^[A-Z_]+=", line))
+
+
+# What compose.yaml sets for the web container (not in the template), with stand-in values.
+COMPOSE_STAND_INS = {
+    "DEPLOYMENT_MODE": "hosted",
+    "TRUSTED_HOSTS": "reader.example",
+    "OIDC_REDIRECT_URI": "https://reader.example/api/auth/callback",
+    "HOSTED_AUTH_DSN": "postgresql://unused.invalid/mothli",
+    "HOSTED_TENANT_DSN": "postgresql://unused.invalid/mothli",
+    "HOSTED_STORAGE_BACKEND": "filesystem",
+}
+
+
+def template_settings(monkeypatch, tmp_path, **filled):
+    """``Settings`` from the template exactly as an owner would run it: every line as written, the
+    owner's placeholders replaced by stand-ins, and ``filled`` written over the empty lines."""
+    import base64
+
+    from app.config import Settings
+
+    values = {**template_values(), **COMPOSE_STAND_INS,
+              "HOSTED_STORAGE_FILESYSTEM_ROOT": str(tmp_path / "books"),
+              "HOSTED_STORAGE_FILESYSTEM_KEY": base64.b64encode(b"k" * 32).decode("ascii"),
+              "OIDC_ISSUER": "https://idp.example/", "OIDC_CLIENT_ID": "mothli",
+              "OIDC_CLIENT_SECRET": "stand-in-secret", **filled}
+    for name in [*Settings.model_fields]:
+        monkeypatch.delenv(name.upper(), raising=False)
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    return Settings(_env_file=None)
+
+
+def test_the_template_with_both_ai_keys_filled_in_gives_a_working_checked_chat(
+    monkeypatch, tmp_path
+) -> None:
+    """The break it catches: an owner following the runbook, filling in the two AI keys the
+    template asks for, and getting a server whose chat can never answer (its switches commented
+    out, as before this test), or one that refuses to start. The chat's switches are in the
+    template, set; the worker's dispatcher is named, with the kinds the chat needs."""
+    from app.hosted.companion.jobs import companion_kinds
+
+    template = template_values()
+    assert template["OPENAI_API_KEY"] == "" and template["TYPESAFE_API_KEY"] == ""
+    for switch in ("READER_PAGE_CONTEXT", "READER_READ_MAP", "JEV_ENABLED",
+                   "READER_CONVERSATION_JEV"):
+        assert template[switch] == "true", switch
+    # Streaming follows READER_CONVERSATION_JEV; hosted mode refuses it turned off.
+    assert "READER_CONVERSATION_STREAM" not in template
+    assert template["HOSTED_JOB_HANDLER"] == "app.hosted.companion.jobs:CompanionJobs"
+
+    settings = template_settings(monkeypatch, tmp_path, OPENAI_API_KEY="sk-stand-in",
+                                 TYPESAFE_API_KEY="ts-stand-in")
+    assert settings.companion_chat()
+    assert settings.jev_enabled and settings.reader_conversation_stream
+    assert settings.reader_story_notes and settings.reader_recollections
+    assert companion_kinds(settings) == {"chapter_notes", "recollect"}
+    assert not settings.hosted_story_memory                  # the owner decides that one
+    assert (settings.hosted_reader_usd_per_day, settings.hosted_reader_usd_per_month,
+            settings.hosted_platform_usd_per_day) == (0.10, 2.00, 5.00)
+    # And it starts, with the platform's writer and Jev built (no call is made).
+    with TestClient(hosted_app(settings), base_url="https://reader.example") as client:
+        platform = client.app.state.platform_client
+        assert platform.provider == "openai-compatible" and platform.jev is not None
+        platform.jev.close()
+
+
+def test_the_template_with_the_ai_keys_left_empty_starts_without_a_chat(monkeypatch,
+                                                                        tmp_path) -> None:
+    """The break it catches: the runbook's promise that Mothli runs without AI accounts broken by
+    the chat's switches being on in the template."""
+    settings = template_settings(monkeypatch, tmp_path)
+    assert not settings.companion_chat()
+    assert not (settings.jev_enabled or settings.reader_story_notes
+                or settings.reader_recollections)
+    assert settings.reader_read_map and settings.reader_page_context
+    with TestClient(hosted_app(settings), base_url="https://reader.example") as client:
+        assert client.app.state.platform_client is None
 
 
 def test_the_real_settings_files_are_never_committed() -> None:

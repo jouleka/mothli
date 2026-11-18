@@ -34,6 +34,7 @@ vi.mock("../api", () => ({
   },
 }));
 
+import { api } from "../api";
 import { Shelf } from "./Shelf";
 
 beforeEach(() => {
@@ -75,6 +76,43 @@ describe("Shelf import failure", () => {
   // NOTE: the input-value reset (re-selecting the SAME file must re-fire onChange) is not
   // representable in jsdom — a file input's .value is always "" there — so that behavior is
   // covered by live browser verification, not a unit test.
+});
+
+describe("a server without Mothli's chat", () => {
+  const signedIn = {
+    user: { id: "05dbebd1-e9e8-4be8-8172-eb65ca8d2a67", display_name: "Wren Example" },
+    expires_at: "2099-01-01T00:00:00+00:00",
+  };
+
+  // Catches: the home chat (or its invitation) shown on a hosted server that said it has no chat,
+  // or the home conversation asked for there, where it can only fail.
+  test("shows no home chat and asks nothing about one", async () => {
+    const homeConversation = vi.fn(async () => ({ turns: [] }));
+    (api as Record<string, unknown>).homeConversation = homeConversation;
+    try {
+      const { container } = render(<Shelf onOpen={() => {}} session={{ ...signedIn, chat: false }} />);
+      await screen.findByText("Make yourself at home.");
+      expect(homeConversation).not.toHaveBeenCalled();
+      expect(screen.queryByLabelText("Ask Mothli about your books")).toBeNull();
+      expect(screen.queryByText(/Ask me “wait, who was that\?”/)).toBeNull();
+      // Reading stays: a book can still be added.
+      expect(container.querySelector('input[type="file"]')).toBeTruthy();
+    } finally {
+      delete (api as Record<string, unknown>).homeConversation;
+    }
+  });
+
+  test("a server with the chat still has the home chat, as before", async () => {
+    const homeConversation = vi.fn(async () => ({ turns: [] }));
+    (api as Record<string, unknown>).homeConversation = homeConversation;
+    try {
+      render(<Shelf onOpen={() => {}} session={{ ...signedIn, chat: true }} />);
+      await waitFor(() => expect(homeConversation).toHaveBeenCalled());
+      expect(await screen.findByText(/Ask me “wait, who was that\?”/)).toBeTruthy();
+    } finally {
+      delete (api as Record<string, unknown>).homeConversation;
+    }
+  });
 });
 
 describe("Shelf a11y", () => {

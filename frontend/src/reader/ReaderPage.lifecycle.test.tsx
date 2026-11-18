@@ -816,8 +816,10 @@ describe("the note after a chapter", () => {
   test("hosted mode asks the chat about the chapter and never the look-back", async () => {
     const extra = mocks as Record<string, unknown>;
     extra.chapterCloseout = vi.fn();
-    mocks.askBook.mockResolvedValue({ as_of_chapter: 2, insufficient_evidence: true,
-      claims: [], citations: [], cost: null });
+    // Hosted mode replies only as a stream (ADR 0043 removed the non-streamed /ask there).
+    extra.askBookStream = vi.fn(async () => ({ as_of_chapter: 2, insufficient_evidence: true,
+      claims: [], citations: [], cost: null, read_frontier: hostedPoint }));
+    mocks.readFrontier.mockResolvedValue(hostedPoint as never);
     mocks.putPosition.mockResolvedValue({ bookmark: 2, cfi: "1:end", position_epoch: 0,
       current_chapter: 3, chapter_progress: 0 });
     try {
@@ -828,11 +830,60 @@ describe("the note after a chapter", () => {
         detail: { cfi: "2:start", section: { current: 2 } },
       })));
       fireEvent.click(await screen.findByRole("button", { name: "Tell me" }));
-      await waitFor(() => expect(mocks.askBook).toHaveBeenCalled());
-      expect(mocks.askBook.mock.calls[0][1]).toBe("What did you notice in Chapter 2?");
+      await waitFor(() => expect(extra.askBookStream).toHaveBeenCalled());
+      expect((extra.askBookStream as ReturnType<typeof vi.fn>).mock.calls[0][1])
+        .toBe("What did you notice in Chapter 2?");
       expect(extra.chapterCloseout).not.toHaveBeenCalled();
+      expect(mocks.askBook).not.toHaveBeenCalled();
     } finally {
       delete extra.chapterCloseout;
+      delete extra.askBookStream;
     }
+  });
+});
+
+const hostedPoint = { id: "a".repeat(64), atom: 2, offset: 0, position_epoch: 0, available_chapter: 2 };
+
+describe("a server without Mothli's chat", () => {
+  // Catches: a hosted server with no chat (its AI accounts not filled in) still offering the moth,
+  // "Tell me" after a chapter, the "/" shortcut or the panel, each ending in "I couldn't get a
+  // reply. Try again?"; or the reader asking the server anything that can only fail.
+  test("shows no way into a chat and asks the server nothing about one", async () => {
+    const extra = mocks as Record<string, unknown>;
+    const asked = {
+      askBookStream: vi.fn(), bookConversation: vi.fn(), chapterCloseout: vi.fn(),
+      graph: vi.fn(), notes: vi.fn(), catchMeUp: vi.fn(), character: vi.fn(),
+    };
+    Object.assign(extra, asked);
+    mocks.putPosition.mockResolvedValue({ bookmark: 2, cfi: "1:end", position_epoch: 0,
+      current_chapter: 3, chapter_progress: 0 });
+    try {
+      render(<ReaderPage bookId="b" onBack={() => {}} hosted chat={false} />);
+      await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+      const view = document.querySelector("foliate-view") as TestFoliateView;
+      act(() => view.dispatchEvent(new CustomEvent("relocate", {
+        detail: { cfi: "2:start", section: { current: 2 } },
+      })));
+      await waitFor(() => expect(mocks.putPosition).toHaveBeenCalled());
+      fireEvent.keyDown(document, { key: "/" });
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+      expect(screen.queryByRole("button", { name: "Talk to Mothli" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Tell me" })).toBeNull();
+      expect(screen.queryByLabelText("Message Mothli")).toBeNull();
+      for (const [name, call] of Object.entries(asked)) expect(call, name).not.toHaveBeenCalled();
+      expect(mocks.askBook).not.toHaveBeenCalled();
+      expect(vi.mocked(globalThis.fetch).mock.calls.map(([url]) => String(url))
+        .filter((url) => /\/ask|conversation|graph|notes|catch-me-up/.test(url))).toEqual([]);
+      // Reading stays: the place is still kept.
+      expect(mocks.putPosition).toHaveBeenCalled();
+    } finally {
+      for (const name of Object.keys(asked)) delete extra[name];
+    }
+  });
+
+  test("a server with the chat still offers it, as before", async () => {
+    render(<ReaderPage bookId="b" onBack={() => {}} hosted chat />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+    expect(await screen.findByRole("button", { name: "Talk to Mothli" })).toBeTruthy();
   });
 });

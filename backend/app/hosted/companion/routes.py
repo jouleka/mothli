@@ -213,7 +213,8 @@ def ask_the_book_stream(book_id: uuid.UUID, body: AskRequest, request: Request,
     anything is reserved.
     """
     settings = request.app.state.settings
-    if not (settings.reader_conversation_stream and settings.reader_page_context):
+    # The condition the session reports as ``chat`` (``Settings.companion_chat``).
+    if not settings.companion_chat():
         raise HTTPException(404, "streamed replies are not enabled")
     if body.read_frontier is None:
         raise HTTPException(422, "a streamed reply needs the confirmed read position")
@@ -387,9 +388,7 @@ class _NoHistory:
 def _home(request: Request, owner_id: OwnerId, catalog_type=HostedCompanionCatalog):
     """(catalog, source, settings) for the home conversation, or 404 while it is off (the local
     route's condition)."""
-    settings = request.app.state.settings
-    if not (settings.reader_read_map and settings.reader_page_context
-            and settings.reader_conversation_stream):
+    if not request.app.state.settings.companion_chat():
         raise HTTPException(404, "the home conversation is not enabled")
     return _bound(request, owner_id, catalog_type)
 

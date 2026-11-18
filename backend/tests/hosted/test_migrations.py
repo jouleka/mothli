@@ -86,7 +86,7 @@ def test_applied_migration_checksum_and_history_are_immutable(database: str) -> 
 
 def test_every_tenant_table_has_non_null_owner_and_rls(database: str) -> None:
     apply_migrations(database)
-    service_tables = {"app_schema_migrations", "provider_capabilities", "oidc_login_attempts",
+    service_tables = {"app_schema_migrations", "oidc_login_attempts",
                       "platform_spend_days", "provider_pauses", "library_account"}
     expected_tables = {
         "users",
@@ -741,6 +741,35 @@ def test_the_key_tables_are_gone_from_a_new_database_and_named_nowhere(database:
                                 (list(KEY_TABLES),)).fetchall()
     for listed in (TENANT_TABLE_PRIVILEGES, WORKER_TABLE_PRIVILEGES, IN_THE_COPY, LEFT_OUT):
         assert not set(KEY_TABLES) & set(listed)
+
+
+# ---- 0030: the unused service table provider_capabilities ------------------------------------
+
+DROP_PROVIDER_CAPABILITIES = 30
+
+
+def test_dropping_provider_capabilities_keeps_every_other_row_and_is_named_nowhere(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches: the migration failing on a database where the table holds a row (it
+    holds no reader content and no secret, so a row goes with it), leaving the table behind,
+    touching an account, a book, a job or a cost, or a grant or list still naming it."""
+    from app.hosted.tenant.export import IN_THE_COPY, LEFT_OUT
+    from app.hosted.tenant.grants import TENANT_TABLE_PRIVILEGES, WORKER_TABLE_PRIVILEGES
+
+    _apply_before(database, DROP_PROVIDER_CAPABILITIES, monkeypatch)
+    with psycopg.connect(database) as conn:
+        _seed_owner_and_book(conn, uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
+        conn.execute("INSERT INTO provider_capabilities (provider, capability_version, "
+                     "capabilities) VALUES ('openai', 'v1', '{\"stream\": true}'::jsonb)")
+        kept = _kept_rows(conn)
+    apply_migrations(database)
+    with psycopg.connect(database) as conn:
+        assert _kept_rows(conn) == kept
+        assert not conn.execute("SELECT 1 FROM pg_tables WHERE schemaname='public' AND "
+                                "tablename='provider_capabilities'").fetchall()
+    for listed in (TENANT_TABLE_PRIVILEGES, WORKER_TABLE_PRIVILEGES, IN_THE_COPY, LEFT_OUT):
+        assert "provider_capabilities" not in listed
 
 
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:

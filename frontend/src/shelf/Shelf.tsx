@@ -6,6 +6,7 @@ import {
   activeOfflineOwner,
   cacheBookForOffline,
   isBookSavedOffline,
+  offersChat,
   type OfflineSession,
 } from "../pwa/offline";
 import { AiStatus } from "../ui/AiStatus";
@@ -129,6 +130,8 @@ export function Shelf({
   session?: OfflineSession | null;
 }) {
   const owner = activeOfflineOwner();
+  // A hosted server without Mothli's chat: no home chat, and no line inviting a question.
+  const chat = offersChat(session);
   const [books, setBooks] = useState<Book[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -606,7 +609,7 @@ export function Shelf({
                   <Moth size={44} />
                   <div className="m-hand ml-note-text">
                     <p>{resuming ? "I remember where you stopped." : "This one is ready when you are."}</p>
-                    <p>Ask me about a name or a scene and I’ll answer from the pages you’ve read.</p>
+                    {chat && <p>Ask me about a name or a scene and I’ll answer from the pages you’ve read.</p>}
                   </div>
                 </div>
               )}
@@ -646,14 +649,14 @@ export function Shelf({
                 <div className="m-hand ml-note-text ml-note-text--large">
                   <p>Hi, I’m Mothli. I’m an AI that reads along with you.</p>
                   <p>I only ever know the pages you’ve read, so I can’t spoil anything.</p>
-                  <p>Ask me “wait, who was that?” whenever you like. I’ll write back in the margin.</p>
+                  {chat && <p>Ask me “wait, who was that?” whenever you like. I’ll write back in the margin.</p>}
                 </div>
               </div>
             </div>
           </section>
         )}
 
-        {"homeConversation" in api && <HomeChat shelfEmpty={libraryEmpty} onShelfChanged={() => void refresh()} />}
+        {chat && "homeConversation" in api && <HomeChat shelfEmpty={libraryEmpty} onShelfChanged={() => void refresh()} />}
 
         <section className="ml-collection" aria-labelledby="collection-title">
           <div className="ml-collection-head">

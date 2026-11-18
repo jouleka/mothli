@@ -8,13 +8,18 @@ be refused, in hosted mode; local mode's rules are unchanged. No database and no
 from __future__ import annotations
 
 import base64
+import uuid
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.hosted.auth.api import SESSION_COOKIE
+from app.hosted.auth.models import Principal
+from app.hosted.auth.tokens import new_token
 from app.hosted.companion.spend import set_spend_limits, spend_limits
-from tests.hosted.test_platform_pays import JEV_CANARY, KEY_CANARY, hosted_app
+from tests.hosted.test_platform_pays import JEV_CANARY, KEY_CANARY, _Tenant, hosted_app
 
 
 def hosted_settings(tmp_path, **values) -> Settings:
@@ -178,3 +183,95 @@ def test_story_memory_settings_refuse_what_cannot_work(tmp_path) -> None:
         hosted_settings(tmp_path, **without("openai_api_key"), hosted_story_memory=True)
     with pytest.raises(ValueError, match="HOSTED_STORY_MEMORY is a hosted-mode setting"):
         Settings(_env_file=None, data_dir=str(tmp_path / "local"), hosted_story_memory=True)
+
+
+# ---- whether this server has a chat at all, and the one mixed state that pays without replying ----
+
+SWITCHES = {"reader_conversation_jev": True, "jev_enabled": True,
+            "hosted_reader_usd_per_day": 0.10, "hosted_platform_usd_per_day": 5.00}
+
+
+def test_hosted_refuses_the_paid_chat_with_streaming_turned_off(tmp_path) -> None:
+    """The break it catches: a hosted server started with the chat's keys, caps and Jev setting,
+    but READER_CONVERSATION_STREAM=false. Hosted mode has no other reply (the non-streamed one was
+    removed, ADR 0043), so nothing could ever answer a reader while chapter notes or story memory
+    could still be paid for. The message names the settings to fix, never a value."""
+    with pytest.raises(ValueError, match="READER_CONVERSATION_STREAM") as refused:
+        hosted_settings(tmp_path, **CHAT, reader_conversation_stream=False)
+    assert "READER_CONVERSATION_JEV" in str(refused.value)
+    assert KEY_CANARY not in str(refused.value) and JEV_CANARY not in str(refused.value)
+    with pytest.raises(ValueError, match="READER_CONVERSATION_STREAM"):
+        hosted_settings(tmp_path, **{**CHAT, "reader_story_notes": True},
+                        reader_conversation_stream=False)
+    # Streaming left to follow the Jev setting, or set on: the chat, as before.
+    assert hosted_settings(tmp_path, **CHAT, reader_conversation_stream=True).companion_chat()
+    # Local mode keeps its reviewed, non-streamed replies.
+    local = Settings(_env_file=None, data_dir=str(tmp_path / "local"), reader_page_context=True,
+                     jev_enabled=True, reader_conversation_jev=True,
+                     reader_conversation_stream=False)
+    assert local.reader_conversation_jev and not local.reader_conversation_stream
+
+
+@pytest.mark.parametrize("empty", [{}, {"openai_api_key": "", "typesafe_api_key": ""}],
+                         ids=["keys-left-out", "keys-left-empty"])
+def test_hosted_with_no_ai_account_starts_without_a_chat_whatever_the_switches(empty,
+                                                                               tmp_path) -> None:
+    """The break it catches: a hosted server whose owner has not filled in either AI account
+    refusing to start because the template's chat switches are on, or starting with a chat that can
+    only fail. With neither account, nothing that calls a model is on and the server says it has no
+    chat; reading and the read map (which calls no model) stay as they were."""
+    settings = hosted_settings(tmp_path, **SWITCHES, **empty)
+    assert not settings.companion_chat()
+    assert not (settings.reader_conversation_jev or settings.reader_conversation_stream
+                or settings.jev_enabled or settings.reader_story_notes
+                or settings.reader_recollections)
+    assert settings.typesafe_api_key is None and not settings.openai_api_key
+    assert settings.reader_page_context and settings.reader_read_map
+    with TestClient(hosted_app(settings), base_url="https://reader.example") as client:
+        assert client.app.state.platform_client is None      # nothing set up to call a model
+        assert client.get("/api/limits").status_code == 401  # up, and asks for sign-in
+
+
+@pytest.mark.parametrize("values, named", [
+    ({**SWITCHES, "openai_api_key": KEY_CANARY}, "TYPESAFE_API_KEY"),
+    ({**SWITCHES, "typesafe_api_key": JEV_CANARY}, "OPENAI_API_KEY or ANTHROPIC_API_KEY"),
+    ({**SWITCHES, "openai_api_key": KEY_CANARY, "typesafe_api_key": ""}, "TYPESAFE_API_KEY"),
+])
+def test_one_ai_account_without_the_other_is_refused(values, named, tmp_path) -> None:
+    """The break it catches: the no-account rule above swallowing a half-filled template, which
+    would start a server that pays one account and can never answer."""
+    with pytest.raises(ValueError, match="the streamed chat in hosted mode requires") as refused:
+        hosted_settings(tmp_path, **values)
+    assert named in str(refused.value)
+    assert KEY_CANARY not in str(refused.value) and JEV_CANARY not in str(refused.value)
+
+
+class _SignedIn:
+    """A sign-in service that knows one reader, so ``GET /api/auth/session`` answers."""
+
+    async def check_runtime_role(self) -> None:
+        return None
+
+    async def authenticate_session(self, *, session_digest, now, idle_ttl):
+        return Principal(owner_id=uuid.uuid4(), session_id=uuid.uuid4(), display_name="Reader",
+                         email=None, csrf_digest=b"c" * 32,
+                         expires_at=datetime(2026, 7, 17, tzinfo=UTC))
+
+
+@pytest.mark.parametrize("values, chat", [({}, False), (SWITCHES, False), (CHAT, True)],
+                         ids=["nothing-set", "switches-without-keys", "chat"])
+def test_the_session_says_whether_this_server_has_a_chat(values, chat, tmp_path) -> None:
+    """The break it catches: the app learning that there is no chat only from a failed request
+    (a reply that 404s, then the old /ask that 404s too), so every reader's first question ends
+    in "I couldn't get a reply". The answer the app reads when it loads says it plainly."""
+    from app.main import create_app
+
+    app = create_app(hosted_settings(tmp_path, **values), auth_repository=_SignedIn(),
+                     tenant_repository=_Tenant(), oidc_client=object(),
+                     auth_clock=lambda: datetime(2026, 7, 16, tzinfo=UTC))
+    with TestClient(app, base_url="https://reader.example") as client:
+        client.cookies.set(SESSION_COOKIE, new_token())
+        answer = client.get("/api/auth/session")
+        assert answer.status_code == 200
+        assert answer.json()["chat"] is chat
+        assert client.app.state.settings.companion_chat() is chat

@@ -11,7 +11,7 @@ import "./styles.css";
 
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { initializeOfflineSupport, type OfflineSession } from "./pwa/offline";
+import { initializeOfflineSupport, offersChat, type OfflineSession } from "./pwa/offline";
 import { ReadingHistory } from "./history/ReadingHistory";
 import { FreeLibrary } from "./library/FreeLibrary";
 import { ReaderPage } from "./reader/ReaderPage";
@@ -76,7 +76,8 @@ function App({ session }: { session?: OfflineSession | null }) {
   // key: a book->book transition must fully unmount the old reader (its view/reporter must never
   // route a stale offset into ANOTHER book's permanent bookmark ratchet — pass-2 F4)
   return bookId ? (
-    <ReaderPage key={bookId} bookId={bookId} onBack={back} hosted={session !== undefined} />
+    <ReaderPage key={bookId} bookId={bookId} onBack={back} hosted={session !== undefined}
+      chat={offersChat(session)} />
   ) : recalling && withHistory ? (
     <ReadingHistory onBack={back} onOpen={open} />
   ) : browsing ? (

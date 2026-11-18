@@ -159,12 +159,31 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
+        # Hosted mode with neither of the platform's AI accounts (no writer key and no TypeSafe
+        # key; a line left empty counts as none) runs without Mothli's chat, whatever the chat's
+        # switches say: the server starts, readers read, and the app is told there is no chat
+        # (``companion_chat``), so it shows none. One account without the other is refused below.
+        if self.deployment_mode == "hosted" and not (
+                self.openai_api_key or self.anthropic_api_key
+                or (self.typesafe_api_key and self.typesafe_api_key.get_secret_value())):
+            self.openai_api_key = self.anthropic_api_key = self.typesafe_api_key = None
+            self.jev_enabled = self.reader_conversation_jev = False
+            self.reader_conversation_stream = False
         if not self.reader_memory_ingest and (self.deployment_mode != "local" or not self.reader_page_context):
             raise ValueError("deferred memory ingestion requires local page context")
         if self.reader_conversation_stream is None:
             self.reader_conversation_stream = self.reader_conversation_jev
         if self.reader_conversation_stream and not self.reader_conversation_jev:
             raise ValueError("READER_CONVERSATION_STREAM requires READER_CONVERSATION_JEV")
+        # Hosted mode has no reply but the streamed one (the non-streamed reply was removed, ADR
+        # 0043): the chat's paid settings with streaming off would pay for notes and story memory
+        # while no reader could ever be answered.
+        if (self.deployment_mode == "hosted" and self.reader_conversation_jev
+                and not self.reader_conversation_stream):
+            raise ValueError(
+                "hosted mode answers readers only with streamed replies: READER_CONVERSATION_JEV "
+                "is on and READER_CONVERSATION_STREAM is false; remove READER_CONVERSATION_STREAM "
+                "(it follows READER_CONVERSATION_JEV) or set it to true")
         if self.reader_conversation_prose and not self.reader_conversation_jev:
             raise ValueError("prose replies require the local conversation Jev pipeline")
         if self.reader_conversation_routing and not self.reader_conversation_jev:
@@ -311,6 +330,13 @@ class Settings(BaseSettings):
                 ):
                     raise ValueError("HOSTED_S3_ENDPOINT_URL must be an allowed origin URL")
         return self
+
+    def companion_chat(self) -> bool:
+        """Whether readers can talk with Mothli on this server: the streamed, checked chat inside a
+        book and on the home screen, with the page context and read map it needs. Hosted mode tells
+        the app at sign-in (``GET /api/auth/session``), so it shows no chat where there is none."""
+        return bool(self.reader_conversation_stream and self.reader_page_context
+                    and self.reader_read_map)
 
     def oidc_signing_algorithm_values(self) -> tuple[str, ...]:
         return tuple(item.strip() for item in self.oidc_signing_algorithms.split(",") if item.strip())

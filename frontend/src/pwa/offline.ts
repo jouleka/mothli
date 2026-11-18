@@ -18,7 +18,16 @@ export type OfflineSession = {
   /** Hosted: set while the reader's account waits to be erased (they asked to delete it). The
    * app then shows only the choice to keep it or sign out. */
   erase_after?: string;
+  /** Hosted: whether this server has Mothli's chat (its AI accounts are set up). Without it the
+   * app shows no way into a chat and asks the server nothing about one. */
+  chat?: boolean;
 };
+
+/** Whether the app offers Mothli's chat: always in local mode (no session); in hosted mode
+ * unless the server said it has none. A session saved before the server said is taken as before. */
+export function offersChat(session: OfflineSession | null | undefined): boolean {
+  return session?.chat !== false;
+}
 
 type PositionMutation = {
   id: string;
@@ -337,6 +346,7 @@ export async function initializeOfflineSupport(): Promise<
             display_name: session.user.display_name,
           },
           expires_at: session.expires_at,
+          ...(typeof session.chat === "boolean" ? { chat: session.chat } : {}),
         }),
       );
     } else if (response.status === 404) {
