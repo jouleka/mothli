@@ -1,6 +1,6 @@
 """LIT-6 extraction CONTRACT as Pydantic models — the single schema source of truth (ADR 0007 D-A5).
 
-Mirrors the spike's ``EXTRACTION_SCHEMA`` (``spikes/lit-6-extraction/extract_schema.py``) field-for-field
+Mirrors the spike's ``EXTRACTION_SCHEMA`` (the removed ``spikes/lit-6-extraction/extract_schema.py``) field-for-field
 so the same per-chapter object maps onto the LIT-5 tables, but expressed as Pydantic models with
 ``str``-subclass enums and ``ConfigDict(extra="forbid")`` so:
 

@@ -1,5 +1,5 @@
 -- LIT-5 / LIT-18 / LIT-19 / LIT-20 — per-book memory database (memory.db) — v1 baseline.
--- Lifted near-verbatim from the twice-reviewed spike (spikes/lit-5-schema/schema.sql) per ADR 0007
+-- Lifted near-verbatim from the twice-reviewed spike (the removed spikes/lit-5-schema/schema.sql) per ADR 0007
 -- D-A1; the only production addition is the append-once partial-UNIQUE index on chapter_summaries
 -- (ADR 0007 D-A3/D-A6 — see the note at the bottom). All DDL is `IF NOT EXISTS` so the forward-only
 -- migration runner (migrations.py) can apply this baseline idempotently on every open.

@@ -1,5 +1,5 @@
 """LIT-6 — the ingestion pipeline: a validated per-chapter extraction -> the LIT-5 store. Re-ported
-from ``spikes/lit-6-extraction/pipeline.py`` (ADR 0007 D-A1 (b)) with the named, behaviour-relevant
+from the removed ``spikes/lit-6-extraction/pipeline.py`` (ADR 0007 D-A1 (b)) with the named, behaviour-relevant
 production changes:
 
   * **append-once is re-sourced off the explicit v2 ``ingested_chapters`` completion marker**, NOT the

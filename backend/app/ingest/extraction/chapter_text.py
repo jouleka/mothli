@@ -1,5 +1,5 @@
 """LIT-6 — clean per-ATOM reading text over the PRODUCTIONIZED segmenter (app.ingest.segmentation),
-re-ported from ``spikes/lit-6-extraction/chapter_text.py`` (ADR 0007 D-A1 (b)).
+re-ported from the removed ``spikes/lit-6-extraction/chapter_text.py`` (ADR 0007 D-A1 (b)).
 
 Two named, behaviour-relevant changes vs the spike:
   * it runs over ``segment_epub`` (the productionized LIT-4 + D-A8 divider-merge), NOT a sibling

@@ -1,5 +1,5 @@
 """LIT-5 — the spoiler-safe Data Access Layer (DAL). Productionized from the twice-reviewed spike
-(spikes/lit-5-schema/dal.py) per ADR 0007 D-A1: the safety cores (`_authorizer`, `_select` funnel,
+(the removed spikes/lit-5-schema/dal.py) per ADR 0007 D-A1: the safety cores (`_authorizer`, `_select` funnel,
 `_WriterCtx`, referential-closure helpers, every BookmarkView read) are lifted near-verbatim.
 
 Production deltas vs the spike (ADR 0007):

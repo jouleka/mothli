@@ -1,16 +1,23 @@
 # Mothli
 
-Mothli is a self-hosted EPUB reader that builds a structured memory of the story as you
-read. It helps you remember characters, relationships, events, and where you stopped without showing
-material beyond your saved reading frontier.
+Mothli is a hosted reading app for many readers. Each reader signs in, keeps a shelf of EPUB books,
+and reads with Mothli, an AI reading companion that knows a book only as far as its reader has read
+it. It helps the reader remember characters, relationships, events, and where they stopped, without
+showing anything beyond their reading place. The AI is paid for by the service, under daily and
+monthly caps; readers do not bring their own AI account.
 
-**Mothli** is both the app and its AI reading companion. The repository contains the FastAPI service, React reader, local
-SQLite story-memory engine, and an experimental hosted multi-user foundation.
+The repository contains the FastAPI service, the React reader, hosted mode (PostgreSQL, sign-in
+through an outside OpenID Connect provider, the server image under `deploy/`), and local mode.
 
-> **Project status:** the local, single-user application is usable and covered by automated tests.
-> The hosted mode is an incomplete engineering foundation, not a ready-to-deploy public service.
-> Backups, restore drills, deployment configuration, monitoring, and an independent security review
-> remain operator responsibilities.
+**Local mode is the development and test workshop, not a product.** It runs one reader on one
+computer with a SQLite database. The spoiler rules are tested there, hosted mode is compared against
+it, and real models can be tried on a ChatGPT subscription. No reader uses it. The setup below starts
+the workshop.
+
+> **Project status:** hosted mode is not live yet. What remains before go-live is tracked in
+> [`docs/product/go-live-map-2026-11-17.md`](docs/product/go-live-map-2026-11-17.md); what was
+> removed when Mothli became one hosted product is in
+> [`docs/adr/0043-one-product.md`](docs/adr/0043-one-product.md).
 
 ## Features
 
@@ -70,7 +77,7 @@ and accepted architecture decisions are recorded under [`docs/adr`](docs/adr).
 - Optional: an OpenAI-compatible or Anthropic API key
 - Optional: PostgreSQL 16 with pgvector for the hosted/parity suite
 
-## Quick start
+## Quick start (the local workshop)
 
 Clone the repository, create a local configuration, and install locked dependencies:
 
@@ -209,11 +216,11 @@ suites against a pinned pgvector image.
 ## Repository layout
 
 ```text
-backend/    FastAPI API, local memory engine, hosted foundation, and tests
+backend/    FastAPI API, hosted mode, the local workshop's memory engine, and tests
 frontend/   React/TypeScript reader, PWA support, and vendored Foliate renderer
+deploy/     Server image, compose files, and backup/restore scripts for hosted mode
 docs/       Product design, ADRs, accessibility notes, and public runbooks
 scripts/    Optional loopback-only local service helpers
-spikes/     Reproducible research experiments and their synthetic/public fixtures
 ```
 
 ## Privacy and security

@@ -1,5 +1,5 @@
 """LIT-8 vector 4 — recap-cache coherence. Lifted near-verbatim from
-``spikes/lit-8-spoiler-eval/harness.py`` (ADR 0007 D-A1 group (a)).
+the removed ``spikes/lit-8-spoiler-eval/harness.py`` (ADR 0007 D-A1 group (a)).
 
 A recap cached at bookmark B must be invalidated when a later ``invalid_at`` or a re-extraction
 retroactively changes what is valid at B. The cache key hashes the live ``(id, invalid_at, content

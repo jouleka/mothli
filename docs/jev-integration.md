@@ -123,6 +123,9 @@ python scripts/classic_books_audit.py --run --env-file ENV --output classics.jso
 python scripts/prepared_reuse_audit.py --run --env-file ENV --output reuse.json
 ```
 
+*Note (18 November 2026): these three scripts were removed under ADR 0043 (one-off measurement
+scripts). They remain in git history; the commands above no longer run on `main`.*
+
 The original-book audit uses SQLite backups, preserves historical spend, fingerprints original
 files/reading state/costs, and removes its disposable copy. Each independent probe restores the
 prepared bank so earlier probes cannot create later hits. The classic audit naturally ingests

@@ -1,5 +1,5 @@
 """LIT-6 — cast-roster entity resolution (the anti-drift core). Lifted near-verbatim from the
-twice-reviewed spike (``spikes/lit-6-extraction/resolve.py``) per ADR 0007 D-A1 group (a): pure,
+twice-reviewed spike (the removed ``spikes/lit-6-extraction/resolve.py``) per ADR 0007 D-A1 group (a): pure,
 behaviour-defining safety logic. The ONLY production change is the import seam — ``cosine`` now comes
 from ``app.llm.client`` (the re-ported LLM module that preserves the spike's ``from llm import cosine``).
 

@@ -228,6 +228,20 @@ a test database, frontend tests and build, `ruff check app tests scripts`).
    `provider_settings.py`, one migration, `HOSTED_READER_KEYS` and the three key settings, grants,
    roles, `export.py`, `app.env.example`. Medium.
 
+- Built on 18 November 2026 in PR #112: steps 1 to 3 as designed, one commit each, except (1) the
+  spike is named in 18 files under `backend/app`, not seven (16 module docstrings and the header
+  comments of `memory.sql` and `catalog.sql`); each now says "the removed spikes/…", nothing else in
+  them changed; the four test docstrings and the older ADRs that name the spikes were left as
+  history; `chapters_meta.json` was not edited, and the eval tests pass on their own copies;
+  (2) the 4 deleted test files held 53 tests: the non-hosted suite collects 2,280 on `main` and 2,227
+  here; besides the script tests, `test_real_book_audit.py` held four cost tests of
+  `reader_prepare.PreparationCatalog` (foreground headroom under the book caps), which go now
+  rather than with R4 in step 5; (3) `backend/README.md`, which the record did not list, told readers
+  to run `live_quality_audit.py` and `live_book_audit.py`; those passages now say the scripts were
+  removed; (4) the go-live map's only statements made false were two README references (a line
+  number and the quoted status sentence); the open item on `benchmark_conversation.py`'s missing
+  spend cap is closed by its removal.
+
 If question 1 is no, steps 6 and 8 are skipped and step 7 keeps the worker's key lookup.
 
 ## Not in this round
