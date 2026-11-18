@@ -72,8 +72,10 @@ class OIDCClient:
         async with self._metadata_lock:
             if self._metadata is not None:
                 return self._metadata
+            # OpenID Connect Discovery 1.0 section 4: drop one trailing slash before the
+            # well-known path; the issuer comparisons below stay exact.
             document = await self._get_json(
-                self.issuer + "/.well-known/openid-configuration"
+                self.issuer.removesuffix("/") + "/.well-known/openid-configuration"
             )
             if document.get("issuer") != self.issuer:
                 raise OIDCError("OIDC discovery failed")
