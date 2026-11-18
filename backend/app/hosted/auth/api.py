@@ -236,6 +236,8 @@ async def session(request: Request):
             "email": principal.email,
         },
         "expires_at": principal.expires_at.isoformat(),
+        # Whether this server has Mothli's chat: the app shows no way into one where it has not.
+        "chat": request.app.state.settings.companion_chat(),
     }
     if principal.erase_after is not None:
         payload["erase_after"] = principal.erase_after.astimezone(UTC).isoformat()

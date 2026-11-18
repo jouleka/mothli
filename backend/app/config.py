@@ -312,6 +312,13 @@ class Settings(BaseSettings):
                     raise ValueError("HOSTED_S3_ENDPOINT_URL must be an allowed origin URL")
         return self
 
+    def companion_chat(self) -> bool:
+        """Whether readers can talk with Mothli on this server: the streamed, checked chat inside a
+        book and on the home screen, with the page context and read map it needs. Hosted mode tells
+        the app at sign-in (``GET /api/auth/session``), so it shows no chat where there is none."""
+        return bool(self.reader_conversation_stream and self.reader_page_context
+                    and self.reader_read_map)
+
     def oidc_signing_algorithm_values(self) -> tuple[str, ...]:
         return tuple(item.strip() for item in self.oidc_signing_algorithms.split(",") if item.strip())
 
