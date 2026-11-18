@@ -165,6 +165,15 @@ class Settings(BaseSettings):
             self.reader_conversation_stream = self.reader_conversation_jev
         if self.reader_conversation_stream and not self.reader_conversation_jev:
             raise ValueError("READER_CONVERSATION_STREAM requires READER_CONVERSATION_JEV")
+        # Hosted mode has no reply but the streamed one (the non-streamed reply was removed, ADR
+        # 0043): the chat's paid settings with streaming off would pay for notes and story memory
+        # while no reader could ever be answered.
+        if (self.deployment_mode == "hosted" and self.reader_conversation_jev
+                and not self.reader_conversation_stream):
+            raise ValueError(
+                "hosted mode answers readers only with streamed replies: READER_CONVERSATION_JEV "
+                "is on and READER_CONVERSATION_STREAM is false; remove READER_CONVERSATION_STREAM "
+                "(it follows READER_CONVERSATION_JEV) or set it to true")
         if self.reader_conversation_prose and not self.reader_conversation_jev:
             raise ValueError("prose replies require the local conversation Jev pipeline")
         if self.reader_conversation_routing and not self.reader_conversation_jev:
