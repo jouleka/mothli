@@ -473,6 +473,31 @@ def test_a_skimmed_page_never_reaches_a_model(chat_app, readers, monkeypatch):
     assert models.checked and "Mara moved" not in models.everything()
 
 
+def test_a_place_the_browser_claims_cannot_widen_what_a_reply_reads(chat_app, readers,
+                                                                    monkeypatch):
+    """The streamed chat's equal of the removed hosted ``/ask`` test's bound (ADR 0043 step 6),
+    where a request for chapter 99 was answered as of the chapter read. The break it catches: a
+    reply that reads further than the reader's own read map because the browser said so, by a
+    later bookmark or by a read point that claims later chapters."""
+    a = reader(chat_app, readers)
+    book = upload(a.client, a.tokens, "a", lamp_book())
+    a.mark(book, [1])
+    honest = a.point(book)
+    forged = {**honest, "atom": 3, "offset": 0, "available_chapter": 3}
+    models = StandIns(chat_app[2].state.platform_client, monkeypatch, reply=line(1, 2))
+    response = a.call("POST", f"/api/books/{book}/ask/stream",
+                      {"question": "What happened to lamp 50?", "bookmark": 99,
+                       "read_frontier": forged})
+    assert response.status_code == 200, response.text
+    events = events_of(response)
+    answer = events[-1]["answer"]
+    assert events[-1]["type"] == "done" and sentences(events) == [line(1, 2)]
+    assert answer["as_of_chapter"] == honest["available_chapter"] <= 1
+    assert answer["read_frontier"] == honest
+    assert models.writes == 1 and models.checked
+    assert "Corvus moved" not in models.everything() and "Vex moved" not in models.everything()
+
+
 def test_a_turn_goes_from_the_chat_when_its_chapter_is_marked_not_read(chat_app, readers,
                                                                         monkeypatch):
     """``test_a_turn_about_a_chapter_goes_when_that_chapter_is_marked_not_read``, hosted: the
