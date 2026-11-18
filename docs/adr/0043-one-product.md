@@ -263,6 +263,21 @@ a test database, frontend tests and build, `ruff check app tests scripts`).
   and loses the plan-only test; the `valid_answer` half of `test_bank_rejects_invalid_answers` is
   kept as `tests/test_answer_bank.py`; (5) docs: `jev-integration.md` says the speed-ups are gone
   and keeps the old paragraphs as record; the README and the go-live map lose their mentions.
+- Built on 18 November 2026 in PR #116: step 4 as designed (the two shell scripts,
+  `local_migration.py`, its test and runbook, one line of `export.py`), except (1) the table is
+  dropped by migration `0027_drop_local_library_migrations.sql` (its policy, then the table, which
+  takes its checks, unique indexes and owner link); no role was ever granted on it by name, so
+  `tenant/grants.py` and `scripts/hosted_roles.py` needed no change, and no schema constant or
+  deploy file named it; (2) besides `export.py`, the book-removal test named it, in its kept list
+  and its "may be empty" set, and in a docstring; all three went; (3) the 6 deleted tests were
+  about copying safely and undoing, none about what a reader may see; the hosted and parity suites
+  collect 432 at d32617e and 426 there (on `main` after step 5, 426 and 420); (4) nothing imported
+  `local_migration.py`; `lifecycle/archive.read_portable_archive` loses its only caller in `app/`
+  and stays with K9; (5) `hosted/companion/store.py:66-69` still says a moved-in book carries its
+  progress in the older counter: left alone, as reading-position code; the branch it describes
+  (`store.py:89`) is not only for moved-in books: a server run with the read map off raises that
+  counter from device reports (`tenant/api.py:1584`, `repository.py:1215`), though with the map on
+  only a moved-in book or such an earlier period could have left it above 0; (6) ADR 0030's link to the removed runbook is left as history.
 
 If question 1 is no, steps 6 and 8 are skipped and step 7 keeps the worker's key lookup.
 
