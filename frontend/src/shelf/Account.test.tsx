@@ -48,6 +48,16 @@ describe("Account", () => {
     expect(await axeAA(baseElement)).toHaveNoViolations();
   });
 
+  // Catches: asking for what Mothli remembers on a server that said it has no chat, where
+  // nothing can be remembered and the question can only fail.
+  test("on a server without the chat, neither asks nor offers what Mothli remembers", async () => {
+    render(<Account session={{ ...session, chat: false }} onClose={() => {}} />);
+    await act(() => new Promise((settled) => setTimeout(settled, 0)));
+    expect(mocks.recollections).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "What Mothli remembers" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+  });
+
   // Catches: a door to a screen the server does not have (hosted answers 404 until a later part).
   test("does not show what Mothli remembers where the server answers 404", async () => {
     mocks.recollections.mockRejectedValue(new ApiError("Not Found", 404));

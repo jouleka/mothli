@@ -207,6 +207,21 @@ describe("Mothli conversation", () => {
     expect(mocks.askBook).toHaveBeenCalledWith("b", "Where did they meet?", 2, [], point, expect.any(AbortSignal));
   });
 
+  // Catches: hosted mode falling back to the non-streamed POST /ask, which hosted mode does not
+  // have (ADR 0043), so a reply that could not stream became a second request that can only fail.
+  test("in hosted mode never asks the non-streamed way, whatever the stream answers", async () => {
+    mocks.askBookStream.mockResolvedValueOnce(null);
+    const view = render(<AskTheBook {...props} hosted prepareReadContext={async () => point} />);
+    submit("Where did they meet?");
+    expect(await screen.findByText("I couldn’t get a reply. Try again?")).toBeTruthy();
+    view.unmount();
+    // No confirmed read position: no stream can be asked for, and nothing else is tried.
+    render(<AskTheBook {...props} hosted prepareReadContext={async () => null} />);
+    submit("And then?");
+    expect(await screen.findByText("I couldn’t get a reply. Try again?")).toBeTruthy();
+    expect(mocks.askBook).not.toHaveBeenCalled();
+  });
+
   test("confirms the visible page before sending and rejects a different source boundary", async () => {
     const point = {id:"a".repeat(64), atom:2, offset:120, position_epoch:0, available_chapter:2};
     let confirm!: (value: typeof point) => void;

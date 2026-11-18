@@ -403,6 +403,19 @@ describe("tenant-scoped offline outbox", () => {
     expect(activeOfflineOwner()).toBe(owner);
   });
 
+  // Catches: a server that said it has no chat offering one again when the app opens offline
+  // from this device's saved session.
+  test("what the server said about its chat is kept with the saved session", async () => {
+    const session = {
+      user: { id: owner, display_name: "Wren Example" },
+      expires_at: "2099-01-01T00:00:00+00:00",
+      chat: false,
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(session), { status: 200 }));
+    expect(await initializeOfflineSupport()).toEqual(session);
+    expect(JSON.parse(localStorage.getItem("litlet.offline.session") ?? "{}").chat).toBe(false);
+  });
+
   // Catches: an account waiting to be erased still opening from this device's saved session, or
   // its offline books left here.
   test("a session waiting to be erased clears this device and is not kept for offline", async () => {
