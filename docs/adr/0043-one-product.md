@@ -278,6 +278,51 @@ a test database, frontend tests and build, `ruff check app tests scripts`).
   (`store.py:89`) is not only for moved-in books: a server run with the read map off raises that
   counter from device reports (`tenant/api.py:1584`, `repository.py:1215`), though with the map on
   only a moved-in book or such an earlier period could have left it above 0; (6) ADR 0030's link to the removed runbook is left as history.
+- Built on 18 November 2026 in PR #117: step 6 as designed (D2 and the front half of D1, no
+  database change), the equal test first, then D2, D1's routes, the frontend, the tidy-ups left by
+  step 5 and these docs, one commit each, except (1) the streamed chat had no test that a later
+  place claimed by the browser (a bookmark of 99, a read point naming later chapters) cannot widen
+  what a reply reads, which the hosted `/ask` test checked for its path; it was written first
+  (`test_companion_stream_postgres.py::test_a_place_the_browser_claims_cannot_widen_what_a_reply_reads`);
+  the rest of that test's properties have the named equals (another reader's book:
+  `::test_second_reader_cannot_stream_from_first_readers_book`; the read map as the bound:
+  `::test_a_skimmed_page_never_reaches_a_model`, `::test_a_sentence_naming_someone_not_yet_met_is_removed`;
+  cost recorded to the asking reader: `::test_a_stored_turn_and_its_cost_belong_to_the_asking_reader`;
+  hosted equals local: the parity test); (2) besides what the record listed, these went because
+  only the removed routes used them: `_CredentialBodyLimit` in `main.py` and the cipher, validator
+  and origins the web app built at start-up for the routes alone (the worker still builds its own
+  cipher, and `config.py` still requires the master key until step 8), the tenant repository's
+  credential and provider-setting methods (`create_credential` to `resolve_credential`) and
+  `settle_provider_call`, the `CREDENTIAL` and `PROVIDER_SETTINGS` lock kinds, and
+  `hosted/provider_settings.py` with `test_provider_settings.py`, since nothing else imported it;
+  the endpoint inventory loses its ten entries and the `credential` surface class (version 24);
+  (3) `HOSTED_READER_KEYS` was left gating only an upload's retired `ingest_book` job, which waits
+  for a key no reader can now give and holds the reader's job limit for good; hosted settings
+  refuse it being on, naming it (`test_platform_pays.py::test_hosted_settings_refuse_reader_keys_…`),
+  and an upload makes no extraction job; the tests that made that job by uploading with the
+  setting on (the source lifecycle and audit tests in `test_tenant_postgres.py`, account deletion's
+  seed) now write it by hand so the job routes keep their checks until step 7;
+  (4) frontend: besides the screen, its test, the button and `api.ts`, hosted mode no longer asks
+  the server once a session whether it helps with a picked passage (`api.passageHelp`, whose probe
+  was a request that could only fail), and "Tell me" after a chapter asks the chat directly in
+  hosted mode instead of first trying `/chapter-closeout`; the screen's styles went; local mode
+  keeps Explain / Define and the look-back; (5) tests: backend (not hosted) 2,093 collected on
+  `main`, 2,080 here (the hosted half of the GPT-6 cache billing test, 4 items, and the tidy-ups'
+  9); hosted and parity 420 on `main`, 413 here (+1 equal, +3 for the "do not exist, whatever the
+  settings" test and +1 for the refusal in place of the old routes test, -2 `test_provider_runtime.py`,
+  -4 `test_provider_settings.py`, -4 in `test_tenant_postgres.py`, -1 body-limit test); frontend
+  493 to 481 (-9 `ProviderSettings.test.tsx`, -3 in `api.test.ts`, -1 in `Shelf.test.tsx`, +1 for
+  "Tell me"); (6) tidy-ups: `answer_bank.py` and its test went (no caller); the client's Fast tier
+  went (`service_tier` is now always `default`, `fast:` billing and its settle-at-Standard branch,
+  `reuse_review_profile`), every model still billed at Standard prices; the optional `model`
+  argument of `note_reservation_actual` stays, unused; `store.py`'s comment no longer names the
+  move. Left for step 7: the `ingest_book` kind, `/api/jobs`, the worker's key lookup
+  (`jobs.py`, `worker.py`), `create_uploaded_book`'s `extraction_job` parameter and its read of
+  `provider_model_settings`, and the limit check that counts that kind. Left for step 8:
+  `hosted/credentials.py` and its test, the two tables and `jobs.credential_id`, the setting
+  `HOSTED_READER_KEYS` itself and the key settings (`HOSTED_CREDENTIAL_MASTER_KEY`, `_KEY_VERSION`,
+  `_PREVIOUS_MASTER_KEYS`, `HOSTED_PROVIDER_VALIDATION_TIMEOUT_SECONDS`), grants, roles,
+  `export.py` and `deploy/app.env.example`.
 
 If question 1 is no, steps 6 and 8 are skipped and step 7 keeps the worker's key lookup.
 
