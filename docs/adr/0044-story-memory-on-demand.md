@@ -559,6 +559,20 @@ smallest risk first. Migrations from **0031**.
 Steps 1 and 2 can be built side by side; 3 waits for 2; 4 and 5 wait for 3; 6, 7 and 8 wait for 4 and
 can be built side by side.
 
+- Built on 18 November 2026 in PR #122: step 1, the split fingerprint, as designed, except (1) the
+  list is hashed as compact JSON (`[[number, file part, text SHA-256], ...]`, UTF-8) by
+  `split_hash_of`, beside `content_hash_of` in `app/ingest/extraction/chapter_text.py`; it holds no
+  content-policy or splitter version, as section 1 says; (2) rows already there get NULL, meaning
+  "not known", and a check allows only a SHA-256; the door refuses a reader's book with no
+  fingerprint, and an edition with none matches nothing; (3) the door keeps its `gutenberg:`
+  condition until step 2; only its match changed (three lines); (4) removing a book clears the
+  fingerprint with the file hash; (5) the `:402` test is unchanged: the different-split and unknown
+  cases are a test of their own, with a copy whose splitter numbers every chapter one on;
+  (6) `create_uploaded_book` requires the fingerprint; (7) the copy of one's data does not carry
+  it, as it does not carry the file hash; (8) unverified point 3 below is checked: one file-driven
+  and one anchor-driven made-up book give one fingerprint in four separate processes with
+  different string-hash seeds (no real book file is in the repository to try).
+
 **The sentence for the terms and privacy pages** (replaces the free-library one, open items line 254):
 "Mothli's notes on a book's story (who's who and what has happened, chapter by chapter) are made once for
 each exact book file and used for everyone who has that same file, whether they uploaded it or took it
