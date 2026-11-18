@@ -148,7 +148,7 @@ Background work in hosted mode: there are **no in-process threads**. Upload inse
 | `GET/DELETE /api/reader/recollections`, `DELETE .../{id}` | `api/profile.py:117,126,134` | no |
 | `/api/classics...` | `api/classics.py:89-154` | no |
 | `/api/history...` | `api/history.py:102-249` | no |
-| `/people`, `/graph`, `/character`, `/timeline`, `/notes`, `/catch-me-up`, `/prepared-questions` | `api/views.py` | no |
+| `/people`, `/graph`, `/character`, `/timeline`, `/notes`, `/catch-me-up` (`/prepared-questions` was removed on 18 November, ADR 0043 R4) | `api/views.py` | no |
 
 **Background workers:**
 
@@ -207,7 +207,7 @@ Background work in hosted mode: there are **no in-process threads**. Upload inse
    - `home_cost_ledger`/`home_cost_reservations`: one row set for the whole install, `book_id = 'home'` (`catalog.sql:86-111`).
    - Integer ids (`turn_id`, `recollection_id`) are guessable and SQLite reuses deleted ones (`catalog.sql:199-200` comment). `DELETE /api/reader/recollections/{id}` (`api/profile.py:126`) ported as it is would let one reader delete another's note. Hosted uses UUIDs and returns the same 404 for "not yours" and "missing" (ADR 0021); the port should too.
 2. **Same book, two readers.** Local turns, read map and notes are keyed by `book_id` (plus `incarnation`). In hosted each upload gets its own `book_id` (`tenant/api.py:531`), so two readers do not share a key unless someone adds de-duplication; keep it that way, or the read map and turns would merge. Chapter notes are a function of the chapter text (`catalog.sql:113-115`), so sharing them between readers of the same file would save money; that is decision 8 and must never share turns, recollections or the read map.
-3. **Shared files.** Local classics, covers, the answer bank and the recap cache are files under one `DATA_DIR` (`api/classics.py:55`, `deps.py` `reviewed-answers-v2.json`, `main.py:430-431`). In hosted they must be per owner or proven content-free.
+3. **Shared files.** Local classics and covers are files under one `DATA_DIR` (`api/classics.py:55`). In hosted they must be per owner or proven content-free. (The answer bank and recap file cache that were also here were removed on 18 November, ADR 0043 R3 and R5.)
 4. **Per-process background state.** `NotesBuilder` keeps its queue in a Python set and its five-minute pause in one attribute for the whole process (`chapter_notes.py:148-177`). With many readers on their own keys, one reader's refused key would pause every reader's notes; with two web processes, two builders could write the same notes, and the pause and queue are lost on restart. ADR 0017 (lines 149-154) already requires shared state for locks and quotas. The hosted lock registry is also per process (`backend/app/hosted/runtime.py:76`); ADR 0022 accepts that only as an optimisation.
 5. **Per-book ceiling.** The local ceiling is per book; the home chat is charged to the first book and lifted when that book is removed (open items 150-151). In hosted the only cap is per owner and unlimited by default. A shared book (risk 2) with a per-book ceiling would let one reader exhaust another's allowance; a per-owner cap avoids that.
 6. **The home chat reads "every book".** `home_conversation.py` and `recollections.py` call `catalog.list_books()` and read maps of all books; in hosted that must be the owner's books only, or the home chat would read other readers' shelves.

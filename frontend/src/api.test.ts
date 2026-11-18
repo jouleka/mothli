@@ -553,7 +553,7 @@ describe("Routes this server does not have", () => {
   test("are asked for once a session, then answered here with the same 404", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => notFound());
     const asks = [() => api.providerSettings(), () => api.graph("a", 2), () => api.notes("a", 2),
-      () => api.preparedQuestions("a", 2), () => api.readOffer("a"), () => api.ingest("a")];
+      () => api.readOffer("a"), () => api.ingest("a")];
     for (const ask of asks) {
       await expect(ask()).rejects.toMatchObject({ status: 404, message: "Not Found" });
       await expect(ask()).rejects.toMatchObject({ status: 404, message: "Not Found" });
@@ -562,7 +562,7 @@ describe("Routes this server does not have", () => {
     await expect(api.graph("b", 1)).rejects.toMatchObject({ status: 404 });
     expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
       "/api/provider-settings", "/api/books/a/graph?bookmark=2", "/api/books/a/notes?bookmark=2",
-      "/api/books/a/prepared-questions?bookmark=2", "/api/books/a/read-offer", "/api/books/a/ingest"]);
+      "/api/books/a/read-offer", "/api/books/a/ingest"]);
   });
 
   test("never hide a book the server does not know, a switched-off feature, or a failure", async () => {

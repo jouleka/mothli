@@ -749,10 +749,6 @@ export const api = {
   // bookmark is optional: omitted = the current frontier; set = the scrubber's past point (LIT-15).
   // Either way the server CLAMPS to the high-water — the client never widens its own frontier.
   catchMeUp: requestRecap,
-  preparedQuestions: (id: string, bookmark: number) =>
-    unlessMissing("prepared-questions", () => fetch(`/api/books/${id}/prepared-questions?bookmark=${bookmark}`)).then(
-      (r) => j<{ as_of_chapter: number; questions: string[] }>(r),
-    ),
   readFrontier: (id: string, anchor?: ReadAnchor) => fetch(`/api/books/${id}/read-frontier`, anchor ? {
     method: "PUT", headers: { "content-type": "application/json", ...csrfHeaders() }, body: JSON.stringify(anchor),
   } : {}).then((r) => j<ReadFrontier>(r)),

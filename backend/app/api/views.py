@@ -14,7 +14,7 @@ never carry the rejected recap or a future name). Cached in-process by the full 
 (book, catalog incarnation, bookmark, validity_snapshot, current synth model, prompt version,
 atom_set_version) — the
 pass-3 churn fixes are what make this cache affordable mid-ingest."""
-from copy import copy, deepcopy
+from copy import copy
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import logging
@@ -28,7 +28,6 @@ from app.reader_reactions import reaction_clarification, reaction_copy
 
 from app.ask import (
     ASK_SYSTEM,
-    PREPARED_ANSWER_SYSTEM,
     AskDraft,
     AskRequest,
     AskRetrievalLimit,
@@ -45,8 +44,6 @@ from app.ask import (
     source_facts,
     validate_ask_draft,
 )
-from app.answer_bank import AnswerBusy, answer_scope, valid_answer
-from app.answer_reuse import reuse_review_client, select_reviewed_response
 from app.ask_context import complete_ask_context
 from app.ask_evidence import (
     ASK_EVIDENCE_SYSTEM,
@@ -245,22 +242,6 @@ def graph(book_id: str, bookmark: int | None = _BM, catalog=Depends(get_catalog)
         return graph_payload(mem, eff)
 
 
-@router.get("/prepared-questions")
-def prepared_questions(book_id: str, bookmark: int | None = _BM,
-                       catalog=Depends(get_catalog), store=Depends(get_store),
-                       settings=Depends(get_settings), client=Depends(get_reader_client),
-                       worker=Depends(get_worker)):
-    """Read-only: offer questions only when their complete current answer has cleared review."""
-    eff, state, manifest = _effective(book_id, bookmark, catalog, store, settings, worker)
-    questions = []
-    bank = getattr(client, "answers", None)
-    if eff > 0 and settings.reader_answer_cache and bank is not None:
-        scope = answer_scope(book_id, eff, state, manifest, catalog=catalog, store=store,
-                             settings=settings, client=client)
-        questions = bank.suggestions(scope, frontier=eff, limit=settings.reader_prepare_max_questions)
-    return {"as_of_chapter": eff, "questions": questions}
-
-
 @router.get("/memory-corrections")
 def memory_corrections(book_id: str, bookmark: int | None = _BM,
                        catalog=Depends(get_catalog), store=Depends(get_store),
@@ -295,9 +276,6 @@ def correct_memory(book_id: str, body: EntityCorrectionRequest, request: Request
             items = mem.entity_correction_history(eff)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
-    warmer = request.app.state.recap_warmer
-    if warmer is not None:
-        warmer.notify(book_id, catalog.get_book(book_id)["incarnation"], force=True)
     return {"as_of_chapter": eff, **result, "items": items}
 
 
@@ -607,28 +585,6 @@ def ask_the_book(
                 "recap": recap["recap"], "insufficient_evidence": recap["recap"] is None,
                 "status": "ready" if recap["recap"] else "paratext_only",
                 "claims": [], "citations": [], "cost": None}
-    bank = getattr(client, "answers", None)
-    if settings.reader_answer_cache and not body.history and hasattr(bank, "run_once"):
-        eff = min(eff, state["ingest_progress"])
-        if eff > 0:
-            scope = answer_scope(book_id, eff, state, manifest, catalog=catalog, store=store,
-                                 settings=settings, client=client)
-            cached = bank.get((*scope, body.question))
-            if cached is not None and cached.get("as_of_chapter") == eff and valid_answer(cached):
-                return {**cached, "cached": True, "cost": _ask_cost_payload([])}
-            # A paused background call must not make an interactive request inherit its
-            # cancellation or its smaller preparation ceiling. Share foreground calls only.
-            key = (*scope, body.question, bool(getattr(client, "preparing", False)))
-            try:
-                value, shared = bank.run_once(key, lambda: _ask_the_book(
-                    book_id, body, catalog, store, settings, client, worker,
-                    read_context=(eff, state, manifest, scope)))
-            except AnswerBusy as exc:
-                raise HTTPException(503, "answer preparation is busy; retry shortly") from exc
-            if shared:
-                value["cost"] = _ask_cost_payload([])
-                value["cached"] = not value["insufficient_evidence"]
-            return value
     return _ask_the_book(book_id, body, catalog, store, settings, client, worker)
 
 
@@ -639,16 +595,10 @@ def _conversation_limit_error(exc):
     return HTTPException(429, "book cost ceiling reached")
 
 
-def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, read_context=None):
+def _ask_the_book(book_id, body, catalog, store, settings, client, worker):
     """Answer only from completed, retrieved passages and return chapter-navigable citations."""
-    if read_context is None:
-        eff, state, manifest = _effective(book_id, body.bookmark, catalog, store, settings, worker)
-        eff = min(eff, state["ingest_progress"])
-        scope = None
-    else:
-        # The single-flight owner runs immediately under the same request lifecycle lease.
-        # Reuse its checked snapshot; rescanning the entire live book cannot add a new guarantee.
-        eff, state, manifest, scope = read_context
+    eff, state, manifest = _effective(book_id, body.bookmark, catalog, store, settings, worker)
+    eff = min(eff, state["ingest_progress"])
     question = conversation_question(body.question, body.history, eff)
     retrieval_question = conversation_retrieval_question(body.question, body.history, eff)
     calls = []
@@ -672,46 +622,10 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
             "citations": [],
             "cost": _ask_cost_payload(calls),
         }
-    # Conversation context is private session state, not a reusable prepared question.
-    answer_cache = (getattr(client, "answers", None)
-                    if settings.reader_answer_cache and not body.history else None)
-    answer_key = None
-    if answer_cache is not None:
-        if scope is None:
-            scope = answer_scope(book_id, eff, state, manifest, catalog=catalog, store=store,
-                                 settings=settings, client=client)
-        answer_key = (*scope, body.question)
-        cached = answer_cache.get(answer_key)
-        if cached is not None and cached.get("as_of_chapter") == eff and valid_answer(cached):
-            return {**deepcopy(cached), "cached": True, "cost": _ask_cost_payload([])}
-        if settings.reader_reuse_enabled and not body.history and not getattr(client, "preparing", False):
-            candidates = answer_cache.candidates(scope, body.question, limit=12)
-            candidates = [c for c in candidates if c["payload"]["as_of_chapter"] == eff
-                          and valid_answer(c["payload"])]
-            if candidates:
-                try:
-                    reviewer = reuse_review_client(client, settings)
-                    matched = select_reviewed_response(body.question, candidates, frontier=eff, store=store,
-                        atoms={a["key"]: a for a in manifest["atoms"]}, catalog=catalog,
-                        settings=settings, client=reviewer, book_id=book_id,
-                        remember=lambda result: remember(result, provider=reviewer.provider,
-                                                         model=reviewer.billing_model("cheap")))
-                    payload = {**matched["payload"], "cached": True,
-                               "cost": _ask_cost_payload(calls)}
-                    answer_cache.set(answer_key, payload,
-                                     reviewed_question=matched["reviewed_question"])
-                    return payload
-                except (JevUnavailable, AskRetrievalLimit):
-                    pass
-                except CostCeilingExceeded as exc:
-                    raise _conversation_limit_error(exc) from exc
-
     def finish(payload):
         reaction = reaction_copy(body.question)
         if reaction and not payload["insufficient_evidence"] and not settings.reader_conversation_pipeline:
             payload["acknowledgment"] = reaction[0]
-        if answer_cache is not None and not payload["insufficient_evidence"]:
-            answer_cache.set(answer_key, deepcopy(payload))
         return payload
 
     with store.book(book_id) as mem:
@@ -751,8 +665,7 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
         raise HTTPException(
             413, "completed text is too large to search at once; choose an earlier chapter"
         ) from exc
-    if (sources and client.provider != "stub" and settings.reader_conversation_pipeline
-            and not getattr(client, "preparing", False)):
+    if sources and client.provider != "stub" and settings.reader_conversation_pipeline:
         from app.conversation_pipeline import (
             DRAFT_SYSTEM, ConversationDraft, answer_conversation, compact_candidates,
         )
@@ -851,7 +764,7 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
                 client,
                 book_id,
                 phase="synthesis",
-                system=PREPARED_ANSWER_SYSTEM if getattr(client, "preparing", False) else ASK_SYSTEM,
+                system=ASK_SYSTEM,
                 user=ask_repair_prompt(prompt, repair_feedback),
                 tier="large",
                 schema=AskDraft,

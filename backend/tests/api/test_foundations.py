@@ -123,45 +123,6 @@ def test_hidden_supplementary_atoms_still_participate_in_geometry_validation(env
     assert api.get(f"/api/books/{bid}/graph").status_code == 409
 
 
-def test_answer_cache_changes_when_content_scope_changes(env):
-    from app.answer_bank import answer_scope
-    api, bid, app, _ = env
-    manifest = api.get(f"/api/books/{bid}/manifest").json()
-    def key():
-        return answer_scope(bid, 2, app.state.catalog.get_state(bid), manifest,
-                            catalog=app.state.catalog, store=app.state.store,
-                            settings=app.state.settings, client=app.state.reader_client)
-    before = key()
-    manifest["atoms"][0]["title"] = "Acknowledgements"
-    assert key() != before
-
-
-def test_background_preparation_can_call_the_real_updated_answer_route(env, monkeypatch):
-    from types import SimpleNamespace
-    import app.api.views as views
-    from app.reader_prepare import PreparationScope, prepare
-    _, bid, app, _ = env
-    app.state.settings.reader_prepare_enabled = app.state.settings.reader_answer_cache = True
-    scope = PreparationScope.capture(app, bid, app.state.catalog.get_book(bid)["incarnation"])
-    def plan(*args, **kwargs):
-        if kwargs["schema"].__name__ == "PreparationReview":
-            data = json.loads(kwargs["user"])
-            return SimpleNamespace(value={"audits": [{"question_id": q["id"],
-                "safe_to_prepare": True, "basis_ids": [1]} for q in data["questions"]]})
-        return SimpleNamespace(value={"questions": [{"question": "Who is Berenice?",
-            "kind": "character", "basis_ids": [1], "follow_up_to": None}]})
-    actual = views.ask_the_book
-    responses = []
-    def answer(*args, **kwargs):
-        value = actual(*args, **kwargs)
-        responses.append(value)
-        return value
-    monkeypatch.setattr("app.reader_prepare.budgeted_completion", plan)
-    monkeypatch.setattr(views, "ask_the_book", answer)
-    prepare(app, scope)
-    assert len(responses) == 1 and responses[0]["as_of_chapter"] == 2
-
-
 def test_illustrations_do_not_split_a_publisher_chapter_but_new_parts_do():
     manifest = {"atoms": [
         {"ordinal": 1, "title": "Chapter I", "part_label": "Part One"},

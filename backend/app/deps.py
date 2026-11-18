@@ -3,7 +3,6 @@ Catalog (the one shared writer), LLMClient — built once in the lifespan and re
 Routes NEVER construct these; the Store's sole-owner guarantee rests on there being exactly one."""
 import asyncio
 import os
-from copy import copy
 
 from fastapi import Request
 
@@ -21,18 +20,6 @@ def build_state(settings: Settings) -> dict:
     os.makedirs(settings.data_dir, exist_ok=True)
     # The writer and Jev, built by the one construction both modes share (ADR 0041 section 1).
     client = build_platform_clients(settings)
-    reader = client
-    if settings.reader_fast_mode:
-        if (client.provider != "openai-compatible" or not client._is_native_openai
-                or any(client._model_for(t) not in {"gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra"}
-                       for t in ("cheap", "large"))):
-            raise ValueError("Reader Fast mode requires native OpenAI GPT-6 Luna, Sol or Terra")
-        reader = copy(client)
-        reader._oai = client._oai.with_options(max_retries=0)
-        reader.service_tier = "fast"
-    from app.answer_bank import AnswerBank
-    reader.answers = AnswerBank(persist_path=(os.path.join(settings.data_dir, "reviewed-answers-v2.json")
-                                             if settings.reader_answer_cache else None))
     catalog = Catalog(os.path.join(settings.data_dir, "catalog.db"),
                       schema_version_default=migrations.CURRENT_VERSION)
     return {
@@ -45,7 +32,7 @@ def build_state(settings: Settings) -> dict:
         ),
         "catalog": catalog,
         "client": client,
-        "reader_client": reader,
+        "reader_client": client,
     }
 
 
@@ -106,8 +93,7 @@ async def book_lifecycle(book_id: str, request: Request):
         path = getattr(getattr(request, "url", None), "path", "")
         method = getattr(request, "method", "")
         position_write = method == "PUT" and path.endswith(("/position", "/read-frontier", "/read-page", "/read-chapters"))
-        shared_read = (getattr(request, "recap_preparation", False)
-                       or method == "GET"
+        shared_read = (method == "GET"
                        or (method == "POST" and path.endswith(("/ask", "/ask/stream", "/chapter-closeout", "/selection-action", "/people", "/ingest/retry")))
                        or position_write)
         if shared_read:

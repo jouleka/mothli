@@ -9,26 +9,23 @@ from app.ask import AskDraft, ask_judge_prompt, retrieve_ask_sources
 from app.ask_evidence import AskEvidenceError, complete_evidence_citations, evidence_prompt
 from app.eval.spoiler_gate.judge import JudgeUnavailable
 from app.llm.jev import JevUnavailable
-from app.llm.jev_tasks import reuse_answer
 from app.config import Settings
 from app.llm.jev_budget import estimate_jev_input
 from app.llm import jev_tasks
-from app.preparation_plan import preparation_facts
 from app.recap_grounding import primary_generation_prompt, primary_snapshot, recap_evidence, review_primary_recap
-from test_reader_preparation import payload
 from test_views import env as env, _supported_citation_audit
 
 
-def test_primary_snapshot_and_plan_never_read_an_uncompleted_raw_chapter(env):
+def test_primary_snapshot_never_reads_an_uncompleted_raw_chapter(env):
     _api, bid, app, _atoms = env
     with app.state.store.book(bid) as mem:
         chapters, raw = primary_snapshot(mem, 1)
         assert chapters and all(r["revealed_at"] == 1 for r in chapters)
         assert "Berenice" not in json.dumps(raw) and "Corvus" not in json.dumps(raw)
-        facts = preparation_facts(mem, 2)
-        primary = [r for r in facts if r["kind"] == "source"]
-        assert primary and "Berenice" in json.dumps(primary)
-        assert "Corvus" not in json.dumps(facts)
+        # At chapter 2 the completed chapter's text is in and the unread chapter 3 is not.
+        snapshot = primary_snapshot(mem, 2)
+        assert "Berenice" in json.dumps(snapshot[1])
+        assert "Corvus" not in json.dumps(snapshot)
         text = " ".join(mem.view(2).raw_text(chapters[0]["chapter_key"]).split())
         assert text  # source came through the visible raw-text funnel
 
@@ -56,22 +53,6 @@ def test_recap_generation_does_not_truncate_primary_evidence_to_fit(limit):
     snapshot = ([{'revealed_at': 1, 'chapter_key': 'one'}], {'one': 'Nell carried a box. ' * 100})
     with pytest.raises(JudgeUnavailable):
         primary_generation_prompt(snapshot, 1, {}, byte_limit=limit)
-
-
-def test_plan_keeps_chapter_ending_details_missing_from_legacy_summary(env):
-    _api, bid, app, atoms = env
-    with app.state.store.book(bid) as mem:
-        key = atoms[1]["key"]
-        # This is a test-only primary-text correction, never a production data migration.
-        with mem._writer():
-            mem._conn.execute("UPDATE raw_chapters SET text=? WHERE chapter_key=?", (
-                "Berenice met Aldric. " + "The wind crossed the valley. " * 300
-                + "Berenice put the cobalt key in a clay cup.", key,
-            ))
-        facts = preparation_facts(mem, 2)
-        assert any(f["kind"] == "source" and "clay cup" in f["text"] for f in facts)
-        assert any(f["kind"] == "character" for f in facts)
-        assert len(json.dumps(facts, ensure_ascii=False).encode()) <= 18000
 
 
 def test_repeated_scene_current_candidates_survive_high_overlap_older_scenes():
@@ -406,29 +387,3 @@ def test_real_provider_recap_gate_cache_and_generic_failures(env, monkeypatch, m
     else:
         assert app.state.recaps.stats()['entries'] == 0
     assert app.state.catalog.get_cost_reservations(bid) == []
-
-
-@pytest.mark.parametrize('fault', [None, 'premise', 'coverage', 'older_scene', 'newer_chapter'])
-def test_reuse_subset_requires_compatible_premises_complete_coverage_and_current_scene(fault):
-    value = payload()
-    value['claims'][0]['text'] = 'Berenice met Aldric at the forge before noon.'
-    candidate = {'reviewed_question': 'Describe the meeting with its place and time.', 'payload': value}
-    before = deepcopy(candidate)
-    query = 'Where did Berenice meet Aldric?'
-    if fault == 'older_scene':
-        value['citations'][0]['ordinal'] = 1
-    if fault == 'newer_chapter':
-        query = 'Where did Berenice meet Aldric in chapter 3?'
-    def run(state, questions):
-        assert 'latest_completed_chapter' in state['candidates'][0]
-        answers = {k: {'choice': 'yes', 'probabilities': {'yes': 1.0}, 'confidence': 1.0} for k in questions}
-        if fault in {'premise', 'coverage'}:
-            answers['q0' if fault == 'premise' else 'a0']['choice'] = 'no'
-        return answers
-    args = dict(run=run, settings=SimpleNamespace(reader_reuse_min_probability=.99, reader_reuse_min_confidence=.9))
-    if fault:
-        with pytest.raises(JevUnavailable):
-            reuse_answer(query, [candidate], **args)
-    else:
-        assert reuse_answer(query, [candidate], **args) is candidate
-        assert candidate == before
