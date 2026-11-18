@@ -1,5 +1,5 @@
 {
-  "version": 23,
+  "version": 24,
   "required_surface_classes": [
     "list",
     "get",
@@ -189,33 +189,6 @@
       "access": "search",
       "repository_method": "search_book",
       "cross_tenant_test": "test_reader_search_is_owner_scoped_spoiler_bounded_and_deletion_aware"
-    },
-    {
-      "method": "POST",
-      "path": "/api/books/{book_id}/ask",
-      "surface": "answer",
-      "access": "cited-answer",
-      "repository_method": "ask_context",
-      "cross_tenant_test": "test_ask_the_book_is_owner_scoped_spoiler_bounded_and_costed",
-      "mounted_only_with": "HOSTED_READER_KEYS"
-    },
-    {
-      "method": "POST",
-      "path": "/api/books/{book_id}/selection-action",
-      "surface": "answer",
-      "access": "selected-text-assistance",
-      "repository_method": "selection_action_context",
-      "cross_tenant_test": "test_reading_assistance_is_owner_scoped_frontier_bounded_and_costed",
-      "mounted_only_with": "HOSTED_READER_KEYS"
-    },
-    {
-      "method": "POST",
-      "path": "/api/books/{book_id}/chapter-closeout",
-      "surface": "answer",
-      "access": "cited-chapter-closeout",
-      "repository_method": "chapter_closeout_context",
-      "cross_tenant_test": "test_reading_assistance_is_owner_scoped_frontier_bounded_and_costed",
-      "mounted_only_with": "HOSTED_READER_KEYS"
     },
     {
       "method": "GET",
