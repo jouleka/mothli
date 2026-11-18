@@ -189,19 +189,11 @@ export function ReaderPage({
     // Removed on another device: what this one kept of the book (its offline copy) goes too.
     void forgetBookOnDevice(bookId);
   }, [gone, bookId]);
-  // Help with a picked passage: always in local mode; in hosted mode once the server says so.
-  // Where it has none, the selection tools offer only what works (highlight, note), the chat is
-  // never about the picked passage, and nothing dead is shown.
-  const [passageHelp, setPassageHelp] = useState(!hosted);
-  useEffect(() => {
-    let live = true;
-    void api.passageHelp?.(bookId, hosted).then((offered) => {
-      if (live) setPassageHelp(offered);
-    });
-    return () => {
-      live = false;
-    };
-  }, [bookId, hosted]);
+  // Help with a picked passage (Explain, Define, a question about it) is local mode's alone: hosted
+  // mode has no route for it until it is built on the platform's models (ADR 0043). There the
+  // selection tools offer only what works (highlight, note), the chat is never about the picked
+  // passage, nothing dead is shown and nothing is asked of the server.
+  const passageHelp = !hosted;
   useEffect(() => {
     const owner = activeOfflineOwner();
     const onGone = (event: Event) => {
@@ -1515,10 +1507,16 @@ export function ReaderPage({
     if (!finished) return;
     const chapterTitle = finished.title;
     const noteId = `chapter-${bookmark}`;
+    // Hosted mode has no chapter look-back route (ADR 0043): its chat is asked about the chapter,
+    // as the reader would ask it, and no request is made that can only fail.
     const tellMe = {
       label: "Tell me",
       run: () =>
-        openConversation(null, {
+        openConversation(null, hosted ? {
+          id: `ask-${bookmark}-${Date.now()}`,
+          kind: "ask",
+          prompt: `What did you notice in ${chapterTitle}?`,
+        } : {
           id: `closeout-${bookmark}-${Date.now()}`,
           kind: "closeout",
           chapter: bookmark,

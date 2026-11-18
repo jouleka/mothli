@@ -15,7 +15,6 @@ import { axeAA } from "../test-a11y";
 const mocks = vi.hoisted(() => ({
   books: vi.fn(),
   importBook: vi.fn(),
-  providerSettings: vi.fn(),
   classics: vi.fn(),
   addClassic: vi.fn(),
   recollections: vi.fn(),
@@ -26,7 +25,6 @@ vi.mock("../api", () => ({
     books: mocks.books,
     deleteBook: mocks.deleteBook,
     importBook: mocks.importBook,
-    providerSettings: mocks.providerSettings,
     classics: mocks.classics,
     addClassic: mocks.addClassic,
     recollections: mocks.recollections,
@@ -42,7 +40,6 @@ beforeEach(() => {
   localStorage.clear();
   mocks.books.mockReset().mockResolvedValue([]);
   mocks.importBook.mockReset();
-  mocks.providerSettings.mockReset().mockRejectedValue(new Error("local mode"));
   mocks.classics.mockReset().mockRejectedValue(new Error("no catalogue"));
   mocks.addClassic.mockReset();
   mocks.recollections.mockReset().mockRejectedValue(new Error("not kept"));
@@ -81,14 +78,18 @@ describe("Shelf import failure", () => {
 });
 
 describe("Shelf a11y", () => {
-  test("offers provider settings only when the hosted endpoint is available", async () => {
+  // Catches: the "paste your own AI key" settings coming back. Readers cannot pay with their own
+  // AI account (ADR 0043), so there is no such screen, signed in or not.
+  test("offers no connection settings for a reader's own AI key", async () => {
     const user = userEvent.setup();
-    mocks.providerSettings.mockResolvedValue({ items: [] });
-    render(<Shelf onOpen={() => {}} />);
+    const session = {
+      user: { id: "05dbebd1-e9e8-4be8-8172-eb65ca8d2a67", display_name: "Wren Example" },
+      expires_at: "2099-01-01T00:00:00+00:00",
+    };
+    render(<Shelf onOpen={() => {}} session={session} />);
     await user.click(screen.getByRole("button", { name: "Library settings and account" }));
-    expect(
-      await screen.findByRole("button", { name: /Connection settings/i }),
-    ).toBeTruthy();
+    await screen.findByRole("button", { name: "Your account" });
+    expect(screen.queryByRole("button", { name: /Connection settings/i })).toBeNull();
   });
 
   test("each book is a real button (keyboard-openable, not a click-only div)", async () => {
@@ -188,16 +189,19 @@ const ownerB = "ae7eb4ca-c15e-4b0e-9476-15e671a005b9";
 describe("Library interactions", () => {
   test("keeps utilities in a keyboard-dismissible disclosure and restores focus", async () => {
     const user = userEvent.setup();
-    mocks.providerSettings.mockResolvedValue({ items: [] });
-    render(<Shelf onOpen={() => {}} />);
+    const session = {
+      user: { id: "05dbebd1-e9e8-4be8-8172-eb65ca8d2a67", display_name: "Wren Example" },
+      expires_at: "2099-01-01T00:00:00+00:00",
+    };
+    render(<Shelf onOpen={() => {}} session={session} />);
     const toggle = screen.getByRole("button", { name: "Library settings and account" });
-    expect(screen.queryByRole("button", { name: "Connection settings" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Your account" })).toBeNull();
     await user.click(toggle);
-    const settings = await screen.findByRole("button", { name: "Connection settings" });
-    settings.focus();
+    const account = await screen.findByRole("button", { name: "Your account" });
+    account.focus();
     await user.keyboard("{Escape}");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByRole("button", { name: "Connection settings" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Your account" })).toBeNull();
     expect(document.activeElement).toBe(toggle);
   });
 
@@ -214,20 +218,6 @@ describe("Library interactions", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(toggle);
     expect(onOpen).not.toHaveBeenCalled();
-  });
-
-  test("returns from provider settings to the visible utilities trigger", async () => {
-    const user = userEvent.setup();
-    mocks.providerSettings.mockResolvedValue({ items: [] });
-    render(<Shelf onOpen={() => {}} />);
-    const toggle = screen.getByRole("button", { name: "Library settings and account" });
-    await user.click(toggle);
-    await user.click(await screen.findByRole("button", { name: "Connection settings" }));
-    expect(await screen.findByRole("dialog", { name: "Your providers" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Close settings" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(document.activeElement).toBe(toggle);
   });
 
   // Catches: anything of hosted sign-in reaching local mode, where there are no accounts.
