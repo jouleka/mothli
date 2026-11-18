@@ -294,8 +294,8 @@ class Settings(BaseSettings):
                 raise ValueError(f"{label} must be an HTTPS URL without user information")
             if parsed.fragment or (label == "OIDC_ISSUER" and parsed.query):
                 raise ValueError(f"{label} may not contain a query or fragment")
-        if self.oidc_issuer.endswith("/"):
-            raise ValueError("OIDC_ISSUER must use its exact issuer value without a trailing slash")
+        if self.oidc_issuer.endswith("//"):
+            raise ValueError("OIDC_ISSUER may end with at most one slash")
         if "openid" not in self.oidc_scopes.split():
             raise ValueError("OIDC_SCOPES must include openid")
         algorithms = self.oidc_signing_algorithm_values()

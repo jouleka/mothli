@@ -41,7 +41,13 @@ step 2, never into an email, a chat or a document.
 6. **The sign-in service** (any OpenID Connect provider). Create a "web application" there with:
    - redirect (callback) address `https://YOURDOMAIN/api/auth/callback`
    - scopes `openid profile email`
-   - Note its **issuer** address, **client ID** and **client secret**.
+   - Note its **issuer** address, **client ID** and **client secret**. Copy the issuer exactly
+     as the service shows it, including a slash at the end if it has one.
+   - **If the service is Auth0:** choose the application type **Regular Web Application**. The
+     issuer is `https://<your tenant domain>/`, with the slash at the end (for example
+     `https://your-tenant.us.auth0.com/`). In the application's settings, set the token
+     endpoint authentication method to **Basic**: Mothli sends the client secret that way,
+     and sign-in will not work with any other choice.
 7. **The AI accounts** (OpenAI or Anthropic, and TypeSafe for Jev), only to switch on Mothli's
    chat inside a book. Mothli runs without them; the AI section of `deploy/app.env` says which
    lines to fill in to switch the chat on.
