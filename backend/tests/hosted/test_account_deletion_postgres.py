@@ -152,8 +152,6 @@ def world(database: str, admin_dsn: str, tmp_path):
             hosted_storage_filesystem_key=base64.b64encode(b"t" * 32).decode("ascii"),
             hosted_credential_master_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
             hosted_credential_key_version="test-v1",
-            # Every inventoried route mounted, the reader-key ones included.
-            hosted_reader_keys=True,
             session_absolute_ttl_seconds=3600,
             session_idle_ttl_seconds=3000,
         )
@@ -245,6 +243,12 @@ def _seed(world: World, label: str) -> uuid.UUID:
         job = conn.execute("INSERT INTO jobs (owner_id,book_id,book_incarnation,kind,"
                            "idempotency_key) VALUES (%s,%s,%s,'chapter_notes',%s) RETURNING id",
                            (*scope, f"chapter-notes:{uuid.uuid4().hex}")).fetchone()[0]
+        # The retired reader-key extraction job an upload made before ADR 0043 (none is made now;
+        # the kind goes in step 7), waiting as it did for a key the reader never gave.
+        conn.execute("INSERT INTO jobs (owner_id,book_id,book_incarnation,kind,state,"
+                     "idempotency_key,payload_metadata) VALUES (%s,%s,%s,'ingest_book',"
+                     "'waiting_configuration',%s,'{\"chapter_count\":1}'::jsonb)",
+                     (*scope, f"ingest:{book.hex}:{incarnation.hex}"))
         conn.execute("INSERT INTO cost_ledger (owner_id,id,book_id,book_incarnation,job_id,phase,"
                      "provider,model,input_tokens,output_tokens,usd,idempotency_key) "
                      "VALUES (%s,%s,%s,%s,%s,'extraction','made-up','model',10,2,0.01,%s)",
@@ -393,8 +397,8 @@ def test_signing_in_while_pending_answers_only_the_pending_refusal_on_every_inve
     for item in inventory["enabled"]:
         if item["path"] == "/api/account/keep" or item["path"] in allowed:
             continue
-        path = re.sub(r"\{(\w+)\}", lambda match: "extraction" if match[1] == "capability"
-                      else str(book) if match[1] == "book_id" else str(uuid.uuid4()), item["path"])
+        path = re.sub(r"\{(\w+)\}", lambda match: str(book) if match[1] == "book_id"
+                      else str(uuid.uuid4()), item["path"])
         body = {} if item["method"] in {"POST", "PUT", "PATCH"} else None
         response = a["client"].request(item["method"], path, json=body, headers=world.csrf("a"))
         assert response.status_code == 403, (item["method"], path, response.text)

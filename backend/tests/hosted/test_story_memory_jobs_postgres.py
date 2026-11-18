@@ -882,18 +882,13 @@ def test_story_memory_jobs_are_well_formed_or_refused_by_the_schema(memory_app, 
 def test_with_story_memory_on_an_upload_makes_no_reader_key_extraction_job(
         tenant_dsn, readers, database, tmp_path):
     """ADR 0042 section 6: the reader-key extraction job (``ingest_book``), which never had a
-    handler, is retired with story memory on, even where reader keys are on."""
-    for keys, made in ((True, 0), (False, 0)):
-        client, tokens, _app = memory_app_for(tenant_dsn, readers, tmp_path / str(keys),
-                                              **MEMORY, hosted_reader_keys=keys)
+    handler, is retired with story memory on; and with it off too, since readers have no keys of
+    their own (ADR 0043, where HOSTED_READER_KEYS is refused)."""
+    for label, values in (("a", MEMORY), ("b", CHAT)):
+        client, tokens, _app = memory_app_for(tenant_dsn, readers, tmp_path / label, **values)
         with client:
-            upload(client, tokens, "a", lamps())
-        assert len(jobs_of(database, readers["a"], "ingest_book")) == made
-    client, tokens, _app = memory_app_for(tenant_dsn, readers, tmp_path / "old", **CHAT,
-                                          hosted_reader_keys=True)
-    with client:
-        upload(client, tokens, "b", lamps())
-    assert len(jobs_of(database, readers["b"], "ingest_book")) == 1     # as before, story memory off
+            upload(client, tokens, label, lamps())
+        assert jobs_of(database, readers[label], "ingest_book") == []
 
 
 # ---- the screens show what the jobs build (parts 3 and 4 together) -----------------------------

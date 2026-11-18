@@ -32,9 +32,7 @@ from app.hosted.companion import routes as companion_routes
 from app.hosted.companion import set_connection_limit
 from app.hosted.companion.source import SourceParseCache
 from app.hosted.companion.spend import set_spend_limits
-from app.hosted.credentials import build_credential_cipher
 from app.hosted.migrations import discover_migrations
-from app.hosted.provider_settings import ProviderValidator, allowed_origins
 from app.hosted.runtime import HostedRuntimeRegistry
 from app.hosted.storage import build_object_storage
 from app.hosted.tenant import api as tenant_api
@@ -47,7 +45,6 @@ from app.llm.factory import build_platform_clients
 from app.llm.versioning import ModelMigrationRequired
 
 _MULTIPART_OVERHEAD_BYTES = 64 * 1024
-_CREDENTIAL_BODY_BYTES = 32 * 1024
 _LOG = logging.getLogger(__name__)
 
 
@@ -347,78 +344,6 @@ class _HostedNoStore:
         await self.app(scope, receive, no_store_send)
 
 
-class _CredentialBodyLimit:
-    """Bound secret-bearing JSON before parsing and before the application receives any bytes."""
-
-    def __init__(self, app, *, max_body_bytes: int = _CREDENTIAL_BODY_BYTES):
-        self.app = app
-        self.max_body_bytes = max_body_bytes
-
-    async def __call__(self, scope, receive, send):
-        path = scope.get("path", "")
-        if scope["type"] != "http" or not (
-            (scope.get("method") == "POST" and path.rstrip("/") == "/api/credentials")
-            or (scope.get("method") == "PUT" and path.startswith("/api/credentials/"))
-        ):
-            await self.app(scope, receive, send)
-            return
-        for key, value in scope.get("headers", ()):
-            if key == b"content-length":
-                try:
-                    if int(value) > self.max_body_bytes:
-                        await self._reject(scope, receive, send)
-                        return
-                except ValueError:
-                    pass
-                break
-        chunks: list[bytes] = []
-        received = 0
-        while True:
-            message = await receive()
-            if message["type"] != "http.request":
-                first = True
-
-                async def replay_disconnect():
-                    nonlocal first
-                    if first:
-                        first = False
-                        return message
-                    return await receive()
-
-                await self.app(scope, replay_disconnect, send)
-                return
-            chunk = message.get("body", b"")
-            received += len(chunk)
-            if received > self.max_body_bytes:
-                await self._reject(scope, receive, send)
-                return
-            chunks.append(chunk)
-            if not message.get("more_body", False):
-                break
-        position = 0
-
-        async def replay_receive():
-            nonlocal position
-            if position >= len(chunks):
-                return {"type": "http.request", "body": b"", "more_body": False}
-            chunk = chunks[position]
-            position += 1
-            return {
-                "type": "http.request",
-                "body": chunk,
-                "more_body": position < len(chunks),
-            }
-
-        await self.app(scope, replay_receive, send)
-
-    @staticmethod
-    async def _reject(scope, receive, send):
-        response = JSONResponse(
-            {"detail": "credential request exceeds the configured size limit"}, status_code=413
-        )
-        await response(scope, receive, send)
-
-
 def create_app(
     settings: Settings | None = None,
     ingest_executor=None,
@@ -430,8 +355,6 @@ def create_app(
     auth_clock=None,
     hosted_runtime=None,
     object_storage=None,
-    credential_cipher=None,
-    provider_validator=None,
     schema_marker_reader=None,
 ) -> FastAPI:
     """``ingest_executor`` lets tests inject a deterministic inline executor; production uses the
@@ -471,11 +394,6 @@ def create_app(
                 )
                 await repository.check_runtime_role()
                 await tenant.check_runtime_role()
-                cipher = credential_cipher or build_credential_cipher(settings)
-                origins = allowed_origins(settings.hosted_provider_allowed_origins)
-                validator = provider_validator or ProviderValidator(
-                    timeout_seconds=settings.hosted_provider_validation_timeout_seconds
-                )
                 app.state.settings = settings
                 app.state.auth_repository = repository
                 app.state.tenant_repository = tenant
@@ -483,9 +401,6 @@ def create_app(
                 app.state.auth_clock = auth_clock or (lambda: datetime.now(UTC))
                 app.state.hosted_runtime = runtime
                 app.state.object_storage = storage
-                app.state.credential_cipher = cipher
-                app.state.provider_origins = origins
-                app.state.provider_validator = validator
                 # The companion's adapters (ADR 0041): bound to one reader per request, sharing
                 # one bounded parse cache and one connection limit per process.
                 set_connection_limit(settings.hosted_companion_db_connections)
@@ -605,15 +520,12 @@ def create_app(
 
         app.include_router(auth_api.router)
         app.include_router(account_api.router)
-        # Without reader keys the key routes are not mounted: they answer as unknown paths.
-        app.include_router(tenant_api.hosted_router(reader_keys=settings.hosted_reader_keys))
+        app.include_router(tenant_api.router)
         app.include_router(companion_routes.router)
         app.include_router(companion_routes.reader_router)
         # The free library (ADR 0041 part 11): the local paths, without covers.
         app.include_router(hosted_classics.router)
         app.add_middleware(_EpubUploadBodyLimit, max_file_bytes=settings.epub_max_upload_bytes)
-        if settings.hosted_reader_keys:
-            app.add_middleware(_CredentialBodyLimit)
         app.add_middleware(_HostedNoStore)
     else:
         app.add_middleware(_ReadingToolTiming)

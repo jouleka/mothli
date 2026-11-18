@@ -19,15 +19,7 @@ from app.hosted.auth.api import (
     csrf_valid,
     pending_deletion_detail,
 )
-from app.hosted.credentials import normalize_provider
-from app.hosted.credentials import CredentialUnavailableError
 from app.hosted.limits import LimitExceededError
-from app.hosted.provider_settings import (
-    ProviderSettingPolicyError,
-    ValidationResult,
-    default_settings_payload,
-    validate_setting_policy,
-)
 from app.hosted.runtime import CacheNamespace, ResourceKind, TenantCacheKey, TenantResourceKey
 from app.hosted.storage import (
     EPUB_MEDIA_TYPE,
@@ -187,14 +179,6 @@ class HostedEntityCorrectionIn(BaseModel):
         return value
 
 
-class ProviderSettingIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    provider: Literal["openai-compatible", "anthropic", "offline"]
-    model: str = Field(min_length=1, max_length=128)
-    credential_id: uuid.UUID | None = None
-    base_url: str | None = Field(default=None, max_length=512)
-
-
 async def _session(request: Request) -> AuthenticatedSession:
     value = await authenticated_session(request)
     if value is None:
@@ -290,201 +274,6 @@ def _limit_failure(exc: LimitExceededError) -> HTTPException:
     )
 
 
-async def _credential_input(request: Request, *, include_provider: bool) -> tuple[str | None, str]:
-    """Parse secret-bearing JSON without ever reflecting invalid input through validation details."""
-    media_type = request.headers.get("content-type", "").partition(";")[0].strip().casefold()
-    if media_type != "application/json":
-        raise HTTPException(415, "credential request must use application/json")
-
-    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-        value: dict[str, object] = {}
-        for key, item in pairs:
-            if key in value:
-                raise ValueError("duplicate JSON key")
-            value[key] = item
-        return value
-
-    try:
-        payload = json.loads(await request.body(), object_pairs_hook=unique_object)
-    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
-        raise HTTPException(422, "invalid credential request") from exc
-    expected = {"provider", "secret"} if include_provider else {"secret"}
-    if not isinstance(payload, dict) or set(payload) != expected:
-        raise HTTPException(422, "invalid credential request")
-    secret = payload.get("secret")
-    provider = payload.get("provider") if include_provider else None
-    if not isinstance(secret, str) or (include_provider and not isinstance(provider, str)):
-        raise HTTPException(422, "invalid credential request")
-    return provider, secret
-
-
-@router.post("/credentials", status_code=201)
-async def create_credential(
-    request: Request,
-    response: Response,
-    owner_id: OwnerId = Depends(_csrf_owner),
-):
-    _private(response)
-    provider, secret = await _credential_input(request, include_provider=True)
-    assert provider is not None
-    credential_id = uuid.uuid4()
-    try:
-        envelope = request.app.state.credential_cipher.encrypt(
-            owner_id, credential_id, normalize_provider(provider), secret
-        )
-    except ValueError as exc:
-        raise HTTPException(422, "invalid credential request") from exc
-    key = _resource(owner_id, ResourceKind.CREDENTIAL, credential_id)
-    async with request.app.state.hosted_runtime.serialized(key):
-        return await request.app.state.tenant_repository.create_credential(owner_id, envelope)
-
-
-@router.get("/credentials")
-async def list_credentials(
-    request: Request,
-    response: Response,
-    owner_id: OwnerId = Depends(_owner),
-):
-    _private(response)
-    key = _resource(owner_id, ResourceKind.LIBRARY, owner_id.value)
-    async with request.app.state.hosted_runtime.serialized(key):
-        return await request.app.state.tenant_repository.list_credentials(owner_id)
-
-
-@router.put("/credentials/{credential_id}")
-async def replace_credential(
-    credential_id: uuid.UUID,
-    request: Request,
-    response: Response,
-    owner_id: OwnerId = Depends(_csrf_owner),
-):
-    _private(response)
-    _provider, secret = await _credential_input(request, include_provider=False)
-    key = _resource(owner_id, ResourceKind.CREDENTIAL, credential_id)
-    async with request.app.state.hosted_runtime.serialized(key):
-        current = await request.app.state.tenant_repository.get_credential(
-            owner_id, credential_id
-        )
-        if current is None:
-            raise HTTPException(404, "unknown credential")
-        try:
-            envelope = request.app.state.credential_cipher.encrypt(
-                owner_id, credential_id, current["provider"], secret
-            )
-        except ValueError as exc:
-            raise HTTPException(422, "invalid credential request") from exc
-        result = await request.app.state.tenant_repository.replace_credential(owner_id, envelope)
-        if result is None:
-            raise HTTPException(404, "unknown credential")
-        return result
-
-
-@router.delete("/credentials/{credential_id}", status_code=204)
-async def delete_credential(
-    credential_id: uuid.UUID,
-    request: Request,
-    owner_id: OwnerId = Depends(_csrf_owner),
-):
-    key = _resource(owner_id, ResourceKind.CREDENTIAL, credential_id)
-    async with request.app.state.hosted_runtime.serialized(key):
-        if not await request.app.state.tenant_repository.delete_credential(
-            owner_id, credential_id
-        ):
-            raise HTTPException(404, "unknown credential")
-
-
-@router.get("/provider-settings")
-async def list_provider_settings(
-    request: Request,
-    response: Response,
-    owner_id: OwnerId = Depends(_owner),
-):
-    _private(response)
-    key = _resource(owner_id, ResourceKind.PROVIDER_SETTINGS, owner_id.value)
-    async with request.app.state.hosted_runtime.serialized(key):
-        policy = default_settings_payload()
-        policy["items"] = await request.app.state.tenant_repository.list_provider_settings(
-            owner_id
-        )
-        return policy
-
-
-@router.put("/provider-settings/{capability}")
-async def put_provider_setting(
-    capability: str,
-    payload: ProviderSettingIn,
-    request: Request,
-    response: Response,
-    owner_id: OwnerId = Depends(_csrf_owner),
-):
-    _private(response)
-    try:
-        capability, provider, model, base_url = validate_setting_policy(
-            capability=capability,
-            provider=payload.provider,
-            model=payload.model,
-            credential_id=payload.credential_id,
-            base_url=payload.base_url,
-            origins=request.app.state.provider_origins,
-        )
-    except ProviderSettingPolicyError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    key = _resource(owner_id, ResourceKind.PROVIDER_SETTINGS, owner_id.value)
-    async with request.app.state.hosted_runtime.serialized(key):
-        setting = await request.app.state.tenant_repository.upsert_provider_setting(
-            owner_id,
-            capability=capability,
-            provider=provider,
-            credential_id=payload.credential_id,
-            model=model,
-            base_url=base_url,
-        )
-        if setting is None:
-            raise HTTPException(422, "selected credential is unavailable")
-        return setting
-
-
-@router.post("/provider-settings/{capability}/validate")
-async def validate_provider_setting(
-    capability: str,
-    request: Request,
-    response: Response,
-    owner_id: OwnerId = Depends(_csrf_owner),
-):
-    _private(response)
-    key = _resource(owner_id, ResourceKind.PROVIDER_SETTINGS, owner_id.value)
-    async with request.app.state.hosted_runtime.serialized(key):
-        setting = await request.app.state.tenant_repository.get_provider_setting(
-            owner_id, capability
-        )
-        if setting is None:
-            raise HTTPException(404, "provider setting is not configured")
-        if setting["provider"] == "offline":
-            result = ValidationResult("offline", "offline")
-        else:
-            credential_id = uuid.UUID(setting["credential_id"])
-            try:
-                resolved = await request.app.state.tenant_repository.resolve_credential(
-                    owner_id, credential_id, request.app.state.credential_cipher
-                )
-            except CredentialUnavailableError:
-                result = ValidationResult("invalid", "invalid_credentials")
-            else:
-                with resolved:
-                    result = await request.app.state.provider_validator.validate(
-                        setting, resolved.get_secret_value()
-                    )
-        recorded = await request.app.state.tenant_repository.record_provider_validation(
-            owner_id,
-            setting_id=uuid.UUID(setting["id"]),
-            expected_updated_at=setting["updated_at"],
-            result=result,
-        )
-        if recorded is None:
-            raise HTTPException(409, "provider setting changed during validation")
-        return {"status": result.status, "code": result.code, "setting": recorded}
-
-
 @router.post("/books", status_code=201)
 async def upload_book(
     file: UploadFile,
@@ -520,9 +309,7 @@ async def store_epub(
     source_kind: str = "upload",
 ) -> dict:
     """The hosted import of one EPUB for this owner: validated and segmented, stored encrypted
-    under the owner's own object, then its rows, search text and (with reader keys, and story
-    memory off) extraction job
-    written in one transaction under the owner's limits; the object is removed again if that
+    under the owner's own object, then its rows and search text written in one transaction under the owner's limits; the object is removed again if that
     transaction fails.
     The upload route and the free library's add both come here, so a book from either is
     imported the same way (ADR 0041 part 11)."""
@@ -595,11 +382,10 @@ async def store_epub(
                 chapter_count=len(chapters),
                 search_documents=search_documents,
                 source_kind=source_kind,
-                # The reader-key extraction job never had a handler. While there are no reader
-                # keys nothing could run one (ADR 0041 part 10), and with story memory on it is
-                # retired: story_memory jobs build the memory instead (ADR 0042 section 6).
-                extraction_job=(request.app.state.settings.hosted_reader_keys
-                                and not request.app.state.settings.hosted_story_memory),
+                # The reader-key extraction job never had a handler, and readers have no keys of
+                # their own (ADR 0043): an upload never makes one. Story memory is built by
+                # story_memory jobs instead (ADR 0042 section 6).
+                extraction_job=False,
             )
         except BaseException as exc:
             try:
@@ -1235,31 +1021,3 @@ async def list_costs(
         if costs is None:
             raise HTTPException(404, "unknown book")
         return costs
-
-
-# The "paste your own key" routes and the older reply paths that run on a reader's own key
-# (ADR 0041 section 6). The platform pays for the companion, so with HOSTED_READER_KEYS=false
-# these are not mounted at all and answer exactly as a path that does not exist. The code is kept
-# for a later "bring your own key" option.
-READER_KEY_ROUTES = frozenset({
-    ("POST", "/api/credentials"),
-    ("GET", "/api/credentials"),
-    ("PUT", "/api/credentials/{credential_id}"),
-    ("DELETE", "/api/credentials/{credential_id}"),
-    ("GET", "/api/provider-settings"),
-    ("PUT", "/api/provider-settings/{capability}"),
-    ("POST", "/api/provider-settings/{capability}/validate"),
-})
-
-
-def hosted_router(*, reader_keys: bool) -> APIRouter:
-    """The tenant routes to mount: all of them, or all but the reader-key routes."""
-    if reader_keys:
-        return router
-    kept = APIRouter()
-    kept.routes.extend(
-        route for route in router.routes
-        if not any((method, route.path) in READER_KEY_ROUTES
-                   for method in getattr(route, "methods", ()) or ())
-    )
-    return kept

@@ -14,7 +14,6 @@ from pathlib import Path
 
 import psycopg
 import pytest
-import httpx
 from fastapi.testclient import TestClient
 from psycopg import conninfo, sql
 
@@ -26,7 +25,6 @@ from app.hosted.auth.repository import AuthConfigurationError
 from app.hosted.auth.tokens import digest_token, new_token
 from app.hosted.migrations import apply_migrations
 from app.hosted.limits import LimitExceededError, inspect_limits, update_limits
-from app.hosted.provider_settings import ProviderValidator
 from app.hosted.storage import EPUB_MEDIA_TYPE
 from app.hosted.tenant.grants import tenant_function_grants, tenant_grants
 from app.hosted.tenant.models import MissingTenantResourceError, OwnerId
@@ -315,30 +313,12 @@ def tenant_app(tenant_dsn: str, corpus: dict, tmp_path):
         hosted_storage_filesystem_key=base64.b64encode(b"t" * 32).decode("ascii"),
         hosted_credential_master_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         hosted_credential_key_version="test-v1",
-        hosted_provider_allowed_origins=(
-            "https://api.openai.com,https://api.anthropic.com,https://network.example"
-        ),
-        # These gates test the reader-key routes, mounted only with this on (ADR 0041 part 3).
-        hosted_reader_keys=True,
     )
-
-    def provider_response(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "network.example":
-            raise httpx.ConnectError("synthetic network failure", request=request)
-        authorization = request.headers.get("authorization")
-        if authorization == "Bearer invalid-owner-key":
-            return httpx.Response(401, json={"error": "private provider detail"})
-        return httpx.Response(
-            200,
-            json={"data": [{"id": "available-model"}, {"id": "text-embedding-3-small"}]},
-        )
-
     app = create_app(
         settings,
         auth_repository=SessionRepository(sessions),
         oidc_client=UnusedOIDCClient(),
         auth_clock=lambda: datetime(2026, 7, 16, 12, tzinfo=UTC),
-        provider_validator=ProviderValidator(transport=httpx.MockTransport(provider_response)),
     )
     with TestClient(app, base_url="https://reader.example") as client:
         yield client, tokens, app
@@ -392,7 +372,6 @@ def test_every_enabled_tenant_endpoint_requires_a_session(tenant_app, corpus: di
     book = corpus["book_a"]
     requests = [
         ("GET", "/api/limits", None),
-        ("GET", "/api/provider-settings", None),
         ("GET", f"/api/books/{book}/preferences", None),
         ("GET", f"/api/books/{book}/manifest", None),
         ("GET", f"/api/books/{book}/search?q=lantern", None),
@@ -428,12 +407,6 @@ def test_every_enabled_tenant_endpoint_requires_a_session(tenant_app, corpus: di
                 "typeface": "publisher",
             },
         ),
-        ("PUT", "/api/provider-settings/extraction", {"provider": "offline", "model": "offline"}),
-        ("POST", "/api/provider-settings/extraction/validate", None),
-        ("POST", "/api/credentials", {"provider": "anthropic", "secret": "secret"}),
-        ("GET", "/api/credentials", None),
-        ("PUT", f"/api/credentials/{uuid.uuid4()}", {"secret": "replacement"}),
-        ("DELETE", f"/api/credentials/{uuid.uuid4()}", None),
         ("GET", "/api/books", None),
         ("POST", "/api/books", None),
         ("GET", f"/api/books/{book}", None),
@@ -692,248 +665,6 @@ def test_list_and_cost_surfaces_never_include_another_owner(tenant_app, corpus: 
     assert costs.status_code == 200
     assert [item["provider"] for item in costs.json()["items"]] == ["provider-b"]
     assert client.get("/api/costs", params={"book_id": str(corpus["book_a"])}).status_code == 404
-
-
-def test_hosted_credentials_are_owner_scoped_and_metadata_only(
-    tenant_app, corpus: dict, database: str
-) -> None:
-    client, tokens, _app = tenant_app
-    original = "sk-owner-a-private-canary-7H3k"
-    csrf_a = _become(client, tokens, "a")
-    assert client.post(
-        "/api/credentials",
-        json={"provider": "anthropic", "secret": original},
-    ).status_code == 403
-    created = client.post(
-        "/api/credentials",
-        json={"provider": "Anthropic", "secret": original},
-        headers={CSRF_HEADER: csrf_a},
-    )
-    assert created.status_code == 201
-    metadata = created.json()
-    credential_id = uuid.UUID(metadata["id"])
-    assert metadata["provider"] == "anthropic"
-    assert metadata["masked_label"].endswith("7H3k")
-    assert not ({"ciphertext", "encrypted_data_key", "nonce", "secret"} & metadata.keys())
-    assert original not in created.text
-
-    listed = client.get("/api/credentials")
-    assert listed.json() == [metadata]
-    assert original not in listed.text
-    with psycopg.connect(database) as conn:
-        stored = conn.execute(
-            """
-            SELECT ciphertext,encrypted_data_key,nonce,key_version
-            FROM provider_credentials WHERE owner_id=%s AND id=%s
-            """,
-            (corpus["owner_a"], credential_id),
-        ).fetchone()
-    assert original.encode() not in bytes(stored[0]) + bytes(stored[1]) + bytes(stored[2])
-    assert len(stored[1]) == 60 and len(stored[2]) == 12 and stored[3] == "test-v1"
-
-    csrf_b = _become(client, tokens, "b")
-    assert client.get("/api/credentials").json() == []
-    missing = uuid.uuid4()
-    hidden_replace = client.put(
-        f"/api/credentials/{credential_id}",
-        json={"secret": "owner-b-attack"},
-        headers={CSRF_HEADER: csrf_b},
-    )
-    absent_replace = client.put(
-        f"/api/credentials/{missing}",
-        json={"secret": "owner-b-attack"},
-        headers={CSRF_HEADER: csrf_b},
-    )
-    assert (hidden_replace.status_code, hidden_replace.json()) == (
-        absent_replace.status_code,
-        absent_replace.json(),
-    ) == (404, {"detail": "unknown credential"})
-    hidden_delete = client.delete(
-        f"/api/credentials/{credential_id}", headers={CSRF_HEADER: csrf_b}
-    )
-    absent_delete = client.delete(
-        f"/api/credentials/{missing}", headers={CSRF_HEADER: csrf_b}
-    )
-    assert (hidden_delete.status_code, hidden_delete.json()) == (
-        absent_delete.status_code,
-        absent_delete.json(),
-    ) == (404, {"detail": "unknown credential"})
-
-    replacement = "sk-owner-a-replacement-9Zq2"
-    csrf_a = _become(client, tokens, "a")
-    rotated = client.put(
-        f"/api/credentials/{credential_id}",
-        json={"secret": replacement},
-        headers={CSRF_HEADER: csrf_a},
-    )
-    assert rotated.status_code == 200
-    assert rotated.json()["rotated_at"] is not None
-    assert replacement not in rotated.text
-    invalid = client.put(
-        f"/api/credentials/{credential_id}",
-        json={"secret": "leaked-on-error\n"},
-        headers={CSRF_HEADER: csrf_a},
-    )
-    assert invalid.status_code == 422 and "leaked-on-error" not in invalid.text
-    duplicate = client.put(
-        f"/api/credentials/{credential_id}",
-        content='{"secret":"duplicate-canary","secret":"second"}',
-        headers={CSRF_HEADER: csrf_a, "Content-Type": "application/json"},
-    )
-    assert duplicate.status_code == 422 and "duplicate-canary" not in duplicate.text
-    oversized = client.put(
-        f"/api/credentials/{credential_id}",
-        content=b"x" * (32 * 1024 + 1),
-        headers={CSRF_HEADER: csrf_a, "Content-Type": "application/json"},
-    )
-    assert oversized.status_code == 413 and "x" * 100 not in oversized.text
-
-    deleted = client.delete(
-        f"/api/credentials/{credential_id}", headers={CSRF_HEADER: csrf_a}
-    )
-    assert deleted.status_code == 204
-    assert client.get("/api/credentials").json() == []
-    with psycopg.connect(database) as conn:
-        destroyed = conn.execute(
-            """
-            SELECT ciphertext,encrypted_data_key,disabled_at,deleted_at
-            FROM provider_credentials WHERE owner_id=%s AND id=%s
-            """,
-            (corpus["owner_a"], credential_id),
-        ).fetchone()
-    assert bytes(destroyed[0]) == b"\x00" and bytes(destroyed[1]) == b"\x00"
-    assert destroyed[2] is not None and destroyed[3] is not None
-
-
-def test_provider_settings_and_validation_are_owner_scoped(
-    tenant_app, corpus: dict, database: str
-) -> None:
-    client, tokens, _app = tenant_app
-    csrf_a = _become(client, tokens, "a")
-    initial = client.get("/api/provider-settings")
-    assert initial.status_code == 200
-    assert initial.json()["items"] == []
-    assert initial.json()["recommendations_persisted"] is False
-    assert "offline" in initial.json()["offline_behavior"].casefold()
-    assert "billed" in initial.json()["cost_ownership"].casefold()
-
-    valid_secret = "valid-owner-key"
-    invalid_secret = "invalid-owner-key"
-    valid = client.post(
-        "/api/credentials",
-        json={"provider": "openai-compatible", "secret": valid_secret},
-        headers={CSRF_HEADER: csrf_a},
-    ).json()
-    invalid = client.post(
-        "/api/credentials",
-        json={"provider": "openai-compatible", "secret": invalid_secret},
-        headers={CSRF_HEADER: csrf_a},
-    ).json()
-    with psycopg.connect(database) as conn:
-        waiting_job = uuid.uuid4()
-        conn.execute(
-            """
-            INSERT INTO jobs
-              (owner_id,id,book_id,book_incarnation,kind,state,idempotency_key,payload_metadata)
-            VALUES (%s,%s,%s,%s,'ingest_book','waiting_configuration',%s,
-                    '{"chapter_count":1}'::jsonb)
-            """,
-            (
-                corpus["owner_a"],
-                waiting_job,
-                corpus["book_a"],
-                corpus["incarnation_a"],
-                f"ingest:{waiting_job.hex}",
-            ),
-        )
-
-    extraction_payload = {
-        "provider": "openai-compatible",
-        "model": "available-model",
-        "credential_id": valid["id"],
-        "base_url": "https://api.openai.com/v1",
-    }
-    assert client.put(
-        "/api/provider-settings/extraction", json=extraction_payload
-    ).status_code == 403
-    saved = client.put(
-        "/api/provider-settings/extraction",
-        json=extraction_payload,
-        headers={CSRF_HEADER: csrf_a},
-    )
-    assert saved.status_code == 200 and saved.json()["validation_status"] == "unchecked"
-
-    csrf_b = _become(client, tokens, "b")
-    assert client.get("/api/provider-settings").json()["items"] == []
-    assert client.post(
-        "/api/provider-settings/extraction/validate", headers={CSRF_HEADER: csrf_b}
-    ).status_code == 404
-    foreign = client.put(
-        "/api/provider-settings/extraction",
-        json=extraction_payload,
-        headers={CSRF_HEADER: csrf_b},
-    )
-    missing_payload = {**extraction_payload, "credential_id": str(uuid.uuid4())}
-    absent = client.put(
-        "/api/provider-settings/extraction",
-        json=missing_payload,
-        headers={CSRF_HEADER: csrf_b},
-    )
-    assert (foreign.status_code, foreign.json()) == (absent.status_code, absent.json()) == (
-        422,
-        {"detail": "selected credential is unavailable"},
-    )
-
-    csrf_a = _become(client, tokens, "a")
-    ready = client.post(
-        "/api/provider-settings/extraction/validate", headers={CSRF_HEADER: csrf_a}
-    )
-    assert ready.status_code == 200 and ready.json()["code"] == "ok"
-    with psycopg.connect(database) as conn:
-        assert conn.execute(
-            "SELECT state,credential_id FROM jobs WHERE owner_id=%s AND id=%s",
-            (corpus["owner_a"], waiting_job),
-        ).fetchone() == ("pending", uuid.UUID(valid["id"]))
-
-    for capability, credential_id, model, base_url, expected in (
-        ("synthesis", invalid["id"], "available-model", "https://api.openai.com/v1", "invalid_credentials"),
-        ("judge", valid["id"], "missing-model", "https://api.openai.com/v1", "unavailable_model"),
-        ("embedding", valid["id"], "available-model", "https://network.example/v1", "network_error"),
-    ):
-        configured = client.put(
-            f"/api/provider-settings/{capability}",
-            json={
-                "provider": "openai-compatible",
-                "model": model,
-                "credential_id": credential_id,
-                "base_url": base_url,
-            },
-            headers={CSRF_HEADER: csrf_a},
-        )
-        assert configured.status_code == 200
-        checked = client.post(
-            f"/api/provider-settings/{capability}/validate", headers={CSRF_HEADER: csrf_a}
-        )
-        assert checked.status_code == 200 and checked.json()["code"] == expected
-        assert valid_secret not in checked.text and invalid_secret not in checked.text
-
-    offline = client.put(
-        "/api/provider-settings/embedding",
-        json={"provider": "offline", "model": "offline", "credential_id": None},
-        headers={CSRF_HEADER: csrf_a},
-    )
-    assert offline.status_code == 200 and offline.json()["validation_status"] == "offline"
-    offline_check = client.post(
-        "/api/provider-settings/embedding/validate", headers={CSRF_HEADER: csrf_a}
-    )
-    assert offline_check.json()["code"] == "offline"
-
-    final = client.get("/api/provider-settings").json()
-    extraction = next(item for item in final["items"] if item["capability"] == "extraction")
-    assert extraction["model"] == "available-model"
-    assert extraction["credential_id"] == valid["id"]
-    assert final["recommendations"]["extraction"]["model"] == "gpt-6.1-terra"
-    assert final["recommendations_persisted"] is False
 
 
 def test_reader_preferences_are_owner_scoped_and_validated(
@@ -1427,6 +1158,25 @@ def test_owner_identity_input_is_rejected_not_ignored(tenant_app, corpus: dict) 
     ).status_code == 422
 
 
+def _waiting_extraction_job(database: str, owner: uuid.UUID, book_id: str) -> uuid.UUID:
+    """The retired reader-key extraction job an upload made before ADR 0043, written as the
+    database owner, so the job routes' own checks keep running until the job goes (step 7)."""
+    job_id = uuid.uuid4()
+    with psycopg.connect(database) as conn:
+        incarnation = conn.execute("SELECT incarnation FROM books WHERE owner_id=%s AND id=%s",
+                                   (owner, book_id)).fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO jobs
+              (owner_id,id,book_id,book_incarnation,kind,state,idempotency_key,payload_metadata)
+            VALUES (%s,%s,%s,%s,'ingest_book','waiting_configuration',%s,
+                    '{"chapter_count":1}'::jsonb)
+            """,
+            (owner, job_id, book_id, incarnation, f"ingest:{job_id.hex}"),
+        )
+    return job_id
+
+
 def test_hosted_source_lifecycle_is_owner_scoped(tenant_app, corpus: dict, database: str) -> None:
     client, tokens, app = tenant_app
     payload = epub_ncx(
@@ -1459,14 +1209,14 @@ def test_hosted_source_lifecycle_is_owner_scoped(tenant_app, corpus: dict, datab
     assert body["title"] == "Private upload"
     assert body["author"] == "Owner A"
     assert body["atoms"] == 1
-    assert body["job"]["state"] == "waiting_configuration"
-    assert body["job"]["book_id"] == body["id"]
-    assert body["job"]["completed_chapters"] == 0
-    assert body["job"]["total_chapters"] == 1
-    assert not ({"worker_id", "lease_token", "payload_metadata"} & set(body["job"]))
-    job_id = body["job"]["id"]
+    assert body["job"] is None              # readers have no keys: no extraction job (ADR 0043)
     assert not ({"storage_key", "object_id", "object_key"} & set(body))
     book_id = body["id"]
+    job_id = str(_waiting_extraction_job(database, corpus["owner_a"], book_id))
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert (job["state"], job["book_id"]) == ("waiting_configuration", book_id)
+    assert (job["completed_chapters"], job["total_chapters"]) == (0, 1)
+    assert not ({"worker_id", "lease_token", "payload_metadata"} & set(job))
     with psycopg.connect(database) as conn:
         stored_metadata = conn.execute(
             """
@@ -1576,45 +1326,11 @@ def test_security_audit_events_and_canaries_are_content_free(
     client, tokens, _app = tenant_app
     caplog.set_level("DEBUG")
     csrf = _become(client, tokens, "a")
-    credential_canary = "sk-audit-private-canary-4Zp8"
-    provider_secret_canary = "invalid-owner-key"
+    secret_canary = "sk-audit-private-canary-4Zp8"
     authorization_canary = "Bearer audit-authorization-canary-Q7v2"
     epub_text_canary = "AUDIT_EPUB_PRIVATE_TEXT_CANARY_R5m1"
-    provider_error_canary = "private provider detail"
     responses = []
 
-    created = client.post(
-        "/api/credentials",
-        json={"provider": "openai-compatible", "secret": credential_canary},
-        headers={CSRF_HEADER: csrf, "Authorization": authorization_canary},
-    )
-    responses.append(created.text)
-    assert created.status_code == 201
-    invalid_provider = client.post(
-        "/api/credentials",
-        json={"provider": "openai-compatible", "secret": provider_secret_canary},
-        headers={CSRF_HEADER: csrf},
-    )
-    responses.append(invalid_provider.text)
-    assert invalid_provider.status_code == 201
-    configured = client.put(
-        "/api/provider-settings/extraction",
-        json={
-            "provider": "openai-compatible",
-            "model": "available-model",
-            "credential_id": invalid_provider.json()["id"],
-            "base_url": "https://api.openai.com/v1",
-        },
-        headers={CSRF_HEADER: csrf},
-    )
-    responses.append(configured.text)
-    assert configured.status_code == 200
-    validated = client.post(
-        "/api/provider-settings/extraction/validate", headers={CSRF_HEADER: csrf}
-    )
-    responses.append(validated.text)
-    assert validated.status_code == 200
-    assert validated.json()["code"] == "invalid_credentials"
     responses.append(
         client.get("/api/books", headers={"Authorization": authorization_canary}).text
     )
@@ -1629,20 +1345,13 @@ def test_security_audit_events_and_canaries_are_content_free(
     )
     responses.append(uploaded.text)
     assert uploaded.status_code == 201
+    job_id = _waiting_extraction_job(database, corpus["owner_a"], uploaded.json()["id"])
     cancelled = client.post(
-        f"/api/jobs/{uploaded.json()['job']['id']}/cancel",
+        f"/api/jobs/{job_id}/cancel",
         headers={CSRF_HEADER: csrf, "Authorization": authorization_canary},
     )
     responses.append(cancelled.text)
     assert cancelled.status_code == 200
-    invalid = client.put(
-        f"/api/credentials/{created.json()['id']}",
-        json={"secret": credential_canary + "\n"},
-        headers={CSRF_HEADER: csrf, "Authorization": authorization_canary},
-    )
-    responses.append(invalid.text)
-    assert invalid.status_code == 422
-
     with psycopg.connect(database) as conn:
         events = conn.execute(
             """
@@ -1656,13 +1365,7 @@ def test_security_audit_events_and_canaries_are_content_free(
             (corpus["owner_a"],),
         ).fetchall()
     actions = {row[1] for row in events}
-    assert {
-        "credential.create",
-        "provider_setting.update",
-        "provider_setting.validate",
-        "book.import",
-        "job.cancel",
-    } <= actions
+    assert {"book.import", "job.cancel"} <= actions
     assert all(row[0] == "owner" for row in events)
     assert all(row[2] and row[3] and row[4] in {"succeeded", "denied", "failed"} for row in events)
     assert all(row[6].tzinfo is not None for row in events)
@@ -1686,13 +1389,7 @@ def test_security_audit_events_and_canaries_are_content_free(
         + [record.getMessage() for record in caplog.records]
         + [repr(events), repr(persisted_jobs), repr(inspected)]
     )
-    for canary in (
-        credential_canary,
-        provider_secret_canary,
-        authorization_canary,
-        epub_text_canary,
-        provider_error_canary,
-    ):
+    for canary in (secret_canary, authorization_canary, epub_text_canary):
         assert canary not in rendered
 
     with pytest.raises(psycopg.errors.CheckViolation):
@@ -1703,7 +1400,7 @@ def test_security_audit_events_and_canaries_are_content_free(
                   (owner_id,actor_kind,action,target_kind,result,metadata)
                 VALUES (%s,'owner','credential.create','credential','succeeded',%s::jsonb)
                 """,
-                (corpus["owner_a"], json.dumps({"secret": credential_canary})),
+                (corpus["owner_a"], json.dumps({"secret": secret_canary})),
             )
 
     cutoff = datetime.now(UTC) - timedelta(days=90)
@@ -1733,10 +1430,6 @@ def test_repository_owner_predicates_hold_when_rls_is_bypassed(database: str, co
     assert not asyncio.run(repository.remove_book(owner_b, corpus["book_a"]))
     assert asyncio.run(repository.get_job(owner_b, uuid.uuid4())) is None
     assert asyncio.run(repository.cancel_job(owner_b, uuid.uuid4())) is None
-    assert asyncio.run(repository.get_credential(owner_b, uuid.uuid4())) is None
-    assert not asyncio.run(repository.delete_credential(owner_b, uuid.uuid4()))
-    assert asyncio.run(repository.list_provider_settings(owner_b)) == []
-    assert asyncio.run(repository.get_provider_setting(owner_b, "extraction")) is None
     with pytest.raises(MissingTenantResourceError):
         asyncio.run(repository.reset_position(owner_b, corpus["book_a"], 0))
     with pytest.raises(MissingTenantResourceError):

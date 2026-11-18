@@ -16,9 +16,7 @@ from app.hosted.tenant.models import OwnerId
 
 class ResourceKind(str, Enum):
     BOOK = "book"
-    CREDENTIAL = "credential"
     LIBRARY = "library"
-    PROVIDER_SETTINGS = "provider-settings"
     COSTS = "costs"
     JOB = "job"
 
