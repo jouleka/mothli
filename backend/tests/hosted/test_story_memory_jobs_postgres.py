@@ -190,7 +190,7 @@ def rows(dsn: str, query: str, *params) -> list[dict]:
 
 
 def jobs_of(dsn: str, owner: uuid.UUID, kind: str = "story_memory") -> list[dict]:
-    return rows(dsn, "SELECT * FROM jobs WHERE owner_id=%s AND kind=%s ORDER BY created_at,id",
+    return rows(dsn, f"SELECT * FROM jobs WHERE owner_id=%s AND kind=%s {jobs_gate.JOB_ORDER}",
                 owner, kind)
 
 
@@ -264,6 +264,10 @@ def test_a_finished_chapter_makes_one_waiting_job_and_each_run_builds_one_chapte
     assert queue.ensure(book) is True and queue.ensure(book) is False
     assert [row["state"] for row in jobs_of(database, a.owner)] == [
         "succeeded", "succeeded", "running", "pending"]
+    jobs_gate.step_clock_back(database, a.owner)       # the database host's clock stepped back
+    assert [(row["state"], row["payload_metadata"]) for row in jobs_of(database, a.owner)] == [
+        ("succeeded", {"chapter": 1}), ("succeeded", {"chapter": 2}), ("running", {}),
+        ("pending", {})]
     assert repository.claim_next(worker_id="second", lease_for=timedelta(seconds=60)) is None
     dispatcher(app, extraction)(claim, repository)        # one run: part 3
     assert repository.succeed(claim)

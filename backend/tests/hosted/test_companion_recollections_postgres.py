@@ -245,7 +245,7 @@ def drain(work: DurableWorker, most: int = 10) -> int:
 
 def jobs_of(dsn: str, owner: uuid.UUID) -> list[dict]:
     return rows(dsn, "SELECT * FROM jobs WHERE owner_id=%s AND kind='recollect' "
-                     "ORDER BY created_at,id", owner)
+                     + jobs_gate.JOB_ORDER, owner)
 
 
 def notes_of(dsn: str, owner: uuid.UUID) -> list[dict]:
