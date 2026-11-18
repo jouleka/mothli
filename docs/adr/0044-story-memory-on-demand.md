@@ -572,6 +572,30 @@ can be built side by side.
   it, as it does not carry the file hash; (8) unverified point 3 below is checked: one file-driven
   and one anchor-driven made-up book give one fingerprint in four separate processes with
   different string-hash seeds (no real book file is in the repository to try).
+- Built on 18 November 2026 in PR #123: step 2, the door for every book, as designed, except
+  (1) **the unique edition index is not built**: an index's condition cannot name the notes
+  account without writing its id into the statement, which needs a procedural block, and the
+  migrations may not contain one (`test_migrations.py` refuses the word `BEGIN` in any of them);
+  nothing creates editions side by side before step 3, so step 3 decides it (a marker column on
+  `books`, or another way); (2) the door's body differs from 0031's in six places only, checked
+  line by line by `test_migrations.py`: the reader's columns lose `source_kind`, the function's
+  own name, no `gutenberg:` condition, `notes_account` for `library_account` (twice), no
+  `source_kind` match, and `FROM reader CROSS JOIN place LEFT JOIN edition ON true` for the empty
+  row; a reader's book with no fingerprint still gets no row; (3) the account the migration
+  makes keeps the operator command's name, "Mothli library", and the command, its role and
+  `is_library_account` work on `notes_account` until step 6; (4) the web process takes a book as
+  served by the door when the door hands anything (`door_served`); where it hands nothing (no
+  edition, or place 0) the reader's own rows answer as before, and a book with both is answered
+  by the door alone; the progress screen, the correction refusal and the reader's story memory
+  queue use the same rule; (5) so a free-library reader before their first finished chapter is
+  now answered as for any book with no notes ("I don't keep a list of who's who for this book
+  yet", and no story in their copy of their data) rather than with an empty cast: the same with
+  and without an edition, until step 5 changes that line for every book; (6) the door does not
+  read an account's state: an account waiting to be erased is refused by its sign-in, and its
+  copy of its data holds nothing past its place; (7) the editions in the tests are built by the
+  operator's command, chapter by chapter, not by readers' runs; (8) the correction refusal for an
+  upload the door serves still gives the free-library line; no upload is served before step 3,
+  and step 7 replaces the line.
 
 **The sentence for the terms and privacy pages** (replaces the free-library one, open items line 254):
 "Mothli's notes on a book's story (who's who and what has happened, chapter by chapter) are made once for
