@@ -179,13 +179,21 @@ next run; nothing of it is shown to anyone meanwhile. The audit log of an erased
 docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.audit show --owner READER_ID
 ```
 
-## 4b. Preparing the free library's story memory (when you choose)
+## 4b. Story memory (when you choose)
 
-For a book from the free library, Mothli can keep who's who and the story so far, prepared once
-for everyone and handed to each reader only up to where they are. You choose which titles; nothing
-is prepared until you run this. It needs the worker on (`COMPOSE_PROFILES=worker` in
-`deploy/.env`) and `HOSTED_STORY_MEMORY=true` in `deploy/app.env`. A reader's own uploads are not
-touched by any of this.
+With the worker on (`COMPOSE_PROFILES=worker` in `deploy/.env`) and `HOSTED_STORY_MEMORY=true` in
+`deploy/app.env`, Mothli keeps who's who and the story so far for every reader's book, uploaded
+or from the free library: made once for each exact book file, a chapter at a time, one chapter
+ahead of the furthest reader, and handed to each reader only up to where they are (ADR 0044).
+Mothli pays for it, never a reader: it is spent from the notes account (the reserved account the
+database makes), at most `HOSTED_STORY_MEMORY_USD_PER_DAY` a day ($10 unless you set it), and
+the platform's daily cap still applies. No step is needed for that. One reader's reading may be
+the first to have at most 30 new chapters made a day, 300 a month, and 5 new book files a month
+(`HOSTED_STORY_MEMORY_NEW_CHAPTERS_PER_DAY`, `..._PER_MONTH`, `HOSTED_STORY_MEMORY_NEW_FILES_PER_MONTH`):
+guards against abuse that a real reader should never meet. Raise one if a real reader does.
+
+Until it is removed (ADR 0044 step 6), you can also prepare a free-library title ahead of its
+readers. You choose which titles; nothing is prepared ahead until you run this.
 
 1. Start it for the titles you want, by their free-library numbers (the number in the book's
    Project Gutenberg address, for example 1342 for *Pride and Prejudice*):
@@ -197,13 +205,14 @@ touched by any of this.
    add would, and the worker then prepares it one chapter at a time. A title that could not be
    added prints the reader's own line for it (a full shelf, for example: raise the account's
    `--max-books` or `--max-library-bytes` with the limits tool below, then run `build` again).
-2. **Set what it may spend** (about $7 for a novel of that length at today's prices). It spends
-   only from the library account's own allowance, never a reader's, and the platform's daily cap
-   still applies to it. For example $10 a day:
+2. **What it may spend** (about $7 for a novel of that length at today's prices). The library
+   account is the notes account: it spends under the notes ceiling above, never from a reader's
+   allowance, and the platform's daily cap still applies to it. To give it a ceiling of its own
+   (for example $10 a day and $50 a month), which then replaces `HOSTED_STORY_MEMORY_USD_PER_DAY`
+   for all story memory:
    ```
    docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.limits set LIBRARY_ACCOUNT_ID --max-spend-usd-per-day 10 --max-spend-usd-per-month 50
    ```
-   Until then it uses the readers' default caps, which prepare about one chapter a day.
 3. See how each title stands, as often as you like:
    ```
    docker compose -f deploy/compose.yaml run --rm library
@@ -310,8 +319,9 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
 - The sign-in service: which one, and its issuer, client ID and client secret (`OIDC_*`).
 - The two AI accounts and their keys, for Mothli's chat: the writer (`OPENAI_API_KEY`, or
   `ANTHROPIC_API_KEY`) and the checker, TypeSafe (`TYPESAFE_API_KEY`), in `deploy/app.env`.
-- The spending caps: $0.10 per reader per day, $2.00 per reader per month and $5.00 per day for
-  the whole platform are placeholders to confirm or change.
+- The spending caps: $0.10 per reader per day and $2.00 per reader per month are placeholders to
+  confirm or change; $15 a day for the whole platform and $10 a day for story memory are the
+  owner's numbers (ADR 0044).
 - How long backups are kept, and where the off-server copies go. That is also how long a deleted
   account's data lives on in backups (step 4).
 - Where the offline copy of `deploy/.env` and `deploy/app.env` is kept.
