@@ -469,9 +469,10 @@ class ContentSnapshot:
         return SnapshotView(self._memory, bookmark, excluded_ordinals=self._excluded)
 
 
-# A ``story_memory`` job of this book still to run (ADR 0042 section 6). A capped reader's job is
-# moved to the next UTC midnight by the claim (``app/hosted/jobs.py``): that one is waiting for
-# tomorrow; any other is under way or about to be.
+# A ``story_memory`` job of this book still to run (ADR 0042 section 6). A run past a chapter
+# guard or the notes ceiling asks for its next run at the next UTC midnight (ADR 0044 section 5,
+# ``app/hosted/companion/jobs.py``): that one is waiting for tomorrow; any other is under way or
+# about to be.
 _MEMORY_JOBS = """
 SELECT job.state,
        job.run_after >= (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day')
@@ -539,8 +540,9 @@ class HostedBookStore(OwnerBoundAdapter):
         and never an edition's rows by any other way (row-level security hides them). The door
         comes first (ADR 0044 section 4): a book with its own rows and an edition the door
         serves is answered by the door alone. Where the door hands nothing (no edition, or
-        place 0), a reader's own rows, built only while ``HOSTED_READER_STORY_MEMORY`` is on,
-        answer as before; without them the answer is the same empty memory either way."""
+        place 0), a reader's own rows (built by the per-reader path before ADR 0044 step 3; only
+        in tests) answer as before; without them the answer is the same empty memory either
+        way."""
         try:
             with self._transaction() as conn:
                 payload = conn.execute(DOOR, {"book": book}).fetchone()

@@ -277,7 +277,22 @@ class ChapterCatalog(ReplyCatalog):
     A reply's rule, for the same reason: the chapter's first model call is checked against the
     caps like any other, and once it is admitted the chapter's later calls are not refused for a
     dollar cap, so a chapter begun under the cap is finished and its paid calls are not thrown
-    away. A reader already at a cap is refused at the first call, before anything is spent.
+    away. An owner already at a cap is refused at the first call, before anything is spent.
     """
 
     __slots__ = ()
+
+
+class NotesCatalog(ChapterCatalog):
+    """The catalog one chapter of story memory is paid through (ADR 0044 section 5): bound to the
+    notes account, and given the edition being built as its book, so the chapter's spend is the
+    notes account's and attributable to that edition, never a reader's. Construct one per chapter:
+    ``NotesCatalog(dsn, OwnerId(edition.owner_id))``.
+
+    ``ChapterCatalog``'s rule (a chapter admitted at its first call finishes); the caps are the
+    notes account's: its own ``owner_limits`` day cap, or the notes ceiling where that is NULL,
+    and a month cap only where its row sets one. No reader's allowance is read or moved.
+    """
+
+    __slots__ = ()
+    _NOTES = True

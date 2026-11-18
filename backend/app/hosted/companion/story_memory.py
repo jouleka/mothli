@@ -31,9 +31,14 @@ finished it:
    rebuilt and the refusal reaches the shared loop as ``StalePreparedRoster``, so the chapter is
    prepared again against the memory as it is, without paying for the extraction again;
 5. the shared loop then calls ``finalize_ingest``, which settles the chapter's deferred
-   extraction calls (the reader's own, as before: spend is recorded as it was); a crash before
-   that leaves them open, and the next run settles them;
+   extraction calls; a crash before that leaves them open, and the next run of any reader of the
+   file settles them (the run of the next chapter, which finalizes the chapter before it);
 6. the working copy is dropped.
+
+Every model call of the chapter is paid by the notes account (ADR 0044 section 5): reserved and
+settled through a ``NotesCatalog`` against the edition, never against the reader whose reading
+asked for it, so no reader's allowance is read or moved and a chapter admitted at its first call
+finishes.
 
 Nothing that must stay out reaches Postgres: no chapter text, no passages, no vectors, nothing
 naming the reader. Nothing here decides what is extracted, what passes review, or at which chapter
@@ -51,7 +56,7 @@ from contextlib import contextmanager, nullcontext
 
 from app.content_scope import ContentMemory
 from app.hosted.companion.source import HostedBookSource
-from app.hosted.companion.store import ChapterCatalog
+from app.hosted.companion.store import HostedCompanionCatalog, NotesCatalog
 from app.hosted.jobs import ClaimedJob, Edition, PostgresWorkerRepository, StoryMemoryMoved
 from app.hosted.tenant.models import OwnerId
 from app.ingest.chapter_extraction import ChapterExtraction, _empty_extraction
@@ -448,43 +453,59 @@ class _PublishingMemory(ContentMemory):
                 "story memory changed after it was copied; prepare the chapter again") from None
 
 
-def _settle_published(catalog, book_id, ordinal, incarnation) -> None:
-    """Settle this reader's calls left open on chapter ``ordinal``, which the edition holds: its
-    deferred extraction calls at their noted size (``finalize_ingest``, a crash after this
-    reader's publish), then anything a run of theirs that died on it left reserved, as
-    abandoned. Each is settled once; a reservation already settled is not open any more."""
-    catalog.finalize_ingest(book_id, ordinal, incarnation=incarnation)
+def _settle_abandoned(notes: NotesCatalog, edition: Edition, ordinal: int) -> None:
+    """Settle, as abandoned, every call left reserved on chapter ``ordinal`` of the edition: a run
+    that died on it (of whichever reader) made them, so they are settled once, now."""
     for purpose in CHAPTER_PURPOSES:
-        for reservation in catalog.cost_reservation_ids(book_id, phase=purpose,
-                                                        chapter_ordinal=ordinal):
-            catalog.settle_cost(book_id, reservation, phase="extraction-abandoned")
+        for reservation in notes.cost_reservation_ids(str(edition.book_id), phase=purpose,
+                                                      chapter_ordinal=ordinal):
+            notes.settle_cost(str(edition.book_id), reservation, phase="extraction-abandoned")
 
 
-def settle_left_open(claim: ClaimedJob, *, tenant_dsn: str, before: int) -> None:
-    """Settle the claimed reader's calls left open on chapters before ``before``, every one of
-    which the edition holds (ADR 0044 step 3): a run of theirs that died, or crashed after its
-    publish, may have left them, and the chapter may since have been built by another reader's
-    run, so no run of this reader's comes back to it. Spend stays where it was recorded."""
-    catalog = ChapterCatalog(tenant_dsn, OwnerId(claim.owner_id))
-    book_id, incarnation = str(claim.book_id), str(claim.book_incarnation)
-    chapters = sorted({row["chapter_ordinal"] for row in catalog.get_cost_reservations(book_id)
-                       if row["chapter_ordinal"] is not None
-                       and 1 <= row["chapter_ordinal"] < before})
-    for ordinal in chapters:
-        _settle_published(catalog, book_id, ordinal, incarnation)
+def _settle_published(notes: NotesCatalog, edition: Edition, ordinal: int) -> None:
+    """Settle the calls left open on chapter ``ordinal``, which the edition holds: its deferred
+    extraction calls at their noted size (``finalize_ingest``, a crash after its publish), then
+    anything a run that died on it left reserved, as abandoned. Each is settled once; a
+    reservation already settled is not open any more."""
+    notes.finalize_ingest(str(edition.book_id), ordinal, incarnation=str(edition.incarnation))
+    _settle_abandoned(notes, edition, ordinal)
+
+
+# What the shared extraction pays through: every call names the reader's book, and is reserved
+# and settled as the notes account's, against the edition (ADR 0044 section 5).
+_SPEND = frozenset({"reserve_cost", "note_reservation_actual", "settle_cost",
+                    "discard_cost_reservation", "cost_reservation_ids", "get_cost_reservations",
+                    "get_costs"})
 
 
 class _EditionCatalog:
-    """The reader's ``ChapterCatalog`` as the shared extraction sees it, except that the progress
-    it reports is the edition's below the chapter (what the working copy holds), never this
-    reader's own rows from before (ADR 0044 step 3: they are not the edition's). Everything
-    else, spend above all, is the reader's catalog unchanged."""
+    """The reader's catalog as the shared extraction sees it, except that (1) the
+    progress it reports is the edition's below the chapter (what the working copy holds), never
+    this reader's own rows from before (ADR 0044 step 3: they are not the edition's); (2) every
+    spend call is the notes account's, against the edition (``notes``, a ``NotesCatalog``), and
+    never reaches the reader's allowance (ADR 0044 step 4). Everything else is the reader's
+    catalog unchanged."""
 
-    def __init__(self, catalog, copy) -> None:
+    def __init__(self, catalog, copy, notes: NotesCatalog, edition: Edition, book_id: str):
         self._catalog, self._copy = catalog, copy
+        self._notes, self._edition, self._book_id = notes, edition, book_id
 
     def __getattr__(self, name):
+        if name in _SPEND:
+            paid = getattr(self._notes, name)
+
+            def as_the_edition(book_id, *args, **kwargs):
+                if book_id != self._book_id:
+                    raise LookupError("unknown book")
+                return paid(str(self._edition.book_id), *args, **kwargs)
+            return as_the_edition
         return getattr(self._catalog, name)
+
+    def finalize_ingest(self, book_id, n, *, cost=None, incarnation=None):
+        if book_id != self._book_id:
+            raise LookupError("unknown book")
+        self._notes.finalize_ingest(str(self._edition.book_id), n,
+                                    incarnation=str(self._edition.incarnation))
 
     def get_state(self, book_id):
         state = self._catalog.get_state(book_id)
@@ -528,12 +549,17 @@ def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *,
     ``storage`` and ``sources`` are the object storage and the process's parse cache, as the
     companion dispatcher holds them.
 
-    Returns True when this run published the chapter, False when it was already published (this
-    reader's deferred extraction calls of it and of the chapter before, if a crash left any open,
-    are settled now; nothing is extracted). Raises ``ChapterOutOfOrder`` when an earlier chapter
+    Every call is paid by the notes account against the edition (``NotesCatalog``); the reader's
+    catalog is used for their book, their copy and their reading only, and no reader's allowance
+    is read or moved.
+
+    Returns True when this run published the chapter, False when it was already published (the
+    deferred extraction calls of it and of the chapter before, if a crash left any open, are
+    settled now; nothing is extracted). Raises ``ChapterOutOfOrder`` when an earlier chapter
     has no memory yet, ``LookupError`` when the book is no longer the reader's,
-    ``CostCeilingExceeded`` when the reader or the platform is at a cap at the chapter's first
-    call (nothing is spent then), ``ExtractionGroundingRejected`` when the chapter fails its
+    ``CostCeilingExceeded`` when the notes account (its day ceiling) or the platform is at a cap
+    at the chapter's first call (nothing is spent then), ``ExtractionGroundingRejected`` when the
+    chapter fails its
     review after the one repair, ``StalePreparedRoster`` when the edition kept moving through
     three preparations, ``ChapterAlreadyPublished`` when another run published it meanwhile,
     ``ModelMigrationRequired`` when the platform's extraction model is not the one the edition
@@ -553,7 +579,7 @@ def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *,
     hold()
     owner = OwnerId(claim.owner_id)
     book_id, incarnation = str(claim.book_id), str(claim.book_incarnation)
-    catalog = ChapterCatalog(tenant_dsn, owner)
+    catalog = HostedCompanionCatalog(tenant_dsn, owner)
     book = catalog.get_book(book_id)
     if book is None or book["incarnation"] != incarnation:
         raise LookupError("unknown book")
@@ -566,12 +592,15 @@ def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *,
     if (book.get("file_hash") != edition.file_hash
             or chapter_text.split_hash_of(chapters, book_id) != edition.split_hash):
         raise WorkingCopyMismatch("the reader's copy is not the edition's file")
+    # The chapter's spend is the notes account's, against the edition (ADR 0044 section 5).
+    notes = NotesCatalog(tenant_dsn, OwnerId(edition.owner_id))
     if repository.chapter_published(edition, ordinal):
         # Built already (by another reader's run, or this one before a crash): nothing to
-        # extract; this reader's calls left open on it, and on the chapter before, are settled.
+        # extract; the calls left open on it, and on the chapter before, are settled.
         if ordinal > 1:
-            catalog.finalize_ingest(book_id, ordinal - 1, incarnation=incarnation)
-        _settle_published(catalog, book_id, ordinal, incarnation)
+            notes.finalize_ingest(str(edition.book_id), ordinal - 1,
+                                  incarnation=str(edition.incarnation))
+        _settle_published(notes, edition, ordinal)
         return False
     copy = _WorkingCopy(_EditionReader(repository, edition, ordinal), repository, claim, book,
                         manifest, chapters, client, ordinal,
@@ -580,13 +609,11 @@ def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *,
         if not set(range(1, ordinal)) <= copy.copied_ordinals:
             raise ChapterOutOfOrder("an earlier chapter has no story memory yet")
         if ordinal not in copy.copied_ordinals:
-            # An attempt at this chapter that died (a crash, or a lease another worker took)
-            # left its calls reserved. They were made, so they are settled now, once; the
-            # shared loop would otherwise refuse the chapter for good.
-            for purpose in CHAPTER_PURPOSES:
-                for reservation in catalog.cost_reservation_ids(book_id, phase=purpose,
-                                                                chapter_ordinal=ordinal):
-                    catalog.settle_cost(book_id, reservation, phase="extraction-abandoned")
+            # An attempt at this chapter that died (a crash, or a lease another worker took),
+            # of whichever reader, left its calls reserved. They were made, so they are settled
+            # now, once; the shared loop would otherwise refuse the chapter for good. The build
+            # slot this run holds means no other run is making calls on this chapter now.
+            _settle_abandoned(notes, edition, ordinal)
 
         def current(checked_book, checked_incarnation):
             if checked_book != book_id or checked_incarnation != incarnation:
@@ -598,7 +625,7 @@ def remember_chapter(claim: ClaimedJob, repository: PostgresWorkerRepository, *,
         # The chapter before is passed too, so its deferred calls are settled if a crash after
         # its publish left them open; every earlier chapter's run did the same for its own.
         extraction = _Unremembered if unremembered else ChapterExtraction
-        extraction(_EditionCatalog(catalog, copy), client, settings, hold,
+        extraction(_EditionCatalog(catalog, copy, notes, edition, book_id), client, settings, hold,
                    time.sleep).ingest_through(
             book_id, [chapter for chapter in chapters if ordinal - 1 <= chapter["ordinal"]
                       <= ordinal],

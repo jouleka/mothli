@@ -149,13 +149,23 @@ class Settings(BaseSettings):
     # day, whatever any reader does.
     hosted_reader_usd_per_day: float = Field(default=0.10, ge=0, le=1000, allow_inf_nan=False)
     hosted_reader_usd_per_month: float = Field(default=2.00, ge=0, le=10000, allow_inf_nan=False)
-    hosted_platform_usd_per_day: float = Field(default=5.00, ge=0, le=100000, allow_inf_nan=False)
-    # ADR 0042 sections 3 and 6: story memory in hosted mode, built by the worker's story_memory
-    # jobs and paid by the owner. HOSTED_STORY_MEMORY turns the feature on at all;
-    # HOSTED_READER_STORY_MEMORY decides whether a reader's own book gets its own memory (off:
-    # no job is made for any reader's book and nothing is spent).
+    hosted_platform_usd_per_day: float = Field(default=15.00, ge=0, le=100000, allow_inf_nan=False)
+    # ADR 0042 sections 3 and 6, ADR 0044: story memory in hosted mode, built by the worker's
+    # story_memory jobs for every reader's book, one chapter ahead of their reading, once per book
+    # file. HOSTED_STORY_MEMORY turns the feature on at all.
     hosted_story_memory: bool = False
-    hosted_reader_story_memory: bool = False
+    # ADR 0044 section 5: Mothli pays for story memory, recorded against the notes account and
+    # never against a reader. Its day ceiling, for everyone (used where the notes account's
+    # owner_limits row leaves its own day cap NULL, so a fresh deployment needs no step), and the
+    # guards against abuse, which a reader who is really reading never meets: how many new
+    # chapters one reader's runs may be the first to build in a UTC day and in a UTC month, and
+    # of how many new files a month they may be the first to build chapter 1. Settings, to be
+    # raised if a real reader ever reaches one.
+    hosted_story_memory_usd_per_day: float = Field(default=10.00, ge=0, le=100000,
+                                                   allow_inf_nan=False)
+    hosted_story_memory_new_chapters_per_day: int = Field(default=30, ge=0, le=100000)
+    hosted_story_memory_new_chapters_per_month: int = Field(default=300, ge=0, le=1000000)
+    hosted_story_memory_new_files_per_month: int = Field(default=5, ge=0, le=100000)
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
@@ -217,10 +227,8 @@ class Settings(BaseSettings):
             raise ValueError("READER_RECOLLECTIONS requires READER_READ_MAP")
         if self.llm_transport == "codex-local" and self.deployment_mode != "local":
             raise ValueError("codex-local is only supported for local testing")
-        # ADR 0042: a reader's own story memory is part of hosted story memory, which local mode
-        # does not use (it builds story memory itself); the extraction is paid like the chat.
-        if self.hosted_reader_story_memory and not self.hosted_story_memory:
-            raise ValueError("HOSTED_READER_STORY_MEMORY requires HOSTED_STORY_MEMORY")
+        # ADR 0042: hosted story memory, which local mode does not use (it builds story memory
+        # itself); the extraction is paid by the owner, as the chat is.
         if self.hosted_story_memory and not hosted:
             raise ValueError("HOSTED_STORY_MEMORY is a hosted-mode setting")
         if self.hosted_story_memory and not self.reader_conversation_jev:

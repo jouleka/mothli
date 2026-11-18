@@ -350,7 +350,10 @@ class PostgresWorkerRepository:
 
         A companion job is skipped while another of the same owner, kind and book is leased or
         running, while any platform provider pause is in force, and while its owner is at a
-        companion cap; a capped owner's job is moved to the start of the next UTC day.
+        companion cap; a capped owner's job is moved to the start of the next UTC day. A
+        ``story_memory`` job is never held for its owner's cap: its spend is the notes
+        account's, not the reader's (ADR 0044 section 5); the run itself applies the chapter
+        guards and the notes ceiling, and waits for the next UTC day past either.
         """
         self._validate_worker_id(worker_id)
         lease_seconds = _seconds(lease_for)
@@ -371,7 +374,7 @@ class PostgresWorkerRepository:
                       AND NOT (job.owner_id=ANY(%(blocked)s::uuid[]))
                       AND (%(kinds)s::text[] IS NULL OR job.kind=ANY(%(kinds)s::text[]))
                       AND (job.kind<>ALL(%(companion)s::text[]) OR (
-                        NOT (job.owner_id=ANY(%(capped)s::uuid[]))
+                        (job.kind='story_memory' OR NOT (job.owner_id=ANY(%(capped)s::uuid[])))
                         AND NOT EXISTS (SELECT 1 FROM public.provider_pauses AS pause
                                         WHERE pause.paused_until>now())
                         AND NOT EXISTS (SELECT 1 FROM public.jobs AS active
@@ -395,7 +398,7 @@ class PostgresWorkerRepository:
                 if not lock["acquired"]:
                     blocked_owners.append(row["owner_id"])
                     continue
-                if row["kind"] in COMPANION_KINDS and self._companion_capped(
+                if row["kind"] in COMPANION_KINDS - {"story_memory"} and self._companion_capped(
                     conn, row["owner_id"]
                 ):
                     # Nothing of theirs could be paid for before the next UTC day.
@@ -739,6 +742,29 @@ class PostgresWorkerRepository:
                 (sorted(CHAPTER_FAILURES), str(edition.book_id), ordinal),
             ).fetchone()["failed"]
 
+    def first_builds(self, owner_id: uuid.UUID) -> dict[str, int]:
+        """How many chapters this owner's own ``story_memory`` runs were the first to build (their
+        jobs that published, ``commit_chapter_memory``): ``day`` and ``month`` since the start of
+        the UTC day and month, and ``files``, how many of this month's were a chapter 1, the
+        first chapter of a new edition. Read from the owner's jobs only, so erasing the reader
+        erases the count, and a chapter another reader built never counts (ADR 0044 section 5).
+        A job's time is when it ended; one that has not ended yet is not counted."""
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                SELECT count(*) FILTER (WHERE completed_at>=(date_trunc('day',
+                         now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')) AS day,
+                       count(*) AS month,
+                       count(*) FILTER (WHERE payload_metadata->'chapter'='1'::jsonb) AS files
+                FROM public.jobs
+                WHERE owner_id=%s AND kind='story_memory'
+                  AND payload_metadata @> '{"published":true}'::jsonb
+                  AND completed_at>=(date_trunc('month', now() AT TIME ZONE 'UTC')
+                                     AT TIME ZONE 'UTC')
+                """,
+                (owner_id,),
+            ).fetchone()
+
     def is_library_account(self, owner_id: uuid.UUID) -> bool:
         """Whether this owner is the library account, whose editions are built whole by the
         operator's command rather than up to a reader's read map (ADR 0042 part 5)."""
@@ -1029,6 +1055,16 @@ class PostgresWorkerRepository:
                 (*scope, chapter_id, chapter["content_hash"], receipt["extractor_model"],
                  receipt["input_tokens"], receipt["output_tokens"],
                  None if receipt["usd"] is None else Decimal(str(receipt["usd"]))),
+            )
+            # This reader's run is the first to build the chapter: its job says so, in the same
+            # transaction, for the chapter guards (``first_builds``, ADR 0044 section 5).
+            conn.execute(
+                """
+                UPDATE public.jobs
+                SET payload_metadata=payload_metadata||'{"published":true}'::jsonb,updated_at=now()
+                WHERE owner_id=%s AND id=%s
+                """,
+                (claim.owner_id, claim.job_id),
             )
             record_event(
                 conn,
