@@ -323,6 +323,47 @@ a test database, frontend tests and build, `ruff check app tests scripts`).
   `HOSTED_READER_KEYS` itself and the key settings (`HOSTED_CREDENTIAL_MASTER_KEY`, `_KEY_VERSION`,
   `_PREVIOUS_MASTER_KEYS`, `HOSTED_PROVIDER_VALIDATION_TIMEOUT_SECONDS`), grants, roles,
   `export.py` and `deploy/app.env.example`.
+- Built on 18 November 2026 in PR #118: step 7 as designed, in four commits (the tests moved,
+  the removal, the migration, these docs), except (1) the machinery tests moved to `chapter_notes`,
+  the plainest living kind (the claim, lease, retry and fencing treat it as every companion kind,
+  and it has no repository method of its own); since a companion kind lets one job of an owner,
+  kind and book wait or run, the tests that need two of one owner's jobs at once now put them on
+  two books; account deletion's waiting job became a `story_memory` job and the idempotency test
+  `recollect` jobs (running, so the one-waiting index cannot be what refuses); the fencing test
+  `test_jobs_postgres.py::test_worker_claim_is_owner_and_book_fenced_against_foreign_identifiers`
+  keeps every assertion on `chapter_notes`; (2) deleted as what was removed: the credential lookup
+  test (`test_worker_resolves_only_claim_bound_owner_credential_just_in_time`), the worker's
+  missing-credential classification (`test_worker_classifies_unavailable_credential_…`, a raised
+  `CredentialUnavailableError` is now an ordinary `internal_error`) and the chapter-count payload
+  case; the job routes' checks went from the source lifecycle, session, owner-predicate, notes
+  and free-library tests, and the audit test's second owner action is now removing the book;
+  (3) besides what the record listed, these went because only the book job used them:
+  `create_uploaded_book`'s `chapter_count` parameter and the `job` key of an upload's answer (no
+  frontend reader), `ClaimedJob.credential_id`, `ResourceKind.JOB`, the `active_job_limit_exceeded`
+  line in `classics.py`, the inventory's `job` surface class and `worker-credential-resolution`
+  resource (version 25); (4) the "jobs under way" count goes with its limit: the column
+  `owner_limits.max_active_jobs` was used by nothing else (no grant names it, `owner_limits` is
+  left out of the export, no frontend reads it), so migration `0028_retire_the_book_job.sql`
+  drops it with the index that served the count, and the limits tool loses `--max-active-jobs`;
+  the tool's own `active_jobs` figure stays, since it counts every kind; (5) the migration deletes
+  `ingest_book` jobs with their attempts; a job with cost rows makes the delete fail on the
+  non-cascading cost link and stops the migration whole, as does a job of another kind left in
+  `waiting_configuration`, which goes from the state check (book removal and account deletion no
+  longer name it); the companion shape check is split in two, a living job names its book and
+  names no credential, so step 8's drop of `jobs.credential_id` takes only the second; the column
+  itself is untouched; (6) the worker builds no credential cipher at start and runs without the
+  key settings (`test_worker.py::test_the_worker_starts_and_runs_without_a_credential_key`), but
+  the companion dispatcher loads hosted settings, which require `HOSTED_CREDENTIAL_MASTER_KEY`
+  until step 8; (7) `commit_chapter` and `reserve_spend` on the worker repository, the extraction
+  path's chapter commit and spend reservation, have no caller in `app/` (only the machinery tests)
+  and were left; (8) tests: hosted and parity 413 on `main` and 413 here (-1 credential lookup,
+  -1 chapter-count case, -1 credential classification, +1 worker start without a key, +2
+  migration tests); the obsolete stand-in that re-added the kind check in
+  `test_companion_story_memory_postgres.py` went. Left for step 8: `hosted/credentials.py` and its
+  test, the two key tables and `jobs.credential_id` (with `jobs_names_no_credential_ck`),
+  `HOSTED_READER_KEYS`, the key settings, grants, roles, `export.py`, `deploy/app.env.example`,
+  the backend README's provider-configuration section and the `pyproject.toml` entry naming
+  `hosted.credentials`.
 
 If question 1 is no, steps 6 and 8 are skipped and step 7 keeps the worker's key lookup.
 
