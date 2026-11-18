@@ -70,8 +70,8 @@ step 2, never into an email, a chat or a document.
    ```
    openssl rand -hex 32
    ```
-4. Make the two keys in `deploy/app.env` (once for `HOSTED_CREDENTIAL_MASTER_KEY`, once for
-   `HOSTED_STORAGE_FILESYSTEM_KEY`):
+4. Make the key in `deploy/app.env` for `HOSTED_STORAGE_FILESYSTEM_KEY`, which encrypts every
+   book file:
    ```
    openssl rand -base64 32
    ```
