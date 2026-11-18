@@ -1,8 +1,35 @@
 # ADR 0044 — Story memory on demand: one book file, one set of notes
 
-**Status:** Proposed (2026-11-18). Accepted when merged. Amends ADR 0042 sections 2, 3, 4, 6 and 7
-and its parts 3 and 5; amends ADR 0017 section 3 again (shared derived memory, now for every book
-file, not only library editions built by the operator).
+**Status:** Accepted (2026-11-18), with the owner's rule below. Amends ADR 0042 sections 2, 3, 4, 6
+and 7 and its parts 3 and 5; amends ADR 0017 section 3 again (shared derived memory, now for every
+book file, not only library editions built by the operator).
+
+## The owner's rule on acceptance (18 November 2026)
+
+His words: "users when they read they want the best possible experience be it imported books …
+be it imported epubs be it free books … the notes are layers we are adding. users should have their
+own quota for speaking with mothli, that's it. behind all that we take care. we can't tell users hey
+you can't read this chapter, or you didn't pay for this, or this other user didn't finish that
+chapter."
+
+What that fixes, wherever the sections below say otherwise:
+
+- **A reader has one visible allowance: talking with Mothli.** Notes are never sold, never tied to a
+  plan and never counted against a reader. Option 3 of section 5, and the remark about a price for
+  notes in question 1, are closed: there is no price for notes.
+- **Mothli pays for notes, behind the scenes** (option 2 of section 5).
+- **The guards of section 5 are protection against abuse only, and a reader who is really reading
+  must never meet them.** They start at 30 new chapters a day and 300 a month that one reader's
+  reading can be first to (not 12 and 120), and 5 new files a month stays. They are settings; raise
+  them if a real reader ever reaches one. The notes ceiling for everyone starts at $10 a day and the
+  platform day at $15, as recommended.
+- **Nothing a reader is shown may say or imply** that they cannot read something, that they have not
+  paid for something, that a limit of theirs was reached for notes, or anything about another reader.
+  Reading is never held back by notes. Where notes are not ready the screens show what there is; the
+  one existing line in Mothli's voice ("I'm a little behind you. I'll catch up on the rest tomorrow.")
+  may stay, and no new line about limits is written. Every step that touches a screen checks this.
+- Questions 2 to 5 are answered as recommended: notes go 30 days after the last holder of a file is
+  gone; one chapter ahead; no reader corrects notes; the timing hint is accepted.
 
 File and line references are to `main` at e4df206 (PR #120). Nothing in this record was run against a
 database, a server or a model; every claim about what the code does comes from reading the lines
