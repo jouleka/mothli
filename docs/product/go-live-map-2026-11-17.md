@@ -177,7 +177,7 @@ Background work in hosted mode: there are **no in-process threads**. Upload inse
 | Piece | State |
 |---|---|
 | Dockerfile, compose, platform config (Fly, Render, Kubernetes, ...) | none found anywhere in the repository |
-| Process commands | web: `uvicorn app.main:create_app --factory` (`README.md:93`); worker: `mothli-hosted-worker` (`pyproject.toml:31`); migrations: `python -m app.hosted.migrations`; key rewrap: `mothli-credential-rewrap`; limits and audit: `python -m app.hosted.limits`, `python -m app.hosted.audit` |
+| Process commands | web: `uvicorn app.main:create_app --factory` (`README.md:100`); worker: `mothli-hosted-worker` (`pyproject.toml:31`); migrations: `python -m app.hosted.migrations`; key rewrap: `mothli-credential-rewrap`; limits and audit: `python -m app.hosted.limits`, `python -m app.hosted.audit` |
 | Environment variable list | in code (`config.py:118-156`) and `backend/README.md`; `.env.example` covers local only |
 | Database roles and grants | described in ADR 0020 and `backend/README.md`; no script. Four roles are expected: auth (`HOSTED_AUTH_DSN`), tenant (`HOSTED_TENANT_DSN`), worker (`HOSTED_WORKER_DSN`), audit (`HOSTED_AUDIT_DSN`) |
 | Health | hosted has only `GET /api/health/live` (`main.py:485-487`); no readiness check (local has `/api/health/ready`, `api/health.py:17`) |
@@ -185,7 +185,7 @@ Background work in hosted mode: there are **no in-process threads**. Upload inse
 | HTTPS and hosts | cookies are Secure (`auth/api.py:58`); `TRUSTED_HOSTS` must be explicit (`config.py:189-191`); OIDC URLs must be HTTPS (`config.py:209-217`). TLS itself is left to whatever sits in front |
 | Security headers | applied in both modes (`main.py:41-84`); API responses marked no-store in hosted (`main.py:234-252`) |
 | Logging | plain Python logging; content-free by design (`audit.py`, `main.py:87-106`); no shipping or metrics found |
-| Backups | local only (`hosted/local_migration.py:936`, ADR 0009); for Postgres and object storage, none: "Backups, restore drills, deployment configuration, monitoring ... remain operator responsibilities" (`README.md:10-13`) |
+| Backups | local only (`hosted/local_migration.py:936`, ADR 0009); for Postgres and object storage, none: "Backups, restore drills, deployment configuration, monitoring ... remain operator responsibilities" (`README.md:10-13` on 17 November; that sentence went when the README was rewritten for one hosted product, ADR 0043) |
 | Local run script | `scripts/run-local-production.sh` is local mode only |
 
 ### B8. Tests
