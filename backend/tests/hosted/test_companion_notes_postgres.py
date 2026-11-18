@@ -772,24 +772,23 @@ def test_a_deleted_books_notes_are_never_written(notes_app, readers, database, w
     assert [row["state"] for row in jobs_of(database, a.owner)] == ["cancelled", "cancelled"]
 
 
-def test_a_companion_worker_leaves_extraction_jobs_alone(notes_app, readers, database,
-                                                        worker_dsn) -> None:
-    """The break it catches: the companion dispatcher's worker claiming a waiting extraction job,
-    which it cannot run and would fail."""
+def test_a_notes_worker_leaves_jobs_of_other_kinds_alone(notes_app, readers, database,
+                                                         worker_dsn) -> None:
+    """The break it catches: a worker whose dispatcher runs chapter notes only claiming a waiting
+    job of another kind (here story memory, run by a worker with story memory on), which it
+    cannot run and would fail."""
     a = reader(notes_app, readers)
     book = upload(a.client, a.tokens, "a", lamp_book())
-    # An extraction job as part 10 (or a reader key) would add it: uploads make none today.
     with psycopg.connect(database) as conn:
         conn.execute("""INSERT INTO jobs (owner_id,book_id,book_incarnation,kind,state,
-                                          idempotency_key,payload_metadata)
-                        SELECT owner_id,id,incarnation,'ingest_book','pending','ingest:walk',
-                               '{"chapter_count": 3}'::jsonb
+                                          idempotency_key)
+                        SELECT owner_id,id,incarnation,'story_memory','pending','story-memory:walk'
                         FROM books WHERE id=%s""", (book,))
     repository = PostgresWorkerRepository(worker_dsn)
     assert repository.claim_next(worker_id="notes", lease_for=timedelta(seconds=30),
                                  kinds=frozenset({"chapter_notes"})) is None
     claimed = repository.claim_next(worker_id="any", lease_for=timedelta(seconds=30))
-    assert claimed is not None and claimed.kind == "ingest_book"
+    assert claimed is not None and claimed.kind == "story_memory"
 
 
 def test_the_dispatcher_refuses_to_start_without_its_settings(monkeypatch, tmp_path) -> None:
@@ -799,7 +798,7 @@ def test_the_dispatcher_refuses_to_start_without_its_settings(monkeypatch, tmp_p
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     with pytest.raises(WorkerConfigurationError, match="hosted mode only"):
         CompanionJobs.from_environment()
-    for kinds in (frozenset({"ingest_book"}), frozenset()):
+    for kinds in (frozenset({"something_else"}), frozenset()):
         with pytest.raises(WorkerConfigurationError,
                            match="chapter notes, recollections and story memory only"):
             CompanionJobs(tenant_dsn="postgresql://unused.invalid/db", settings=None, client=None,

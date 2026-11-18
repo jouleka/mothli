@@ -243,12 +243,10 @@ def _seed(world: World, label: str) -> uuid.UUID:
         job = conn.execute("INSERT INTO jobs (owner_id,book_id,book_incarnation,kind,"
                            "idempotency_key) VALUES (%s,%s,%s,'chapter_notes',%s) RETURNING id",
                            (*scope, f"chapter-notes:{uuid.uuid4().hex}")).fetchone()[0]
-        # The retired reader-key extraction job an upload made before ADR 0043 (none is made now;
-        # the kind goes in step 7), waiting as it did for a key the reader never gave.
-        conn.execute("INSERT INTO jobs (owner_id,book_id,book_incarnation,kind,state,"
-                     "idempotency_key,payload_metadata) VALUES (%s,%s,%s,'ingest_book',"
-                     "'waiting_configuration',%s,'{\"chapter_count\":1}'::jsonb)",
-                     (*scope, f"ingest:{book.hex}:{incarnation.hex}"))
+        # A second job of the book, waiting: story memory's next chapter.
+        conn.execute("INSERT INTO jobs (owner_id,book_id,book_incarnation,kind,"
+                     "idempotency_key) VALUES (%s,%s,%s,'story_memory',%s)",
+                     (*scope, f"story-memory:{uuid.uuid4().hex}"))
         conn.execute("INSERT INTO cost_ledger (owner_id,id,book_id,book_incarnation,job_id,phase,"
                      "provider,model,input_tokens,output_tokens,usd,idempotency_key) "
                      "VALUES (%s,%s,%s,%s,%s,'extraction','made-up','model',10,2,0.01,%s)",
@@ -336,7 +334,7 @@ def test_asking_to_delete_signs_out_everywhere_and_stops_background_work(world: 
                             (b["owner"],)).fetchone()[0] == 1
         jobs = conn.execute("SELECT kind, state, cancellation_requested_at IS NOT NULL FROM jobs "
                             "WHERE owner_id=%s ORDER BY kind", (a["owner"],)).fetchall()
-        assert jobs == [("chapter_notes", "running", True), ("ingest_book", "cancelled", True)]
+        assert jobs == [("chapter_notes", "running", True), ("story_memory", "cancelled", True)]
         assert conn.execute("SELECT id, state, cancellation_requested_at FROM jobs "
                             "WHERE owner_id=%s ORDER BY id", (b["owner"],)).fetchall() == b_jobs
         status, stored, deleted_at, *_ = conn.execute(

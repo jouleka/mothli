@@ -16,7 +16,7 @@ def _claim() -> ClaimedJob:
         job_id=uuid.uuid4(),
         book_id=uuid.uuid4(),
         book_incarnation=uuid.uuid4(),
-        kind="ingest_book",
+        kind="chapter_notes",
         attempt_no=1,
         worker_id="worker",
         lease_token="private-token",

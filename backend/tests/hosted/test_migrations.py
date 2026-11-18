@@ -591,20 +591,23 @@ def test_idempotency_keys_are_tenant_scoped(database: str) -> None:
             "INSERT INTO users (id, display_name) VALUES (%s, 'A'), (%s, 'B')",
             (owner_a, owner_b),
         )
+        # Recollection jobs (a living kind that needs no book), running rather than waiting: at
+        # most one companion job of an owner, kind and book waits, and that index must not be
+        # what refuses the third.
         conn.execute(
-            "INSERT INTO jobs (owner_id, id, kind, idempotency_key, payload_metadata) "
-            "VALUES (%s, %s, 'ingest_book', 'same', '{\"chapter_count\":1}')",
+            "INSERT INTO jobs (owner_id, id, kind, state, idempotency_key) "
+            "VALUES (%s, %s, 'recollect', 'running', 'same')",
             (owner_a, job_a),
         )
         conn.execute(
-            "INSERT INTO jobs (owner_id, id, kind, idempotency_key, payload_metadata) "
-            "VALUES (%s, %s, 'ingest_book', 'same', '{\"chapter_count\":1}')",
+            "INSERT INTO jobs (owner_id, id, kind, state, idempotency_key) "
+            "VALUES (%s, %s, 'recollect', 'running', 'same')",
             (owner_b, job_b),
         )
-        with pytest.raises(psycopg.errors.UniqueViolation):
+        with pytest.raises(psycopg.errors.UniqueViolation, match="idempotency_key"):
             conn.execute(
-                "INSERT INTO jobs (owner_id, id, kind, idempotency_key, payload_metadata) "
-                "VALUES (%s, %s, 'ingest_book', 'same', '{\"chapter_count\":1}')",
+                "INSERT INTO jobs (owner_id, id, kind, state, idempotency_key) "
+                "VALUES (%s, %s, 'recollect', 'running', 'same')",
                 (owner_a, uuid.uuid4()),
             )
 

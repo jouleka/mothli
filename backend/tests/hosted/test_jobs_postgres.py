@@ -1,4 +1,10 @@
-"""Real-PostgreSQL durable job/lease/idempotency contract (LIT-44)."""
+"""Real-PostgreSQL durable job/lease/idempotency contract (LIT-44).
+
+The sample job is a ``chapter_notes`` job (ADR 0043 step 7 moved these tests off the retired
+``ingest_book``): the plainest living kind, which the claim, lease, retry and fencing treat as every
+companion kind and which has no method of its own on the worker repository. As for every companion
+kind, at most one job of an owner, kind and book waits or runs at a time, so a test that needs two
+of one owner's jobs at once puts them on two books."""
 
 from __future__ import annotations
 
@@ -110,8 +116,10 @@ def corpus(database: str) -> dict:
     owner_a = uuid.uuid4()
     owner_b = uuid.uuid4()
     book_a = uuid.uuid4()
+    book_a2 = uuid.uuid4()
     book_b = uuid.uuid4()
     incarnation_a = uuid.uuid4()
+    incarnation_a2 = uuid.uuid4()
     incarnation_b = uuid.uuid4()
     with psycopg.connect(database) as conn:
         conn.cursor().executemany(
@@ -125,6 +133,7 @@ def corpus(database: str) -> dict:
             """,
             [
                 (owner_a, book_a, incarnation_a, "A book"),
+                (owner_a, book_a2, incarnation_a2, "A second book"),
                 (owner_b, book_b, incarnation_b, "B book"),
             ],
         )
@@ -132,8 +141,10 @@ def corpus(database: str) -> dict:
         "owner_a": owner_a,
         "owner_b": owner_b,
         "book_a": book_a,
+        "book_a2": book_a2,
         "book_b": book_b,
         "incarnation_a": incarnation_a,
+        "incarnation_a2": incarnation_a2,
         "incarnation_b": incarnation_b,
     }
 
@@ -143,27 +154,33 @@ def _enqueue(
     corpus: dict,
     *,
     owner: str = "a",
+    book: str | None = None,
     max_attempts: int = 3,
     suffix: str | None = None,
+    kind: str = "chapter_notes",
     credential_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     job_id = uuid.uuid4()
     suffix = suffix or job_id.hex
+    book = book or owner
+    payload = '{"chapter_count":1}' if kind == "ingest_book" else "{}"
     with psycopg.connect(database) as conn:
         conn.execute(
             """
             INSERT INTO jobs
               (owner_id,id,book_id,book_incarnation,kind,idempotency_key,max_attempts,
                payload_metadata,credential_id)
-            VALUES (%s,%s,%s,%s,'ingest_book',%s,%s,'{"chapter_count":1}'::jsonb,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
             """,
             (
                 corpus[f"owner_{owner}"],
                 job_id,
-                corpus[f"book_{owner}"],
-                corpus[f"incarnation_{owner}"],
-                f"ingest:{suffix}",
+                corpus[f"book_{book}"],
+                corpus[f"incarnation_{book}"],
+                kind,
+                f"{kind.replace('_', '-')}:{suffix}",
                 max_attempts,
+                payload,
                 credential_id,
             ),
         )
@@ -311,7 +328,10 @@ def test_provider_concurrency_is_atomic_across_worker_instances(
     worker_dsn: str, database: str, corpus: dict
 ) -> None:
     update_limits(database, corpus["owner_a"], {"max_provider_concurrency": 1})
-    jobs_a = [_enqueue(database, corpus, suffix=f"limit-a-{index}") for index in range(2)]
+    # On two books, so that only the owner's concurrency (not one job per owner, kind and book)
+    # can hold the second back.
+    jobs_a = [_enqueue(database, corpus, book=book, suffix=f"limit-{book}")
+              for book in ("a", "a2")]
     job_b = _enqueue(database, corpus, owner="b", suffix="limit-b")
 
     def claim(worker: str):
@@ -457,7 +477,8 @@ def test_worker_resolves_only_claim_bound_owner_credential_just_in_time(
             """,
             (corpus["owner_a"], uuid.uuid4(), credential_id),
         )
-    job_id = _enqueue(database, corpus, credential_id=credential_id)
+    # Only the retired kind could name a credential (jobs_companion_shape_ck).
+    job_id = _enqueue(database, corpus, kind="ingest_book", credential_id=credential_id)
     repository = PostgresWorkerRepository(worker_dsn, cipher)
     claim = repository.claim_next(worker_id="credential-worker", lease_for=timedelta(seconds=30))
     assert claim is not None and claim.job_id == job_id and claim.credential_id == credential_id
@@ -480,20 +501,15 @@ def test_worker_resolves_only_claim_bound_owner_credential_just_in_time(
         repository.resolve_credential(claim)
 
 
-@pytest.mark.parametrize(
-    "payload",
-    ({}, {"chapter_count": 1, "token": "must-not-persist"}),
-)
-def test_ingestion_job_payload_requires_progress_and_rejects_credentials(
-    database: str, corpus: dict, payload: dict
-) -> None:
+def test_ingestion_job_payload_requires_progress(database: str, corpus: dict) -> None:
+    """Only the retired ``ingest_book`` kind had to carry a chapter count."""
     with pytest.raises(psycopg.errors.CheckViolation):
         with psycopg.connect(database) as conn:
             conn.execute(
                 """
                 INSERT INTO jobs
                   (owner_id,id,book_id,book_incarnation,kind,idempotency_key,payload_metadata)
-                VALUES (%s,%s,%s,%s,'ingest_book',%s,%s::jsonb)
+                VALUES (%s,%s,%s,%s,'ingest_book',%s,'{}'::jsonb)
                 """,
                 (
                     corpus["owner_a"],
@@ -501,7 +517,26 @@ def test_ingestion_job_payload_requires_progress_and_rejects_credentials(
                     corpus["book_a"],
                     corpus["incarnation_a"],
                     f"ingest:{uuid.uuid4().hex}",
-                    psycopg.types.json.Jsonb(payload),
+                ),
+            )
+
+
+def test_job_payload_rejects_credentials(database: str, corpus: dict) -> None:
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with psycopg.connect(database) as conn:
+            conn.execute(
+                """
+                INSERT INTO jobs
+                  (owner_id,id,book_id,book_incarnation,kind,idempotency_key,payload_metadata)
+                VALUES (%s,%s,%s,%s,'chapter_notes',%s,%s::jsonb)
+                """,
+                (
+                    corpus["owner_a"],
+                    uuid.uuid4(),
+                    corpus["book_a"],
+                    corpus["incarnation_a"],
+                    f"chapter-notes:{uuid.uuid4().hex}",
+                    psycopg.types.json.Jsonb({"chapter_count": 1, "token": "must-not-persist"}),
                 ),
             )
 
@@ -615,7 +650,7 @@ def test_start_heartbeat_failure_retry_and_sanitized_terminal_error(
 
 def test_pending_and_running_cancellation_are_cooperative(database: str, corpus: dict) -> None:
     pending_id = _enqueue(database, corpus, suffix="pending")
-    running_id = _enqueue(database, corpus, suffix="running")
+    running_id = _enqueue(database, corpus, book="a2", suffix="running")
     repository = PostgresWorkerRepository(database)
     running = repository.claim_next(worker_id="worker", lease_for=timedelta(seconds=30))
     assert running is not None and running.job_id in {pending_id, running_id}
