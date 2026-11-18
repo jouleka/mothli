@@ -140,7 +140,7 @@ def rows(dsn: str, query: str, *params) -> list[dict]:
 
 
 def jobs_of(dsn: str, owner: uuid.UUID, kind: str = "chapter_notes") -> list[dict]:
-    return rows(dsn, "SELECT * FROM jobs WHERE owner_id=%s AND kind=%s ORDER BY created_at,id",
+    return rows(dsn, f"SELECT * FROM jobs WHERE owner_id=%s AND kind=%s {jobs_gate.JOB_ORDER}",
                 owner, kind)
 
 
@@ -214,6 +214,8 @@ def test_a_finished_chapter_gets_checked_notes_through_a_durable_job(notes_app, 
     a.read(book, 2, 1, 5)
     assert len(jobs_of(database, a.owner)) == 1
     finish_chapter_two(a, book)
+    assert [row["state"] for row in jobs_of(database, a.owner)] == ["succeeded", "pending"]
+    jobs_gate.step_clock_back(database, a.owner)       # the database host's clock stepped back
     assert [row["state"] for row in jobs_of(database, a.owner)] == ["succeeded", "pending"]
     drain(worker(app, worker_dsn))
     assert [(n["atom"], n["sentences"]) for n in notes_of(database, a.owner)] == [

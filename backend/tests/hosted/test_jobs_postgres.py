@@ -27,6 +27,23 @@ from app.hosted.migrations import apply_migrations
 
 pytestmark = pytest.mark.postgres
 
+# How the companion tests list one reader's jobs: by how far along each is (finished, under way,
+# waiting), then by the chapter a story-memory run did, and only then by created_at. A job's
+# created_at is the database host's wall clock, which can step back (the WSL clock does when it
+# resyncs), so a later job could be listed first; nothing in the product orders work by it
+# beyond fairness of the claim.
+JOB_ORDER = ("ORDER BY CASE WHEN state IN ('succeeded','failed','cancelled') THEN 0"
+             " WHEN state IN ('leased','running') THEN 1 ELSE 2 END,"
+             " (payload_metadata->>'chapter')::integer NULLS LAST, created_at, id")
+
+
+def step_clock_back(dsn: str, owner: uuid.UUID) -> None:
+    """Reverse the created_at order of an owner's jobs, as a clock stepping back between two
+    inserts would."""
+    with psycopg.connect(dsn) as conn:
+        conn.execute("UPDATE jobs SET created_at = timestamptz '2000-01-01'"
+                     " - (created_at - timestamptz '2000-01-01') WHERE owner_id=%s", (owner,))
+
 
 @pytest.fixture(scope="module")
 def admin_dsn() -> str:
