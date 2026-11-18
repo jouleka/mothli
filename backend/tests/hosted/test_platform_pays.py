@@ -2,7 +2,7 @@
 
 The one construction of the model clients both modes share (local mode must build exactly what it
 built before); what hosted mode refuses, at settings and at startup, without ever printing a key;
-and the reader-key routes, which answer as unknown paths unless HOSTED_READER_KEYS is on.
+and the removed reader-key routes, which answer as unknown paths whatever the settings.
 No model is called: building a client opens no connection.
 """
 
@@ -18,7 +18,6 @@ from fastapi.testclient import TestClient
 
 from app import deps
 from app.config import Settings
-from app.hosted.tenant.api import READER_KEY_ROUTES
 from app.llm.client import LLMClient
 from app.llm.factory import PlatformClientsUnavailable, build_platform_clients
 from app.main import create_app
@@ -246,21 +245,44 @@ def test_a_missing_platform_key_stops_hosted_startup_naming_the_setting_not_its_
     assert KEY_CANARY not in caplog.text and JEV_CANARY not in caplog.text
 
 
+# What readers paying with their own AI key used (ADR 0043 step 6): the key and model settings
+# screen's routes and the replies, Explain / Define and chapter look-back that ran on that key.
+REMOVED_PATHS = (
+    "/api/credentials",
+    "/api/credentials/{credential_id}",
+    "/api/provider-settings",
+    "/api/provider-settings/{capability}",
+    "/api/provider-settings/{capability}/validate",
+    "/api/books/{book_id}/ask",
+    "/api/books/{book_id}/selection-action",
+    "/api/books/{book_id}/chapter-closeout",
+)
+CHAT_ON = {**PAID, "reader_conversation_jev": True, "hosted_reader_usd_per_day": 0.10,
+           "hosted_platform_usd_per_day": 5.00}
+
+
 def _concrete(path: str) -> str:
     return (path.replace("{book_id}", str(uuid.uuid4()))
             .replace("{credential_id}", str(uuid.uuid4()))
             .replace("{capability}", "synthesis"))
 
 
-def test_reader_key_routes_answer_as_unknown_paths_unless_reader_keys_are_on(tmp_path) -> None:
-    """The break it catches: a "paste your own key" or reader-key reply route that still answers
-    (401, 403, 405, 413 or 422) while the platform pays, telling anyone it is there, or one that
-    disappears while HOSTED_READER_KEYS is on. Unknown paths answer 404 {"detail": "Not Found"}."""
+@pytest.mark.parametrize("values", [
+    {}, CHAT_ON, {**CHAT_ON, "hosted_story_memory": True, "hosted_reader_story_memory": True},
+], ids=["nothing-paid", "chat", "chat-and-story-memory"])
+def test_the_reader_key_paths_do_not_exist_in_hosted_mode_whatever_the_settings(values,
+                                                                                tmp_path) -> None:
+    """The break it catches: a "paste your own key" route, or a reply, Explain / Define or chapter
+    look-back that runs on a reader's own key, answering at all in hosted mode (401, 403, 405, 413
+    or 422 would tell anyone it is there). Nothing in hosted mode serves Explain / Define or the
+    chapter look-back now, so no hosted spoiler test is needed for them until they are built on
+    the platform's models (ADR 0043). Unknown paths answer 404 {"detail": "Not Found"}."""
     methods = ("GET", "POST", "PUT", "DELETE", "PATCH")
-    with TestClient(hosted_app(hosted_settings(tmp_path)), base_url="https://reader.example") as client:
+    with TestClient(hosted_app(hosted_settings(tmp_path, **values)),
+                    base_url="https://reader.example") as client:
         unknown = client.get(f"/api/no-such-route-{uuid.uuid4().hex}")
         assert (unknown.status_code, unknown.json()) == (404, {"detail": "Not Found"})
-        for _method, path in sorted(READER_KEY_ROUTES):
+        for path in REMOVED_PATHS:
             for method in methods:
                 answer = client.request(method, _concrete(path), content=b"x" * 40_000,
                                         headers={"content-type": "application/json"})
@@ -268,8 +290,12 @@ def test_reader_key_routes_answer_as_unknown_paths_unless_reader_keys_are_on(tmp
                     method, path)
         assert client.get("/api/limits").status_code == 401         # the rest is still there
 
-    with TestClient(hosted_app(hosted_settings(tmp_path, hosted_reader_keys=True)),
-                    base_url="https://reader.example") as client:
-        for method, path in sorted(READER_KEY_ROUTES):
-            answer = client.request(method, _concrete(path), json={})
-            assert answer.status_code == 401, (method, path, answer.text)
+
+def test_hosted_settings_refuse_reader_keys_rather_than_switch_on_half_a_feature(tmp_path) -> None:
+    """The break it catches: HOSTED_READER_KEYS=true left in an old .env starting hosted mode with
+    what is left of the reader-key feature (an upload's extraction job that nothing runs, which
+    counts against the reader's job limit for good). The message names the setting and why."""
+    for values in ({}, CHAT_ON):
+        with pytest.raises(ValueError, match="HOSTED_READER_KEYS was removed"):
+            hosted_settings(tmp_path, **values, hosted_reader_keys=True)
+    assert hosted_settings(tmp_path).hosted_reader_keys is False

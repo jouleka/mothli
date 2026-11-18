@@ -8,8 +8,6 @@ import uuid
 from dataclasses import replace
 
 import pytest
-from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.hosted.credentials import (
@@ -19,7 +17,6 @@ from app.hosted.credentials import (
     build_credential_cipher,
 )
 from app.hosted.tenant.models import OwnerId
-from app.main import _CredentialBodyLimit
 
 
 def _cipher(*, active: str = "v1") -> CredentialCipher:
@@ -95,24 +92,3 @@ def test_settings_keyring_is_secret_and_fails_closed() -> None:
     )
     with pytest.raises(CredentialConfigurationError, match="base64"):
         build_credential_cipher(broken)
-
-
-def test_credential_request_body_is_bounded_before_application_parsing() -> None:
-    app = FastAPI()
-
-    @app.put("/api/credentials/{credential_id}")
-    async def consume(credential_id: uuid.UUID, request: Request):
-        return {"size": len(await request.body()), "id": str(credential_id)}
-
-    app.add_middleware(_CredentialBodyLimit, max_body_bytes=16)
-    with TestClient(app) as client:
-        credential_id = uuid.uuid4()
-        accepted = client.put(
-            f"/api/credentials/{credential_id}", content=b"x" * 16
-        )
-        rejected = client.put(
-            f"/api/credentials/{credential_id}", content=b"private-canary-over-limit"
-        )
-    assert accepted.json()["size"] == 16
-    assert rejected.status_code == 413
-    assert "private-canary" not in rejected.text

@@ -275,12 +275,6 @@ export type ChapterNote = {
   unremembered?: boolean;
 };
 export type Notes = { as_of_chapter: number; cast: CastMember[]; chapters: ChapterNote[] };
-export type ProviderCapability = "extraction" | "synthesis" | "embedding" | "judge";
-export type HostedProvider = "openai-compatible" | "anthropic" | "offline";
-export type CredentialMetadata = {
-  id: string; provider: Exclude<HostedProvider, "offline">; masked_label: string; key_version: string;
-  created_at: string; rotated_at: string | null; disabled_at: string | null;
-};
 export type ReaderPreferences = {
   font_size: "small" | "book" | "large" | "x-large";
   line_height: "compact" | "comfortable" | "relaxed";
@@ -316,29 +310,6 @@ export type BookmarkMark = ReaderMarkBase & {
 };
 export type ReaderMark = HighlightMark | AnnotationMark | BookmarkMark;
 export type ReaderMarks = { as_of_chapter: number; marks: ReaderMark[] };
-export type ProviderSetting = {
-  id: string; provider: HostedProvider; capability: ProviderCapability; credential_id: string | null;
-  model: string; base_url: string | null; enabled: boolean;
-  validation_status: "unchecked" | "ready" | "offline" | "invalid";
-  validation_error_code: string | null; validated_at: string | null;
-  created_at: string; updated_at: string;
-};
-export type ProviderRecommendation = { provider: HostedProvider; model: string; base_url: string | null };
-export type ProviderSettingsPayload = {
-  capabilities: ProviderCapability[]; providers: HostedProvider[];
-  recommendations: Record<ProviderCapability, ProviderRecommendation>;
-  recommendations_persisted: false; offline_behavior: string; cost_ownership: string;
-  items: ProviderSetting[];
-};
-export type ProviderSettingInput = {
-  provider: HostedProvider; model: string; credential_id: string | null; base_url?: string | null;
-};
-export type ProviderValidation = {
-  status: "ready" | "offline" | "invalid";
-  code: "ok" | "offline" | "invalid_credentials" | "unavailable_model" | "network_error" | "service_error";
-  setting: ProviderSetting;
-};
-
 /** What every hosted route answers while the reader's account waits to be erased. */
 export const PENDING_DELETION = "account_pending_deletion";
 
@@ -401,7 +372,7 @@ function csrfHeaders(): Record<string, string> {
 }
 
 /** Routes this server does not have at all, learned from its first "Not Found" this session:
- * hosted mode has no story memory, chapter notes or reader-key routes yet. Asked once, then
+ * hosted mode has no story memory or chapter notes yet. Asked once, then
  * answered here with the same 404, so the console and the server's log are not filled with the
  * same refusal on every page. A 404 that says anything else (a book the reader does not have, a
  * switched-off feature) is never kept: those can change and are asked every time. */
@@ -426,12 +397,7 @@ async function unlessMissing(route: string, request: () => Promise<Response>): P
 /** Tests only: forget what this session learned about the server's routes. */
 export function forgetMissingRoutes(): void {
   missingRoutes.clear();
-  passageHelpProbe = null;
 }
-
-// null until asked: whether this server helps with a picked passage (hosted mode, reader keys off,
-// does not have the route). One question per session, and only in hosted mode.
-let passageHelpProbe: Promise<boolean> | null = null;
 
 function offlineFailure(error: unknown): boolean {
   return error instanceof TypeError || (typeof navigator !== "undefined" && !navigator.onLine);
@@ -895,6 +861,8 @@ export const api = {
       request.done();
     }
   },
+  // Help with a picked passage and the chapter look-back: local mode only. Hosted mode has neither
+  // route (ADR 0043), and its screens never ask (ReaderPage's ``passageHelp`` and "Tell me").
   selectionAction: (
     id: string,
     value: { action: SelectionAction; text: string; atom: number; cfi: string; question?: string; history?: ConversationMessage[] },
@@ -909,25 +877,6 @@ export const api = {
       ...(value.action === "translate" ? { target_language: "English" } : {}),
     }),
   })).then((r) => j<SelectionAssistAnswer>(r));
-  },
-  /** Whether this server helps with a picked passage (Explain, Define, Translate, a question about
-   * it). Local mode always does, and nothing is asked. In hosted mode it is asked once a session,
-   * without doing anything: the route takes only POST, so a GET is "Method Not Allowed" where it
-   * exists and "Not Found" where it does not. When the answer cannot be had, the tools are offered,
-   * as before. */
-  passageHelp: (id: string, hosted: boolean): Promise<boolean> => {
-    if (!hosted) return Promise.resolve(true);
-    if (missingRoutes.has("selection-action")) return Promise.resolve(false);
-    passageHelpProbe ??= unlessMissing("selection-action", () =>
-      fetch(`/api/books/${encodeURIComponent(id)}/selection-action`, { cache: "no-store" }),
-    ).then(
-      () => !missingRoutes.has("selection-action"),
-      () => {
-        passageHelpProbe = null;
-        return true;
-      },
-    );
-    return passageHelpProbe;
   },
   chapterCloseout: (id: string, chapter: number) =>
     unlessMissing("chapter-closeout", () => fetch(`/api/books/${id}/chapter-closeout`, {
@@ -968,30 +917,6 @@ export const api = {
     unlessMissing("notes", () => fetch(`/api/books/${id}/notes${bookmark != null ? `?bookmark=${bookmark}` : ""}`)).then(
       (r) => j<Notes>(r),
     ),
-  credentials: () => fetch("/api/credentials").then((r) => j<CredentialMetadata[]>(r)),
-  createCredential: (provider: Exclude<HostedProvider, "offline">, secret: string) =>
-    fetch("/api/credentials", {
-      method: "POST",
-      headers: { "content-type": "application/json", ...csrfHeaders() },
-      body: JSON.stringify({ provider, secret }),
-    }).then((r) => j<CredentialMetadata>(r)),
-  deleteCredential: (id: string) =>
-    fetch(`/api/credentials/${id}`, { method: "DELETE", headers: csrfHeaders() }).then(
-      (r) => j<void>(r),
-    ),
-  providerSettings: () =>
-    unlessMissing("provider-settings", () => fetch("/api/provider-settings")).then((r) => j<ProviderSettingsPayload>(r)),
-  putProviderSetting: (capability: ProviderCapability, value: ProviderSettingInput) =>
-    fetch(`/api/provider-settings/${capability}`, {
-      method: "PUT",
-      headers: { "content-type": "application/json", ...csrfHeaders() },
-      body: JSON.stringify(value),
-    }).then((r) => j<ProviderSetting>(r)),
-  validateProviderSetting: (capability: ProviderCapability) =>
-    fetch(`/api/provider-settings/${capability}/validate`, {
-      method: "POST",
-      headers: csrfHeaders(),
-    }).then((r) => j<ProviderValidation>(r)),
   logout: async () => {
     try {
       await fetch("/api/auth/logout", { method: "POST", headers: csrfHeaders() }).then(

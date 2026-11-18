@@ -781,35 +781,58 @@ describe("help with a picked passage", () => {
     (TestFoliateView.prototype as unknown as { getCFI: () => string }).getCFI = () => "epubcfi(/6/2!/4/2/1:0)";
   });
 
-  // Catches: Explain, Define and "Talk to Mothli" offered for a picked passage where the server
-  // cannot help with one (hosted mode), each ending in "I can't help with a picked passage".
-  test("where the server has none, only what works is offered", async () => {
+  // Catches: Explain, Define and "Talk to Mothli" offered for a picked passage in hosted mode,
+  // which has no route for them (ADR 0043), each ending in "I can't help with a picked passage";
+  // or the server asked about one at all.
+  test("hosted mode offers only what works with a picked passage and asks the server nothing", async () => {
     const extra = mocks as Record<string, unknown>;
-    extra.passageHelp = vi.fn(async () => false);
+    extra.selectionAction = vi.fn();
     try {
       render(<ReaderPage bookId="b" onBack={() => {}} hosted />);
       const tools = await pickAPassage();
-      await waitFor(() => expect(within(tools).queryByRole("button", { name: "Talk to Mothli" })).toBeNull());
+      expect(within(tools).queryByRole("button", { name: "Talk to Mothli" })).toBeNull();
       expect(within(tools).queryByRole("button", { name: "More passage tools" })).toBeNull();
       expect(within(tools).getByRole("button", { name: /Highlight/ })).toBeTruthy();
       expect(within(tools).getByRole("button", { name: "Note" })).toBeTruthy();
-      expect(extra.passageHelp).toHaveBeenCalledWith("b", true);
+      expect(extra.selectionAction).not.toHaveBeenCalled();
+      expect(vi.mocked(globalThis.fetch).mock.calls.map(([url]) => String(url))
+        .filter((url) => url.includes("selection-action"))).toEqual([]);
     } finally {
-      delete extra.passageHelp;
+      delete extra.selectionAction;
     }
   });
 
   test("local mode keeps every passage tool, as before", async () => {
+    render(<ReaderPage bookId="b" onBack={() => {}} />);
+    const tools = await pickAPassage();
+    expect(within(tools).getByRole("button", { name: "Talk to Mothli" })).toBeTruthy();
+    expect(within(tools).getByRole("button", { name: "More passage tools" })).toBeTruthy();
+  });
+});
+
+describe("the note after a chapter", () => {
+  // Catches: "Tell me" in hosted mode asking for the chapter look-back, a route hosted mode does
+  // not have (ADR 0043), so every reader's first "Tell me" is a failed request before the chat.
+  test("hosted mode asks the chat about the chapter and never the look-back", async () => {
     const extra = mocks as Record<string, unknown>;
-    extra.passageHelp = vi.fn(async () => true);
+    extra.chapterCloseout = vi.fn();
+    mocks.askBook.mockResolvedValue({ as_of_chapter: 2, insufficient_evidence: true,
+      claims: [], citations: [], cost: null });
+    mocks.putPosition.mockResolvedValue({ bookmark: 2, cfi: "1:end", position_epoch: 0,
+      current_chapter: 3, chapter_progress: 0 });
     try {
-      render(<ReaderPage bookId="b" onBack={() => {}} />);
-      const tools = await pickAPassage();
-      expect(within(tools).getByRole("button", { name: "Talk to Mothli" })).toBeTruthy();
-      expect(within(tools).getByRole("button", { name: "More passage tools" })).toBeTruthy();
-      expect(extra.passageHelp).toHaveBeenCalledWith("b", false);
+      render(<ReaderPage bookId="b" onBack={() => {}} hosted />);
+      await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+      const view = document.querySelector("foliate-view") as TestFoliateView;
+      act(() => view.dispatchEvent(new CustomEvent("relocate", {
+        detail: { cfi: "2:start", section: { current: 2 } },
+      })));
+      fireEvent.click(await screen.findByRole("button", { name: "Tell me" }));
+      await waitFor(() => expect(mocks.askBook).toHaveBeenCalled());
+      expect(mocks.askBook.mock.calls[0][1]).toBe("What did you notice in Chapter 2?");
+      expect(extra.chapterCloseout).not.toHaveBeenCalled();
     } finally {
-      delete extra.passageHelp;
+      delete extra.chapterCloseout;
     }
   });
 });

@@ -9,35 +9,6 @@ import pytest
 
 from test_views import env as env
 from app.deps import book_lifecycle
-from app.llm.client import LLMClient
-
-
-def test_fast_wire_keeps_reasoning_and_independent_structured_review():
-    import json
-    import httpx
-    from app.ask import AskVerdict
-    bodies = []
-    def reply(request):
-        bodies.append(json.loads(request.content))
-        return httpx.Response(200, json={
-            "id": "test", "object": "chat.completion", "created": 1,
-            "model": "gpt-6-luna", "service_tier": "fast",
-            "choices": [{"index": 0, "finish_reason": "stop", "message": {
-                "role": "assistant", "content": '{"references_future":false,"unsupported_claims":[],"missing_details":[]}'}}],
-            "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
-        })
-    with httpx.Client(transport=httpx.MockTransport(reply)) as transport:
-        client = LLMClient(env={"OPENAI_API_KEY": "unit-test-only"}, cheap_model="gpt-6-luna",
-                           large_model="gpt-6-luna", http_client=transport, max_retries=0)
-        client.service_tier = "fast"
-        verdict, usage = client.complete("Review only these sources.", "Untrusted claim data.",
-                                         schema=AskVerdict, max_output_tokens=512)
-        assert verdict == {"references_future": False, "unsupported_claims": [], "missing_details": []}
-        assert usage == {"in": 100, "out": 20}
-        assert bodies[0]["reasoning_effort"] == "medium"
-        assert bodies[0]["service_tier"] == "fast" and bodies[0]["max_completion_tokens"] == 512
-        assert bodies[0]["response_format"]["json_schema"]["strict"] is True
-        client._embed_oai.close()
 
 
 def test_answers_are_frontier_and_reset_scoped(env, monkeypatch):

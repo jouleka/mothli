@@ -17,7 +17,6 @@ import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupported
 import { readLastPassage, sinceLabel } from "../reader/lastPassage";
 import { shelfJourney } from "../reader/chapterPlace";
 import { Account } from "./Account";
-import { ProviderSettings } from "./ProviderSettings";
 import { RemoveBook } from "./RemoveBook";
 import { HomeChat } from "./HomeChat";
 import "./shelf-redesign.css";
@@ -133,8 +132,6 @@ export function Shelf({
   const [books, setBooks] = useState<Book[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [settingsAvailable, setSettingsAvailable] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [showUtilities, setShowUtilities] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [dark, setDark] = useState(() => document.documentElement.dataset.theme === "dark");
@@ -205,12 +202,6 @@ export function Shelf({
     mounted.current = true;
     void refresh();
     void loadClassics();
-    api
-      .providerSettings()
-      .then(() => {
-        if (mounted.current) setSettingsAvailable(true);
-      })
-      .catch(() => {});
     return () => {
       mounted.current = false;
     };
@@ -546,7 +537,6 @@ export function Shelf({
         </section>
         <div className="ml-utilities" ref={utilities} id="library-utilities" hidden={!showUtilities}>
           <strong className="ml-utilities-title">Your reading space</strong>
-          {settingsAvailable && <Button variant="ghost" icon="settings" onClick={() => { utilitiesToggle.current?.focus(); setShowUtilities(false); setShowSettings(true); }}>Connection settings</Button>}
           <InstallApp />
           {session?.user && <span className="account-name">{session.user.display_name}</span>}
           {session?.user && <Button variant="ghost" icon="people" onClick={() => { utilitiesToggle.current?.focus(); setShowUtilities(false); setShowAccount(true); }}>Your account</Button>}
@@ -906,9 +896,6 @@ export function Shelf({
             window.setTimeout(() => removeOpener.current?.focus());
           }}
         />
-      )}
-      {showSettings && (
-        <ProviderSettings onClose={() => setShowSettings(false)} />
       )}
       {showAccount && session?.user && (
         <Account

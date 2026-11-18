@@ -218,8 +218,7 @@ class LLMClient:
         model = self._model_for(tier)
         if self.provider == "codex-local":
             return f"chatgpt-plan:{model}"
-        return (f"fast:{model}" if self._is_native_openai
-                and getattr(self, "service_tier", "default") == "fast" else model)
+        return model
 
     # ---- completion --------------------------------------------------------
     def reasoning_effort(self, tier, schema=None):
@@ -298,7 +297,7 @@ class LLMClient:
         return True
 
     @staticmethod
-    def _usage_openai(resp, *, native=False, requested_fast=False):
+    def _usage_openai(resp, *, native=False):
         u = getattr(resp, "usage", None)
         usage = {"in": getattr(u, "prompt_tokens", 0) or 0,
                  "out": getattr(u, "completion_tokens", 0) or 0}
@@ -310,8 +309,6 @@ class LLMClient:
                 value = getattr(details, source, None)
                 if value is not None and value != 0:
                     usage[target] = value
-            if requested_fast and getattr(resp, "service_tier", None) == "default":
-                usage["service_tier"] = "default"
         return usage
 
     def _complete_openai(self, system, user, tier, schema, max_output_tokens):
@@ -322,23 +319,18 @@ class LLMClient:
         if self._is_native_openai and model in _NATIVE_REASONING_EFFORT:
             short_recap_draft = (model == "gpt-6-luna" and schema is None
                                  and getattr(self, "recap_generation_profile", False))
-            unreasoned = (model == "gpt-6-luna" and
-                          (getattr(self, "reuse_review_profile", False) or short_recap_draft))
-            # Native Luna defaults to medium; its isolated short reuse review uses none.
-            # Sol stays low. The shared cap bounds visible
-            # output AND reasoning. The isolated local reader may request Fast processing;
-            # billing_model preserves its premium in the durable cost ledger. Extraction and
-            # hosted clients retain Standard processing.
+            unreasoned = short_recap_draft
+            # Native Luna defaults to medium; its short recap draft uses none. Sol stays low. The
+            # shared cap bounds visible output AND reasoning. Every client asks for Standard
+            # processing (the local Fast option went with the solo speed-ups, ADR 0043).
             cap = {"max_completion_tokens": max_output_tokens if max_output_tokens is not None else 4096,
                    "reasoning_effort": ("none" if unreasoned else self.reasoning_effort(tier, schema)),
-                   "service_tier": getattr(self, "service_tier", "default")}
+                   "service_tier": "default"}
             if unreasoned:
                 cap["temperature"] = 0
-        requested_fast = cap.get("service_tier") == "fast"
         if self._is_native_openai:
             cap["store"] = False
-        allowed_tiers = ((None, "fast", "priority", "default") if requested_fast
-                         else (None, "default"))
+        allowed_tiers = (None, "default")
         on_delta = getattr(self, "on_text_delta", None) if schema is None else None
         if on_delta is not None:
             # A spoken reply: the caller receives each fragment as it is written. Its reasoning
@@ -356,8 +348,7 @@ class LLMClient:
                         if text:
                             parts.append(text)
                             on_delta(text)
-            return "".join(parts), self._usage_openai(
-                final, native=self._is_native_openai, requested_fast=requested_fast)
+            return "".join(parts), self._usage_openai(final, native=self._is_native_openai)
         if schema is None:
             resp = self._oai.chat.completions.create(model=model, messages=messages, **cap)
             if (self._is_native_openai and model in _NATIVE_REASONING_EFFORT
@@ -365,7 +356,7 @@ class LLMClient:
                 self._record_provider_failure("completion", "unsupported_service_tier")
                 raise ProviderUnavailable("unsupported_service_tier", service="completion")
             return resp.choices[0].message.content or "", self._usage_openai(
-                resp, native=self._is_native_openai, requested_fast=requested_fast)
+                resp, native=self._is_native_openai)
         if self._is_native_openai:
             resp = self._oai.chat.completions.parse(
                 model=model, messages=messages, response_format=schema, **cap
@@ -377,8 +368,7 @@ class LLMClient:
                     and getattr(resp, "service_tier", None) not in allowed_tiers):
                 self._record_provider_failure("completion", "unsupported_service_tier")
                 raise ProviderUnavailable("unsupported_service_tier", service="completion")
-            return parsed.model_dump(mode="json"), self._usage_openai(
-                resp, native=True, requested_fast=requested_fast)
+            return parsed.model_dump(mode="json"), self._usage_openai(resp, native=True)
         return self._complete_generic_structured(model, messages, schema, max_output_tokens)
 
     def _complete_generic_structured(self, model, messages, schema, max_output_tokens):

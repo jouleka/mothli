@@ -1,8 +1,6 @@
 """GPT-6 Luna/Sol request and billing contracts, exercised through the SDK with a fake wire only."""
-import asyncio
 import json
 from types import SimpleNamespace
-import uuid
 
 import httpx
 import pytest
@@ -13,8 +11,6 @@ from app.ask_selection import SourceSelection
 from app.catalog.catalog import Catalog
 from app.cost import CostCeilingExceeded, budgeted_completion, estimate_input_tokens, pricing_known, usd_of
 from app.cost.limits import completion_usage, reserved_usd_of
-from app.hosted.provider_runtime import budgeted_hosted_completion
-from app.hosted.tenant.models import OwnerId
 from app.eval.spoiler_gate.judge import JudgeVerdict
 from app.ingest.extraction.schema import Extraction
 from app.ingest.extraction.validation import ExtractionVerdict
@@ -56,27 +52,6 @@ def _settings(**overrides):
         "cost_max_input_tokens_per_book": 100000, "cost_max_output_tokens_per_book": 10000,
         "cost_max_usd_per_book": 1.0, **overrides,
     })
-
-
-@pytest.mark.parametrize("actual_tier,expected_model", [("default", "gpt-6-luna"),
-                                                     ("fast", "fast:gpt-6-luna")])
-def test_fast_review_reserves_premium_but_settles_reported_service_tier(tmp_path, actual_tier, expected_model):
-    catalog = Catalog(str(tmp_path / "catalog.db"))
-    catalog.add_book("b", title="Billing fixture")
-    seen = []
-    def handler(request):
-        [reservation] = catalog.get_cost_reservations("b")
-        seen.append(reservation["model"])
-        return _response("gpt-6-luna", "Checked.", service_tier=actual_tier)
-    client = _client(handler)
-    client.service_tier = "fast"  # nothing in the app asks for the fast tier now; the ledger still settles it
-    result = budgeted_completion(catalog, _settings(), client, "b", phase="review",
-                                system="Review.", user="Evidence. " * 200, tier="cheap")
-    [settled] = catalog.get_costs("b")
-    assert seen == ["fast:gpt-6-luna"] and result.billing_model == expected_model
-    assert settled["model"] == expected_model
-    assert settled["usd"] == pytest.approx(usd_of(expected_model, {"in":100, "out":20}))
-    assert not catalog.get_cost_reservations("b")
 
 
 @pytest.mark.parametrize("model,reasoning", [("gpt-6-luna", "medium"), ("gpt-6.1-sol", "low")])
@@ -386,52 +361,3 @@ def test_model_change_cannot_append_to_a_preexisting_extractor_pin():
     assert ("extractor_model", versioning.FORCE_RE_EXTRACT) in error.value.decisions
     assert "model_migration_required" == error.value.public_detail()["code"]
     assert pinned["extractor_model"] == "stub:gpt-4o-mini"
-
-
-@pytest.mark.parametrize("schema,reasoning,requested_cap,settings_cap,effective_cap", [
-    (Result, "medium", 777, 1000, 777),
-    (JudgeVerdict, "medium", 777, 1000, 777),
-    (AskVerdict, "medium", 2048, 4096, 2048),
-    (AskVerdict, "medium", 4096, 2048, 2048),
-])
-def test_hosted_native_cache_usage_uses_same_reserve_and_actual_price(
-    schema, reasoning, requested_cap, settings_cap, effective_cap,
-):
-    events = []
-    reservation = uuid.uuid4()
-
-    class Repository:
-        async def reserve_provider_call(self, *_args, **kwargs):
-            events.append(("reserve", kwargs))
-            return {"id": reservation}
-
-        async def settle_provider_call(self, *_args, **kwargs):
-            events.append(("settle", kwargs))
-
-    def handler(request):
-        assert events[0][0] == "reserve"
-        events.append(("provider", json.loads(request.content)))
-        value = ({"references_future": False, "unsupported_claims": []}
-                 if issubclass(schema, JudgeVerdict) else {"supported": True, "text": "Grounded."})
-        return _response("gpt-6-luna", json.dumps(value),
-                         cached=40, written=30)
-
-    setting = {"id": str(uuid.uuid4()), "credential_id": str(uuid.uuid4()),
-               "updated_at": "2026-10-15T12:00:00+00:00", "provider": "openai-compatible", "model": "gpt-6-luna"}
-    result = asyncio.run(budgeted_hosted_completion(
-        Repository(), OwnerId(uuid.uuid4()), uuid.uuid4(),
-        _settings(cost_max_output_tokens_per_call=settings_cap), setting, _client(handler),
-        phase="judge", system="Source only.", user="Evidence. " * 200, schema=schema,
-        max_output_tokens=requested_cap,
-    ))
-    assert [event[0] for event in events] == ["reserve", "provider", "settle"]
-    assert events[1][1]["max_completion_tokens"] == effective_cap
-    assert events[1][1]["reasoning_effort"] == reasoning
-    assert result.usage == {"in": 100, "out": 20, "cache_read": 40, "cache_write": 30}
-    expected = 30 * 0.10e-6 + 40 * 0.01e-6 + 30 * 0.125e-6 + 20 * 0.5e-6
-    assert result.usd == pytest.approx(expected)
-    assert float(events[-1][1]["usd"]) == pytest.approx(expected)
-    reserved = events[0][1]
-    assert reserved["reserved_output_tokens"] == effective_cap
-    assert float(reserved["reserved_usd"]) == pytest.approx(
-        reserved["reserved_input_tokens"] * 0.125e-6 + effective_cap * 0.5e-6)

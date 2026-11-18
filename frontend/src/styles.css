@@ -1768,8 +1768,7 @@ main:focus,
   display: none;
 }
 /* Reusable overlay treatment: same type, surface, entrance and exit everywhere. */
-.hero-scrim,
-.provider-settings-scrim {
+.hero-scrim {
   position: fixed;
   inset: 0;
   z-index: 30;
@@ -2582,119 +2581,6 @@ main:focus,
   width: 100%;
   text-align: left;
 }
-/* Provider settings shares fields and buttons with the reading panels. */
-.provider-settings {
-  position: relative;
-  width: min(900px, 100%);
-  max-height: calc(100dvh - 80px);
-  overflow-y: auto;
-  margin: auto;
-  padding: 30px 36px 36px;
-  background: var(--paper);
-  color: var(--ink);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-panel);
-  animation: panel-in 240ms var(--ease);
-}
-.provider-settings-head {
-  position: sticky;
-  top: -30px;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  border-bottom: 1px solid var(--hairline);
-  padding: 30px 36px 20px;
-  margin: -30px -36px 20px;
-  background: var(--paper);
-}
-.provider-settings-head h2 {
-  font: 400 28px/1.2 var(--display);
-  letter-spacing: -0.035em;
-  margin: 6px 0;
-}
-.provider-settings-head p {
-  margin: 0;
-  color: var(--ink-soft);
-  font-size: 12px;
-}
-.provider-notes {
-  color: var(--ink-soft);
-  font-size: 13px;
-  line-height: 1.7;
-}
-.provider-notes p {
-  margin: 8px 0;
-}
-.provider-fieldset {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  margin: 26px 0 0;
-  padding: 20px;
-  border: 1px solid var(--hairline);
-  border-radius: 10px;
-}
-.provider-fieldset legend {
-  padding: 0 8px;
-  font-weight: 600;
-  font-size: 13px;
-}
-.provider-fieldset label {
-  display: grid;
-  gap: 6px;
-  color: var(--ink-soft);
-  font-size: 12px;
-}
-.provider-fieldset input,
-.provider-fieldset select {
-  width: 100%;
-  min-width: 0;
-  font-size: 13px;
-}
-.provider-fieldset .quiet {
-  grid-column: 1/-1;
-  font-size: 12px;
-  margin: 0;
-}
-.capability-settings {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-.provider-actions {
-  grid-column: 1/-1;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: var(--ink-soft);
-}
-.credential-list {
-  list-style: none;
-  padding: 0;
-}
-.credential-list li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--hairline);
-  font-size: 13px;
-}
-.provider-message {
-  padding: 12px 16px;
-  background: var(--accent-wash);
-  border-radius: 7px;
-  font-size: 13px;
-}
-.settings-loading {
-  padding: 50px 0;
-  text-align: center;
-  color: var(--ink-soft);
-}
 .app-boot {
   min-height: 100dvh;
   display: flex;
@@ -3035,8 +2921,7 @@ main:focus,
   .selection-actions {
     bottom: 72px;
   }
-  .hero-scrim,
-  .provider-settings-scrim {
+  .hero-scrim {
     padding: 20px;
   }
 }
@@ -3256,8 +3141,7 @@ main:focus,
     gap: 8px;
     margin-top: 35px;
   }
-  .hero-scrim,
-  .provider-settings-scrim {
+  .hero-scrim {
     padding: 0;
     background: var(--paper);
   }
@@ -3347,27 +3231,6 @@ main:focus,
   .scrubber-label {
     min-width: 100px;
     font-size: 12px;
-  }
-  .provider-settings {
-    border-radius: 0;
-    border: 0;
-    height: 100dvh;
-    min-height: 0;
-    max-height: 100dvh;
-    padding: 24px 20px 40px;
-  }
-  .provider-settings-head {
-    top: -24px;
-    padding: 24px 20px 18px;
-    margin: -24px -20px 20px;
-  }
-  .provider-fieldset,
-  .capability-settings {
-    grid-template-columns: 1fr;
-    padding: 18px;
-  }
-  .credential-list li {
-    flex-wrap: wrap;
   }
   .appearance-groups {
     gap: 22px 14px;
@@ -3511,13 +3374,6 @@ main:focus,
 .reader-popover[data-closing="true"] {
   animation: panel-out 140ms ease both;
   pointer-events: none;
-}
-.provider-settings-scrim[data-closing="true"] {
-  animation: scrim-in 160ms ease reverse both;
-  pointer-events: none;
-}
-.provider-settings-scrim[data-closing="true"] > .provider-settings {
-  animation: panel-out 160ms ease both;
 }
 .relationship-register > ul > li > button {
   color: var(--madder);
