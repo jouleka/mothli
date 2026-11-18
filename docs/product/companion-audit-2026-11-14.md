@@ -244,7 +244,7 @@ Lower-severity note: in page mode `/selection-action` accepts any text that is a
 | # | Change | Expected gain | Spoiler risk | Effort |
 |---|---|---|---|---|
 | Q0a | Pass the position-bounded cast and aliases into the writer and reviewer on the page path, as "names known so far" | Fixes the Alyosha failure and every nickname question | Aliases must come through the existing `revealed_at` filter at the completed-chapter boundary; names from the chapter in progress only from the read prefix | 1–2 days |
-| Q0b | Re-tune escalation: measure how often it overturns a draft on the 24-case set, then raise the Jev limits or escalate only on a failed support check | Removes 6–10 s (CLI) from roughly half of answers | **This loosens a check.** Do it only with the false-accept controls in `benchmark_jev_conversation.py` showing no new unsupported answers | 1 day plus measurement |
+| Q0b | Re-tune escalation: measure how often it overturns a draft on the 24-case set, then raise the Jev limits or escalate only on a failed support check | Removes 6–10 s (CLI) from roughly half of answers | **This loosens a check.** Do it only with the false-accept controls in `benchmark_jev_conversation.py` (removed under ADR 0043 on 18 November 2026; in git history) showing no new unsupported answers | 1 day plus measurement |
 | Q0c | Give refused spoiler questions their own reply ("we haven't got there yet") instead of "which passage did you mean?" | Tone; makes the boundary feel deliberate | None; the refusal is unchanged | 0.5 day |
 | Q1 | Run the Jev selection batches concurrently, and classify the turn while retrieval runs | About 0.4–0.6 s (Live: each Jev call is ≈0.2 s) | None | 0.5 day |
 | Q2 | Cap the candidate pool at 12 so selection is one Jev batch | Jev tokens ≈18k → ≈8k; one call instead of three | None; fewer passages, same boundary | 0.5 day |
@@ -1242,6 +1242,8 @@ None was changed. Each already has a ceiling, except the two marked.
 | `serve_local_jev.py` | Runs the app itself: $1 a book |
 | `benchmark_conversation.py` | **None of its own.** It runs on a copy of a library with the env file's settings, so Jev is called if that file turns it on, under the app's ceiling of $5 a book |
 
+*Note (18 November 2026): every script in this table except `serve_local_jev.py` was removed under ADR 0043; they remain in git history.*
+
 ### Verified, with stand-in models only
 
 9 new tests in `backend/tests/test_spend.py`. Two are guards that pass on main. The other seven cannot run there, because the cache, the cap and the shared notes step do not exist; main's own script, run whole with the same stand-ins, gave the "10 for 5" row above. Whole backend suite: 2,108 passed, 83 skipped; `ruff check app tests scripts` is clean.
@@ -1958,6 +1960,8 @@ The third example needs a decision from you: the current prompts forbid "gets me
 | Cost | `cost.calls` from the response | Targets in §7 |
 
 **Running it.** `backend/scripts/benchmark_conversation.py` already takes a `cases.json` and prints per-case seconds, claims and cost; it needs a real key and a copied data directory. The offline harness from this audit (calls and prompt sizes, no key) can become a regression test that fails when an ordinary question exceeds three calls.
+
+*Note (18 November 2026): `benchmark_conversation.py` and the other one-off measurement scripts named in this audit were removed under ADR 0043. They remain in git history.*
 
 ## 9. Robustness
 

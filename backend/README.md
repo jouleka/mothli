@@ -119,27 +119,10 @@ states, put one-off actions in events, and reserve relationships for enduring ti
 direct consequences at the stated time without assuming future persistence; inferred secrecy,
 motives, symbolism, and unprovided duration still require textual support.
 
-The opt-in synthetic OpenAI sample uses normal import, ingestion and Ask routes against disposable
-data. Configure the ignored `.env` with `OPENAI_API_KEY`, then run from `backend`. Select the
-lightweight model explicitly:
-
-```bash
-# Preflight only: no provider calls.
-uv run python scripts/live_quality_audit.py --output /path/to/acceptance.json
-# Explicitly allow the small paid sample.
-uv run python scripts/live_quality_audit.py --run --model gpt-6-luna --budget-usd 0.25 --output /path/to/acceptance.json
-```
-
-The harness fixes the native OpenAI endpoint and `text-embedding-3-small`, disables SDK automatic
-retries, requires exactly priced completion models, and applies a $1 per-book application reservation
-limit (lower it with `--budget-usd` when repeating a sample). It sends synthetic prose only. The report
-keeps structured extraction/reviewer outputs, claims, citations, latency, cost and a small memory
-sample for manual inspection, including a rejected ingestion. Four direct review challenges exercise
-unsupported location/time/cause attachments and a supported co-location counterpart before the five
-Ask cases. Term checks are triage, not a
-correctness score. Separate runs have separate books, so callers must track their combined spend. Provider
-billing remains authoritative. The normal application dollar ceiling uses an advisory known-model
-price table; hard token limits still apply when model pricing is unknown.
+The opt-in synthetic OpenAI sample (`scripts/live_quality_audit.py`) was removed on 18 November 2026
+under ADR 0043 (one-off measurement scripts); it remains in git history. The application's dollar
+ceiling uses an advisory known-model price table; hard token limits still apply when model pricing
+is unknown. Provider billing remains authoritative.
 
 For a lightweight local profile set both `LLM_CHEAP_MODEL=gpt-6-luna` and
 `LLM_LARGE_MODEL=gpt-6-luna` in `.env`. These are role names; setting both uses Luna for extraction,
@@ -156,25 +139,10 @@ repeatedly introduced unsupported state and participant details, while review al
 rejections. The full-model run completed ingestion and five Ask cases, but manual inspection still
 found an unsupported location implication in one summary. These are calibration observations, not a
 model accuracy estimate. The field-evidence contract above and the direct review challenges were
-added after that run. The harness also permits `gpt-6.1-sol`, `gpt-5.4`, and `gpt-5.4-mini` for explicit
-comparisons.
+added after that run.
 
-For an existing book, author gold questions from the exact imported chapter ordinals before looking
-at model responses. A JSON document with `cases` entries containing `id`, `bookmark`, `question`, and
-`expected` (`answer` or `refuse`) can be tested on a disposable SQLite snapshot:
-
-```bash
-uv run python scripts/live_book_audit.py --run --model gpt-6-luna --budget-usd 0.25 \
-  --data-dir /absolute/path/to/data --book-id bk0123456789ab \
-  --cases /path/to/preauthored-cases.json --output /path/to/book-audit.json
-```
-
-This keeps the source book, model pins, completion receipts, reading position and historical ledger
-unchanged. Only the temporary copy receives simulated chapter frontiers and incremental spend.
-`requested_bookmark` can exceed a case's actual `bookmark` to test the server clamp. Gold answers are
-audit-only and never enter the model prompt. Reports retain exact retrieved passages, including on
-refusals, so inspect both source exposure and each claim's own cited evidence manually. Reports can
-contain spoilers up to their labeled chapter limits. This does not rebuild historical extraction.
+The per-book audit on a disposable snapshot (`scripts/live_book_audit.py`) was also removed under
+ADR 0043 and remains in git history. `scripts/companion_eval.py` is the kept evaluation script.
 
 Changing a book's extraction or embedding space now fails with `model_migration_required` rather
 than mixing incompatible facts or vectors. Reading and existing memory remain available. Restore
