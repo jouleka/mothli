@@ -657,6 +657,16 @@ companion with `READER_READ_MAP=false` (hosted has no `conversation_frontier`, s
 under `DATA_DIR` (`deps.py:45`, map B9.3); and an `OPENAI_BASE_URL` whose origin is not in
 `HOSTED_PROVIDER_ALLOWED_ORIGINS` (`config.py:153-155`).
 
+- Built on 18 November 2026 in PR #120: the server now reports whether it has the chat. `GET
+  /api/auth/session` carries `"chat"`, from `Settings.companion_chat()` (streamed replies, page
+  context and the read map, the condition the book and home chat routes 404 on). Without a chat
+  the app shows no way into one (no moth, panel, "Tell me", `/` shortcut, tappable names, home chat
+  or "What Mothli remembers") and asks the server nothing about one; in hosted mode it never falls
+  back to the non-streamed `/ask`. Hosted settings refuse `READER_CONVERSATION_JEV` with
+  `READER_CONVERSATION_STREAM=false` (paid, and nothing could answer), and with neither AI account
+  (no writer key, no `TYPESAFE_API_KEY`) the chat's switches are off and the server starts without
+  a chat; `deploy/app.env.example` sets the switches, so filling in the two keys turns the chat on.
+
 ### 8. The frontend
 
 The reader app calls the **same paths in both modes**; hosted mounts the companion routes at the local
