@@ -549,7 +549,6 @@ def main():
             reader_conversation_pipeline=True, reader_conversation_jev=True,
             reader_conversation_routing=True, reader_conversation_draft_effort="low",
             reader_conversation_review_effort="low", reader_memory_ingest=False,
-            reader_answer_cache=False,
             classics_enabled=False, cost_max_usd_per_book=args.max_usd_per_book,
             # Off: a note distilled from one case's messages would be given to the next case's
             # replies, and each batch is a writer call and checks this script does not plan for.

@@ -18,14 +18,16 @@ JEV_PARTIAL_EVIDENCE_ENABLED=true
 JEV_EXTRACTION_ENABLED=true
 JEV_IDENTITY_ENABLED=true
 JEV_RECAP_ENABLED=false
-READER_ANSWER_CACHE=true
-READER_REUSE_ENABLED=true
-READER_REUSE_FAST_REVIEW=true
 ```
 
 Supply `TYPESAFE_API_KEY` in the server environment, or use `JEV_WINDOWS_CREDENTIAL=true` with
 the existing Windows DPAPI credential. Explicit Jev activation without credentials fails startup.
-Hosted mode does not expose these local reader routes. Cache, preparation and reuse remain opt-in.
+Hosted mode does not expose these local reader routes.
+
+The answer cache, prepared-answer reuse, prepared questions, recap pre-warming, the recap file
+cache and fast mode were removed on 18 November 2026 (ADR 0043 R3 to R6); their settings no
+longer exist and are ignored if still present. The paragraphs below that describe them are kept
+as the record of how they worked.
 
 When reuse is enabled, `READER_REUSE_FAST_REVIEW` defaults to true for native OpenAI GPT-6 Luna
 in local mode. An isolated client copy requests Fast processing, reasoning none and temperature

@@ -39,7 +39,6 @@ OLD_SETTINGS = {
 }
 KEPT_FILES = ("reviewed-answers-v2.json", "reviewed-recaps-v1.json")
 FACT = "Berenice met Aldric at the forge and they spoke."
-REMOVED = pytest.mark.xfail(strict=True, reason="the old speed-ups are still in the code")
 
 
 def _files(root):
@@ -49,7 +48,7 @@ def _files(root):
 
 @pytest.mark.parametrize("old_settings", [
     pytest.param(False, id="no-old-settings"),
-    pytest.param(True, id="every-old-setting", marks=REMOVED),
+    pytest.param(True, id="every-old-setting"),
 ])
 def test_two_identical_questions_are_each_answered_fresh_and_nothing_is_kept(
         tmp_path, monkeypatch, old_settings):
@@ -118,7 +117,6 @@ def test_prepared_questions_route_is_gone(env):
     assert api.get(f"/api/books/{bid}/prepared-questions").status_code == 404
 
 
-@REMOVED
 def test_old_setting_names_are_ignored_and_switch_nothing_on(tmp_path, monkeypatch):
     env_file = tmp_path / "old.env"
     env_file.write_text("".join(f"{name}={value}\n" for name, value in OLD_SETTINGS.items()),

@@ -68,8 +68,7 @@ def probe(epub: Path, place: int, questions: list[str], later: list[str], env_fi
     with tempfile.TemporaryDirectory(prefix="mothli-probe-") as data:
         settings = Settings(_env_file=env_file, data_dir=data, reader_page_context=True,
                             reader_conversation_jev=True, reader_memory_ingest=False,
-                            reader_story_notes=False, reader_recollections=False,
-                            reader_answer_cache=False)
+                            reader_story_notes=False, reader_recollections=False)
         app = create_app(settings, ingest_executor=_NoIngest())
         with TestClient(app) as api:
             posted = api.post("/api/books", files={

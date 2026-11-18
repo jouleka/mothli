@@ -1,7 +1,6 @@
 """Conversation from a confirmed primary-text prefix, independent of chapter extraction latency."""
 from copy import copy
 from collections import deque
-import hashlib
 import json
 import logging
 import sys
@@ -12,13 +11,11 @@ from time import perf_counter
 
 from fastapi import HTTPException
 
-from app.answer_bank import AnswerBusy, valid_answer
-from app.ask import (ASK_JUDGE_SYSTEM, AskDraft, AskRetrievalLimit, AskSafetyError, ask_prompt,
+from app.ask import (AskDraft, AskRetrievalLimit, AskSafetyError, ask_prompt,
     conversation_question, conversation_retrieval_question, retrieve_ask_sources, source_facts)
 from app.ask_context import complete_ask_context
-from app.ask_evidence import ASK_EVIDENCE_SYSTEM, AskEvidenceError
+from app.ask_evidence import AskEvidenceError
 from app.ask_selection import SOURCE_SELECTION_SYSTEM, SourceSelection, select_sources_bounded
-from app.content_scope import CONTENT_POLICY_VERSION
 from app.conversation_pipeline import (ConversationDraft, SceneConversationDraft, DRAFT_SYSTEM, answer_conversation,
                                        compact_candidates, review_escalation, CLARIFICATIONS, BRIEF_DRAFT_SYSTEM,
                                        review_draft, PROSE_DRAFT_SYSTEM, ProseConversationDraft)
@@ -27,19 +24,17 @@ from app.eval.spoiler_gate import score_recap
 from app.eval.spoiler_gate.synthesis import _read_visibility
 from app.eval.spoiler_gate.binding import unsupported_event_bindings
 from app.read_frontier import requested_snapshot
-from app.retrieval_passages import passage_windows, recent_scene_windows, SCENE_WINDOWS_VERSION
+from app.retrieval_passages import passage_windows, recent_scene_windows
 from app.unicode_text import word_tokens, proper_words, normalize_text
 from app.eval.spoiler_gate.grounding import STOPWORDS
-from app.conversation_jev import (DECISION_LIMITS, FIT, SUPPORT, RELEVANCE, POLICY_VERSION,
-                                  POLICY, review_with_jev, prepare_context, JevNeedsReasoning,
+from app.conversation_jev import (review_with_jev, prepare_context, JevNeedsReasoning,
                                   answers_request)
 from app.conversation_jev import review_recap_prefix
 from app.llm.jev import JevUnavailable
 from app.llm.jev_budget import budgeted_jev
-from app.conversation_turns import (VERSION as TURN_VERSION, REPLY_SYSTEM, QUESTIONS, classify_turn,
+from app.conversation_turns import (classify_turn,
                                     answer_dialogue, book_fact_risk)
-from app.known_names import (same_person_names, names_note, text_same_person, first_mention,
-                             BRIDGE_VERSION)
+from app.known_names import (same_person_names, names_note, text_same_person, first_mention)
 
 REACTION_NOTES = (
     "The reader is reacting to what they have just read, not asking a question. Reply as a companion "
@@ -134,21 +129,6 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             "elapsed_ms": round((perf_counter() - started) * 1000, 2)})
         return result.value
 
-    scope = (book_id, book["incarnation"], hashlib.sha256(json.dumps([
-        point["id"], CONTENT_POLICY_VERSION, "page-conversation-v2-known-names", SCENE_WINDOWS_VERSION, DRAFT_SYSTEM,
-        ASK_EVIDENCE_SYSTEM, ASK_JUDGE_SYSTEM,
-        [POLICY_VERSION, POLICY, FIT, SUPPORT, RELEVANCE, DECISION_LIMITS,
-         getattr(getattr(client,"jev",None),"model","unavailable")]
-        if use_jev else "parallel-gpt-review",
-        client.extractor_version("large"), client.extractor_version("cheap"),
-        getattr(client, "base_url", ""), settings.reader_conversation_review_effort,
-        settings.reader_conversation_draft_effort, settings.reader_conversation_routing,
-        draft_system, "prose-v1" if prose else None, BRIDGE_VERSION,
-        [TURN_VERSION, REPLY_SYSTEM, QUESTIONS] if settings.reader_conversation_routing else None,
-    ]).encode()).hexdigest())
-    key = (*scope, body.question)
-    bank = getattr(client, "answers", None) if settings.reader_answer_cache and not body.history else None
-
     def timing_payload():
         return {"request_id":request_id, "total_ms":round((perf_counter()-started_request)*1000, 2),
                 "stages_ms":dict(timings)}
@@ -179,15 +159,9 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         if calculation:
             value["calculation"] = calculation
         value["timing"] = timing_payload()
-        if bank is not None and valid_answer(value):
-            bank.set(key, value)
         return value
 
     def run():
-        if bank is not None:
-            cached = bank.get(key)
-            if cached and cached.get("read_frontier") == point and valid_answer(cached):
-                return {**cached, "cached": True, "cost": cost_payload([]), "timing":timing_payload()}
         if settings.reader_conversation_routing:
             from app.arithmetic import arithmetic_reply
             calculated=arithmetic_reply(body.question)
@@ -203,15 +177,6 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             except JevUnavailable:
                 # Routing only chooses a cheaper path. Without it, take the full evidence path.
                 signals["jev_down"] = True
-        scene_bank = getattr(client, "answers", None) if settings.reader_answer_cache and route == "recent_recap" else None
-        # AnswerBank persists exactly (book, incarnation, scope, question). Keep the
-        # scene namespace inside the scope digest, never as an extra key component.
-        scene_scope = hashlib.sha256(json.dumps([scope[2], "scene-recap-no-dialogue"]).encode()).hexdigest()
-        scene_key = (*scope[:2], scene_scope, body.question)
-        if scene_bank is not None:
-            cached = scene_bank.get(scene_key)
-            if cached and cached.get("read_frontier") == point and valid_answer(cached):
-                return {**cached, "cached":True, "cost":cost_payload(calls), "timing":timing_payload()}
         if route.startswith("clarify_"):
             return payload(AskDraft(insufficient_evidence=True, claims=[]), [],
                            CLARIFICATIONS[route.removeprefix("clarify_")])
@@ -449,22 +414,12 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
                         signals["closing"] = closing
                 except (JevUnavailable, AskEvidenceError):
                     pass
-        result = payload(draft, sources, clarification)
-        if scene_bank is not None and valid_answer(result):
-            scene_bank.set(scene_key, result)
-        return result
+        return payload(draft, sources, clarification)
 
     try:
-        if bank is not None:
-            value, shared = bank.run_once(key, run)
-            if shared:
-                value.update(cached=True, cost=cost_payload([]), timing=timing_payload())
-            return value
         return run()
     except CostCeilingExceeded as exc:
         raise _conversation_limit_error(exc) from exc
-    except AnswerBusy as exc:
-        raise HTTPException(503, "conversation is busy; retry shortly") from exc
     except JevUnavailable as exc:
         raise HTTPException(503, "Jev review unavailable; no unchecked reply was published") from exc
     except AskRetrievalLimit as exc:

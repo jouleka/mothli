@@ -1,14 +1,13 @@
-"""The opt-in HTTP path retains frontier, privacy and fail-closed publication boundaries."""
+"""The opt-in HTTP path retains frontier and fail-closed publication boundaries."""
 import json
 import re
 
 from test_views import env as env
 
 
-def test_conversation_route_clamps_sources_caches_only_standalone_and_withholds_bad_proof(env, monkeypatch):
+def test_conversation_route_clamps_sources_answers_fresh_and_withholds_bad_proof(env, monkeypatch):
     api, bid, app, _ = env
     app.state.settings.reader_conversation_pipeline = True
-    app.state.settings.reader_answer_cache = True
     app.state.settings.reader_conversation_review_effort = "low"
     client = app.state.client
     client.provider = "openai-compatible"
@@ -40,15 +39,13 @@ def test_conversation_route_clamps_sources_caches_only_standalone_and_withholds_
     assert first.status_code == 200, first.text
     assert first.json()["as_of_chapter"] == 2
     calls = len(prompts)
-    cached = api.post(f"/api/books/{bid}/ask", json=question).json()
-    assert cached["cached"] and len(prompts) == calls
-    assert cached["cost"]["calls"] == []
+    again = api.post(f"/api/books/{bid}/ask", json=question).json()
+    assert not again.get("cached") and len(prompts) == 2 * calls  # nothing kept: asked afresh
+    assert again["cost"]["calls"]
     contextual = {**question, "history": [
         {"role": "user", "content": "My private thought about Berenice", "as_of_chapter": 2}]}
     assert api.post(f"/api/books/{bid}/ask", json=contextual).status_code == 200
-    assert len(client.answers.rows) == 1  # No private/contextual answer enters the reusable bank.
     broken[0] = True
     withheld = api.post(f"/api/books/{bid}/ask", json=contextual)
     assert withheld.status_code == 502
     assert "Berenice met Aldric" not in withheld.text
-    assert len(client.answers.rows) == 1

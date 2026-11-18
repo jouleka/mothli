@@ -1,4 +1,4 @@
-"""Exact source-prefix, persistence, reset, cache and no-embedding boundaries; no live model."""
+"""Exact source-prefix, persistence, reset and no-embedding boundaries; no live model."""
 import json
 import re
 from pathlib import Path
@@ -15,7 +15,7 @@ from test_ingest import InlineExecutor
 @pytest.fixture
 def page_env(tmp_path):
     settings = Settings(_env_file=None, allow_stub=True, reader_page_context=True,
-        reader_answer_cache=True, reader_conversation_pipeline=True, data_dir=str(tmp_path / "data"))
+        reader_conversation_pipeline=True, data_dir=str(tmp_path / "data"))
     app = create_app(settings, ingest_executor=InlineExecutor())
     with TestClient(app) as api:
         text = ("Mara put the cobalt key in a red tin. Jonas waited beside the forge. "
@@ -73,11 +73,12 @@ def test_current_chapter_prefix_is_available_before_any_chapter_extraction(page_
     assert response.json()["read_frontier"] == point
     assert "red tin" in response.text and "UNREAD_CANARY" not in response.text
     paid = len(calls)
-    assert api.post(f"/api/books/{bid}/ask", json=body).json()["cached"]
-    assert len(calls) == paid
+    again = api.post(f"/api/books/{bid}/ask", json=body).json()
+    assert not again.get("cached") and len(calls) == 2 * paid  # nothing kept: asked afresh
+    paid = len(calls)
     newer = confirm(api, bid, anchor("A cart rattled past the forge."))
     assert newer["offset"] > point["offset"] and newer["id"] != point["id"]
-    # Old in-flight snapshots stay narrow and keep their own cache namespace.
+    # Old in-flight snapshots stay narrow.
     assert api.post(f"/api/books/{bid}/ask", json=body).json()["read_frontier"] == point
     response = api.post(f"/api/books/{bid}/ask", json={**body, "read_frontier": newer})
     assert response.status_code == 200 and len(calls) > paid
@@ -206,8 +207,9 @@ def test_jev_candidate_prepares_evidence_then_drafts_and_checks_own_citations(pa
     result = api.post(f"/api/books/{bid}/ask", json=body)
     assert result.status_code == 200, result.text
     assert paid == ["jev", "draft", "jev"] + (["escalation"] if escalation else [])
-    assert api.post(f"/api/books/{bid}/ask", json=body).json()["cached"]
-    assert paid == ["jev", "draft", "jev"] + (["escalation"] if escalation else [])
+    again = api.post(f"/api/books/{bid}/ask", json=body).json()
+    assert not again.get("cached")  # nothing kept: asked afresh
+    assert paid == (["jev", "draft", "jev"] + (["escalation"] if escalation else [])) * 2
     settings.reader_conversation_jev = False
     monkeypatch.setattr(app.state.client, "complete", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("not a cache hit")))
     # A baseline request must not reuse approval from the experimental reviewer.
@@ -249,16 +251,13 @@ def test_routed_dialogue_never_searches_book_or_publishes_unchecked_assertions(p
         assert "jev-intent" in response.json()["timing"]["stages_ms"]
 
 
-def test_scene_recap_cache_is_independent_of_dialogue_but_reset_still_invalidates_it(page_env, monkeypatch, tmp_path):
+def test_scene_recap_is_independent_of_dialogue_answered_fresh_and_reset_still_invalidates_it(page_env, monkeypatch):
     from types import SimpleNamespace
-    from app.answer_bank import AnswerBank
     import app.page_conversation as module
     api, bid, app, settings = page_env
     point = confirm(api,bid)
     settings.reader_conversation_jev = True
     settings.reader_conversation_routing = True
-    cache_path = tmp_path / "answers.json"
-    app.state.client.answers = AnswerBank(persist_path=cache_path)
     paid=[]
     def evaluate(state, questions):
         paid.append("jev")
@@ -280,15 +279,9 @@ def test_scene_recap_cache_is_independent_of_dialogue_but_reset_still_invalidate
     first=api.post(f"/api/books/{bid}/ask",json=request)
     assert first.status_code == 200,first.text
     assert paid == ["jev","draft","jev"]
-    bank = app.state.client.answers
-    # A recap must not poison persistence of the entire shared answer bank.
-    normal_key = (bid, "incarnation", "normal-scope", "Where is the key?")
-    bank.set(normal_key, first.json())
-    assert all(len(key) == 4 for key in bank.rows)
-    app.state.client.answers = AnswerBank(persist_path=cache_path)
-    assert app.state.client.answers.get(normal_key) == first.json()
+    # Nothing is kept between questions: the same request is answered afresh.
     second=api.post(f"/api/books/{bid}/ask",json=request)
-    assert second.status_code == 200 and second.json()["cached"]
-    assert paid == ["jev","draft","jev","jev"]
+    assert second.status_code == 200 and not second.json().get("cached")
+    assert paid == ["jev","draft","jev"] * 2
     api.post(f"/api/books/{bid}/position/reset",json={"position_epoch":0})
     assert api.post(f"/api/books/{bid}/ask",json=request).status_code == 409

@@ -149,11 +149,11 @@ def test_the_cap_settings_have_the_owners_provisional_defaults(tmp_path) -> None
 
 
 @pytest.mark.parametrize("setting, value", [
-    ("allow_stub", True), ("jev_windows_credential", True), ("reader_answer_cache", True),
+    ("allow_stub", True), ("jev_windows_credential", True),
 ])
 def test_hosted_settings_refuse_what_the_platform_must_not_run(setting, value, tmp_path) -> None:
     """The break it catches: hosted mode starting with the stub, a Jev key read from a Windows
-    credential store, or a cache that writes one file shared by every reader (ADR 0041 section 7)."""
+    credential store (ADR 0041 section 7). The file caches it also refused were removed (ADR 0043)."""
     with pytest.raises(ValueError, match=setting.upper()):
         hosted_settings(tmp_path, **PAID, **{setting: value})
     Settings(_env_file=None, data_dir=str(tmp_path / "local"), **{setting: value})  # local: allowed

@@ -9,7 +9,6 @@ import pytest
 
 from test_views import env as env
 from app.deps import book_lifecycle
-from app.lifecycle_cache import RecapRegistry
 from app.llm.client import LLMClient
 
 
@@ -41,13 +40,11 @@ def test_fast_wire_keeps_reasoning_and_independent_structured_review():
         client._embed_oai.close()
 
 
-def test_reviewed_answer_cache_is_free_and_frontier_and_reset_scoped(env, monkeypatch):
+def test_answers_are_frontier_and_reset_scoped(env, monkeypatch):
     api, bid, app, _ = env
     client = app.state.client
-    app.state.settings.reader_answer_cache = True
     # Keep the real offline route's deterministic validation. Jev is unused for stub generation.
     client.jev = SimpleNamespace(model="jev-1.13.0", close=lambda: None)
-    client.answers = RecapRegistry(max_entries=2, max_failures=1, max_flights=1)
     calls = []
     original = client.complete
     def count(*args, **kwargs):
@@ -67,10 +64,6 @@ def test_reviewed_answer_cache_is_free_and_frontier_and_reset_scoped(env, monkey
     assert first.status_code == 200, first.text
     assert first.json()["claims"] and not first.json()["insufficient_evidence"]
     paid_calls = len(calls)
-    second = api.post(f"/api/books/{bid}/ask", json=question).json()
-    assert second["cached"] is True and second["claims"] == first.json()["claims"]
-    assert second["cost"]["calls"] == [] and len(calls) == paid_calls
-    # A pronoun in a personal discussion must never reuse the standalone cached question.
     contextual = api.post(f"/api/books/{bid}/ask", json={**question, "history": [
         {"role": "user", "content": "Tell me about Berenice", "as_of_chapter": 2},
     ]})

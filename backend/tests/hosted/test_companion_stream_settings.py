@@ -102,16 +102,15 @@ def test_the_chat_is_refused_without_each_part_5_condition(values, named, tmp_pa
     ({**CHAT, "llm_transport": "codex-local"}, "codex-local"),
     ({**CHAT, "allow_stub": True}, "ALLOW_STUB"),
     ({**CHAT, "jev_windows_credential": True}, "JEV_WINDOWS_CREDENTIAL"),
-    ({**CHAT, "reader_answer_cache": True}, "READER_ANSWER_CACHE"),
     ({**CHAT, "reader_memory_ingest": False}, "deferred memory ingestion"),
     ({**CHAT, "openai_base_url": "https://llm.elsewhere.example/v1"},
      "HOSTED_PROVIDER_ALLOWED_ORIGINS"),
 ])
 def test_what_hosted_mode_still_refuses_with_the_chat_on(values, match, tmp_path) -> None:
     """The break it catches: the chat's settings opening a door section 7 keeps shut: the
-    owner's subscription CLI, the stub, a Windows credential store, files shared by every reader,
-    deferred memory, a writer address nobody allowed, or chapter notes or recollections without
-    the chat's conditions (keys and caps)."""
+    owner's subscription CLI, the stub, a Windows credential store, deferred memory, a writer
+    address nobody allowed, or chapter notes or recollections without the chat's conditions (keys
+    and caps)."""
     with pytest.raises(ValueError, match=match):
         hosted_settings(tmp_path, **values)
 

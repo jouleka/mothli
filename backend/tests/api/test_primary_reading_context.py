@@ -9,12 +9,10 @@ from app.ask import AskDraft, ask_judge_prompt, retrieve_ask_sources
 from app.ask_evidence import AskEvidenceError, complete_evidence_citations, evidence_prompt
 from app.eval.spoiler_gate.judge import JudgeUnavailable
 from app.llm.jev import JevUnavailable
-from app.llm.jev_tasks import reuse_answer
 from app.config import Settings
 from app.llm.jev_budget import estimate_jev_input
 from app.llm import jev_tasks
 from app.recap_grounding import primary_generation_prompt, primary_snapshot, recap_evidence, review_primary_recap
-from test_takeover_regressions import payload
 from test_views import env as env, _supported_citation_audit
 
 
@@ -389,29 +387,3 @@ def test_real_provider_recap_gate_cache_and_generic_failures(env, monkeypatch, m
     else:
         assert app.state.recaps.stats()['entries'] == 0
     assert app.state.catalog.get_cost_reservations(bid) == []
-
-
-@pytest.mark.parametrize('fault', [None, 'premise', 'coverage', 'older_scene', 'newer_chapter'])
-def test_reuse_subset_requires_compatible_premises_complete_coverage_and_current_scene(fault):
-    value = payload()
-    value['claims'][0]['text'] = 'Berenice met Aldric at the forge before noon.'
-    candidate = {'reviewed_question': 'Describe the meeting with its place and time.', 'payload': value}
-    before = deepcopy(candidate)
-    query = 'Where did Berenice meet Aldric?'
-    if fault == 'older_scene':
-        value['citations'][0]['ordinal'] = 1
-    if fault == 'newer_chapter':
-        query = 'Where did Berenice meet Aldric in chapter 3?'
-    def run(state, questions):
-        assert 'latest_completed_chapter' in state['candidates'][0]
-        answers = {k: {'choice': 'yes', 'probabilities': {'yes': 1.0}, 'confidence': 1.0} for k in questions}
-        if fault in {'premise', 'coverage'}:
-            answers['q0' if fault == 'premise' else 'a0']['choice'] = 'no'
-        return answers
-    args = dict(run=run, settings=SimpleNamespace(reader_reuse_min_probability=.99, reader_reuse_min_confidence=.9))
-    if fault:
-        with pytest.raises(JevUnavailable):
-            reuse_answer(query, [candidate], **args)
-    else:
-        assert reuse_answer(query, [candidate], **args) is candidate
-        assert candidate == before

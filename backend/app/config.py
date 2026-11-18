@@ -50,7 +50,6 @@ class Settings(BaseSettings):
     jev_recap_enabled: bool = False  # Experimental: conservative routing added latency in live QA.
     jev_min_probability: float = Field(default=0.95, ge=0.9, le=1)
     jev_min_confidence: float = Field(default=0.85, ge=0.8, le=1)
-    reader_answer_cache: bool = False
     reader_conversation_pipeline: bool = False
     reader_page_context: bool = False
     reader_memory_ingest: bool = True  # Local source-first preview can defer paid memory backfill.
@@ -75,11 +74,6 @@ class Settings(BaseSettings):
     # One model call in a page conversation. The provider default (120 s) is far past the
     # point where a reader has given up; codex-local keeps its own subprocess timeout.
     reader_conversation_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
-    reader_reuse_enabled: bool = False
-    reader_reuse_fast_review: bool = True  # Local GPT-6 Luna reuse checks only; normal preparation is unchanged.
-    reader_reuse_min_probability: float = Field(default=0.99, ge=0.95, le=1)
-    reader_reuse_min_confidence: float = Field(default=0.90, ge=0.85, le=1)
-    reader_reuse_timeout_seconds: float = Field(default=0.65, gt=0, le=1)
 
     # service
     deployment_mode: Literal["local", "hosted"] = "local"
@@ -238,12 +232,11 @@ class Settings(BaseSettings):
         missing = [name for name, value in required.items() if value is None or value == ""]
         if missing:
             raise ValueError("hosted mode requires " + ", ".join(missing))
-        # ADR 0041 section 7: the owner pays, so nothing but the owner's own paid API accounts,
-        # and nothing that writes one file shared by every reader under DATA_DIR.
+        # ADR 0041 section 7: the owner pays, so nothing but the owner's own paid API accounts.
+        # (The settings that wrote one file shared by every reader were removed, ADR 0043.)
         refused = {
             "ALLOW_STUB": self.allow_stub,
             "JEV_WINDOWS_CREDENTIAL": self.jev_windows_credential,
-            "READER_ANSWER_CACHE": self.reader_answer_cache,
         }
         on = [name for name, value in refused.items() if value]
         if on:

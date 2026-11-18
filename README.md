@@ -118,8 +118,8 @@ evaluating a new provider configuration.
 
 ### GPT-6.1 Terra and local ChatGPT testing
 
-The default OpenAI completion model is `gpt-6.1-terra` for both roles. Extraction, passage selection,
-and question planning use low reasoning effort; answer/recap synthesis and structured evidence,
+The default OpenAI completion model is `gpt-6.1-terra` for both roles. Extraction and passage selection
+use low reasoning effort; answer/recap synthesis and structured evidence,
 identity, and spoiler reviews use medium. Other explicitly configured models retain their profiles.
 
 For local testing through your ChatGPT account, use the Codex CLI (tested with 0.167.0), run
@@ -134,7 +134,6 @@ EMBED_PROVIDER=stub
 READER_PAGE_CONTEXT=true
 READER_CONVERSATION_PIPELINE=true
 READER_CONVERSATION_REVIEW_EFFORT=low
-READER_ANSWER_CACHE=true
 ```
 
 This uses the existing ChatGPT sign-in without copying its credentials into the project or browser.
@@ -190,7 +189,7 @@ this is not a universal EPUB structure classifier.
 `POST /api/books/{book_id}/ingest/retry` resumes preparation through the saved bookmark. It cannot
 advance reading progress. Questions distinguish pending/interrupted preparation from unsupported
 answers, and common recap requests reuse the reviewed recap flow. Content-policy versions scope
-both recap and answer caches. Selected-text AI requests allow navigation/status reads while reset
+the in-memory recap cache. Selected-text AI requests allow navigation/status reads while reset
 and deletion still wait for their lifecycle lease.
 
 Publisher chapter numbers are display metadata rather than replacements for internal ordinals.

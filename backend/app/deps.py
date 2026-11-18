@@ -20,10 +20,6 @@ def build_state(settings: Settings) -> dict:
     os.makedirs(settings.data_dir, exist_ok=True)
     # The writer and Jev, built by the one construction both modes share (ADR 0041 section 1).
     client = build_platform_clients(settings)
-    reader = client
-    from app.answer_bank import AnswerBank
-    reader.answers = AnswerBank(persist_path=(os.path.join(settings.data_dir, "reviewed-answers-v2.json")
-                                             if settings.reader_answer_cache else None))
     catalog = Catalog(os.path.join(settings.data_dir, "catalog.db"),
                       schema_version_default=migrations.CURRENT_VERSION)
     return {
@@ -36,7 +32,7 @@ def build_state(settings: Settings) -> dict:
         ),
         "catalog": catalog,
         "client": client,
-        "reader_client": reader,
+        "reader_client": client,
     }
 
 

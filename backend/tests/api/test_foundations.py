@@ -123,19 +123,6 @@ def test_hidden_supplementary_atoms_still_participate_in_geometry_validation(env
     assert api.get(f"/api/books/{bid}/graph").status_code == 409
 
 
-def test_answer_cache_changes_when_content_scope_changes(env):
-    from app.answer_bank import answer_scope
-    api, bid, app, _ = env
-    manifest = api.get(f"/api/books/{bid}/manifest").json()
-    def key():
-        return answer_scope(bid, 2, app.state.catalog.get_state(bid), manifest,
-                            catalog=app.state.catalog, store=app.state.store,
-                            settings=app.state.settings, client=app.state.reader_client)
-    before = key()
-    manifest["atoms"][0]["title"] = "Acknowledgements"
-    assert key() != before
-
-
 def test_illustrations_do_not_split_a_publisher_chapter_but_new_parts_do():
     manifest = {"atoms": [
         {"ordinal": 1, "title": "Chapter I", "part_label": "Part One"},

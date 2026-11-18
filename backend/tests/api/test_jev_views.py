@@ -124,7 +124,6 @@ def test_partial_evidence_reviews_only_unresolved_claims_but_final_judge_sees_co
     client.cheap_model = client.large_model = "gpt-6-luna"
     settings.jev_selection_enabled = False
     settings.jev_partial_evidence_enabled = True
-    settings.reader_answer_cache = True
     selected = [1] if route == "chapter-closeout" else []
     evidence_calls, final_calls = [], []
     texts = ["Berenice met Aldric at the forge.", "Berenice and Aldric spoke."]
