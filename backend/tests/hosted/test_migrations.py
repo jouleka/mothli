@@ -354,6 +354,10 @@ def test_tenant_foreign_keys_and_indexes_carry_owner_scope(database: str) -> Non
         # PostgreSQL's built-in GIN tsvector operator class cannot prefix UUID owner_id. Queries
         # still require owner/book/incarnation predicates and forced RLS before heap rows are visible.
         "ix_book_search_documents_owner_vector",
+        # ADR 0044 step 3: the build slot is one chapter of one edition across every reader, so
+        # it cannot be per owner. Only the worker reads or writes it (the claim and the run's
+        # own job); a reader's session sees only their own jobs (forced RLS).
+        "ux_jobs_one_build_per_chapter",
     }
     with psycopg.connect(database) as conn:
         foreign_keys = conn.execute(
@@ -686,16 +690,17 @@ def _stored_key_world(conn) -> dict:
 
 def _kept_rows(conn) -> dict:
     # A column a later migration adds is no change to a book: 0031's split fingerprint comes
-    # empty on rows already there, which its own test checks. Nor is the notes account 0032
-    # makes on a database without one a change to anyone's account (its own test checks it).
+    # empty on rows already there, which its own test checks, and so does 0033's edition mark on
+    # a reader's book (its own test checks it). Nor is the notes account 0032 makes on a database
+    # without one a change to anyone's account (its own test checks it).
     account = "notes_account" if conn.execute(
         "SELECT to_regclass('public.notes_account')").fetchone()[0] else "library_account"
     return {"users": conn.execute(
         f"SELECT * FROM users WHERE id NOT IN (SELECT account_id FROM {account}) "
         "ORDER BY 1, 2").fetchall(),
         "cost_ledger": conn.execute("SELECT * FROM cost_ledger ORDER BY 1, 2").fetchall()} | {
-        "books": conn.execute("SELECT to_jsonb(book) - 'split_hash' FROM books AS book "
-                              "ORDER BY owner_id, id").fetchall()} | {
+        "books": conn.execute("SELECT to_jsonb(book) - 'split_hash' - 'edition_of' "
+                              "FROM books AS book ORDER BY owner_id, id").fetchall()} | {
         "jobs": conn.execute("SELECT owner_id, id, book_id, kind, state, idempotency_key "
                              "FROM jobs ORDER BY id").fetchall()}
 
@@ -935,7 +940,9 @@ def test_the_notes_account_is_the_library_account_renamed_and_the_door_changes_o
             "pg_get_function_identity_arguments(oid), pg_get_function_result(oid) "
             "FROM pg_proc WHERE oid = %s::regprocedure", (_DOOR_FUNCTION,)).fetchone()
         body = _door_body(conn)
-    apply_migrations(database)
+    # Through 0032 only: 0033 adds the edition mark to books and a line to the door (its own
+    # test below).
+    _apply_before(database, ONE_BUILD, monkeypatch)
 
     with psycopg.connect(database) as conn:
         assert conn.execute("SELECT to_regclass('public.library_account')").fetchone()[0] is None
@@ -982,6 +989,119 @@ def test_a_new_database_has_one_notes_account_that_never_signs_in(database: str)
     apply_migrations(database)
     with psycopg.connect(database) as conn:
         assert conn.execute("SELECT account_id FROM notes_account").fetchall() == [(account,)]
+
+
+# ---- 0033: one build per chapter (ADR 0044 step 3) ---------------------------------------------
+
+ONE_BUILD = 33
+# The one line 0033 adds to the door: the edition it finds is a marked one.
+_EDITION_MARK = ("     AND built.deleted_at IS NULL\n",
+                 "     AND built.deleted_at IS NULL\n     AND built.edition_of IS NOT NULL\n")
+
+
+def _notes_book(conn, account, title, file_hash, split_hash, *, deleted=False, age=0):
+    book = uuid.uuid4()
+    conn.execute(
+        "INSERT INTO books (owner_id, id, incarnation, title, schema_version, file_hash, "
+        "split_hash, created_at, deleted_at) VALUES (%s, %s, %s, %s, 1, %s, %s, "
+        "now() - %s * interval '1 hour', CASE WHEN %s THEN now() END)",
+        (account, book, uuid.uuid4(), title, file_hash, split_hash, age, deleted))
+    return book
+
+
+def test_one_build_per_chapter_marks_the_editions_keeps_one_a_file_and_adds_one_door_line(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0033 with the operator's editions and a
+    reader's copy of the same file: an edition left unmarked (the door would no longer find it),
+    a second copy of a file, a removed book or a reader's book marked, any other value of a book
+    changed; a second live edition of one file, a mark on a book that is not the notes account's
+    or without both fingerprints, accepted afterwards; two leased or running story-memory jobs
+    holding one chapter of one edition (or the slot taken by a waiting or finished job, or one
+    of another kind); or the door changed beyond its one line, or its owner, privileges,
+    security, settings, arguments or result changed."""
+    _apply_before(database, ONE_BUILD, monkeypatch)
+    reader = uuid.uuid4()
+    a, b, c = "a" * 64, "b" * 64, "c" * 64
+    with psycopg.connect(database) as conn:
+        [(account,)] = conn.execute("SELECT account_id FROM notes_account").fetchall()
+        first = _notes_book(conn, account, "Edition", a, b, age=2)
+        second = _notes_book(conn, account, "A second copy", a, b, age=1)
+        gone = _notes_book(conn, account, "Removed", c, b, deleted=True)
+        unsplit = _notes_book(conn, account, "No split", c, None)
+        conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (reader,))
+        mine = _notes_book(conn, reader, "Mine", a, b)
+        books = conn.execute("SELECT to_jsonb(book) FROM books AS book ORDER BY id").fetchall()
+        if conn.execute("SELECT 1 FROM pg_roles WHERE rolname='lit38_door_reader'").fetchone() \
+                is None:
+            conn.execute("CREATE ROLE lit38_door_reader NOLOGIN")
+        conn.execute(f"GRANT EXECUTE ON FUNCTION {_NEW_DOOR} TO lit38_door_reader")
+        record = conn.execute(
+            "SELECT proowner::regrole::text, proacl::text, prosecdef, provolatile, proconfig, "
+            "pg_get_function_identity_arguments(oid), pg_get_function_result(oid) "
+            "FROM pg_proc WHERE oid = %s::regprocedure", (_NEW_DOOR,)).fetchone()
+        body = conn.execute("SELECT prosrc FROM pg_proc WHERE oid = %s::regprocedure",
+                            (_NEW_DOOR,)).fetchone()[0]
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        marked = dict(conn.execute("SELECT id, edition_of FROM books").fetchall())
+        assert marked == {first: account, second: None, gone: None, unsplit: None, mine: None}
+        assert conn.execute("SELECT to_jsonb(book) - 'edition_of' FROM books AS book "
+                            "ORDER BY id").fetchall() == books
+        assert conn.execute(
+            "SELECT proowner::regrole::text, proacl::text, prosecdef, provolatile, proconfig, "
+            "pg_get_function_identity_arguments(oid), pg_get_function_result(oid) "
+            "FROM pg_proc WHERE oid = %s::regprocedure", (_NEW_DOOR,)).fetchone() == record
+        assert _definers(conn) == _DEFINERS
+        before, after = _EDITION_MARK
+        assert body.count(before) == 1
+        assert conn.execute("SELECT prosrc FROM pg_proc WHERE oid = %s::regprocedure",
+                            (_NEW_DOOR,)).fetchone()[0] == body.replace(before, after)
+    refused = (
+        ("UPDATE books SET edition_of = owner_id WHERE id = %s", (second,),
+         psycopg.errors.UniqueViolation),
+        ("UPDATE books SET edition_of = %s WHERE id = %s", (account, mine),
+         psycopg.errors.CheckViolation),
+        ("UPDATE books SET edition_of = owner_id WHERE id = %s", (mine,),
+         psycopg.errors.ForeignKeyViolation),
+        ("UPDATE books SET edition_of = owner_id WHERE id = %s", (unsplit,),
+         psycopg.errors.CheckViolation),
+    )
+    for statement, params, error in refused:
+        with pytest.raises(error):
+            with psycopg.connect(database) as conn:
+                conn.execute(statement, params)
+    with psycopg.connect(database) as conn:
+        # A removed edition frees its file: a new live one may be made.
+        conn.execute("UPDATE books SET deleted_at = now() WHERE id = %s", (first,))
+        conn.execute("UPDATE books SET edition_of = owner_id WHERE id = %s", (second,))
+
+    # The build slot.
+    with psycopg.connect(database) as conn:
+        incarnation = conn.execute("SELECT incarnation FROM books WHERE id = %s",
+                                   (mine,)).fetchone()[0]
+
+    def job(state, chapter, kind="story_memory", owner=reader, book=mine):
+        conn.execute(
+            "INSERT INTO jobs (owner_id, book_id, book_incarnation, kind, state, "
+            "idempotency_key, payload_metadata, completed_at) VALUES (%s, %s, %s, %s, %s, %s, "
+            "jsonb_build_object('chapter', %s::integer, 'edition', %s::text), "
+            "CASE WHEN %s IN ('succeeded', 'failed', 'cancelled') THEN now() END)",
+            (owner, book, incarnation, kind, state, f"slot:{uuid.uuid4().hex}", chapter,
+             str(second), state))
+
+    with psycopg.connect(database, autocommit=True) as conn:
+        job("running", 1)
+        for state in ("pending", "succeeded", "failed", "cancelled"):
+            job(state, 1)
+        job("leased", 2)
+        job("running", 1, kind="chapter_notes")
+        for state in ("leased", "running"):
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                job(state, 1)
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                job(state, 2)
 
 
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:

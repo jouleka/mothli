@@ -261,13 +261,17 @@ def test_worker_role_is_bypassrls_and_exactly_privileged(
 
     role = conninfo.conninfo_to_dict(worker_dsn)["user"]
     with psycopg.connect(database, autocommit=True) as conn:
-        conn.execute(sql.SQL("GRANT SELECT ON books TO {}").format(sql.Identifier(role)))
+        # One privilege more than its list (ADR 0044 step 3 gave it SELECT on books, so the
+        # probe is a table it must never read: a reader's stored file).
+        conn.execute(sql.SQL("GRANT SELECT ON source_objects TO {}").format(
+            sql.Identifier(role)))
     try:
         with pytest.raises(WorkerConfigurationError, match="allow-list"):
             repository.check_runtime_role()
     finally:
         with psycopg.connect(database, autocommit=True) as conn:
-            conn.execute(sql.SQL("REVOKE SELECT ON books FROM {}").format(sql.Identifier(role)))
+            conn.execute(sql.SQL("REVOKE SELECT ON source_objects FROM {}").format(
+                sql.Identifier(role)))
 
 
 def test_provider_concurrency_is_atomic_across_worker_instances(

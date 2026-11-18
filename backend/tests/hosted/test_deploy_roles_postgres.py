@@ -101,7 +101,8 @@ def test_one_grant_more_or_less_refuses_and_the_script_restores_exactly(provisio
         ("REVOKE SELECT ON themes FROM {}", tenant,
          lambda: asyncio.run(PostgresTenantRepository(dsn["tenant"]).check_runtime_role()),
          AuthConfigurationError),
-        ("GRANT SELECT ON books TO {}", worker,
+        # (ADR 0044 step 3 gave the worker SELECT on books; it must never read a stored file.)
+        ("GRANT SELECT ON source_objects TO {}", worker,
          lambda: PostgresWorkerRepository(dsn["worker"]).check_runtime_role(),
          WorkerConfigurationError),
         # The worker only reads the money records; every job's spend is written as the tenant.

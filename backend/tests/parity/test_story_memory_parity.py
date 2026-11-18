@@ -3,16 +3,18 @@
 One small book (a contents page, which is never sent to a model, then three chapters that meet
 new people, give one of them another name, replace her state, and tie people together) is
 extracted chapter by chapter twice with the same stand-in writer and checker: by local mode's
-shared ``ChapterExtraction`` over the local store, and by ``remember_chapter`` over a hosted
-reader's Postgres rows through a claimed job. After every chapter, at every bookmark, the
-unchanged readers must answer the same from both: ``score_recap``, ``same_person_names``,
+shared ``ChapterExtraction`` over the local store, and by ``remember_chapter`` into the edition of
+a hosted reader's file through a claimed job (ADR 0044 step 3). After every chapter, at every
+bookmark, the unchanged readers must answer the same from both, the hosted side through the door
+at the reader's place (the chapter just built): ``score_recap``, ``same_person_names``,
 ``completion_frontier``, the views the checks use, and the relationships, states, themes and
-event participants the cast screens read (with the parity suite's predicates). Stand-in models
-only: nothing is called and nothing is paid.
+event participants the cast screens read (with the parity suite's predicates, on the edition's
+rows). Stand-in models only: nothing is called and nothing is paid.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 import uuid
@@ -44,6 +46,7 @@ from app.unicode_text import word_tokens
 from tests.api._epub import epub_ncx
 from tests.hosted import test_companion_read_map_postgres as read_map_gate
 from tests.hosted import test_jobs_postgres as jobs_gate
+from tests.hosted.test_companion_stream_postgres import Reader
 from tests.hosted.test_tenant_postgres import UnusedOIDCClient
 from tests.ingest._grounding import canned_grounding_verdict
 from tests.parity.test_companion_memory_parity import _audit
@@ -66,15 +69,22 @@ CHAPTERS = {
 }
 
 
-def harbour_book() -> bytes:
-    """Three chapters, with a map page (not story: never sent to a model) after the first."""
+def harbour_book(title: str = "The Harbour Book") -> bytes:
+    """Three chapters, with a map page (not story: never sent to a model) after the first. Another
+    ``title`` makes another file (another edition) with the same chapters. Made once per title:
+    the zip records the time it was written, so two makings a second apart are two files."""
+    return _harbour_book(title)
+
+
+@functools.cache
+def _harbour_book(title: str) -> bytes:
     chapter = [(f"c{n}.xhtml", f"Chapter {roman}", f"Chapter {roman}", CHAPTERS[marker] * 6)
                for n, (roman, marker) in enumerate((("I", "nets"), ("II", "ferry"),
                                                     ("III", "rescued")), start=1)]
     return epub_ncx(
         [chapter[0], ("map.xhtml", "Map: The Coast", "Map: The Coast",
                       "The harbour, the quay and the tower. " * 4), *chapter[1:]],
-        title="The Harbour Book", author="Ada Writer")
+        title=title, author="Ada Writer")
 
 
 def _person(name, *, aliases=(), state=None, known=False):
@@ -230,13 +240,16 @@ def claimed(app, worker_dsn: str, owner: uuid.UUID, book: str, worker: str = "me
 
 def remember(app, worker_dsn, owner, book, client, ordinal, *, claim=None, hold=None,
              tenant=None) -> bool:
-    """One run of one chapter under a claimed lease; the job succeeds or fails like a run.
-    ``tenant`` replaces the RLS-enforced tenant role (a superuser, to test the predicates)."""
+    """One run of one chapter under a claimed lease; the job succeeds or fails like a run. The
+    chapter is built into the edition of the book's file, made on its first chapter, as the
+    story-memory job builds it (ADR 0044 step 3). ``tenant`` replaces the RLS-enforced tenant
+    role (a superuser, to test the predicates)."""
     repository, claim = claim or claimed(app, worker_dsn, owner, book)
     lease = _Lease(repository, claim, timedelta(seconds=60))
     try:
+        edition = repository.edition_of(claim, create=True)
         published = remember_chapter(
-            claim, repository, hold=hold or lease.hold,
+            claim, repository, edition=edition, hold=hold or lease.hold,
             tenant_dsn=tenant or app.state.companion_dsn,
             settings=app.state.settings, client=client, storage=app.state.object_storage,
             sources=app.state.companion_sources, ordinal=ordinal)
@@ -396,10 +409,11 @@ def test_hosted_chapters_build_the_story_memory_local_mode_builds(
     of one chapter: any of these answers a check or a screen differently from local mode."""
     client = extraction_client()
     extractor = Extractor(client, monkeypatch)
-    _client, _tokens, app = hosted_app
+    http, tokens, app = hosted_app
     owner = readers["a"]
     book = hosted_book(hosted_app, "a", harbour_book())
     atoms = hosted_atoms(app, owner, book)
+    reader = Reader(http, tokens, "a", owner)
     with local_book(tmp_path, harbour_book()) as (extract, memory, local_atoms, chapters):
         assert [atom["ordinal"] for atom in atoms] == [1, 2, 3, 4]
         assert chapters[1]["title"] == "Map: The Coast"
@@ -409,13 +423,20 @@ def test_hosted_chapters_build_the_story_memory_local_mode_builds(
             local_calls = extractor.calls[calls:]
             assert remember(app, worker_dsn, owner, book, client, ordinal) is True
             assert extractor.calls[calls + len(local_calls):] == local_calls
+            # ADR 0044 step 3: the chapter is the edition's, handed to the reader through the
+            # door up to their place, which is the chapter just built.
+            reader.mark(book, [ordinal])
+            edition = edition_scope(database, owner, book)
             with memory() as mem:
                 expected = answers(mem, local_atoms, chapters)
                 expected_cast = {bm: local_cast(mem, bm) for bm in BOOKMARKS}
             for dsn in (tenant_dsn, database):   # row security, and the predicates alone
                 assert hosted_answers(dsn, owner, book, atoms, chapters) == expected, ordinal
-                assert {bm: hosted_cast(dsn, owner, book, bm) for bm in BOOKMARKS} \
-                    == expected_cast, ordinal
+            # The edition's own rows, with the parity suite's predicates, read past row security:
+            # a reader's session cannot read them at all
+            # (``test_story_memory_editions_postgres.py``).
+            assert {bm: hosted_cast(database, *edition, bm) for bm in BOOKMARKS} \
+                == expected_cast, ordinal
             assert expected["frontier"] == ordinal
 
     # A floor under the comparison: the book exercises what it claims to.
@@ -431,5 +452,20 @@ def test_hosted_chapters_build_the_story_memory_local_mode_builds(
     assert re.fullmatch(r"[0-9a-f-]{36}:c1\.xhtml", atoms[0]["key"])
     with psycopg.connect(database) as conn:          # the replaced state is closed, not deleted
         assert conn.execute(
-            "SELECT revealed_at,invalid_at FROM entity_state WHERE owner_id=%s"
-            " AND status->>'note'='keeping the light'", (owner,)).fetchone() == (1, 3)
+            "SELECT revealed_at,invalid_at FROM entity_state WHERE owner_id=%s AND book_id=%s"
+            " AND status->>'note'='keeping the light'", edition).fetchone() == (1, 3)
+        # The reader owns no story memory of their own.
+        assert conn.execute("SELECT count(*) FROM chapters WHERE owner_id=%s",
+                            (owner,)).fetchone()[0] == 0
+
+
+def edition_scope(dsn, owner, book) -> tuple:
+    """(notes account, edition id as text) of the live edition of the reader's book's file."""
+    with psycopg.connect(dsn) as conn:
+        [(account, edition)] = conn.execute(
+            """SELECT edition.owner_id, edition.id::text FROM books AS mine
+               JOIN books AS edition ON edition.file_hash = mine.file_hash
+                AND edition.split_hash = mine.split_hash AND edition.deleted_at IS NULL
+               JOIN notes_account AS notes ON notes.account_id = edition.owner_id
+               WHERE mine.owner_id = %s AND mine.id = %s""", (owner, book)).fetchall()
+    return account, edition
