@@ -233,7 +233,7 @@ class LLMClient:
                 "SentenceVerdict"}:
             return getattr(self, "conversation_review_effort", "medium")
         if schema is not None and schema.__name__ in {
-                "Extraction", "SourceSelection", "PreparedQuestions"}:
+                "Extraction", "SourceSelection"}:
             return "low"
         return "medium"
 
@@ -244,8 +244,7 @@ class LLMClient:
                 result = complete(system, user, model=self._model_for(tier),
                                   effort=self.reasoning_effort(tier, schema), schema=schema,
                                   max_output_tokens=max_output_tokens, timeout=self.timeout,
-                                  background=bool(getattr(self, "preparing", False)
-                                                  or getattr(self, "background_inference", False)))
+                                  background=bool(getattr(self, "background_inference", False)))
             elif self.provider == "anthropic":
                 result = self._complete_anthropic(system, user, tier, schema, max_output_tokens)
             elif self.provider == "openai-compatible":

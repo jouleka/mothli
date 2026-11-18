@@ -150,7 +150,6 @@ def test_the_cap_settings_have_the_owners_provisional_defaults(tmp_path) -> None
 
 @pytest.mark.parametrize("setting, value", [
     ("allow_stub", True), ("jev_windows_credential", True), ("reader_answer_cache", True),
-    ("reader_prepare_enabled", True),
 ])
 def test_hosted_settings_refuse_what_the_platform_must_not_run(setting, value, tmp_path) -> None:
     """The break it catches: hosted mode starting with the stub, a Jev key read from a Windows

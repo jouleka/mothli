@@ -28,8 +28,7 @@ def main():
         jev_extraction_enabled=True,
         jev_identity_enabled=True,
         reader_answer_cache=True,
-        reader_prepare_enabled=True, reader_reuse_enabled=True,
-        reader_prepare_max_questions=8,
+        reader_reuse_enabled=True,
         cost_max_usd_per_book=1.0,
     )
     uvicorn.run(create_app(settings), host="127.0.0.1", port=args.port, access_log=False,

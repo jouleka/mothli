@@ -10,13 +10,27 @@ import pytest
 from app.answer_bank import AnswerBank, AnswerBusy
 from app.ask import AskDraft, judge_ask_draft
 from app.answer_reuse import review_reuse
-from app.cost import CostCeilingExceeded
 from app.llm.jev import JevUnavailable
 from app.llm.jev_tasks import reuse_answer
-from app.reader_prepare import preparation_key, prepare
-from test_preparation_priority import question, audit
-from test_reader_preparation import capture, payload
 from test_views import env as env
+
+
+def payload():
+    return {"as_of_chapter": 2, "insufficient_evidence": False,
+            "claims": [{"text": "Berenice met Aldric at the forge.", "citation_ids": [1]}],
+            "citations": [{"id": 1, "ordinal": 2, "chapter_key": "two", "href": "two.xhtml",
+                           "title": "Two", "excerpt": "Berenice met Aldric at the forge."}]}
+
+
+def capture(app, bid):
+    from app.answer_bank import answer_scope
+    from app.api.views import _effective
+    st = app.state
+    eff, state, manifest = _effective(bid, None, st.catalog, st.store, st.settings, st.worker)
+    eff = min(eff, state["ingest_progress"])
+    return SimpleNamespace(answer_key=answer_scope(bid, eff, state, manifest, catalog=st.catalog,
+                                                   store=st.store, settings=st.settings,
+                                                   client=st.reader_client))
 
 
 def test_local_paid_timeout_has_one_wire_attempt_and_one_conservative_charge(tmp_path):
@@ -108,41 +122,6 @@ def test_exact_cached_answer_remains_available_when_paid_flights_are_full(env):
     response = api.post(f"/api/books/{bid}/ask", json={"question": question})
     assert response.status_code == 200 and response.json()["cached"]
     assert response.json()["cost"]["calls"] == []
-
-
-def test_budget_failure_keeps_reviewed_plan_without_restart_spend_and_resumes_after_allowance_change(env, monkeypatch, tmp_path):
-    _, bid, app, _ = env
-    settings, client = app.state.settings, app.state.reader_client
-    settings.reader_prepare_enabled = settings.reader_answer_cache = True
-    path = tmp_path / "answers.json"
-    client.answers = AnswerBank(persist_path=path)
-    calls = []
-    def complete(*a, **kw):
-        calls.append(kw["schema"].__name__)
-        value = ({"questions": [question("Where did Berenice meet Aldric?")]}
-                 if calls[-1] == "PreparedQuestions" else audit(json.loads(kw["user"])["questions"]))
-        return SimpleNamespace(value=value)
-    def blocked(*a, **kw):
-        calls.append("blocked-answer")
-        raise CostCeilingExceeded("book ceiling")
-    monkeypatch.setattr("app.reader_prepare.budgeted_completion", complete)
-    monkeypatch.setattr("app.api.views.ask_the_book", blocked)
-    scope = capture(app, bid)
-    prepare(app, scope)
-    assert calls == ["PreparedQuestions", "PreparationReview", "blocked-answer"]
-    key = preparation_key(scope, settings)
-    assert client.answers.prepared(key) and client.answers.plans[key]["reviewed"]
-    client.answers = AnswerBank(persist_path=path)
-    prepare(app, scope)
-    assert len(calls) == 3  # Restart is not permission to purchase another failed attempt.
-    settings.cost_max_input_tokens_per_book += 1
-    def answer(_bid, body, _catalog, _store, _settings, prepared_client, _worker, *, request=None):
-        prepared_client.answers.set((*scope.answer_key, body.question), payload())
-        return payload()
-    monkeypatch.setattr("app.api.views.ask_the_book", answer)
-    prepare(app, scope)
-    assert calls == ["PreparedQuestions", "PreparationReview", "blocked-answer"]
-    assert client.answers.suggestions(scope.answer_key) and not client.answers.plans
 
 
 @pytest.mark.parametrize("decision", ["pass", "incompatible", "omission", "unsupported", "future", "invalid", "outage"])

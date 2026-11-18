@@ -103,7 +103,6 @@ def test_the_chat_is_refused_without_each_part_5_condition(values, named, tmp_pa
     ({**CHAT, "allow_stub": True}, "ALLOW_STUB"),
     ({**CHAT, "jev_windows_credential": True}, "JEV_WINDOWS_CREDENTIAL"),
     ({**CHAT, "reader_answer_cache": True}, "READER_ANSWER_CACHE"),
-    ({**CHAT, "reader_prepare_enabled": True}, "READER_PREPARE_ENABLED"),
     ({**CHAT, "reader_memory_ingest": False}, "deferred memory ingestion"),
     ({**CHAT, "openai_base_url": "https://llm.elsewhere.example/v1"},
      "HOSTED_PROVIDER_ALLOWED_ORIGINS"),

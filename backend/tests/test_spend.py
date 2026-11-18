@@ -307,7 +307,7 @@ def test_a_whole_evaluation_run_pays_for_each_chapter_once_and_a_second_run_for_
         return Settings(_env_file=None, allow_stub=True, reader_page_context=True,
                         reader_conversation_pipeline=True, **{name: given[name] for name in (
                             "data_dir", "llm_large_model", "jev_model", "reader_memory_ingest",
-                            "reader_answer_cache", "reader_prepare_enabled", "classics_enabled")})
+                            "reader_answer_cache", "classics_enabled")})
 
     def app_with_notes(settings):
         app = create_app(settings, ingest_executor=InlineExecutor())

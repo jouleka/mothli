@@ -381,7 +381,6 @@ export function AskTheBook({
   });
   const [tab, setTab] = useState<CompanionTab>(initialTab);
   const [focusPerson, setFocusPerson] = useState<EntityId | null>(null);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
   useEffect(() => setTab(initialTab), [initialTab]);
   useEffect(() => {
     if (!navigate) return;
@@ -789,22 +788,6 @@ export function AskTheBook({
       });
   }, [seed?.id]);
 
-  // Suggestions are only offered when their answers have already cleared review server-side.
-  useEffect(() => {
-    let live = true;
-    setSuggestions([]);
-    if (bookmark < 1) return;
-    Promise.resolve()
-      .then(() => api.preparedQuestions(bookId, bookmark))
-      .then((value) => {
-        if (live && value && value.as_of_chapter <= bookmark) setSuggestions((value.questions ?? []).slice(0, 3));
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [bookId, bookmark]);
-
   const askAbout = (prompt: string) => {
     setTab("talk");
     onClearSelection?.();
@@ -823,7 +806,7 @@ export function AskTheBook({
     : bookmark > 0
       ? ["What just happened?", "What have I missed?"]
       : [];
-  const chips = (visibleExchanges.length ? [] : starters).concat(suggestions).slice(0, 3);
+  const chips = (visibleExchanges.length ? [] : starters).slice(0, 3);
 
   return (
     <div

@@ -179,6 +179,4 @@ def test_partial_evidence_reviews_only_unresolved_claims_but_final_judge_sees_co
     if response.status_code == 200:
         assert [c["text"] for c in response.json()["claims"]] == texts
         assert all(s["ordinal"] <= 2 for s in response.json()["citations"])
-    else:
-        assert api.get(f"/api/books/{bid}/prepared-questions").json()["questions"] == []
     assert app.state.catalog.get_cost_reservations(bid) == []

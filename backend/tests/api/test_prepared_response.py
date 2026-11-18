@@ -9,7 +9,7 @@ from app.answer_bank import AnswerBank
 from app.answer_reuse import (reviewed_response_request, select_reviewed_response,
                              validated_response_selection)
 from app.llm.jev import JevUnavailable
-from test_reader_preparation import payload, capture
+from test_takeover_regressions import payload, capture
 from test_views import env as env
 
 

@@ -80,10 +80,6 @@ class Settings(BaseSettings):
     reader_reuse_min_probability: float = Field(default=0.99, ge=0.95, le=1)
     reader_reuse_min_confidence: float = Field(default=0.90, ge=0.85, le=1)
     reader_reuse_timeout_seconds: float = Field(default=0.65, gt=0, le=1)
-    reader_prepare_enabled: bool = False
-    reader_prepare_max_questions: int = Field(default=8, ge=1, le=10)
-    reader_prepare_delay_seconds: float = Field(default=1.0, ge=0, le=10)
-    reader_prepare_max_usd_per_book: float = Field(default=0.25, gt=0, le=2)
 
     # service
     deployment_mode: Literal["local", "hosted"] = "local"
@@ -248,7 +244,6 @@ class Settings(BaseSettings):
             "ALLOW_STUB": self.allow_stub,
             "JEV_WINDOWS_CREDENTIAL": self.jev_windows_credential,
             "READER_ANSWER_CACHE": self.reader_answer_cache,
-            "READER_PREPARE_ENABLED": self.reader_prepare_enabled,
         }
         on = [name for name, value in refused.items() if value]
         if on:

@@ -28,7 +28,6 @@ from app.reader_reactions import reaction_clarification, reaction_copy
 
 from app.ask import (
     ASK_SYSTEM,
-    PREPARED_ANSWER_SYSTEM,
     AskDraft,
     AskRequest,
     AskRetrievalLimit,
@@ -243,22 +242,6 @@ def graph(book_id: str, bookmark: int | None = _BM, catalog=Depends(get_catalog)
     eff, _st, _m = _effective(book_id, bookmark, catalog, store, settings, worker)
     with store.book(book_id) as mem:
         return graph_payload(mem, eff)
-
-
-@router.get("/prepared-questions")
-def prepared_questions(book_id: str, bookmark: int | None = _BM,
-                       catalog=Depends(get_catalog), store=Depends(get_store),
-                       settings=Depends(get_settings), client=Depends(get_reader_client),
-                       worker=Depends(get_worker)):
-    """Read-only: offer questions only when their complete current answer has cleared review."""
-    eff, state, manifest = _effective(book_id, bookmark, catalog, store, settings, worker)
-    questions = []
-    bank = getattr(client, "answers", None)
-    if eff > 0 and settings.reader_answer_cache and bank is not None:
-        scope = answer_scope(book_id, eff, state, manifest, catalog=catalog, store=store,
-                             settings=settings, client=client)
-        questions = bank.suggestions(scope, frontier=eff, limit=settings.reader_prepare_max_questions)
-    return {"as_of_chapter": eff, "questions": questions}
 
 
 @router.get("/memory-corrections")
@@ -613,9 +596,7 @@ def ask_the_book(
             cached = bank.get((*scope, body.question))
             if cached is not None and cached.get("as_of_chapter") == eff and valid_answer(cached):
                 return {**cached, "cached": True, "cost": _ask_cost_payload([])}
-            # A paused background call must not make an interactive request inherit its
-            # cancellation or its smaller preparation ceiling. Share foreground calls only.
-            key = (*scope, body.question, bool(getattr(client, "preparing", False)))
+            key = (*scope, body.question)
             try:
                 value, shared = bank.run_once(key, lambda: _ask_the_book(
                     book_id, body, catalog, store, settings, client, worker,
@@ -681,7 +662,7 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
         cached = answer_cache.get(answer_key)
         if cached is not None and cached.get("as_of_chapter") == eff and valid_answer(cached):
             return {**deepcopy(cached), "cached": True, "cost": _ask_cost_payload([])}
-        if settings.reader_reuse_enabled and not body.history and not getattr(client, "preparing", False):
+        if settings.reader_reuse_enabled and not body.history:
             candidates = answer_cache.candidates(scope, body.question, limit=12)
             candidates = [c for c in candidates if c["payload"]["as_of_chapter"] == eff
                           and valid_answer(c["payload"])]
@@ -748,8 +729,7 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
         raise HTTPException(
             413, "completed text is too large to search at once; choose an earlier chapter"
         ) from exc
-    if (sources and client.provider != "stub" and settings.reader_conversation_pipeline
-            and not getattr(client, "preparing", False)):
+    if sources and client.provider != "stub" and settings.reader_conversation_pipeline:
         from app.conversation_pipeline import (
             DRAFT_SYSTEM, ConversationDraft, answer_conversation, compact_candidates,
         )
@@ -848,7 +828,7 @@ def _ask_the_book(book_id, body, catalog, store, settings, client, worker, *, re
                 client,
                 book_id,
                 phase="synthesis",
-                system=PREPARED_ANSWER_SYSTEM if getattr(client, "preparing", False) else ASK_SYSTEM,
+                system=ASK_SYSTEM,
                 user=ask_repair_prompt(prompt, repair_feedback),
                 tier="large",
                 schema=AskDraft,

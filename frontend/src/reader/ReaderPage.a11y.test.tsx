@@ -22,7 +22,6 @@ const mocks = vi.hoisted(() => ({
   deleteReaderMark: vi.fn(),
   ingest: vi.fn(),
   catchMeUp: vi.fn(),
-  preparedQuestions: vi.fn(async () => ({questions:[],as_of_chapter:1})),
   epubUrl: vi.fn(() => "/api/books/b/epub"),
 }));
 vi.mock("../api", () => ({

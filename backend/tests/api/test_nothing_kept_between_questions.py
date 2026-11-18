@@ -113,7 +113,6 @@ def test_two_identical_questions_are_each_answered_fresh_and_nothing_is_kept(
         assert not (Path(settings.data_dir) / name).exists()
 
 
-@REMOVED
 def test_prepared_questions_route_is_gone(env):
     api, bid, _app, _atoms = env
     assert api.get(f"/api/books/{bid}/prepared-questions").status_code == 404
