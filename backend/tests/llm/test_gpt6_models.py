@@ -54,27 +54,6 @@ def _settings(**overrides):
     })
 
 
-@pytest.mark.parametrize("actual_tier,expected_model", [("default", "gpt-6-luna"),
-                                                     ("fast", "fast:gpt-6-luna")])
-def test_fast_review_reserves_premium_but_settles_reported_service_tier(tmp_path, actual_tier, expected_model):
-    catalog = Catalog(str(tmp_path / "catalog.db"))
-    catalog.add_book("b", title="Billing fixture")
-    seen = []
-    def handler(request):
-        [reservation] = catalog.get_cost_reservations("b")
-        seen.append(reservation["model"])
-        return _response("gpt-6-luna", "Checked.", service_tier=actual_tier)
-    client = _client(handler)
-    client.service_tier = "fast"  # nothing in the app asks for the fast tier now; the ledger still settles it
-    result = budgeted_completion(catalog, _settings(), client, "b", phase="review",
-                                system="Review.", user="Evidence. " * 200, tier="cheap")
-    [settled] = catalog.get_costs("b")
-    assert seen == ["fast:gpt-6-luna"] and result.billing_model == expected_model
-    assert settled["model"] == expected_model
-    assert settled["usd"] == pytest.approx(usd_of(expected_model, {"in":100, "out":20}))
-    assert not catalog.get_cost_reservations("b")
-
-
 @pytest.mark.parametrize("model,reasoning", [("gpt-6-luna", "medium"), ("gpt-6.1-sol", "low")])
 @pytest.mark.parametrize("tier", ["cheap", "large"])
 @pytest.mark.parametrize("schema", [None, Result])

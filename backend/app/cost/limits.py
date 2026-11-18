@@ -71,16 +71,11 @@ def usd_of(model, usage):
     if name is None:
         return 0.0
     input_price, output_price = _USD[name]
-    # Native Fast processing is 2x Standard; identity is separate from the wire model name.
-    if (model or "").startswith("fast:"):
-        input_price, output_price = input_price * 2, output_price * 2
     if name not in _CACHE_INPUT_USD:
         return usage.get("in", 0) * input_price + usage.get("out", 0) * output_price
     actual = completion_usage(usage)
     read, write = actual.get("cache_read", 0), actual.get("cache_write", 0)
     cached_price, write_price = _CACHE_INPUT_USD[name]
-    if (model or "").startswith("fast:"):
-        cached_price, write_price = cached_price * 2, write_price * 2
     # GPT-6 long-context premiums apply to the entire request, not only the excess tokens.
     input_scale, output_scale = (2, 1.5) if actual["in"] > 272_000 else (1, 1)
     return (((actual["in"] - read - write) * input_price + read * cached_price + write * write_price)
@@ -245,18 +240,11 @@ def budgeted_completion(catalog, settings, client, book_id, *, phase, system, us
     missing_usage = actual == {"in": 0, "out": 0} and getattr(client, "provider", None) != "stub"
     if missing_usage:
         actual = reserved_usage                         # missing real-provider usage fails conservative
-    actual_model = model
-    if (not missing_usage and getattr(client, "_is_native_openai", False)
-            and model.startswith("fast:") and usage.get("service_tier") == "default"):
-        # Fast may be served at Standard priority. Reserve the premium beforehand, but settle
-        # the explicitly reported processing tier without changing the shared client's profile.
-        actual_model = model.removeprefix("fast:")
-    actual_usd = reserved_usd_of(model, actual) if missing_usage else usd_of(actual_model, actual)
+    actual_usd = reserved_usd_of(model, actual) if missing_usage else usd_of(model, actual)
     try:
         catalog.note_reservation_actual(
             book_id, reservation_id, input_tokens=actual["in"], output_tokens=actual["out"],
             usd=actual_usd,
-            **({"model": actual_model} if actual_model != model else {}),
         )
     except ValueError as exc:
         raise RuntimeError("cost reservation disappeared while provider call was in flight") from exc
@@ -265,7 +253,7 @@ def budgeted_completion(catalog, settings, client, book_id, *, phase, system, us
         raise CostCeilingExceeded("provider usage exceeded its reserved hard limit")
     if not defer_settlement:
         catalog.settle_cost(book_id, reservation_id)
-    return BudgetedResult(value, actual, actual_usd, reservation_id, actual_model)
+    return BudgetedResult(value, actual, actual_usd, reservation_id, model)
 
 
 def budgeted_embedding(catalog, settings, client, book_id, *, phase, texts, chapter_ordinal=None):

@@ -66,7 +66,7 @@ class _BookStore(OwnerBoundAdapter):
         never moves it up (ADR 0042 section 3). The older counter, which "start over" sets to 0,
         can only bring it down until the map writes both again, as it did before. Until the
         book's read map has begun, it is that older counter, from which the shared code begins
-        the map once (a book moved in from local mode carries its progress there).
+        the map once; with the read map off it is all there is (the place devices report).
 
         ``ingest_progress`` counts the chapters, from the first, whose story memory is built: a
         live receipt for a live chapter at every ordinal up to it (0 before extraction). For a
