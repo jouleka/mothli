@@ -62,10 +62,13 @@ WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "job_attempts": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "chapters": frozenset({"SELECT", "INSERT"}),
     "chapter_summaries": frozenset({"INSERT"}),
-    "cost_ledger": frozenset({"SELECT", "INSERT"}),
+    # Read only: the claim skips a reader at a cap (``spend.reader_cap_reached``). Every living
+    # job's money is reserved, noted and settled through the tenant role (``companion/spend.py``,
+    # ADR 0041 section 5); the worker's own writes went with the book job (ADR 0043).
+    "cost_ledger": frozenset({"SELECT"}),
     "ingested_chapters": frozenset({"SELECT", "INSERT"}),
     "owner_limits": frozenset({"SELECT"}),
-    "cost_reservations": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    "cost_reservations": frozenset({"SELECT"}),
     "audit_events": frozenset({"INSERT"}),
     # ADR 0041 part 6: the platform-wide pause after the provider refused the account.
     "provider_pauses": frozenset({"SELECT", "INSERT", "UPDATE"}),

@@ -94,6 +94,12 @@ def test_the_role_script_matches_every_startup_check_as_written() -> None:
     assert [role.bypass_rls for role in roles.RUNTIME_ROLES] == [
         True, False, True, True, True, True, False]
     assert [role.key for role in roles.RUNTIME_ROLES if role.owner_tables] == ["purge"]
+    # The worker reads the money records for its cap check and writes none of them: every living
+    # job reserves, notes and settles its spend as the tenant role (companion/spend.py).
+    assert WORKER_TABLE_PRIVILEGES["cost_ledger"] == {"SELECT"}
+    assert WORKER_TABLE_PRIVILEGES["cost_reservations"] == {"SELECT"}
+    assert TENANT_TABLE_PRIVILEGES["cost_ledger"] >= {"SELECT", "INSERT"}
+    assert TENANT_TABLE_PRIVILEGES["cost_reservations"] >= {"SELECT", "INSERT", "UPDATE"}
 
 
 def test_the_role_script_grants_the_purge_role_the_owner_tables_and_its_few_others() -> None:

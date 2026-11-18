@@ -104,6 +104,13 @@ def test_one_grant_more_or_less_refuses_and_the_script_restores_exactly(provisio
         ("GRANT SELECT ON books TO {}", worker,
          lambda: PostgresWorkerRepository(dsn["worker"]).check_runtime_role(),
          WorkerConfigurationError),
+        # The worker only reads the money records; every job's spend is written as the tenant.
+        ("GRANT INSERT ON cost_ledger TO {}", worker,
+         lambda: PostgresWorkerRepository(dsn["worker"]).check_runtime_role(),
+         WorkerConfigurationError),
+        ("GRANT UPDATE ON cost_reservations TO {}", worker,
+         lambda: PostgresWorkerRepository(dsn["worker"]).check_runtime_role(),
+         WorkerConfigurationError),
         ("GRANT SELECT ON books TO {}", auth,
          lambda: asyncio.run(PostgresAuthRepository(dsn["auth"]).check_runtime_role()),
          AuthConfigurationError),
