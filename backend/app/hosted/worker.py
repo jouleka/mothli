@@ -13,10 +13,6 @@ from datetime import timedelta
 from typing import Protocol
 
 from app.hosted.jobs import ClaimedJob, LostLeaseError, PostgresWorkerRepository, SanitizedFailure
-from app.hosted.credentials import (
-    CredentialUnavailableError,
-    build_credential_cipher_from_environment,
-)
 from app.hosted.limits import LimitExceededError
 
 
@@ -64,15 +60,6 @@ class DurableWorker:
         except HandledJobFailure as exc:
             try:
                 self.repository.fail(claim, failure=exc.failure, retry_after=self.retry_after)
-            except LostLeaseError:
-                pass
-        except CredentialUnavailableError:
-            try:
-                self.repository.fail(
-                    claim,
-                    failure=SanitizedFailure("provider_rejected", retryable=False),
-                    retry_after=self.retry_after,
-                )
             except LostLeaseError:
                 pass
         except LimitExceededError:
@@ -135,9 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"environment variable {args.dsn_env!r} is not set")
     if not args.handler:
         parser.error("--handler or HOSTED_JOB_HANDLER is required")
-    repository = PostgresWorkerRepository(
-        dsn, build_credential_cipher_from_environment(os.environ)
-    )
+    repository = PostgresWorkerRepository(dsn)
     repository.check_runtime_role()
     handler = _load_handler(args.handler)
     # A handler that works for owners through other settings builds itself from this process's

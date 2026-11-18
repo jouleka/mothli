@@ -582,11 +582,7 @@ def test_second_reader_cannot_see_trigger_or_change_first_readers_notes_or_jobs(
         assert (hidden.status_code, hidden.json()) == (absent.status_code, absent.json()), suffix
         assert (hidden.status_code, hidden.json()) == (404, {"detail": "unknown book"}), suffix
     b.become()
-    # B's own upload makes no extraction job while reader keys are off (ADR 0041 part 10).
-    assert b.client.get("/api/jobs").json() == []
-    for job in jobs_a:
-        assert b.client.get(f"/api/jobs/{job['id']}").status_code == 404
-        assert b.call("POST", f"/api/jobs/{job['id']}/cancel").status_code == 404
+    # B's own upload makes no job (ADR 0043 step 7); no route lists or cancels jobs.
     assert jobs_of(database, b.owner) == []
     assert jobs_of(database, a.owner) == jobs_a and notes_of(database, a.owner) == notes_a
 
@@ -630,25 +626,19 @@ def test_second_reader_cannot_see_trigger_or_change_first_readers_notes_or_jobs(
     assert len(models.notes_prompts) == 1
 
 
-# ---- the reader's job routes and upload quota ---------------------------------------------------
+# ---- the upload quota ----------------------------------------------------------------------------
 
-def test_waiting_notes_neither_block_an_upload_nor_show_as_the_readers_jobs(notes_app, readers,
-                                                                            database):
-    """The break it catches: a busy companion filling the reader's job quota so a book cannot be
-    uploaded, or the server's own background jobs listed, shown or cancellable on the reader's
-    extraction screen."""
+def test_waiting_notes_do_not_block_an_upload(notes_app, readers, database):
+    """The break it catches: a busy companion counted against the reader's shelf so a book
+    cannot be uploaded. No limit counts jobs since the retired extraction job went (ADR 0043
+    step 7), and no route shows the server's own background jobs to the reader."""
     a, _book = opened(notes_app, readers)
-    update_limits(database, a.owner, {"max_active_jobs": 1})
     [notes_job] = jobs_of(database, a.owner)
-    # No extraction job while reader keys are off (ADR 0041 part 10): only the notes job waits.
-    assert jobs_of(database, a.owner, "ingest_book") == []
     second = upload(a.client, a.tokens, "a", lamp_book())
     assert second
     a.become()
-    assert a.client.get("/api/jobs").json() == []
-    assert a.client.get("/api/limits").json()["active_jobs"] == 0
-    assert a.client.get(f"/api/jobs/{notes_job['id']}").status_code == 404
-    assert a.call("POST", f"/api/jobs/{notes_job['id']}/cancel").status_code == 404
+    assert not ({"max_active_jobs", "active_jobs"} & set(a.client.get("/api/limits").json()))
+    assert [row["id"] for row in jobs_of(database, a.owner)] == [notes_job["id"]]
     assert [row["state"] for row in jobs_of(database, a.owner)] == ["pending"]
 
 

@@ -6,7 +6,7 @@ entry's EPUB with the local module's own guarded fetch (``app.classics.fetch_cla
 from the entry's number on Project Gutenberg's fixed hosts, HTTPS only, redirects followed only
 within those hosts, the upload limit read as it streams) and hands it to ``store_epub``, the one
 hosted import an uploaded file goes through: the same validation, encryption, object storage and
-limits (and, while reader keys are off, no extraction job). The book is then the reader's own like
+limits (and no job). The book is then the reader's own like
 any upload; nothing fetched is kept for, or shared with, another reader.
 
 Fenced in further than locally: one fetch in flight per reader and ``MAX_FETCHES`` in this
@@ -67,8 +67,6 @@ LIMITS = {
                             "longer need, then add it again."),
     "library_storage_exceeded": ("Your shelf has no room left for this book, so it wasn’t added. "
                                  "Remove a book you no longer need, then add it again."),
-    "active_job_limit_exceeded": ("Mothli can’t take in another new book right now, so this one "
-                                  "wasn’t added. Please try again later."),
     "upload_size_exceeded": TOO_LARGE,
 }
 

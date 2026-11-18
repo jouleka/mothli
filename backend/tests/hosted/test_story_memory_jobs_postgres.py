@@ -232,7 +232,7 @@ def test_a_finished_chapter_makes_one_waiting_job_and_each_run_builds_one_chapte
     extraction = extraction_client()
     models = Lamps(extraction, monkeypatch)
     a, book = opened(memory_app, readers)
-    assert jobs_of(database, a.owner) == [] and jobs_of(database, a.owner, "ingest_book") == []
+    assert rows(database, "SELECT id FROM jobs WHERE owner_id=%s", a.owner) == []
     a.read(book, 1, 1, 60)              # part 1 to its end, from after its heading: not whole
     a.read(book, 2, 1, 30)              # half of part 2
     assert jobs_of(database, a.owner) == []
@@ -879,16 +879,16 @@ def test_story_memory_jobs_are_well_formed_or_refused_by_the_schema(memory_app, 
     assert len(jobs_of(database, a.owner)) == 1
 
 
-def test_with_story_memory_on_an_upload_makes_no_reader_key_extraction_job(
+def test_with_story_memory_on_or_off_an_upload_makes_no_job(
         tenant_dsn, readers, database, tmp_path):
-    """ADR 0042 section 6: the reader-key extraction job (``ingest_book``), which never had a
-    handler, is retired with story memory on; and with it off too, since readers have no keys of
-    their own (ADR 0043, where HOSTED_READER_KEYS is refused)."""
+    """ADR 0042 section 6 and ADR 0043 step 7: the reader-key extraction job, which never had a
+    handler, is gone; an upload makes no job of any kind, with story memory on or off (its jobs
+    follow the reader's reading)."""
     for label, values in (("a", MEMORY), ("b", CHAT)):
         client, tokens, _app = memory_app_for(tenant_dsn, readers, tmp_path / label, **values)
         with client:
             upload(client, tokens, label, lamps())
-        assert jobs_of(database, readers[label], "ingest_book") == []
+        assert rows(database, "SELECT id FROM jobs WHERE owner_id=%s", readers[label]) == []
 
 
 # ---- the screens show what the jobs build (parts 3 and 4 together) -----------------------------

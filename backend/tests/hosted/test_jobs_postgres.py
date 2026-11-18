@@ -25,10 +25,8 @@ from app.hosted.jobs import (
     SanitizedFailure,
     WorkerConfigurationError,
 )
-from app.hosted.credentials import CredentialCipher, CredentialUnavailableError
 from app.hosted.limits import LimitExceededError, update_limits
 from app.hosted.tenant.grants import worker_grants
-from app.hosted.tenant.models import OwnerId
 from app.hosted.migrations import apply_migrations
 
 pytestmark = pytest.mark.postgres
@@ -157,31 +155,24 @@ def _enqueue(
     book: str | None = None,
     max_attempts: int = 3,
     suffix: str | None = None,
-    kind: str = "chapter_notes",
-    credential_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     job_id = uuid.uuid4()
     suffix = suffix or job_id.hex
     book = book or owner
-    payload = '{"chapter_count":1}' if kind == "ingest_book" else "{}"
     with psycopg.connect(database) as conn:
         conn.execute(
             """
             INSERT INTO jobs
-              (owner_id,id,book_id,book_incarnation,kind,idempotency_key,max_attempts,
-               payload_metadata,credential_id)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
+              (owner_id,id,book_id,book_incarnation,kind,idempotency_key,max_attempts)
+            VALUES (%s,%s,%s,%s,'chapter_notes',%s,%s)
             """,
             (
                 corpus[f"owner_{owner}"],
                 job_id,
                 corpus[f"book_{book}"],
                 corpus[f"incarnation_{book}"],
-                kind,
-                f"{kind.replace('_', '-')}:{suffix}",
+                f"chapter-notes:{suffix}",
                 max_attempts,
-                payload,
-                credential_id,
             ),
         )
     return job_id
@@ -437,68 +428,6 @@ def test_optional_spend_ceiling_requires_atomic_preflight_reservations(
             usd="0.001",
             cost_idempotency_key="spend:missing",
         )
-
-
-def test_worker_resolves_only_claim_bound_owner_credential_just_in_time(
-    worker_dsn: str, database: str, corpus: dict
-) -> None:
-    cipher = CredentialCipher({"test-v1": b"c" * 32}, active_version="test-v1")
-    credential_id = uuid.uuid4()
-    envelope = cipher.encrypt(
-        OwnerId(corpus["owner_a"]), credential_id, "anthropic", "worker-private-canary"
-    )
-    with psycopg.connect(database) as conn:
-        conn.execute(
-            """
-            INSERT INTO provider_credentials
-              (owner_id,id,provider,masked_label,ciphertext,encrypted_data_key,
-               encryption_algorithm,key_version,nonce)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """,
-            (
-                envelope.owner_id,
-                envelope.credential_id,
-                envelope.provider,
-                envelope.masked_label,
-                envelope.ciphertext,
-                envelope.encrypted_data_key,
-                envelope.encryption_algorithm,
-                envelope.key_version,
-                envelope.nonce,
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO provider_model_settings
-              (owner_id,id,provider,capability,credential_id,model,base_url,
-               validation_status,validated_at)
-            VALUES (%s,%s,'anthropic','extraction',%s,'available-model',
-                    'https://api.anthropic.com/v1','ready',now())
-            """,
-            (corpus["owner_a"], uuid.uuid4(), credential_id),
-        )
-    # Only the retired kind could name a credential (jobs_companion_shape_ck).
-    job_id = _enqueue(database, corpus, kind="ingest_book", credential_id=credential_id)
-    repository = PostgresWorkerRepository(worker_dsn, cipher)
-    claim = repository.claim_next(worker_id="credential-worker", lease_for=timedelta(seconds=30))
-    assert claim is not None and claim.job_id == job_id and claim.credential_id == credential_id
-    assert repository.start(claim)
-    with repository.resolve_credential(claim) as resolved:
-        assert resolved.provider == "anthropic"
-        assert resolved.get_secret_value() == "worker-private-canary"
-        assert "worker-private-canary" not in repr(resolved)
-    with pytest.raises(CredentialUnavailableError):
-        resolved.get_secret_value()
-
-    with pytest.raises(CredentialUnavailableError):
-        repository.resolve_credential(replace(claim, credential_id=uuid.uuid4()))
-    with psycopg.connect(database) as conn:
-        conn.execute(
-            "UPDATE provider_credentials SET disabled_at=now() WHERE owner_id=%s AND id=%s",
-            (corpus["owner_a"], credential_id),
-        )
-    with pytest.raises(CredentialUnavailableError):
-        repository.resolve_credential(claim)
 
 
 def test_ingestion_job_payload_requires_progress(database: str, corpus: dict) -> None:

@@ -16,12 +16,6 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.hosted.audit import record_event
-from app.hosted.credentials import (
-    CredentialCipher,
-    CredentialUnavailableError,
-    EncryptedCredential,
-    ResolvedProviderCredential,
-)
 from app.hosted.limits import LimitExceededError
 from app.hosted.tenant.grants import ALL_TABLE_PRIVILEGES, WORKER_TABLE_PRIVILEGES
 
@@ -102,7 +96,6 @@ class ClaimedJob:
     attempt_no: int
     worker_id: str
     lease_token: str = field(repr=False)
-    credential_id: uuid.UUID | None = None
 
 
 def _seconds(value: timedelta, *, allow_zero: bool = False) -> float:
@@ -121,7 +114,6 @@ class PostgresWorkerRepository:
     """Privileged cross-tenant scheduler boundary; every post-claim mutation carries owner + job."""
 
     _dsn: str = field(repr=False)
-    _credential_cipher: CredentialCipher | None = field(default=None, repr=False)
 
     def _connect(self) -> psycopg.Connection:
         return psycopg.connect(self._dsn, row_factory=dict_row)
@@ -183,63 +175,6 @@ class PostgresWorkerRepository:
     def _validate_worker_id(worker_id: str) -> None:
         if not isinstance(worker_id, str) or _WORKER_ID_RE.fullmatch(worker_id) is None:
             raise ValueError("worker id must use the bounded content-free identifier format")
-
-    def resolve_credential(
-        self,
-        claim: ClaimedJob,
-    ) -> ResolvedProviderCredential:
-        """Resolve only the active credential explicitly bound to this claimed job, just in time."""
-        credential_id = claim.credential_id
-        if credential_id is None or self._credential_cipher is None:
-            raise CredentialUnavailableError("job credential is unavailable")
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT credential.owner_id,credential.id,credential.provider,
-                       credential.masked_label,credential.ciphertext,
-                       credential.encrypted_data_key,credential.encryption_algorithm,
-                       credential.key_version,credential.nonce
-                FROM public.jobs AS job
-                JOIN public.job_attempts AS attempt
-                  ON (attempt.owner_id,attempt.job_id)=(job.owner_id,job.id)
-                JOIN public.provider_credentials AS credential
-                  ON (credential.owner_id,credential.id)=(job.owner_id,job.credential_id)
-                JOIN public.provider_model_settings AS setting
-                  ON setting.owner_id=job.owner_id
-                 AND setting.capability='extraction'
-                 AND setting.credential_id=job.credential_id
-                WHERE job.owner_id=%s AND job.id=%s AND job.credential_id=%s
-                  AND job.state='running' AND attempt.attempt_no=%s
-                  AND attempt.worker_id=%s AND attempt.lease_token_digest=%s
-                  AND attempt.finished_at IS NULL AND attempt.lease_expires_at>now()
-                  AND credential.disabled_at IS NULL AND credential.deleted_at IS NULL
-                  AND setting.enabled AND setting.validation_status='ready'
-                """,
-                (
-                    claim.owner_id,
-                    claim.job_id,
-                    credential_id,
-                    claim.attempt_no,
-                    claim.worker_id,
-                    _token_digest(claim.lease_token),
-                ),
-            ).fetchone()
-        if row is None:
-            raise CredentialUnavailableError("job credential is unavailable")
-        envelope = EncryptedCredential(
-            owner_id=row["owner_id"],
-            credential_id=row["id"],
-            provider=row["provider"],
-            masked_label=row["masked_label"],
-            ciphertext=bytes(row["ciphertext"]),
-            encrypted_data_key=bytes(row["encrypted_data_key"]),
-            encryption_algorithm=row["encryption_algorithm"],
-            key_version=row["key_version"],
-            nonce=bytes(row["nonce"]),
-        )
-        return ResolvedProviderCredential(
-            envelope.provider, self._credential_cipher.decrypt(envelope)
-        )
 
     @staticmethod
     def _requeue(
@@ -371,7 +306,7 @@ class PostgresWorkerRepository:
                 row = conn.execute(
                     """
                     SELECT job.owner_id,job.id,job.book_id,job.book_incarnation,
-                           job.credential_id,job.kind,job.attempt_count
+                           job.kind,job.attempt_count
                     FROM public.jobs AS job
                     WHERE job.state='pending' AND job.run_after<=now()
                       AND job.cancellation_requested_at IS NULL
@@ -478,7 +413,6 @@ class PostgresWorkerRepository:
             attempt_no=attempt_no,
             worker_id=worker_id,
             lease_token=token,
-            credential_id=row["credential_id"],
         )
 
     @staticmethod

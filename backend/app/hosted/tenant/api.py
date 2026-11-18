@@ -379,13 +379,8 @@ async def store_epub(
                 media_type=receipt.media_type,
                 byte_size=receipt.byte_size,
                 encryption=receipt.encryption,
-                chapter_count=len(chapters),
                 search_documents=search_documents,
                 source_kind=source_kind,
-                # The reader-key extraction job never had a handler, and readers have no keys of
-                # their own (ADR 0043): an upload never makes one. Story memory is built by
-                # story_memory jobs instead (ADR 0042 section 6).
-                extraction_job=False,
             )
         except BaseException as exc:
             try:
@@ -416,48 +411,6 @@ async def list_books(request: Request, response: Response, owner_id: OwnerId = D
     key = _resource(owner_id, ResourceKind.LIBRARY, owner_id.value)
     async with request.app.state.hosted_runtime.serialized(key):
         return await request.app.state.tenant_repository.list_books(owner_id)
-
-
-@router.get("/jobs")
-async def list_jobs(request: Request, response: Response, owner_id: OwnerId = Depends(_owner)):
-    _private(response)
-    key = _resource(owner_id, ResourceKind.LIBRARY, owner_id.value)
-    async with request.app.state.hosted_runtime.serialized(key):
-        return await request.app.state.tenant_repository.list_jobs(owner_id)
-
-
-@router.get("/jobs/{job_id}")
-async def get_job(
-    job_id: uuid.UUID,
-    request: Request,
-    response: Response,
-    owner_id: OwnerId = Depends(_owner),
-):
-    _private(response)
-    key = _resource(owner_id, ResourceKind.JOB, job_id)
-    async with request.app.state.hosted_runtime.serialized(key):
-        job = await request.app.state.tenant_repository.get_job(owner_id, job_id)
-        if job is None:
-            raise HTTPException(404, "unknown job")
-        return job
-
-
-@router.post("/jobs/{job_id}/cancel")
-async def cancel_job(
-    job_id: uuid.UUID,
-    request: Request,
-    response: Response,
-    owner_id: OwnerId = Depends(_csrf_owner),
-):
-    _private(response)
-    key = _resource(owner_id, ResourceKind.JOB, job_id)
-    async with request.app.state.hosted_runtime.serialized(key):
-        job = await request.app.state.tenant_repository.cancel_job(owner_id, job_id)
-        if job is None:
-            raise HTTPException(404, "unknown job")
-        if job["state"] in {"succeeded", "failed"}:
-            raise HTTPException(409, "completed job cannot be cancelled")
-        return job
 
 
 @router.get("/books/{book_id}")

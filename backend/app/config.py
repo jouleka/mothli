@@ -154,8 +154,8 @@ class Settings(BaseSettings):
     hosted_reader_usd_per_month: float = Field(default=2.00, ge=0, le=10000, allow_inf_nan=False)
     hosted_platform_usd_per_day: float = Field(default=5.00, ge=0, le=100000, allow_inf_nan=False)
     # Readers paying with their own AI key was removed (ADR 0043): the platform pays. Its routes
-    # and settings screen are gone, so hosted mode refuses this being on rather than switch on what
-    # is left (an upload's retired extraction job, which nothing runs). The name itself goes with
+    # and settings screen are gone, and the upload's extraction job it last gated went in step 7,
+    # so it switches nothing on; hosted mode still refuses it being on. The name itself goes with
     # the key tables (ADR 0043 step 8).
     hosted_reader_keys: bool = False
     # ADR 0042 sections 3 and 6: story memory in hosted mode, built by the worker's story_memory

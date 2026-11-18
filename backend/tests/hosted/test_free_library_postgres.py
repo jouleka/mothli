@@ -205,8 +205,8 @@ def test_adding_a_classic_puts_it_on_the_readers_shelf_through_the_upload_path(
     assert library["source_kind"] == f"gutenberg:{PRIDE}" and own["source_kind"] == "upload"
     assert {key: library[key] for key in ("title", "author", "file_hash")} == {
         key: own[key] for key in ("title", "author", "file_hash")}
-    # Neither makes an extraction job while reader keys are off (ADR 0041 part 10).
-    assert rows_a["jobs"] == [] and book["job"] is None and uploaded.json()["job"] is None
+    # Neither makes a job (ADR 0043 step 7).
+    assert rows_a["jobs"] == [] and "job" not in book and "job" not in uploaded.json()
     assert len([row for row in rows_a["search"] if str(row["book_id"]) == book["id"]]) == 2
     stored = {str(row["book_id"]): row for row in rows_a["objects"]}[book["id"]]
     assert stored["byte_size"] == len(BOOK)
@@ -373,24 +373,22 @@ def test_the_limits_on_books_and_bytes_refuse_an_add_exactly_as_they_refuse_an_u
     assert len(files(objects, a)) == 1
 
 
-def test_without_reader_keys_a_book_makes_no_extraction_job_and_the_shelf_has_no_job_limit(
+def test_a_book_makes_no_job_and_the_shelf_has_no_job_limit(
         library_app, readers, database, source):
-    """The break it catches: every upload or add making an extraction job that nothing can run
-    while reader keys are off (ADR 0041 part 10), so the default three "active" jobs refuse the
-    reader's fourth book for good."""
+    """The break it catches: every upload or add making an extraction job that nothing can run,
+    so a limit on "active" jobs refuses the reader's fourth book for good. The job and its limit
+    are gone (ADR 0043 step 7)."""
     a = readers["a"]
-    assert not library_app[2].state.settings.hosted_reader_keys
     for number in range(1, 5):
         uploaded = upload(library_app, "a", made_up_book(f"OWN{number}"))
         assert uploaded.status_code == 201, uploaded.text
-        assert uploaded.json()["job"] is None
+        assert "job" not in uploaded.json()
     added = add(library_app, "a")
     assert added.status_code == 201, added.text
-    assert added.json()["job"] is None
+    assert "job" not in added.json()
     assert held(database, a)["jobs"] == []
-    assert get(library_app, "a", "/api/jobs").json() == []
     limits = get(library_app, "a", "/api/limits").json()
-    assert limits["books"] == 5 and limits["active_jobs"] == 0 and limits["max_active_jobs"] == 3
+    assert limits["books"] == 5 and not ({"active_jobs", "max_active_jobs"} & set(limits))
     # Each is readable as it is.
     for book in get(library_app, "a", "/api/books").json():
         assert get(library_app, "a", f"/api/books/{book['book_id']}/epub").status_code == 200
