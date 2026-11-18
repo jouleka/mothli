@@ -1,7 +1,10 @@
 # ADR 0043 — One product: what goes now that Mothli is hosted
 
-**Status:** Proposed (2026-11-18). Nothing in this record has been removed yet. It is an inventory
-and a plan for the owner to say yes or no to; each removal is then its own small pull request.
+**Status:** Accepted (2026-11-18). The owner agreed to the whole removal list and answered both
+questions at the end: readers never pay for the AI with their own AI account ("they can only pay
+us"), and nothing is needed from the copy of Mothli on his own computer. So D1 to D4 are removed
+too. Nothing had been removed when this record was accepted; each removal is its own small pull
+request.
 
 File and line references are to `main` at 9170e06 (PR #110). Every "depends on" below comes from
 searching the code (who imports it, which tests use it, which tables and settings it touches, which
@@ -235,6 +238,10 @@ If question 1 is no, steps 6 and 8 are skipped and step 7 keeps the worker's key
 - The experimental checker switches listed above.
 
 ## Questions for the owner
+
+Both answered on 18 November 2026: **no** to question 1 ("users cannot pay the Mothli AI with their
+own AI account, they can only pay us") and **no** to question 2 ("I don't need anything from the
+copy of Mothli on my own computer"). Every conditional step in the order above goes ahead.
 
 **1. Should readers ever be able to pay for Mothli's AI with their own AI account?**
 Today you pay for every reader's AI, with daily and monthly caps. Old code is still there, switched
