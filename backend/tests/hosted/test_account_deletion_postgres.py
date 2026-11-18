@@ -150,8 +150,6 @@ def world(database: str, admin_dsn: str, tmp_path):
             hosted_storage_backend="filesystem",
             hosted_storage_filesystem_root=str(tmp_path / "objects"),
             hosted_storage_filesystem_key=base64.b64encode(b"t" * 32).decode("ascii"),
-            hosted_credential_master_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-            hosted_credential_key_version="test-v1",
             session_absolute_ttl_seconds=3600,
             session_idle_ttl_seconds=3000,
         )

@@ -215,8 +215,6 @@ def test_hosted_app_lifespan_owns_and_closes_runtime_registry() -> None:
             oidc_client_id="litlet",
             oidc_client_secret="not-a-real-secret",
             oidc_redirect_uri="https://reader.example/api/auth/callback",
-            hosted_credential_master_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-            hosted_credential_key_version="test-v1",
             hosted_runtime_shutdown_timeout_seconds=0.25,
         )
         app = create_app(
@@ -256,8 +254,6 @@ def test_shutdown_timeout_log_contains_only_aggregate_count(caplog) -> None:
             oidc_client_id="litlet",
             oidc_client_secret="not-a-real-secret",
             oidc_redirect_uri="https://reader.example/api/auth/callback",
-            hosted_credential_master_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-            hosted_credential_key_version="test-v1",
             hosted_runtime_shutdown_timeout_seconds=0.01,
         )
         app = create_app(

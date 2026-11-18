@@ -12,20 +12,18 @@ import concurrent.futures
 import uuid
 from dataclasses import replace
 from datetime import timedelta
-from decimal import Decimal
 
 import psycopg
 import pytest
 from psycopg import conninfo, sql
 
 from app.hosted.jobs import (
-    JobIdempotencyError,
     LostLeaseError,
     PostgresWorkerRepository,
     SanitizedFailure,
     WorkerConfigurationError,
 )
-from app.hosted.limits import LimitExceededError, update_limits
+from app.hosted.limits import update_limits
 from app.hosted.tenant.grants import worker_grants
 from app.hosted.migrations import apply_migrations
 
@@ -225,16 +223,6 @@ def test_worker_claim_is_owner_and_book_fenced_against_foreign_identifiers(
         lambda: repository.heartbeat(
             foreign_owner_claim, lease_for=timedelta(seconds=30)
         ),
-        lambda: repository.reserve_spend(
-            foreign_owner_claim,
-            phase="extraction",
-            provider="test-provider",
-            model="test-model",
-            reserved_input_tokens=1,
-            reserved_output_tokens=1,
-            reserved_usd="0.001",
-            idempotency_key="foreign-owner-reservation",
-        ),
         lambda: repository.fail(
             foreign_owner_claim,
             failure=SanitizedFailure("internal_error", retryable=False),
@@ -245,25 +233,9 @@ def test_worker_claim_is_owner_and_book_fenced_against_foreign_identifiers(
         with pytest.raises(LostLeaseError):
             operation()
 
+    # A claim turned on another reader's book is refused at the publish too:
+    # test_story_memory_postgres.py::test_one_readers_chapter_never_reads_or_writes_anothers_rows.
     assert repository.start(claim)
-    with pytest.raises(JobIdempotencyError, match="claimed book"):
-        repository.commit_chapter(
-            claim,
-            book_id=corpus["book_b"],
-            book_incarnation=corpus["incarnation_b"],
-            chapter_id=uuid.uuid4(),
-            chapter_key="foreign-book",
-            ordinal=1,
-            content_hash="9" * 64,
-            summary="must not commit",
-            extractor_version="test-v1",
-            provider="test-provider",
-            model="test-model",
-            input_tokens=1,
-            output_tokens=1,
-            usd="0.001",
-            cost_idempotency_key="foreign-book-commit",
-        )
 
     with psycopg.connect(database) as conn:
         assert conn.execute(
@@ -285,23 +257,6 @@ def test_worker_role_is_bypassrls_and_exactly_privileged(
     claim = repository.claim_next(worker_id="isolated-worker", lease_for=timedelta(seconds=30))
     assert claim is not None and claim.job_id == job_id
     assert repository.start(claim)
-    assert repository.commit_chapter(
-        claim,
-        book_id=corpus["book_a"],
-        book_incarnation=corpus["incarnation_a"],
-        chapter_id=uuid.uuid4(),
-        chapter_key="role-proof-chapter",
-        ordinal=1,
-        content_hash="d" * 64,
-        summary="Role proof summary",
-        extractor_version="test-v1",
-        provider="test-provider",
-        model="test-model",
-        input_tokens=1,
-        output_tokens=1,
-        usd="0.0001",
-        cost_idempotency_key=f"job:{job_id}:role-proof",
-    )
     assert repository.succeed(claim)
 
     role = conninfo.conninfo_to_dict(worker_dsn)["user"]
@@ -337,97 +292,6 @@ def test_provider_concurrency_is_atomic_across_worker_instances(
     assert {value.owner_id for value in claimed} == {corpus["owner_a"], corpus["owner_b"]}
     assert sum(value.job_id in jobs_a for value in claimed) == 1
     assert any(value.job_id == job_b for value in claimed)
-
-
-def test_optional_spend_ceiling_requires_atomic_preflight_reservations(
-    worker_dsn: str, database: str, corpus: dict
-) -> None:
-    update_limits(database, corpus["owner_a"], {"max_spend_usd": Decimal("0.10")})
-    job_id = _enqueue(database, corpus, suffix="spend-limit")
-    repository = PostgresWorkerRepository(worker_dsn)
-    claim = repository.claim_next(worker_id="spend-worker", lease_for=timedelta(seconds=30))
-    assert claim is not None and claim.job_id == job_id
-    assert repository.start(claim)
-    reservation_id = repository.reserve_spend(
-        claim,
-        phase="extraction",
-        provider="test-provider",
-        model="test-model",
-        reserved_input_tokens=100,
-        reserved_output_tokens=20,
-        reserved_usd="0.08",
-        idempotency_key="spend:chapter-1",
-    )
-    assert repository.reserve_spend(
-        claim,
-        phase="extraction",
-        provider="test-provider",
-        model="test-model",
-        reserved_input_tokens=100,
-        reserved_output_tokens=20,
-        reserved_usd="0.08",
-        idempotency_key="spend:chapter-1",
-    ) == reservation_id
-    with pytest.raises(LimitExceededError, match="spend_limit_exceeded"):
-        repository.reserve_spend(
-            claim,
-            phase="extraction",
-            provider="test-provider",
-            model="test-model",
-            reserved_input_tokens=10,
-            reserved_output_tokens=2,
-            reserved_usd="0.03",
-            idempotency_key="spend:chapter-2",
-        )
-    assert repository.commit_chapter(
-        claim,
-        book_id=corpus["book_a"],
-        book_incarnation=corpus["incarnation_a"],
-        chapter_id=uuid.uuid4(),
-        chapter_key="spend-proof-chapter",
-        ordinal=1,
-        content_hash="e" * 64,
-        summary="Spend proof summary",
-        extractor_version="test-v1",
-        provider="test-provider",
-        model="test-model",
-        input_tokens=90,
-        output_tokens=15,
-        usd="0.07",
-        cost_idempotency_key="spend:chapter-1",
-    )
-    with psycopg.connect(database) as conn:
-        assert conn.execute(
-            "SELECT state,actual_usd FROM cost_reservations WHERE owner_id=%s AND id=%s",
-            (corpus["owner_a"], reservation_id),
-        ).fetchone() == ("settled", Decimal("0.0700000000"))
-
-    no_reservation_job = _enqueue(database, corpus, suffix="spend-no-reservation")
-    # Finish the first claim so the per-owner concurrency slot is available.
-    assert repository.succeed(claim)
-    second = repository.claim_next(
-        worker_id="spend-worker-2", lease_for=timedelta(seconds=30)
-    )
-    assert second is not None and second.job_id == no_reservation_job
-    assert repository.start(second)
-    with pytest.raises(LimitExceededError, match="spend_reservation_required"):
-        repository.commit_chapter(
-            second,
-            book_id=corpus["book_a"],
-            book_incarnation=corpus["incarnation_a"],
-            chapter_id=uuid.uuid4(),
-            chapter_key="unreserved-chapter",
-            ordinal=2,
-            content_hash="f" * 64,
-            summary="Must not commit",
-            extractor_version="test-v1",
-            provider="test-provider",
-            model="test-model",
-            input_tokens=1,
-            output_tokens=1,
-            usd="0.001",
-            cost_idempotency_key="spend:missing",
-        )
 
 
 def test_job_payload_rejects_credentials(database: str, corpus: dict) -> None:
@@ -586,56 +450,3 @@ def test_pending_and_running_cancellation_are_cooperative(database: str, corpus:
             "SELECT state FROM jobs WHERE owner_id=%s ORDER BY id",
             (corpus["owner_a"],),
         ).fetchall() == [("cancelled",), ("cancelled",)]
-
-
-def test_chapter_memory_receipt_and_cost_commit_is_atomic_and_idempotent(
-    database: str, corpus: dict
-) -> None:
-    job_id = _enqueue(database, corpus)
-    repository = PostgresWorkerRepository(database)
-    claim = repository.claim_next(worker_id="worker", lease_for=timedelta(seconds=30))
-    assert claim is not None and repository.start(claim)
-    chapter_id = uuid.uuid4()
-    model_payload_canary = "MODEL_PAYLOAD_PRIVATE_CANARY_H6s3"
-    values = dict(
-        book_id=corpus["book_a"],
-        book_incarnation=corpus["incarnation_a"],
-        chapter_id=chapter_id,
-        chapter_key="chapter-1",
-        ordinal=1,
-        content_hash="a" * 64,
-        summary=model_payload_canary,
-        extractor_version="test-v1",
-        provider="test-provider",
-        model="test-model",
-        input_tokens=10,
-        output_tokens=2,
-        usd="0.001",
-        cost_idempotency_key=f"job:{job_id}:chapter:1:extract",
-    )
-    assert repository.commit_chapter(claim, **values)
-    assert not repository.commit_chapter(claim, **values)
-    assert repository.succeed(claim)
-
-    with psycopg.connect(database) as conn:
-        counts = tuple(
-            conn.execute(
-                f"SELECT count(*) FROM {table} WHERE owner_id=%s AND book_id=%s",
-                (corpus["owner_a"], corpus["book_a"]),
-            ).fetchone()[0]
-            for table in ("chapters", "chapter_summaries", "ingested_chapters", "cost_ledger")
-        )
-        audit = conn.execute(
-            "SELECT actor_kind,action,target_kind,result,metadata FROM audit_events "
-            "WHERE owner_id=%s ORDER BY occurred_at,id",
-            (corpus["owner_a"],),
-        ).fetchall()
-    assert counts == (1, 1, 1, 1)
-    assert [row[1] for row in audit] == [
-        "job.claim",
-        "job.start",
-        "chapter.commit",
-        "job.succeed",
-    ]
-    assert all(row[0] == "worker" and row[2] in {"job", "chapter"} for row in audit)
-    assert model_payload_canary not in repr(audit)

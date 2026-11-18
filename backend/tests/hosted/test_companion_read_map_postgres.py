@@ -92,8 +92,6 @@ def hosted_settings(tenant: str, objects, **overrides) -> Settings:
         hosted_storage_backend="filesystem",
         hosted_storage_filesystem_root=str(objects),
         hosted_storage_filesystem_key=base64.b64encode(b"t" * 32).decode("ascii"),
-        hosted_credential_master_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        hosted_credential_key_version="test-v1",
         reader_page_context=True,
         reader_read_map=True,
         **overrides,

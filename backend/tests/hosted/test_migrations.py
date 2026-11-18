@@ -10,8 +10,6 @@ import pytest
 from psycopg import conninfo
 
 from app.hosted.migrations import apply_migrations, discover_migrations
-from app.hosted.credentials import CredentialCipher, rewrap_credentials
-from app.hosted.tenant.models import OwnerId
 
 
 pytestmark = pytest.mark.postgres
@@ -278,75 +276,6 @@ def test_reader_marks_require_portable_bounded_anchors_and_versions(database: st
         "annotations_body_bounded",
         "bookmarks_label_bounded",
     } <= constraints
-
-
-def test_provider_credentials_have_ciphertext_not_plaintext_fields(database: str) -> None:
-    apply_migrations(database)
-    with psycopg.connect(database) as conn:
-        columns = {
-            row[0]
-            for row in conn.execute(
-                """
-                SELECT column_name FROM information_schema.columns
-                WHERE table_schema = 'public' AND table_name = 'provider_credentials'
-                """
-            )
-        }
-
-    assert {"ciphertext", "encrypted_data_key", "key_version", "nonce"} <= columns
-    assert {"plaintext", "api_key", "secret", "token"}.isdisjoint(columns)
-
-
-def test_provider_credential_master_key_rotation_rewraps_without_plaintext(database: str) -> None:
-    apply_migrations(database)
-    owner = OwnerId(uuid.uuid4())
-    credential_id = uuid.uuid4()
-    old_cipher = CredentialCipher({"old": b"o" * 32}, active_version="old")
-    envelope = old_cipher.encrypt(owner, credential_id, "anthropic", "rotation-canary")
-    with psycopg.connect(database) as conn:
-        conn.execute("INSERT INTO users (id,display_name) VALUES (%s,'Rotation Owner')", (owner.value,))
-        conn.execute(
-            """
-            INSERT INTO provider_credentials
-              (owner_id,id,provider,masked_label,ciphertext,encrypted_data_key,
-               encryption_algorithm,key_version,nonce)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """,
-            (
-                envelope.owner_id,
-                envelope.credential_id,
-                envelope.provider,
-                envelope.masked_label,
-                envelope.ciphertext,
-                envelope.encrypted_data_key,
-                envelope.encryption_algorithm,
-                envelope.key_version,
-                envelope.nonce,
-            ),
-        )
-
-    active = CredentialCipher(
-        {"old": b"o" * 32, "new": b"n" * 32}, active_version="new"
-    )
-    assert rewrap_credentials(database, active, batch_size=1) == 1
-    assert rewrap_credentials(database, active, batch_size=1) == 0
-    with psycopg.connect(database) as conn:
-        row = conn.execute(
-            """
-            SELECT owner_id,id,provider,masked_label,ciphertext,encrypted_data_key,
-                   encryption_algorithm,key_version,nonce
-            FROM provider_credentials WHERE owner_id=%s AND id=%s
-            """,
-            (owner.value, credential_id),
-        ).fetchone()
-    rotated = type(envelope)(
-        owner_id=row[0],credential_id=row[1],provider=row[2],masked_label=row[3],
-        ciphertext=bytes(row[4]),encrypted_data_key=bytes(row[5]),
-        encryption_algorithm=row[6],key_version=row[7],nonce=bytes(row[8]),
-    )
-    assert rotated.key_version == "new" and rotated.ciphertext == envelope.ciphertext
-    with active.decrypt(rotated) as resolved:
-        assert resolved.get_secret_value() == "rotation-canary"
 
 
 def test_source_object_rows_require_opaque_encrypted_verified_epub_metadata(database: str) -> None:
