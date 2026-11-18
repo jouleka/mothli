@@ -241,6 +241,28 @@ a test database, frontend tests and build, `ruff check app tests scripts`).
   removed; (4) the go-live map's only statements made false were two README references (a line
   number and the quoted status sentence); the open item on `benchmark_conversation.py`'s missing
   spend cap is closed by its removal.
+- Built on 18 November 2026 in PR #115: step 5 as designed, the equal test first
+  (`test_nothing_kept_between_questions.py`), then one commit per piece in the order R6, R5, R4, R3
+  (smallest first, and the only order that keeps every commit green: `recap_warm` imports
+  `reader_prepare`, which imports `answer_bank`, which imported `preparation_plan`), except
+  (1) `Settings` ignores unknown names (`extra="ignore"`), so the old names are ignored, not refused;
+  the test checks that none becomes a setting; (2) besides what the record listed, these went
+  because only the removed pieces used them: the ingest worker's `on_complete` hook and the
+  `recap_preparation` flag in `book_lifecycle` (R5), the file load and save in `RecapRegistry` (R5),
+  the background client's `preparing` flag, `PREPARED_ANSWER_SYSTEM` and the `PreparedQuestions`
+  effort entry (R4), `jev_tasks.reuse_answer` and the answer-scope hash in `page_conversation.py`
+  (R3); (3) left in place: `AnswerBusy` and `valid_answer` stay as the record says, though nothing
+  in `app/` calls them any more, and the LLM client's fast-tier support (`service_tier`, the `fast:`
+  prices, `reuse_review_profile`), shared code that nothing now switches on; (4) tests: 144 test
+  items deleted and 10 added (2,227 collected on `main`, 2,093 here); two spoiler tests the record
+  did not name went with what they guarded (`test_primary_reading_context.py::test_reuse_subset_…`
+  and `test_lifecycle_cache.py::test_cleared_recaps_survive_restart_…`), with the same equals;
+  `test_reader_latency.py::test_reviewed_answer_cache_…`, listed to go, also guarded the live
+  frontier and reset checks and was trimmed instead; `test_primary_reading_context.py` keeps its
+  snapshot test, now checking `primary_snapshot` at chapter 2 where it checked `preparation_facts`,
+  and loses the plan-only test; the `valid_answer` half of `test_bank_rejects_invalid_answers` is
+  kept as `tests/test_answer_bank.py`; (5) docs: `jev-integration.md` says the speed-ups are gone
+  and keeps the old paragraphs as record; the README and the go-live map lose their mentions.
 
 If question 1 is no, steps 6 and 8 are skipped and step 7 keeps the worker's key lookup.
 
