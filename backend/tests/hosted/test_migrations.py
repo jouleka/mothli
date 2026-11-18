@@ -685,8 +685,12 @@ def _stored_key_world(conn) -> dict:
 
 
 def _kept_rows(conn) -> dict:
+    # A column a later migration adds is no change to a book: 0031's split fingerprint comes
+    # empty on rows already there, which its own test checks.
     return {table: conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2").fetchall()
-            for table in ("users", "books", "cost_ledger")} | {
+            for table in ("users", "cost_ledger")} | {
+        "books": conn.execute("SELECT to_jsonb(book) - 'split_hash' FROM books AS book "
+                              "ORDER BY owner_id, id").fetchall()} | {
         "jobs": conn.execute("SELECT owner_id, id, book_id, kind, state, idempotency_key "
                              "FROM jobs ORDER BY id").fetchall()}
 
