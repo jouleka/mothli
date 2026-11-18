@@ -984,11 +984,11 @@ def fingerprints(dsn: str, owner, book) -> tuple:
                             (owner, book)).fetchone()
 
 
-def test_two_imports_of_one_file_have_one_split_fingerprint_and_another_file_another(
+def test_two_imports_of_one_file_have_one_split_fingerprint_and_another_split_another(
         shelf, database):
     """The break it catches: an import that keeps no split fingerprint, or one that depends on
     the reader, the book id or the way the file came (a free-library add or an upload), so two
-    copies of one file would never match; one that stays the same for another file; or a removed
+    copies of one file would never match; one that stays the same for another split; or a removed
     book that keeps it, still tying the reader to the file."""
     a, b, uploader = reader(shelf, "r2a"), reader(shelf, "r5a"), reader(shelf, "u")
     book_a, book_b = add(a), add(b)
@@ -1000,10 +1000,23 @@ def test_two_imports_of_one_file_have_one_split_fingerprint_and_another_file_ano
     assert len(chapters) == PARTS
     assert split_hash == split_hash_of(chapters, "any-book") and file_hash != split_hash
 
+    # Another file whose chapters are the same (only its title differs): another file hash, the
+    # same split, so it is still another book (the door needs both equal). A file whose last
+    # two parts are one chapter: another split.
     shelf.source.files[int(ALICE)] = long_lamps("The Long Lamp Book, Revised")
-    other = add(a, ALICE)
-    other_file, other_split = fingerprints(database, a.owner, other)
-    assert other_file != file_hash and other_split != split_hash and other_split is not None
+    retitled = add(a, ALICE)
+    assert fingerprints(database, a.owner, retitled)[0] not in (file_hash, None)
+    assert fingerprints(database, a.owner, retitled)[1] == split_hash
+    parts = [" ".join(tline(n, i) for i in range(1, 41)) + EXTRA.get(n, "")
+             for n in range(1, PARTS + 1)]
+    joined = epub_ncx([*((f"c{n}.xhtml", f"Part {n}", f"Part {n}", parts[n - 1])
+                         for n in range(1, PARTS - 1)),
+                       (f"c{PARTS - 1}.xhtml", f"Part {PARTS - 1}", f"Part {PARTS - 1}",
+                        parts[-2] + " " + parts[-1])], title="The Long Lamp Book",
+                      author="Ada Writer")
+    other = read_map_gate.upload(shelf.client, shelf.tokens, "u", joined)
+    other_file, other_split = fingerprints(database, uploader.owner, other)
+    assert other_file != file_hash and other_split not in (split_hash, None)
 
     assert a.call("DELETE", f"/api/books/{book_a}").status_code == 204
     assert fingerprints(database, a.owner, book_a) == (None, None)
