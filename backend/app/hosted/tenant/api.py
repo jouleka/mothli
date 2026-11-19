@@ -163,22 +163,6 @@ class BookmarkUpdateIn(BaseModel):
         return value
 
 
-class HostedEntityCorrectionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    source_entity_id: uuid.UUID
-    canonical_name: str = Field(min_length=1, max_length=200)
-    reason: str = Field(min_length=1, max_length=1000)
-    bookmark: StrictInt = Field(ge=1, le=2**31 - 1)
-
-    @field_validator("canonical_name", "reason")
-    @classmethod
-    def correction_text_not_blank(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("value must not be blank")
-        return value
-
-
 async def _session(request: Request) -> AuthenticatedSession:
     value = await authenticated_session(request)
     if value is None:
@@ -899,68 +883,6 @@ async def reset_position(
             raise HTTPException(
                 409, "reading position was reset in another session; reload before continuing"
             ) from exc
-
-
-@router.get("/books/{book_id}/memory")
-async def memory_snapshot(
-    book_id: uuid.UUID,
-    request: Request,
-    response: Response,
-    owner_id: OwnerId = Depends(_owner),
-):
-    _private(response)
-    key = _resource(owner_id, ResourceKind.BOOK, book_id)
-    async with request.app.state.hosted_runtime.serialized(key):
-        snapshot = await request.app.state.tenant_repository.memory_snapshot(owner_id, book_id)
-        if snapshot is None:
-            raise HTTPException(404, "unknown book")
-        return snapshot
-
-
-@router.get("/books/{book_id}/memory-corrections")
-async def memory_corrections(
-    book_id: uuid.UUID,
-    request: Request,
-    response: Response,
-    bookmark: int | None = Query(default=None, ge=0),
-    owner_id: OwnerId = Depends(_owner),
-):
-    _private(response)
-    key = _resource(owner_id, ResourceKind.BOOK, book_id)
-    async with request.app.state.hosted_runtime.serialized(key):
-        result = await request.app.state.tenant_repository.memory_corrections(
-            owner_id, book_id, bookmark
-        )
-        if result is None:
-            raise HTTPException(404, "unknown book")
-        return result
-
-
-@router.post("/books/{book_id}/memory-corrections")
-async def correct_memory(
-    book_id: uuid.UUID,
-    body: HostedEntityCorrectionIn,
-    request: Request,
-    response: Response,
-    owner_id: OwnerId = Depends(_csrf_owner),
-):
-    _private(response)
-    key = _resource(owner_id, ResourceKind.BOOK, book_id)
-    async with request.app.state.hosted_runtime.serialized(key):
-        try:
-            result = await request.app.state.tenant_repository.replace_memory_entity(
-                owner_id,
-                book_id,
-                source_entity_id=body.source_entity_id,
-                canonical_name=body.canonical_name,
-                reason=body.reason,
-                bookmark=body.bookmark,
-            )
-        except ValueError as exc:
-            raise HTTPException(409, str(exc)) from exc
-        if result is None:
-            raise HTTPException(404, "unknown book")
-        return result
 
 
 @router.get("/costs")

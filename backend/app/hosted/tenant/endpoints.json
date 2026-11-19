@@ -207,30 +207,6 @@
     },
     {
       "method": "GET",
-      "path": "/api/books/{book_id}/memory",
-      "surface": "memory",
-      "access": "read",
-      "repository_method": "memory_snapshot",
-      "cross_tenant_test": "test_foreign_book_is_hidden_from_every_identifier_endpoint"
-    },
-    {
-      "method": "GET",
-      "path": "/api/books/{book_id}/memory-corrections",
-      "surface": "memory",
-      "access": "read",
-      "repository_method": "memory_corrections",
-      "cross_tenant_test": "test_reader_memory_corrections_are_owner_scoped_and_frontier_bounded"
-    },
-    {
-      "method": "POST",
-      "path": "/api/books/{book_id}/memory-corrections",
-      "surface": "mutate",
-      "access": "write",
-      "repository_method": "replace_memory_entity",
-      "cross_tenant_test": "test_reader_memory_corrections_are_owner_scoped_and_frontier_bounded"
-    },
-    {
-      "method": "GET",
       "path": "/api/costs",
       "surface": "cost",
       "access": "cost",
