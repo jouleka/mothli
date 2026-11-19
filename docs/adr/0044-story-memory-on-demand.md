@@ -774,6 +774,57 @@ can be built side by side.
   listed in the pull request. (8) No `source_kind` or "library" branch is left in the
   story-memory path; the correction refusal's free-library line (`LIBRARY_MEMORY_FIXED`) is
   step 7's.
+- Built on 19 November 2026 in PR #128: step 7, corrections refused for every book and the tenant
+  role off the memory tables, with **no migration**, except (1) **no refusal line is written**:
+  section 7 gives the routes one line for every book ("Mothli makes its notes on a book once for
+  that book file, so they can't be corrected here.") and also says the routes answer 404. The
+  build removes the routes, so every book, with or without an edition, another reader's and no
+  book at all, answers exactly as a route that never existed (404, `{"detail": "Not Found"}`);
+  the line was never written and the free-library line (`LIBRARY_MEMORY_FIXED`) is deleted.
+  (2) **There is no correction screen**: section 7 says the app's correction screen is local
+  mode's. No screen calls a correction route in either mode: `frontend/src/api.ts` keeps two
+  helpers (`memoryCorrections`, `correctMemory`) that no component calls, and nothing calls
+  `GET /memory`. A hosted reader was offered no correction control before this step and is offered
+  none now; the frontend is unchanged, and local mode's routes (`app/api/views.py`) stay.
+  (3) **What was removed**: the three routes and their request model (`tenant/api.py`, 78
+  lines), their three `endpoints.json` entries (24 lines), and in `tenant/repository.py` the
+  reader's memory snapshot, the correction history, the correction write path with its copy of
+  later rows and its lock against a publish, and `LIBRARY_MEMORY_FIXED` (562 lines out, 16 in,
+  with items 5 and 6). The publish's "the memory moved since it was copied" check stays.
+  (4) **The tenant role lost**, from `grants.py` (the role script revokes everything and grants
+  the list, and no grant to it lives in SQL, so no migration): `SELECT, DELETE` on `chapters`;
+  `SELECT` on `ingested_chapters`, `chapter_summaries`, `events` and `themes`; `SELECT, INSERT,
+  UPDATE` on `entities`; `SELECT, INSERT` on `aliases`, `edges`, `event_participants`,
+  `entity_state` and `entity_corrections`. It held nothing on `chunks` and `chunk_embeddings`.
+  The door reads the first nine of those (with `books`, `notes_account`, `reading_state` and
+  `read_ranges`) as its owner, so it is unchanged; `STORY_MEMORY_TABLES` in `grants.py` names
+  all thirteen, and the startup check already refused a privilege on any table off the list.
+  (5) **What else in the web process touched them**, found by search and by running every
+  hosted and parity test with the grants removed: the position routes counted the reader's own
+  receipts (`receipt_count`; no screen read it, and a reader has owned none since step 5: the
+  field is dropped); a position report checked its chapter against the reader's own chapters or
+  the manifest (now the manifest alone, which every import writes); and removing a book deleted
+  the reader's `chapters` (none since step 5). The progress screen, the story screens, the chat
+  and the copy of one's data already read through the door (step 5). (6) **Removal, the same
+  file again, the copy and erasure**: removal erases the reader's rows as before, minus
+  `chapters`, clears the fingerprints on the book's row (their link to the edition) and leaves
+  the edition; the same file uploaded again is a new book at place 0, the door's empty row byte
+  for byte as for a file nobody built, then handed the edition as the reader reads on; the copy
+  reads the notes through the door, unchanged; erasure is the purge's, which holds `SELECT,
+  DELETE` on every table with an owner and bypasses row security, unchanged, and never erases
+  the notes account. (7) The story memory tables are not erased with a book any more: they hold
+  no reader's rows. `test_removing_a_book_postgres.py` lists them apart (`NOT_A_READERS`) and
+  checks the tenant role holds nothing on them. (8) **Tests**: deleted, as section 8 says,
+  `test_correction_logic_audit.py` (one test) and `test_tenant_postgres.py::test_reader_memory_corrections_are_owner_scoped_and_frontier_bounded`,
+  the spoiler test of section 8 (a correction neither made nor shown past the reader's place):
+  the feature it guarded is gone. `test_story_memory_postgres.py`'s "a correction during
+  extraction is respected" is not deleted but kept for the publish's check that stays: the
+  edition is moved under the run by the database owner (another name for a person, at the
+  chapter before) instead of by a correction, and the publish is refused and the chapter
+  prepared again without paying again. Every other changed test is listed in the pull request;
+  the door tests change in one test only, whose correction call now expects the unknown route's
+  answer. (9) The `entity_corrections` table stays, empty in hosted mode, with nobody's
+  privilege but the purge's; dropping it would be a migration of its own.
 
 **The sentence for the terms and privacy pages** (replaces the free-library one, open items line 254):
 "Mothli's notes on a book's story (who's who and what has happened, chapter by chapter) are made once for
