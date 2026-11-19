@@ -23,7 +23,6 @@ build slot and failures counted per edition are ``test_story_memory_editions_pos
 
 from __future__ import annotations
 
-import functools
 import json
 import re
 import uuid
@@ -95,13 +94,8 @@ GREETING = "Corvus greeted Vex at the quay."
 def lamps(title: str = "The Lamp Book") -> bytes:
     """The chat tests' lamp book (Mara in part 1, Corvus in part 2, Vex in part 3, sixty lines
     each), with Corvus named once more at the end of part 3. Another ``title`` makes another file
-    (so another edition, ADR 0044 step 3) with the very same parts. Made once per title: the zip
-    records the time it was written, so two makings a second apart would be two files."""
-    return _lamps(title)
-
-
-@functools.cache
-def _lamps(title: str) -> bytes:
+    (so another edition, ADR 0044 step 3) with the very same parts; the same title made twice is
+    one file (``epub_ncx`` stamps no clock)."""
     parts = [" ".join(line(n, i) for i in range(1, 61)) for n in (1, 2, 3)]
     parts[2] += " " + GREETING
     return epub_ncx([(f"c{n}.xhtml", f"Part {n}", f"Part {n}", text)

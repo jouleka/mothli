@@ -27,6 +27,15 @@ def line(chapter, number):
     return f"{PEOPLE[chapter - 1]} moved lamp {number} in part {chapter}."
 
 
+def member(name):
+    """A zip member stamped with one fixed time, so the book made twice is one file (one file
+    hash, one edition: ADR 0044). ``writestr`` with a bare name stamps the clock, to two seconds;
+    two readers' copies made a moment apart were then two files, and shared nothing."""
+    info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+    info.external_attr = 0o600 << 16
+    return info
+
+
 def _page(title, body):
     return ('<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="en">'
             f"<head><title>{title}</title></head><body>{body}</body></html>")
@@ -68,10 +77,10 @@ def alice_shaped_epub():
            f"<navMap>{points}</navMap></ncx>")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
-        z.writestr("mimetype", "application/epub+zip")
-        z.writestr("META-INF/container.xml", _CONTAINER)
-        z.writestr("OEBPS/content.opf", opf)
-        z.writestr("OEBPS/toc.ncx", ncx)
+        z.writestr(member("mimetype"), "application/epub+zip")
+        z.writestr(member("META-INF/container.xml"), _CONTAINER)
+        z.writestr(member("OEBPS/content.opf"), opf)
+        z.writestr(member("OEBPS/toc.ncx"), ncx)
         for name, body in files:
-            z.writestr(f"OEBPS/{name}", body)
+            z.writestr(member(f"OEBPS/{name}"), body)
     return buf.getvalue()

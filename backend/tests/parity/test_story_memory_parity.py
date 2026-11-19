@@ -14,7 +14,6 @@ rows). Stand-in models only: nothing is called and nothing is paid.
 
 from __future__ import annotations
 
-import functools
 import json
 import re
 import uuid
@@ -71,13 +70,8 @@ CHAPTERS = {
 
 def harbour_book(title: str = "The Harbour Book") -> bytes:
     """Three chapters, with a map page (not story: never sent to a model) after the first. Another
-    ``title`` makes another file (another edition) with the same chapters. Made once per title:
-    the zip records the time it was written, so two makings a second apart are two files."""
-    return _harbour_book(title)
-
-
-@functools.cache
-def _harbour_book(title: str) -> bytes:
+    ``title`` makes another file (another edition) with the same chapters; the same title made
+    twice is one file (``epub_ncx`` stamps no clock)."""
     chapter = [(f"c{n}.xhtml", f"Chapter {roman}", f"Chapter {roman}", CHAPTERS[marker] * 6)
                for n, (roman, marker) in enumerate((("I", "nets"), ("II", "ferry"),
                                                     ("III", "rescued")), start=1)]
