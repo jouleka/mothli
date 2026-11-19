@@ -23,7 +23,7 @@ const card = (entity_id: EntityId, name: string, ties: { entity_id: EntityId; na
   ties: ties.map((tie) => ({ ...tie, rel_type: "friend", label: "walks with", direction: "out" as const })),
 });
 const progress = (status: string) => ({ ingest_progress: 3, status, flags: [], error: null });
-const missing = () => new ApiError("no story memory for this book", 404);
+const missing = () => new ApiError("unknown book", 404);
 
 beforeEach(() => {
   for (const mock of Object.values(mocks)) mock.mockReset();
@@ -93,15 +93,34 @@ describe("a chapter Mothli could not make notes on", () => {
   });
 });
 
-describe("a book with no story memory", () => {
-  test("the cast and the story keep their kind “not yet” lines on a 404", async () => {
+// ADR 0044 step 5: every book has a cast and a story, built as readers reach its chapters, so
+// before the first finished chapter the server answers an empty one for every book alike,
+// whether or not anyone else has the same file.
+const NO_ONE_YET = "No one yet. Keep reading and I’ll keep track of who’s who.";
+const FIRST_CHAPTER = "Finish your first chapter and I’ll start keeping notes for you here.";
+
+describe("a book before its first finished chapter", () => {
+  test("the cast and the story show the same empty lines every book shows", async () => {
+    mocks.graph.mockResolvedValue(graph(0, []));
+    mocks.notes.mockResolvedValue({ as_of_chapter: 0, cast: [], chapters: [] });
+    render(<PeoplePanel bookId="b" bookmark={0} onAsk={() => {}} />);
+    await screen.findByText(NO_ONE_YET);
+    render(<StoryPanel bookId="b" bookmark={0} onOpenPerson={() => {}} onAskChapter={() => {}} />);
+    await screen.findByText(FIRST_CHAPTER);
+    expect(screen.queryByText(/Try again/)).toBeNull();
+    expect(screen.queryByText(WAITING)).toBeNull();
+    // Nothing is behind the reader, so nobody asks whether more is on its way.
+    expect(mocks.ingest).not.toHaveBeenCalled();
+  });
+
+  test("no line says this book has no notes, not even on a refusal", async () => {
     mocks.graph.mockRejectedValue(missing());
     mocks.notes.mockRejectedValue(missing());
     render(<PeoplePanel bookId="b" bookmark={3} onAsk={() => {}} />);
-    await screen.findByText(/I don’t keep a list of who’s who for this book yet/);
+    await screen.findByText("I couldn’t gather the cast right now. Try again in a moment.");
     render(<StoryPanel bookId="b" bookmark={3} onOpenPerson={() => {}} onAskChapter={() => {}} />);
-    await screen.findByText(/I don’t keep chapter-by-chapter notes for this book yet/);
-    expect(screen.queryByText(/Try again/)).toBeNull();
+    await screen.findByText("I couldn’t open my notes right now. Try again in a moment.");
+    expect(screen.queryByText(/for this book yet/)).toBeNull();
     expect(screen.queryByText(WAITING)).toBeNull();
   });
 });

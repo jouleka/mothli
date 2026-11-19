@@ -2,7 +2,7 @@
  * served by bookmark-clamped routes (graph, character, notes, catch-me-up), so nothing past the
  * reader's frontier can appear. Read-only; asking about something hands off to the conversation. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, type ChapterNote, type Character, type EntityId, type GraphNode } from "../api";
+import { api, type ChapterNote, type Character, type EntityId, type GraphNode } from "../api";
 import { Icon } from "../ui/Icon";
 import { Moth } from "../ui/Moth";
 
@@ -50,12 +50,6 @@ function groupLabel(relType: string) {
   return TIE_GROUPS.find((group) => group.key === relType)?.label ?? "Also connected";
 }
 
-/** "absent" when the server keeps no story memory for this book (a 404: hosted mode, where none
- * is built yet), so the panel says so instead of asking the reader to try again. */
-type Failure = false | true | "absent";
-const failure = (reason: unknown): Failure =>
-  reason instanceof ApiError && reason.status === 404 ? "absent" : true;
-
 function MemoryState({ mood, children }: { mood: "thinking" | "sleepy" | "curious"; children: React.ReactNode }) {
   return (
     <div className="memory-state">
@@ -70,8 +64,10 @@ const WAITING = "I’m a little behind you. I’ll catch up on the rest tomorrow
 const UNREMEMBERED ="This chapter slipped past me, so I couldn’t make notes on it. You can still ask me about it in the chat.";
 
 /** Whether the rest of this book's memory waits for tomorrow (the server answers
- * `status: "waiting"` once a reader's allowance for the day is spent). Asked only when what came
- * back is behind the reader; a server that never waits never shows the line. */
+ * `status: "waiting"` only while the reader has finished chapters whose notes wait for the next
+ * day). Asked only when what came back is behind the reader; a server that never waits never
+ * shows the line. (Every book answers the cast and the story, empty before the first finished
+ * chapter, so a refusal of either is a failure like any other.) */
 function useWaiting(bookId: string, behind: boolean) {
   const [waiting, setWaiting] = useState(false);
   useEffect(() => {
@@ -105,7 +101,7 @@ export function PeoplePanel({
 }) {
   const [people, setPeople] = useState<GraphNode[] | null>(null);
   const [asOf, setAsOf] = useState<number | null>(null);
-  const [failed, setFailed] = useState<Failure>(false);
+  const [failed, setFailed] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<EntityId | null>(focusId ?? null);
   const [detail, setDetail] = useState<Character | null>(null);
@@ -127,7 +123,7 @@ export function PeoplePanel({
           setAsOf(graph.as_of_chapter);
         }
       })
-      .catch((reason: unknown) => live && setFailed(failure(reason)));
+      .catch(() => live && setFailed(true));
     return () => {
       live = false;
     };
@@ -225,9 +221,7 @@ export function PeoplePanel({
         <span className="sr-only">Find a person</span>
         <input value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder="Find someone" />
       </label>
-      {failed === "absent" ? (
-        <MemoryState mood="curious">I don’t keep a list of who’s who for this book yet. Ask me about anyone you’ve met in the chat.</MemoryState>
-      ) : failed ? (
+      {failed ? (
         <MemoryState mood="sleepy">I couldn’t gather the cast right now. Try again in a moment.</MemoryState>
       ) : people == null ? (
         <MemoryState mood="thinking">Gathering everyone you’ve met…</MemoryState>
@@ -274,7 +268,7 @@ export function StoryPanel({
 }) {
   const [chapters, setChapters] = useState<ChapterNote[] | null>(null);
   const [asOf, setAsOf] = useState<number | null>(null);
-  const [failed, setFailed] = useState<Failure>(false);
+  const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const waiting = useWaiting(bookId, asOf != null && asOf < bookmark);
 
@@ -292,14 +286,12 @@ export function StoryPanel({
           setAsOf(notes.as_of_chapter);
         }
       })
-      .catch((reason: unknown) => live && setFailed(failure(reason)));
+      .catch(() => live && setFailed(true));
     return () => {
       live = false;
     };
   }, [bookId, bookmark, refresh]);
 
-  if (failed === "absent")
-    return <MemoryState mood="curious">I don’t keep chapter-by-chapter notes for this book yet. Ask me about any chapter you’ve read in the chat.</MemoryState>;
   if (failed) return <MemoryState mood="sleepy">I couldn’t open my notes right now. Try again in a moment.</MemoryState>;
   if (!chapters) return <MemoryState mood="thinking">Flipping back through my notes…</MemoryState>;
   if (!chapters.length)

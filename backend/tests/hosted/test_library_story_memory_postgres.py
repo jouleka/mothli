@@ -319,6 +319,9 @@ def door_bytes(dsn: str, owner, book) -> str | None:
     return None if row is None else row[0]
 
 
+# What the cast answers a reader the door hands nothing (ADR 0044 step 5): every book alike.
+EMPTY_GRAPH = {"as_of_chapter": 0, "characters": [], "relationships": []}
+
 HANDED = ("chapters", "completed", "entities", "aliases", "themes", "events", "summaries",
           "edges", "states")
 
@@ -343,6 +346,13 @@ def stamps(row: dict) -> list[int]:
             found += [item[key] for key in ("invalid_at", "chapter_ordinal")
                       if item.get(key) is not None]
     return found
+
+
+def handed_anything(dsn: str, owner, book) -> bool:
+    """Whether the door hands this reader any chapter of an edition of their book's file,
+    through ``HostedBookStore`` (ADR 0044 step 5: the door is its only source)."""
+    with HostedBookStore(dsn, OwnerId(owner)).book(book) as mem:
+        return mem.has_rows()
 
 
 def through(dsn: str, owner, book) -> int | None:
@@ -424,7 +434,7 @@ def test_readers_at_2_5_and_10_are_each_handed_only_what_is_up_to_their_place(
 
         # The reader's story memory, progress and counter.
         with HostedBookStore(tenant_dsn, OwnerId(someone.owner)).book(book) as mem:
-            assert mem.shared
+            assert mem.has_rows()
             assert {row["canonical_name"] for row in mem._audit_all("entities")} \
                 == set(NAMES[:at])
             assert mem.completion_frontier(hosted_atoms(shelf.app, someone.owner, book)) == at
@@ -545,7 +555,7 @@ def test_no_argument_device_tab_or_direct_write_moves_the_place_and_the_door_ref
     twin_reader.mark(twin, [1, 2])
     assert stamps(door(tenant_dsn, twin_reader.owner, twin)) == stamps(door(tenant_dsn, a.owner,
                                                                             book))
-    assert HostedBookStore(tenant_dsn, OwnerId(twin_reader.owner)).shared(twin)
+    assert handed_anything(tenant_dsn, twin_reader.owner, twin)
     assert get(twin_reader, f"/api/books/{twin}/graph").json()["as_of_chapter"] == 2
     # Another file of the same title: handed nothing, and nothing of its own to show.
     shelf.source.files[int(PRIDE)] = long_lamps("The Long Lamp Book, Revised")
@@ -554,11 +564,11 @@ def test_no_argument_device_tab_or_direct_write_moves_the_place_and_the_door_ref
     differs.mark(changed, [1, 2, 3])
     assert empty_row(door(tenant_dsn, differs.owner, changed))
     assert empty_row(door(database, differs.owner, changed))
-    assert not HostedBookStore(tenant_dsn, OwnerId(differs.owner)).shared(changed)
+    assert not handed_anything(tenant_dsn, differs.owner, changed)
     # ADR 0044 step 4: the marks asked for its job; run (no page read), it builds nothing.
     drain(work, 60)
     assert empty_row(door(tenant_dsn, differs.owner, changed))
-    assert get(differs, f"/api/books/{changed}/graph").status_code == 404
+    assert get(differs, f"/api/books/{changed}/graph").json() == EMPTY_GRAPH
     assert a.call("DELETE", f"/api/books/{book}").status_code == 204
     assert door(tenant_dsn, a.owner, book) is None and door(database, a.owner, book) is None
 
@@ -642,7 +652,7 @@ def test_a_reader_of_the_library_edition_gets_what_local_mode_builds_to_their_pl
             with HostedBookStore(tenant_dsn, OwnerId(someone.owner)).book(book) as mem:
                 # Served by the door once it hands anything; at place 0 it hands nothing, the
                 # same as for a book with no edition (ADR 0044 section 4).
-                assert mem.shared == (at > 0)
+                assert mem.has_rows() == (at > 0)
                 assert answers(mem, atoms, chapters) == expected, at
                 assert {bm: screens(mem, bm) for bm in range(0, 6)} == expected_screens, at
             assert expected["frontier"] == at
@@ -740,8 +750,12 @@ def test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look(
     someone.mark(book, [1, 2])
     with HostedBookStore(tenant_dsn, OwnerId(someone.owner)).book(book) as mem:
         assert score_recap(mem, 2, REMEMBERED)["future_entity_leaks"] == []
-    with HostedBookStore(tenant_dsn, OwnerId(account)).book(
-            str(_library_book(tenant_dsn, account))) as everything:
+    # The rows past the place, as a reader who has read to the end is handed them (until ADR 0044
+    # step 5 this read the notes account's own rows, which the web process no longer reads).
+    finished = reader(shelf, "r10a")
+    finished_book = add(finished)
+    finished.mark(finished_book, list(range(1, PARTS + 1)))
+    with HostedBookStore(tenant_dsn, OwnerId(finished.owner)).book(finished_book) as everything:
         assert score_recap(everything, 2, REMEMBERED)["future_entity_leaks"] == ["Zephyrine"]
 
     platform = shelf.app.state.platform_client
@@ -782,8 +796,10 @@ def test_the_edition_tells_no_reader_anything_of_another_and_its_account_is_nobo
     # door hands both the same row, byte for byte, and the screen says the same of both.
     assert door_bytes(tenant_dsn, a.owner, book_a) == door_bytes(tenant_dsn, b.owner, book_b) \
         == door_bytes(tenant_dsn, a.owner, unbuilt)
-    assert [(response.status_code, response.json()) for response in before] \
-        == [(404, get(a, f"/api/books/{unbuilt}/graph").json())] * 2
+    unbuilt_graph = get(a, f"/api/books/{unbuilt}/graph")
+    assert [(response.status_code, response.content) for response in before] \
+        == [(unbuilt_graph.status_code, unbuilt_graph.content)] * 2
+    assert unbuilt_graph.json() == {"as_of_chapter": 0, "characters": [], "relationships": []}
 
     edition = everything_of(database, account)
     calls = list(models.calls)
@@ -1175,8 +1191,17 @@ def test_the_door_refuses_a_reader_whose_split_differs_from_the_editions_or_is_u
             for dsn in (tenant_dsn, database):
                 answer = door(dsn, a.owner, book)
                 assert (answer is None) == unknown and nothing(answer), (owner, value)
-            assert not HostedBookStore(tenant_dsn, OwnerId(a.owner)).shared(book)
-            assert get(a, f"/api/books/{book}/graph").status_code == 404
+            graph = get(a, f"/api/books/{book}/graph")
+            if unknown:
+                # No row from the door, the only source of story memory (ADR 0044 step 5): the
+                # book is unknown to it, as a book not theirs (no reader's book can be made
+                # without both fingerprints, step 1).
+                with pytest.raises(LookupError):
+                    handed_anything(tenant_dsn, a.owner, book)
+                assert (graph.status_code, graph.json()) == (404, {"detail": "unknown book"})
+            else:
+                assert not handed_anything(tenant_dsn, a.owner, book)
+                assert (graph.status_code, graph.json()) == (200, EMPTY_GRAPH)
         set_split(owner, which, split_hash)
         assert door(tenant_dsn, a.owner, book) == before
 
@@ -1195,7 +1220,7 @@ def test_the_door_refuses_a_reader_whose_split_differs_from_the_editions_or_is_u
     drain(work, 60)
     assert empty_row(door(tenant_dsn, later.owner, shifted))
     assert empty_row(door(database, later.owner, shifted))
-    assert get(later, f"/api/books/{shifted}/graph").status_code == 404
+    assert get(later, f"/api/books/{shifted}/graph").json() == EMPTY_GRAPH
     assert door(tenant_dsn, a.owner, book) == before
 
 
@@ -1231,7 +1256,7 @@ def only_up_to(shelf, tenant_dsn, database, account, someone: Reader, book: str,
         assert {item["name"] for item in raw["entities"]} == set(NAMES[:at])
         assert not [word for word in hidden if word in json.dumps(raw, default=str)]
     with HostedBookStore(tenant_dsn, OwnerId(someone.owner)).book(book) as mem:
-        assert mem.shared
+        assert mem.has_rows()
         assert {row["canonical_name"] for row in mem._audit_all("entities")} == set(NAMES[:at])
         assert mem.completion_frontier(hosted_atoms(shelf.app, someone.owner, book)) == at
 
@@ -1370,8 +1395,8 @@ def test_a_reader_of_another_file_of_the_same_title_is_handed_nothing(
         assert empty_row(door(dsn, other.owner, another))
     assert door_bytes(tenant_dsn, other.owner, another) \
         == door_bytes(tenant_dsn, starting.owner, fresh)
-    assert not HostedBookStore(tenant_dsn, OwnerId(other.owner)).shared(another)
-    assert get(other, f"/api/books/{another}/graph").status_code == 404
+    assert not handed_anything(tenant_dsn, other.owner, another)
+    assert get(other, f"/api/books/{another}/graph").json() == EMPTY_GRAPH
     models = StandIns(shelf.app.state.platform_client, monkeypatch,
                       reply=f"{tline(1, 2)} {tline(3, 3)}")
     assert tline(3, 3) in sentences(other.ask(another, "What has happened so far?"))
@@ -1445,7 +1470,7 @@ def test_the_doors_answer_at_place_0_is_the_same_byte_for_byte_with_and_without_
         reader may take one copy every few minutes, so each reader takes it once)."""
         raw = door_bytes(tenant_dsn, someone.owner, book)
         with HostedBookStore(tenant_dsn, OwnerId(someone.owner)).book(book) as mem:
-            memory = (mem.shared, mem.has_rows(),
+            memory = (mem.has_rows(),
                       mem.completion_frontier(hosted_atoms(shelf.app, someone.owner, book)),
                       {bm: screens(mem, bm) for bm in range(0, 3)},
                       [sorted(map(str, mem._audit_all(table)))

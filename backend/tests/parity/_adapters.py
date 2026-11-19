@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 
 import psycopg
-from psycopg.rows import dict_row
+from psycopg.rows import dict_row, tuple_row
 from psycopg.types.json import Jsonb
 
 from app.catalog.catalog import Catalog
@@ -47,6 +47,77 @@ def _content_hash(text: str, length: int) -> str:
 
 def _uuid(kind: str, key: str) -> uuid.UUID:
     return uuid.uuid5(_NAMESPACE, f"{kind}:{key}")
+
+
+# The story memory tables, parents before children (the foreign keys of migrations 0002 and 0024).
+EDITION_TABLES = ("chapters", "ingested_chapters", "chapter_summaries", "entities", "themes",
+                  "events", "chunks", "aliases", "edges", "entity_state", "event_participants",
+                  "entity_corrections", "chunk_embeddings")
+
+
+def serve_through_the_door(conn: psycopg.Connection, scope: tuple, *,
+                           place: int | None) -> tuple:
+    """Move the story memory rows written for a reader's book into the edition of that book's
+    file, and set the reader's place (None: leave it as their reading made it): ADR 0044, where a
+    reader owns no story memory row and the web process reads story memory only through the
+    door, which hands the edition's rows up to the reader's place. A book with no fingerprints is
+    given made-up ones first. ``conn`` reads past row-level security; returns the edition's
+    (owner, book, incarnation).
+
+    With ``place`` past the last chapter the door hands every row (and every end), so the story
+    memory the checks get is what the rows were before the move; at a lower place it is the
+    door's own bound."""
+    owner, book, incarnation = scope
+    conn = conn.cursor(row_factory=tuple_row)   # whatever rows the connection makes
+    with conn.connection.transaction():
+        made_up = hashlib.sha256(f"a parity file {book}".encode()).hexdigest()
+        conn.execute("UPDATE books SET file_hash=%s,split_hash=%s WHERE owner_id=%s AND id=%s"
+                     " AND file_hash IS NULL", (made_up, made_up, owner, book))
+        mine = conn.execute("SELECT file_hash,split_hash,content_language,book_type FROM books"
+                            " WHERE owner_id=%s AND id=%s", (owner, book)).fetchone()
+        [(account,)] = conn.execute("SELECT account_id FROM notes_account").fetchall()
+        edition = conn.execute(
+            "INSERT INTO books (owner_id,title,schema_version,file_hash,split_hash,"
+            "content_language,book_type,edition_of) VALUES (%s,'edition',1,%s,%s,%s,%s,%s)"
+            " RETURNING owner_id,id,incarnation", (account, *mine, account)).fetchone()
+        params = {"owner": owner, "book": book, "incarnation": incarnation,
+                  "account": edition[0], "edition": edition[1],
+                  "edition_incarnation": edition[2]}
+        moved = {"owner_id": "%(account)s", "book_id": "%(edition)s",
+                 "book_incarnation": "%(edition_incarnation)s"}
+        for table in EDITION_TABLES:
+            columns = [row[0] for row in conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema='public'"
+                " AND table_name=%s AND is_generated='NEVER' ORDER BY ordinal_position",
+                (table,)).fetchall()]
+            conn.execute(
+                f"INSERT INTO {table} ({','.join(columns)})"
+                f" SELECT {','.join(moved.get(column, column) for column in columns)}"
+                f" FROM {table} WHERE owner_id=%(owner)s AND book_id=%(book)s"
+                " AND book_incarnation=%(incarnation)s", params)
+        for table in reversed(EDITION_TABLES):
+            conn.execute(f"DELETE FROM {table} WHERE owner_id=%(owner)s AND book_id=%(book)s"
+                         " AND book_incarnation=%(incarnation)s", params)
+    if place is not None:
+        set_place(conn.connection, scope, place)
+    return edition
+
+
+def set_place(conn: psycopg.Connection, scope: tuple, place: int) -> None:
+    """The reader's place, as the door works it out: ``memory_through`` and a read page in
+    chapter ``place`` (0: nothing read). Committed at once."""
+    with conn.transaction():
+        conn.execute("INSERT INTO reading_state (owner_id,book_id,book_incarnation,bookmark,"
+                     "memory_through) VALUES (%s,%s,%s,%s,%s)"
+                     " ON CONFLICT (owner_id,book_id,book_incarnation)"
+                     " DO UPDATE SET memory_through=EXCLUDED.memory_through",
+                     (*scope, place, place))
+        conn.execute("DELETE FROM read_ranges WHERE owner_id=%s AND book_id=%s"
+                     " AND book_incarnation=%s", scope)
+        if place:
+            conn.execute("INSERT INTO read_ranges (owner_id,book_id,book_incarnation,atom,"
+                         "start_offset,end_offset,source) VALUES (%s,%s,%s,%s,0,1,'told')",
+                         (*scope, place))
 
 
 class _SnapshotMixin:

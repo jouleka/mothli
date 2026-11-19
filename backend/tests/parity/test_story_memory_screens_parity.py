@@ -2,10 +2,12 @@
 
 One book with pages that are not part of the book proper (``tests/_alice_shaped.py``) is added to
 the local app (SQLite catalog and ``MemoryDB``) and to the hosted app (Postgres adapters, object
-storage), the same memory rows are written into each, and the reader walks through it with "I've
-read this" and "I haven't read this". At every place, the cast, every person's card, the story so
-far and progress must be the same in both, for every chapter asked for, once each mode's own ids
-are replaced by names. Then the probes: nothing stamped after the reader's place is in any of them.
+storage), the same memory rows are written into each (hosted: into the edition of the reader's
+file, which the door hands them up to their place, ADR 0044), and the reader walks through it with
+"I've read this" and "I haven't read this". At every place, the cast, every person's card, the
+story so far and progress must be the same in both, for every chapter asked for, once each mode's
+own ids are replaced by names; hosted progress never passes the reader's place. Then the probes:
+nothing stamped after the reader's place is in any of them.
 """
 
 from __future__ import annotations
@@ -28,7 +30,8 @@ from tests.hosted.test_companion_story_memory_postgres import (
     TITLES,
     book_keys,
     complete_chapter,
-    seed_story_memory,
+    edition_for,
+    seed_edition,
 )
 from tests.parity import test_companion_parity as read_map_parity
 
@@ -101,8 +104,10 @@ class Local(read_map_parity.LocalReader):
 
 class Hosted(read_map_parity.HostedReader):
     def seed(self, dsn: str) -> None:
-        ids = seed_story_memory(dsn, self.owner, self.book,
-                                book_keys(self.app, self.owner, self.book))
+        """The same rows, into the edition of the reader's file (ADR 0044: the door hands them
+        to the reader up to their place; a reader owns no story memory row)."""
+        ids = seed_edition(dsn, self.owner, self.book, book_keys(self.app, self.owner, self.book))
+        self.edition = edition_for(dsn, self.owner, self.book)
         self.dsn = dsn
         people = {key for key, *_rest in PEOPLE}
         self.names = {value: key for key, value in ids.items() if key in people}
@@ -111,7 +116,7 @@ class Hosted(read_map_parity.HostedReader):
         self.ids[NOBODY] = "00000000-0000-4000-8000-000000000000"
 
     def complete(self, ordinal: int) -> None:
-        complete_chapter(self.dsn, self.owner, self.book, ordinal)
+        complete_chapter(self.dsn, *self.edition, ordinal)
 
     def get(self, suffix: str, **query):
         return self._client.get(f"/api/books/{self.book}{suffix}", params=query,
@@ -180,9 +185,16 @@ def test_the_story_memory_screens_are_the_same_locally_and_hosted_at_every_place
         hosted.seed(postgres_database)
         places = {}
 
-        def compare(label):
+        def compare(label, place):
             here, there = _screens(local), _screens(hosted)
             for key, value in here.items():
+                if key == "ingest":
+                    # The one difference, hosted being the stricter: hosted progress counts only
+                    # what the door hands the reader, so never past their place (ADR 0044 step
+                    # 2); local counts every chapter built.
+                    status, body = value
+                    value = (status, {**body, "ingest_progress": min(body["ingest_progress"],
+                                                                     place)})
                 assert there[key] == value, (label, key)
             assert there.keys() == here.keys()
             places[label] = there
@@ -191,15 +203,15 @@ def test_the_story_memory_screens_are_the_same_locally_and_hosted_at_every_place
             for side in (local, hosted):
                 action(side)
 
-        compare("nothing read")
+        compare("nothing read", 0)
         for atom in (3, 4, 5):
             both(lambda side, atom=atom: side.request("PUT", "/read-chapters",
                                                       {"atoms": [atom], "read": True}))
-            compare(f"read {atom}")
+            compare(f"read {atom}", atom)
         both(lambda side: side.complete(5))
-        compare("chapter 5 complete")
+        compare("chapter 5 complete", 5)
         both(lambda side: side.request("PUT", "/read-chapters", {"atoms": [4], "read": False}))
-        compare("chapter 4 not read")
+        compare("chapter 4 not read", 3)
     finally:
         local.close()
         hosted.close()
@@ -207,7 +219,7 @@ def test_the_story_memory_screens_are_the_same_locally_and_hosted_at_every_place
     # ---- the probes: what the walk shows, in both modes (they are equal) ----
     gone = (404, {"detail": "unknown character"})
     nothing = places["nothing read"]
-    assert nothing["ingest"] == (200, {"ingest_progress": 4, "status": "idle", "flags": [],
+    assert nothing["ingest"] == (200, {"ingest_progress": 0, "status": "idle", "flags": [],
                                        "error": None})
     assert _cast(nothing) == [] and nothing[("notes", None)][1]["chapters"] == []
     assert nothing[("graph", None)][1]["as_of_chapter"] == 0

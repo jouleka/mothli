@@ -2,16 +2,20 @@
 
 The parity corpus (``fixtures/spoiler_parity.json``), extended here with a person whose name is
 an ordinary word, a late alias, a retracted person, a retracted alias and a retracted theme, is
-loaded into a local ``MemoryDB`` and into the Postgres memory tables of one hosted reader. At
-every chapter counter the unchanged ``score_recap``, ``same_person_names`` and
-``completion_frontier`` must return exactly the same thing from both, on the tenant role with
-row-level security and on a superuser connection where only the adapter's own predicates hold.
+loaded into a local ``MemoryDB`` and into the Postgres memory tables of the edition of one hosted
+reader's file (ADR 0044: a reader owns no story memory row, and the door hands them the edition's
+up to their place; here a place past the last chapter, so every row). At every chapter counter
+the unchanged ``score_recap``, ``same_person_names`` and ``completion_frontier`` must return
+exactly the same thing from both, on the tenant role with row-level security and on a superuser
+connection where only the door and the snapshot's own predicates hold; and a reader at each place
+is handed nothing past it.
 An empty memory must behave like a local book with extraction off. A memory that cannot be read
 must stop the reply, and one reader's snapshot must never hold another's rows.
 """
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -42,6 +46,8 @@ from tests.parity._adapters import (
     SQLiteParityAdapter,
     _uuid,
     load_corpus,
+    serve_through_the_door,
+    set_place,
 )
 
 # The tenant gate's own database and RLS-enforced role, granted from the same allow-list.
@@ -51,6 +57,7 @@ tenant_dsn = tenant_gate.tenant_dsn
 
 CORPUS = Path(__file__).parent / "fixtures" / "spoiler_parity.json"
 BOOKMARKS = range(0, 8)  # before the first chapter, each chapter, past the retracted last one
+PAST_THE_END = 99        # a reader's place past every chapter: the door hands every row
 
 # (key, name, type, revealed_at, retracted)
 EXTRA_ENTITIES = [
@@ -186,6 +193,9 @@ def seeded(tmp_path, database):
     _seed_local_extras(local)
     remote = PostgresParityAdapter(database, corpus)
     _seed_hosted_extras(remote, corpus)
+    # ADR 0044: the reader owns no story memory row; the door hands them the edition's. Past the
+    # last chapter it hands every row and every end, so the checks get what local mode has.
+    remote.edition = serve_through_the_door(remote.conn, remote._scope(), place=PAST_THE_END)
     try:
         yield corpus, local, remote
     finally:
@@ -287,6 +297,20 @@ def test_the_checks_get_the_same_story_memory_locally_and_hosted(seeded, tenant_
             for key, result in expected[bookmark]["recap"].items():
                 assert hosted[bookmark]["recap"][key] == result, (bookmark, key)
 
+    # A reader at each place is handed only what is up to it, and what they are handed answers
+    # as local mode does there (a later name is left to the chat's other checks, ADR 0042).
+    scope = remote._scope()
+    for place in BOOKMARKS:
+        set_place(remote.conn, scope, place)
+        with HostedBookStore(tenant_dsn, OwnerId(remote.owner_id)).book(
+                str(remote.book_id)) as mem:
+            assert mem.completion_frontier(_atoms(corpus)) == min(place,
+                                                                 expected["frontier"]["all"])
+            assert all(row["revealed_at"] <= place for table in ("entities", "aliases", "themes")
+                       for row in mem._audit_all(table)), place
+            assert _view(mem, place) == expected[place]["view"], place
+    set_place(remote.conn, scope, PAST_THE_END)
+
     # A floor under the comparison: the fixture exercises what it claims to.
     assert expected["frontier"]["all"] == 5   # chapter 6 is retracted
     assert _leaks(expected, 4, "The Shadow watched them from the gate.") == ["The Shadow"]
@@ -337,12 +361,14 @@ def test_one_readers_snapshot_never_holds_another_readers_rows(seeded, tenant_ds
     security, so reader B's checks (or prompts) see reader A's names, or B can load A's book."""
     corpus, _local, a = seeded
     with psycopg.connect(database) as conn:
-        b_owner, b_book, _b_incarnation = _hosted_reader(
-            conn, chapters=corpus["chapters"][:2], people=[("Zinaida", 1), ("Kolya", 2)])
-        # A's names as the superuser reads them, without the adapter.
+        b_scope = _hosted_reader(conn, chapters=corpus["chapters"][:2],
+                                 people=[("Zinaida", 1), ("Kolya", 2)])
+        b_owner, b_book, _b_incarnation = b_scope
+        serve_through_the_door(conn, b_scope, place=PAST_THE_END)
+        # A's names as the superuser reads them, without the adapter: the edition of A's file.
         a_names = {row[0] for row in conn.execute(
             "SELECT canonical_name FROM entities WHERE owner_id=%s AND book_id=%s",
-            (a.owner_id, a.book_id)).fetchall()}
+            a.edition[:2]).fetchall()}
     assert {"Alyosha", "The Shadow", "Rose", "Smerdyakov"} <= a_names
 
     for dsn in (tenant_dsn, database):
@@ -364,11 +390,12 @@ def test_one_readers_snapshot_never_holds_another_readers_rows(seeded, tenant_ds
             assert names == a_names and not names & {"Zinaida", "Kolya"}
 
     # Row-level security is really on for the tenant role: with B's owner set, a query with no
-    # owner predicate at all still sees none of A's rows.
+    # owner predicate at all sees no edition's rows, B's file's or A's (ADR 0044: they are the
+    # notes account's, and only the door hands them out).
     with psycopg.connect(tenant_dsn) as conn, conn.transaction():
         conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(b_owner),))
         seen = {row[0] for row in conn.execute("SELECT canonical_name FROM entities").fetchall()}
-    assert seen == {"Zinaida", "Kolya"}
+    assert seen == set()
 
 
 @pytest.mark.postgres
@@ -381,8 +408,10 @@ def test_an_empty_story_memory_behaves_like_local_with_extraction_off(tmp_path, 
     with psycopg.connect(database) as conn, conn.transaction():
         owner, book = uuid.uuid4(), uuid.uuid4()
         conn.execute("INSERT INTO users (id,display_name) VALUES (%s,'Empty reader')", (owner,))
-        conn.execute("INSERT INTO books (owner_id,id,title,schema_version) VALUES (%s,%s,'B',1)",
-                     (owner, book))
+        # A file nobody has built notes for: the door's empty answer (ADR 0044 section 4).
+        fingerprint = hashlib.sha256(f"an empty book {book}".encode()).hexdigest()
+        conn.execute("INSERT INTO books (owner_id,id,title,schema_version,file_hash,split_hash)"
+                     " VALUES (%s,%s,'B',1,%s,%s)", (owner, book, fingerprint, fingerprint))
     try:
         with store.book("empty-book") as local:
             expected = _answers(local, corpus)
@@ -418,7 +447,7 @@ def test_one_snapshot_per_store_shared_by_threads_and_never_reused_by_the_next(s
         thread.join()
     assert len(seen) == 4 and all(mem is seen[0] for mem in seen)
 
-    scope = remote._scope()
+    scope = remote.edition
     with remote.conn.transaction():
         remote.conn.execute(
             "INSERT INTO entities (owner_id,book_id,book_incarnation,id,source_chapter_id,"

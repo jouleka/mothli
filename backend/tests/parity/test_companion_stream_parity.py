@@ -2,8 +2,10 @@
 
 The same book, the same reading, the same questions and the same stand-in writer and checker,
 through the local route (``Catalog``, a local ``MemoryDB``) and the hosted route (the hosted
-adapters, the platform's client), with an empty story memory and with the same people seeded in
-both. The unchanged ``stream_read_prefix`` decides both, so every reply must give the same events:
+adapters, the platform's client), with an empty story memory and seeded: locally with the people
+local mode holds at the reader's place, hosted with an edition of the file holding every part's
+people (ADR 0044: the door hands the chat only what is up to the reader's place). The unchanged
+``stream_read_prefix`` decides both, so every reply must give the same events:
 the sentences shown, how many were removed, the status, the offers and any error; and the writer
 and the checker must be given the same text.
 """
@@ -46,6 +48,7 @@ from tests.parity import test_companion_parity as read_map_parity
 pytestmark = pytest.mark.postgres
 
 postgres_database = read_map_parity.postgres_database
+PLACE = 1        # part 1 read; five lines of part 2
 
 
 class LocalChat:
@@ -70,10 +73,15 @@ class LocalChat:
         return self._client.request(method, f"/api/books/{self.book}{suffix}", json=body)
 
     def seed(self, _dsn) -> None:
+        """The people local extraction holds at the reader's place (part 1 finished): local
+        mode builds story memory only as far as the reader has read, and hosted mode is handed
+        only that far of an edition others built further (ADR 0044 section 4)."""
         with self.app.state.store.book(self.book) as mem:
-            ids = {name: mem.add_entity(name, "character", ordinal) for name, ordinal in PEOPLE}
+            ids = {name: mem.add_entity(name, "character", ordinal) for name, ordinal in PEOPLE
+                   if ordinal <= PLACE}
             for name, surface, ordinal in ALIASES:
-                mem.add_alias(ids[name], surface, ordinal)
+                if name in ids and ordinal <= PLACE:
+                    mem.add_alias(ids[name], surface, ordinal)
 
     def close(self) -> None:
         self._client.__exit__(None, None, None)
@@ -110,7 +118,9 @@ class HostedChat:
 
     def seed(self, dsn) -> None:
         # Keys of no chapter of the book: the receipt the schema needs never counts, so the
-        # chat's frontier is 0 here as it is in the local memory, which has no receipt.
+        # chat's frontier is 0 here as it is in the local memory, which has no receipt. Every
+        # person, of all three parts, into the edition of the reader's file: the door hands the
+        # chat only those of the parts the reader has finished.
         seed_memory(dsn, self.owner, self.book)
 
     def close(self) -> None:
@@ -205,10 +215,11 @@ def test_the_same_reading_and_reply_give_the_same_events_locally_and_hosted(
         assert any(done[2] for done in dones) and any(done[4] == "ahead" for done in dones)
         assert any(done[5] for done in dones)
         assert any(item[0] == "error" for item in flat)
-        removed_names = [shown for shown in compared[2:4]]
-        if memory == "seeded":
-            assert all(("sentence", line(1, 2)) in shown and len(shown) == 2
-                       for shown in removed_names)
+        # Seeded, the edition holds Corvus (part 2) and Vex (part 3) while the reader has
+        # finished part 1 only: the writer and the checker were given exactly what local mode,
+        # which builds no further than the reader, gives them (the comparison above). A later
+        # name in a reply is left to the checker and the second look in both modes alike (ADR
+        # 0042 section 3; ``test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look``).
         assert ("sentence", "Mara will lose lamp 2 later.") not in compared[4]
         # Turns are stored the same way: the same conversation, as each mode shows it.
         assert ([turn["content"] for turn in local.request("GET", "/conversation").json()["turns"]]

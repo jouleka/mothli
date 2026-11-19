@@ -696,6 +696,45 @@ can be built side by side.
   new test lists every method of the worker's repository a run may call with how far into the
   edition each reaches, so a new way of reading the edition fails it until it is listed with its
   bound. Every changed test is listed in the pull request.
+- Built on 19 November 2026 in PR #126: step 5, screens say the same for every book, with no
+  migration, except (1) **"running" and "waiting" are told only while the reader is owed
+  notes**: progress (`/ingest`) names a job of theirs only while they have finished a chapter
+  whose notes the door does not hand them yet (the complete chapters it hands are fewer than
+  their place); otherwise it says `idle`. Section 3 changed only the 404, but before the first
+  finished chapter a job of theirs would still have answered `running` (their first page asks
+  for one), and at any place the first reader of a file, whose run builds the chapter ahead,
+  would have been told `running` (or `waiting`, past a guard) where a later reader, whose run
+  has nothing to build, is told `idle`: a difference the record did not accept, now gone.
+  While notes are owed, both are told as before: only a reader who has reached a chapter
+  nobody built before them can be owed notes for more than a moment, which is the timing hint
+  of section 4. (2) **No new line**: the empty cast and story use the panels' existing lines
+  ("No one yet. Keep reading and I'll keep track of who's who." and "Finish your first chapter
+  and I'll start keeping notes for you here."); the two lines of a book with no notes ("I don't
+  keep a list of who's who for this book yet. ..." and "I don't keep chapter-by-chapter notes
+  for this book yet. ...") are deleted, and a 404 from these routes, now only a book that is not
+  the reader's (or the read map switched off), shows the panels' ordinary "try again in a
+  moment" lines. "I don't keep a list of names for this book yet." ("Who was that?" in the chat)
+  stays: hosted mode has no route for names read off the page, and it answers it alike for
+  every book. (3) **What went with the fallback** (section 8's row): `_LOAD`, `door_served`,
+  `DOOR_LISTS`, the snapshot's `shared` flag, `HostedBookStore.shared` and the reader's-receipts
+  branch of progress (`companion/store.py`); `has_rows` now means "the door hands a chapter".
+  (4) A live book of a reader with no fingerprint gets no row from the door and is now unknown
+  to story memory (404 "unknown book" on the screens, refused by the chat as a book not
+  theirs), where the fallback answered it as empty; no such book can be made since step 1. (5)
+  Hosted progress never passes the reader's place (since step 2); the screens' parity test now
+  states that as its one difference from local mode instead of comparing a reader's own rows.
+  (6) The tests that seeded a reader's own rows seed the edition instead (the door hands them
+  to the reader up to their place): the story screens' tests, the screens' and the chat's
+  parity tests, the checks' parity test (at a place past the end, so every row, and now also at
+  each place) and the hosted chat's seeded tests; the chat's parity test seeds local mode only
+  to the reader's place, as local mode builds, so its "seeded" case no longer shows a later
+  name removed by the story memory: through the door that is left to the checker and the
+  second look, as `test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look`
+  records. (7) "Waiting" is still read from a job waiting until the next UTC midnight or later,
+  so a two-minute wait for a chapter another run holds, or a retry, set just before midnight
+  UTC reads as "waiting" for those minutes; left as it is. (8) The tenant role's grants, the
+  operator's command and the reader-chapter readers of `tenant/repository.py` are untouched
+  (steps 6 and 7). Every changed test is listed in the pull request.
 
 **The sentence for the terms and privacy pages** (replaces the free-library one, open items line 254):
 "Mothli's notes on a book's story (who's who and what has happened, chapter by chapter) are made once for

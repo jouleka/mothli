@@ -1040,8 +1040,10 @@ def test_the_story_screens_show_what_the_jobs_built_and_only_up_to_the_readers_p
     def screen(reader, path):
         return reader.call("GET", f"/api/books/{book}/{path}")
 
-    # Nothing built and nothing asked for yet: the panels' "not yet" answer.
-    assert screen(a, "graph").status_code == 404
+    # Nothing built and nothing asked for yet: the empty cast every book shows before its first
+    # finished chapter (ADR 0044 step 5; it was a 404 before).
+    assert (screen(a, "graph").status_code, screen(a, "graph").json()) == (
+        200, {"as_of_chapter": 0, "characters": [], "relationships": []})
 
     a.read(book, 1, 1, 2)
     a.mark(book, [1, 2])                                  # parts 1 and 2 read; part 3 is not
