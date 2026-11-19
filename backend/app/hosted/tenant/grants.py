@@ -115,10 +115,18 @@ TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
 # are made and when the role is checked, so a table a later migration adds is covered without
 # anyone listing it. Beyond them it reads and updates ``users`` (to find who is due and leave a
 # bare id behind) and writes one content-free audit event.
+#
+# ADR 0044 step 8: it also erases an edition 30 days after the last reader holding its file is
+# gone. UPDATE on books, to mark an edition with no holder ("no holder since", migration 0034),
+# clear the mark when a holder is back, and leave an erased edition's row as a bare id (its
+# fingerprints, title and source cleared), as removing a book leaves a reader's: the notes
+# account's ledger, reservations and jobs still refer to it. Its notes go with its chapters
+# (the cascade of migration 0024), with the DELETE it already holds.
 PURGE_OWNER_TABLE_PRIVILEGES = frozenset({"SELECT", "DELETE"})
 PURGE_OTHER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "users": frozenset({"SELECT", "UPDATE"}),
     "audit_events": frozenset({"INSERT"}),
+    "books": frozenset({"UPDATE"}),
 }
 
 ALL_TABLE_PRIVILEGES = frozenset(

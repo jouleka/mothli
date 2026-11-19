@@ -117,7 +117,8 @@ def test_one_grant_more_or_less_refuses_and_the_script_restores_exactly(provisio
         ("GRANT SELECT ON books TO {}", auth,
          lambda: asyncio.run(PostgresAuthRepository(dsn["auth"]).check_runtime_role()),
          AuthConfigurationError),
-        ("GRANT UPDATE ON books TO {}", purge, check_purge, PurgeConfigurationError),
+        # (ADR 0044 step 8 gave the purge UPDATE on books; it never adds a book.)
+        ("GRANT INSERT ON books TO {}", purge, check_purge, PurgeConfigurationError),
         ("GRANT SELECT ON platform_spend_days TO {}", purge, check_purge, PurgeConfigurationError),
         ("REVOKE DELETE ON chapter_notes FROM {}", purge, check_purge, PurgeConfigurationError),
         ("REVOKE EXECUTE ON FUNCTION companion_platform_reserve(numeric,numeric) FROM {}", tenant,

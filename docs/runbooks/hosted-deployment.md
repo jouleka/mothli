@@ -168,9 +168,15 @@ has. Run it by hand the same way:
 docker compose -f deploy/compose.yaml run --rm purge
 ```
 
-**Checking it ran.** Each run prints one line, for example `erased 1, unfinished 0, waiting 3`:
-accounts erased in this run, accounts it could not finish (it ends with an error then), and
-accounts still inside their 30 days. `tail deploy/backups/purge.log` shows the last runs. An
+The same step erases Mothli's notes on a book file nobody has any more: 30 days after the last
+reader with that exact file removed it or deleted their account (ADR 0044 section 6). A reader
+who brings the file back within the 30 days keeps the notes; one who brings it back later gets
+them built again, paid again.
+
+**Checking it ran.** Each run prints one line, for example
+`erased 1, unfinished 0, waiting 3; editions erased 0, unfinished 0, waiting 2`: accounts erased
+in this run, accounts it could not finish (it ends with an error then), and accounts still inside
+their 30 days; then the same for book files' notes. `tail deploy/backups/purge.log` shows the last runs. An
 account it could not finish (book storage unreachable, the database restarted) is finished by the
 next run; nothing of it is shown to anyone meanwhile. The audit log of an erased account ends with
 `account.purge`:

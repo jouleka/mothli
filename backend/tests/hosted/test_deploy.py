@@ -113,7 +113,9 @@ def test_the_role_script_grants_the_purge_role_the_owner_tables_and_its_few_othe
     tables, functions = granted(roles.render(
         roles.grant_statements("mothli", purge, ["books", "audit_events", "sessions"])))
     assert tables == {
-        "books": frozenset({"SELECT", "DELETE"}),
+        # ADR 0044 step 8: UPDATE on books, to mark an edition nobody holds and to leave an
+        # erased edition's row as a bare id.
+        "books": frozenset({"SELECT", "DELETE", "UPDATE"}),
         "sessions": frozenset({"SELECT", "DELETE"}),
         "audit_events": frozenset({"SELECT", "DELETE", "INSERT"}),
         "users": frozenset({"SELECT", "UPDATE"}),
