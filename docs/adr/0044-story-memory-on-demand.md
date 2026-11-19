@@ -461,6 +461,12 @@ this reader's reading or someone else's. One added sentence in its explanation (
 notes on a book's story are made once for each exact book file and used for everyone who has it; this
 copy holds them only up to where you are."
 
+**Note on the export sentence (19 November 2026, step 9): not added.** The reviewer decided, and told
+the owner, that the explanation inside "Take a copy of my data" stays as it is. Its words are already
+accurate ("who you have met and the story so far, as Mothli keeps them up to where you are", and
+"Nothing about anyone else is in here."), and the owner's rule says nothing a reader is shown speaks
+of other readers. The sentence about shared notes is for the terms and privacy pages only (below).
+
 ### 7. Corrections
 
 Today a reader can correct their own book's memory (`POST /api/books/{id}/memory-corrections`,
@@ -555,6 +561,10 @@ smallest risk first. Migrations from **0031**.
    holder coming back clears the mark; the export is unchanged.
 9. **Words** (no code): ADR 0017 section 3 and ADR 0042 sections 3 and 6 marked as amended; the privacy
    and terms sentence below; open items updated.
+10. **Placeholder, planned (owner approved on 19 November 2026); its own section follows when built.**
+    The fixed check that drops a sentence naming someone the reader has not met yet stopped working in
+    hosted mode when later names stopped leaving the database (steps 3 and 5). Step 10 restores it
+    inside the database.
 
 Steps 1 and 2 can be built side by side; 3 waits for 2; 4 and 5 wait for 3; 6, 7 and 8 wait for 4 and
 can be built side by side.
@@ -864,6 +874,24 @@ can be built side by side.
   waiting N`; an unfinished edition makes the run end with an error, as an unfinished account
   does. Nothing is written to the audit log for an edition. (9) "Take a copy of my data" is
   unchanged (its sentence is step 9's). Every changed test is listed in the pull request.
+- Built on 19 November 2026: step 9, words, with no migration and no change to what any reader is
+  shown or what the server does, except (1) **the export sentence of section 6 is not added**: the
+  reviewer decided, and told the owner, that the copy's explanation is already accurate and that
+  nothing a reader is shown may speak of other readers; the sentence goes on the terms and privacy
+  pages only (the note under section 6). (2) ADR 0017 section 3 and ADR 0042 sections 3 and 6 each
+  open with an "Amended by ADR 0044" note; their old text is kept. ADR 0042's status line says so
+  too. (3) The terms and privacy sentence below replaces the free-library one in the open items
+  word for word (that item is now line 257, not 254); the pages themselves are not built.
+  (4) **The two correction helpers are removed** from `frontend/src/api.ts` (`memoryCorrections`,
+  `correctMemory`) with their two types and their one test in `api.test.ts`: no screen called them
+  in either mode. Local mode's correction routes (`app/api/views.py`) stay. (5) `docs/DECISIONS.md`
+  D55 is amended: hosted mode has no corrections since step 7, local mode is unchanged. (6) The
+  questions for the owner and the points this record could not verify now say what steps 1 to 8
+  settled. (7) Left as they are: the empty `entity_corrections` table (dropping it is a migration
+  of its own), the notes account's name "Mothli library" (no reader sees it), dated reports
+  under `docs/product` that describe the design as it was on their day, and `docs/a11y.md`'s
+  LIT-59 section, which describes a "Correct this name" form that no screen has had since before
+  this record.
 
 **The sentence for the terms and privacy pages** (replaces the free-library one, open items line 254):
 "Mothli's notes on a book's story (who's who and what has happened, chapter by chapter) are made once for
@@ -901,6 +929,14 @@ When nobody has the file any more, its notes are deleted 30 days later."
 
 ## Questions for the owner
 
+All five were answered on 18 November 2026 (the owner's rule at the top), and steps 1 to 8 built the
+answers: (1) Mothli pays, from the notes account, under a $10 day ceiling, with the platform's day at
+$15; one reader's reading may be first to 30 new chapters a day, 300 a month and 5 new files a month
+(not 12 and 120), no reader's allowance moves and notes are never sold (step 4); (2) an edition is
+erased 30 days after the last holder of its file is gone, for every book (step 8); (3) one chapter
+ahead (step 4); (4) no reader corrects notes: the hosted correction routes are gone (step 7);
+(5) the timing hint is accepted. The questions are kept below as they were asked.
+
 1. **Who pays for the notes, and under which cap?** Recommended: Mothli pays, from a notes allowance of
    its own, $10 a day for everyone, and each reader can be first to at most 12 new chapters a day and 120 a
    month (about $1.08 and $10.80 at most), with the overall daily limit raised from $5 to $15. If you
@@ -919,6 +955,14 @@ When nobody has the file any more, its notes are deleted 30 days later."
    does; hiding it would mean making everyone wait.
 
 ## What this record could not verify
+
+Where each point stands after steps 1 to 8: point 1 is answered by step 3 (Postgres accepts the
+index; the slot frees at the first claim after the lease's end, item 3 of its note). Point 2 is
+answered by step 7 (every hosted and parity test run with the grants removed; item 5 of its note).
+Point 3 is checked by step 1 for made-up books only, in four processes with different string-hash
+seeds; no real book file was tried. Point 5 is answered by step 8: the purge needs only `UPDATE` on
+`books` and reads the notes account through `edition_of` (item 7 of its note). Points 4 and 6 are
+still open: nothing has been measured with real models or real readers.
 
 1. That Postgres accepts the partial unique index on two `payload_metadata` fields of `jobs`, and exactly
    when an expired lease leaves `running` so the slot frees (the claim's handling of expired leases was not

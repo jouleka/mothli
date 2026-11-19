@@ -257,16 +257,6 @@ export type GraphEdge = {
   rel_type: string; label: string; revealed_at: number; invalid_at: number | null;
 };
 export type Graph = { as_of_chapter: number; characters: GraphNode[]; relationships: GraphEdge[] };
-export type MemoryCorrection = {
-  correction_id: number | string;
-  kind: "replace" | "split" | "merge";
-  effective_at: number;
-  source_entities: { entity_id: number | string; name: string }[];
-  target_entities: { entity_id: number | string; name: string }[];
-  reason: string | null;
-  recorded_at: string;
-};
-export type MemoryCorrections = { as_of_chapter: number; items: MemoryCorrection[] };
 // the codex "story broken down" (LIT-31): a chapter + its highlights (who first appears, its events)
 export type ChapterNote = {
   chapter_key: string; revealed_at: number; title: string; summary: string;
@@ -900,18 +890,6 @@ export const api = {
   visiblePeople: (id: string, point: ReadFrontier) => unlessMissing("people", () => fetch(`/api/books/${id}/people`,{
     method:"POST",headers:{"content-type":"application/json",...csrfHeaders()},body:JSON.stringify(point),
   })).then((r)=>j<{read_frontier:ReadFrontier;names:string[]}>(r)),
-  memoryCorrections: (id: string, bookmark?: number) =>
-    fetch(
-      `/api/books/${id}/memory-corrections${bookmark != null ? `?bookmark=${bookmark}` : ""}`,
-    ).then((r) => j<MemoryCorrections>(r)),
-  correctMemory: (
-    id: string,
-    value: { source_entity_id: number; canonical_name: string; reason: string; bookmark: number },
-  ) => fetch(`/api/books/${id}/memory-corrections`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...csrfHeaders() },
-    body: JSON.stringify(value),
-  }).then((r) => j<MemoryCorrections & { correction_id: number | string; target_entity_id: number | string }>(r)),
   // the chapter-by-chapter breakdown (summary + highlights) + visible cast, clamped to `bookmark` (LIT-31)
   notes: (id: string, bookmark?: number) =>
     unlessMissing("notes", () => fetch(`/api/books/${id}/notes${bookmark != null ? `?bookmark=${bookmark}` : ""}`)).then(

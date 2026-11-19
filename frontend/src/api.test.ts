@@ -456,28 +456,6 @@ describe("Hosted writes", () => {
     expect(saved).toMatchObject({ queued: true });
     expect(pendingPosition("book")).toMatchObject({ cfi: "page-40", offset: 40 });
   });
-
-  test("posts an exact-frontier memory correction with CSRF", async () => {
-    vi.spyOn(document, "cookie", "get").mockReturnValue("__Host-litlet-csrf=csrf-token");
-    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-      as_of_chapter: 3, correction_id: 7, target_entity_id: 8, items: [],
-    }), { status: 200, headers: { "content-type": "application/json" } }));
-    const correction = {
-      source_entity_id: 4,
-      canonical_name: "Wilhelmina Harker",
-      reason: "The full name is established in the chapters already read.",
-      bookmark: 3,
-    };
-    await api.correctMemory("book", correction);
-    expect(fetch).toHaveBeenCalledWith(
-      "/api/books/book/memory-corrections",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({ "X-CSRF-Token": "csrf-token" }),
-        body: JSON.stringify(correction),
-      }),
-    );
-  });
 });
 
 describe("Removing a book", () => {

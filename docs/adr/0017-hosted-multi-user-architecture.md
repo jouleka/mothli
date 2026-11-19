@@ -50,6 +50,12 @@ receive an authenticated principal from the session dependency; clients never su
 
 ### 3. Ownership model
 
+**Amended by ADR 0044 (18 November 2026).** Story memory is now shared for every book file, not
+only for library editions the operator built: the notes on a book are made as readers reach each
+chapter, once for each exact file, under one notes account, and handed to each reader only up to
+their own place. No reader owns story memory rows any more, and the operator builds nothing; the
+text below, and the 17 November amendment, are kept as they were.
+
 Every tenant-owned row has a non-null `owner_id` referencing `users.id`, including derived data. The
 denormalization is deliberate: it makes ownership visible at each query and permits composite foreign
 keys that reject mismatched tenant/resource pairs.
