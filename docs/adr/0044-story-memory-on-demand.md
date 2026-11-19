@@ -825,6 +825,45 @@ can be built side by side.
   the door tests change in one test only, whose correction call now expects the unknown route's
   answer. (9) The `entity_corrections` table stays, empty in hosted mode, with nobody's
   privilege but the purge's; dropping it would be a migration of its own.
+- Built on 19 November 2026 in PR #129: step 8, erasing an edition nobody holds, as designed,
+  except (1) **the migration is `0034_edition_holders.sql`**, not 0035: step 7 needed none, so
+  0034 was never used. It adds `books.no_holder_since` ("no holder since", a time and nothing
+  else) and a check that only a live edition carries it; every row starts without it, so no
+  edition's 30 days start at the deployment. (2) **A holder** is a reader's live `books` row with
+  both fingerprints equal, of an account whose status is not `deleting` (pending deletion) or
+  `deleted` (being erased); the notes account's own books never hold. Each purge run, after the
+  accounts: a held edition loses its mark; an unheld one without a mark gets `now()`; a mark
+  already there is kept; an edition whose mark is 30 days old is erased. (3) **The erased
+  edition's row is kept as a bare id**, as a removed book's is (deleted, no title, author,
+  source, fingerprints, mark or edition mark), not deleted: the notes account's ledger,
+  reservations and any job of the command's refer to it. Its chapters are deleted, and every
+  story memory row with them by migration 0024's cascade, with the rows a reader's removal
+  erases (an edition the command made through the add path may have some). (4) **The stored file
+  of a command-made edition** goes before the rows, object then record, one at a time, as the
+  account purge does its files first; a crash leaves the record, and the next run deletes the
+  object again (safe to repeat). (5) **Races** are closed by the edition's existing lock (the
+  one `commit_chapter_memory` takes): the erasure takes it, then decides again (a holder back
+  clears the mark and keeps everything), then erases in the same transaction. A publish waiting
+  for it then finds the edition no longer live and writes nothing; a publish holding it commits
+  first and its reader is a holder. A reader who uploads the file after the erasure has decided
+  and before it commits is not seen: the edition is erased and the file starts again (accepted).
+  A run whose edition was erased under it (its publish refused, or anything else failing once
+  the edition is gone) does not fail: its job succeeds and asks for the reader's next run,
+  which makes a new edition from chapter 1; the unique edition index keeps it to one live
+  edition. The calls that run made on the erased edition's chapter stay as open reservations
+  of the notes account (nothing settles a book that is no longer live, as for a removed book);
+  their cost is not in the ledger. (6) **Jobs that name an erased edition**: finished ones keep
+  its id in `payload_metadata` (the chapter guards still count a published one; the "two
+  failures" count reads only the edition named, so a new edition starts at none); a waiting job
+  loses `edition` at its claim, as every job does, and builds the new edition; the build slot
+  holds only `leased` or `running` jobs, so an erased edition's slot frees when the run ends.
+  (7) **The purge role gains `UPDATE` on `books`** (`grants.py`), nothing else; no other role
+  changes, and the tenant role still holds nothing on the story memory tables. It reads the
+  notes account through `edition_of`, so it needs no privilege on `notes_account` (unverified
+  point 5 below, answered). (8) The purge's line now ends `; editions erased N, unfinished N,
+  waiting N`; an unfinished edition makes the run end with an error, as an unfinished account
+  does. Nothing is written to the audit log for an edition. (9) "Take a copy of my data" is
+  unchanged (its sentence is step 9's). Every changed test is listed in the pull request.
 
 **The sentence for the terms and privacy pages** (replaces the free-library one, open items line 254):
 "Mothli's notes on a book's story (who's who and what has happened, chapter by chapter) are made once for
