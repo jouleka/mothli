@@ -34,8 +34,9 @@ import pytest
 from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
 
-from app.eval.spoiler_gate import score_recap
+from app.eval.spoiler_gate import score_recap, unread_future_names
 from app.hosted.companion.jobs import CompanionJobs, StoryMemoryQueue, story_memory_failure
+from app.hosted.companion.later_names import rebuild_name_words
 from app.hosted.companion.memory import HostedBookStore
 from app.hosted.companion.spend import set_spend_limits, spend_limits
 from app.hosted.companion.store import HostedCompanionCatalog
@@ -526,9 +527,10 @@ def test_a_chapter_failing_on_two_runs_is_kept_unremembered_and_the_book_goes_on
         assert same_person_names(mem, 2, read_words, {"vex", "lamplighter"}) == []
         assert same_person_names(mem, 3, read_words, {"lamplighter"}) == [
             ["Vex", "the Lamplighter"]]
+        # Asked of the database (ADR 0044 step 10), which answers with the sentence's own word.
         for bookmark in (1, 2):
             assert score_recap(mem, bookmark, "Corvus moved lamp 50.")[
-                "future_entity_leaks"] == ["Corvus"]
+                "future_entity_leaks"] == ["corvus"]
         assert score_recap(mem, 3, "Corvus moved lamp 50.")["future_entity_leaks"] == []
 
 
@@ -550,9 +552,7 @@ def fixed_check_drops(mem, durable: int, read_text: str) -> set[str]:
     dropped = set()
     for probe, sentence in PROBES.items():
         result = score_recap(mem, durable, sentence, read_text=read_text)
-        leaks = [name for name in result["future_entity_leaks"]
-                 if not set(word_tokens(name)) <= words]
-        if leaks or result["prolepsis_hits"]:
+        if unread_future_names(result, words) or result["prolepsis_hits"]:
             dropped.add(probe)
     return dropped
 
@@ -573,6 +573,17 @@ def test_an_unremembered_chapter_is_never_looser_than_local_mode_on_the_spoiler_
     assert drain(worker(app, extraction, worker_dsn)) == 5
     assert built_for(database, a.owner, book) == [(1, "body"), (2, "unremembered"), (3, "body")]
     atoms = hosted_atoms(app, a.owner, book)
+    # Each publish wrote the words of the names it added (ADR 0044 step 10), exactly as they are
+    # made again from the edition's rows; no name is without them.
+    words = ("SELECT source_kind, source_id, source_digest, tokens, folded, roles, words"
+             " FROM name_words WHERE owner_id=%s AND book_id=%s ORDER BY 1, 2")
+    with psycopg.connect(database) as conn:
+        scope = conn.execute("SELECT owner_id, id, incarnation FROM books WHERE owner_id=%s"
+                             " AND id=%s", edition_of(database, a.owner, book)[:2]).fetchone()
+        published = conn.execute(words, scope[:2]).fetchall()
+        assert {row[0] for row in published} == {"entity", "alias", "theme"}
+        assert rebuild_name_words(conn, scope) == len(published)
+        assert conn.execute(words, scope[:2]).fetchall() == published
 
     local_client = extraction_client()
     Lamps(local_client, monkeypatch, reject={2})
@@ -599,12 +610,10 @@ def test_an_unremembered_chapter_is_never_looser_than_local_mode_on_the_spoiler_
                       3: {"foreshadowing"}}
 
     # Through the hosted chat, the checker clearing every sentence: what is dropped is exactly
-    # what the fixed checks drop, at each place. ADR 0044 step 3: the notes are the edition's,
-    # handed through the door only up to the reader's place, so at each place the chat's checks
-    # know what the door hands there (``served``), never a later chapter; still never looser
-    # than local mode, and the rest is Jev's and the second look's
-    # (``test_story_memory_door_postgres.py::test_the_chats_spoiler_probes_through_the_door``
-    # and ``::test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look``).
+    # what the fixed checks drop, at each place. The notes are the edition's, handed through the
+    # door only up to the reader's place (ADR 0044 step 3), and the later names are checked in
+    # the database (step 10), so at each place, with the reader really there (``served``), the
+    # chat drops what it dropped when the reader held every row: every name not yet met.
     platform = app.state.platform_client
     served = {}
     for place in (1, 2, 3):
@@ -621,7 +630,7 @@ def test_an_unremembered_chapter_is_never_looser_than_local_mode_on_the_spoiler_
             shown = sentences(a.ask(book))
             assert line(1, 2) in shown, (place, probe)
             assert (sentence not in shown) == (probe in served[place]), (place, probe)
-    assert served == {1: {"foreshadowing"}, 2: {"foreshadowing"}, 3: {"foreshadowing"}}
+    assert served == hosted
 
 
 # ---- 6: the writer refused, or unreachable ----------------------------------------------------------

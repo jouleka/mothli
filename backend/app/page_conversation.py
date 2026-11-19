@@ -20,7 +20,7 @@ from app.conversation_pipeline import (ConversationDraft, SceneConversationDraft
                                        compact_candidates, review_escalation, CLARIFICATIONS, BRIEF_DRAFT_SYSTEM,
                                        review_draft, PROSE_DRAFT_SYSTEM, ProseConversationDraft)
 from app.cost import CostCeilingExceeded, budgeted_completion, pricing_known
-from app.eval.spoiler_gate import score_recap
+from app.eval.spoiler_gate import score_recap, unread_future_names
 from app.eval.spoiler_gate.synthesis import _read_visibility
 from app.eval.spoiler_gate.binding import unsupported_event_bindings
 from app.read_frontier import requested_snapshot
@@ -327,8 +327,7 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             if result["future_entity_leaks"]:
                 if read_words is None:
                     read_words = set(word_tokens(permitted_text))
-                result["future_entity_leaks"] = [name for name in result["future_entity_leaks"]
-                    if not set(word_tokens(name)) <= read_words]
+                result["future_entity_leaks"] = unread_future_names(result, read_words)
             result["unsupported_event_bindings"] = unsupported_event_bindings(text, facts)
             timings["safety"] = round(timings.get("safety", 0) + (perf_counter()-started_safety)*1000, 2)
             return result

@@ -25,10 +25,12 @@ from .synthesis import (
     score_recap,
     supplied_facts,
     synth_prompt,
+    unread_future_names,
 )
 
 __all__ = [
     "score_recap",
+    "unread_future_names",
     "assert_recap_safe",
     "SpoilerGateError",
     "supplied_facts",

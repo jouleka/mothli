@@ -561,10 +561,11 @@ smallest risk first. Migrations from **0031**.
    holder coming back clears the mark; the export is unchanged.
 9. **Words** (no code): ADR 0017 section 3 and ADR 0042 sections 3 and 6 marked as amended; the privacy
    and terms sentence below; open items updated.
-10. **Placeholder, planned (owner approved on 19 November 2026); its own section follows when built.**
-    The fixed check that drops a sentence naming someone the reader has not met yet stopped working in
-    hosted mode when later names stopped leaving the database (steps 3 and 5). Step 10 restores it
-    inside the database.
+10. **The later-name check, in the database** (migration `0035_later_name_words.sql`; owner approved
+    on 19 November 2026). The fixed check that drops a sentence naming someone the reader has not met
+    yet stopped working in hosted mode when later names stopped leaving the database (steps 3 and 5).
+    Step 10 restores it inside the database, so the names still never leave it. Its own section,
+    "Step 10 in plain words", follows the steps; its "Built on" note is with the others.
 
 Steps 1 and 2 can be built side by side; 3 waits for 2; 4 and 5 wait for 3; 6, 7 and 8 wait for 4 and
 can be built side by side.
@@ -892,6 +893,112 @@ can be built side by side.
   under `docs/product` that describe the design as it was on their day, and `docs/a11y.md`'s
   LIT-59 section, which describes a "Correct this name" form that no screen has had since before
   this record.
+- Built on 19 November 2026: step 10, the later-name check in the database (migration
+  `0035_later_name_words.sql`), as the owner approved it, except where said. (1) **What is
+  stored**: a new table, `name_words`, one row for each person, other name and theme of an
+  edition, holding that name's match words as `score_recap` makes them (`_match_tokens`), the same
+  words with their accents folded, which of them are role words, and every word of the name, with
+  the SHA-256 of the exact text they were made from. They are made by one function,
+  `synthesis.name_words_of`, from the very functions the local check uses, so the two modes split
+  a name the same way. The row is keyed by the name's own row; when a name is revealed, whether it
+  was taken back, and whose other name it is are read from the name's row at each check, never
+  copied, so they cannot disagree with the notes. A name whose words are missing, or were made
+  from another text, makes the check refuse the whole book (`complete` false), and the reply stops
+  (`StoryMemoryUnavailable`), as when the notes cannot be read at all. (2) **Who writes
+  it**: the worker, in the transaction that publishes a chapter, for the names that chapter adds
+  (`commit_chapter_memory`; the worker now makes the ids of a chapter's other names and themes so
+  it can name them, and gains `INSERT` on `name_words` and nothing else). A later chapter never
+  changes or takes back a published name (the publish refuses a changed copied row, step 3), so
+  rows are only ever added; a name changed or taken back by anyone else is caught by the digest or
+  read from its row. It hangs from its chapter like every row of the notes, so erasing an edition
+  (step 8) erases it, and removing a reader's book never touches it. The tenant role holds no
+  privilege on it (`STORY_MEMORY_TABLES`); it is in the copy-of-your-data list as left out.
+  (3) **The function**, `story_memory_later_names(book, at_most, sentence words, sentence words
+  folded, read_any, read_proper, read_also, read_not)`, a `SECURITY DEFINER` function in plain SQL,
+  `EXECUTE` revoked from `PUBLIC` and granted to the tenant role alone (`grants.py`, the role
+  script). It finds the reader, their book and its live edition exactly as the door does, works
+  out the place exactly as the door does, and applies `score_recap`'s rule as set comparisons: the
+  whitelist of read visible words, reader-parity rules (a) and (b) by name, the accent-folded
+  match for names and the exact one for themes, and the chat's own rule that a later name every
+  word of which the reader has read is not news (`unread_future_names`). It returns words of the
+  sentence it was given and nothing else. **One departure from the brief**: it takes `at_most`,
+  a ceiling that can only lower the place (`LEAST`), never raise it. Local mode checks a sentence
+  as of the chapters whose notes are complete, which can be below the reader's place, and the home
+  chat checks as of chapter 0 for a book with nothing finished; without the ceiling hosted mode
+  would let through a name revealed between the two that local mode removes. A name revealed
+  between them is one the door already hands this reader, so the ceiling tells the caller nothing
+  it does not have. (4) **The seam**: `score_recap` asks `db.later_name_check` when the store has
+  one (the hosted snapshot does; a snapshot built without a database refuses), and otherwise runs
+  local mode's lines unchanged (moved into `_later_names_here`). Everything else in it is as it
+  was. A hosted result's `future_entity_leaks` and `future_theme_hits` hold the sentence's own
+  matching words, not the names, and `unread_future_entity_leaks` the ones the chat drops; the chat
+  (`sentence_checks.safe`, and the local-only `page_conversation`) reads that through
+  `unread_future_names`, which for a local result is the old list comprehension. No hosted path
+  shows or logs these lists. (5) **Size**: one call per checked sentence (each `score_recap`),
+  never one per word. It sends the sentence's words and the reader's own read words: every
+  distinct word of the read text (some thousands for a novel read far), the capitalised ones read
+  mid-sentence, and two lists that are almost always empty. Not measured on a long book.
+  (6) **Themes**: checked in the database too and kept a soft signal, as locally; no hosted path
+  acts on it (it was empty in hosted mode before). (7) **No backfill**: nothing was deployed
+  before this step, so no edition lacks its words. A future rebuild (an edition made before a
+  change to how names are split, or a restore of an old backup) runs
+  `app.hosted.companion.later_names.rebuild_name_words(conn, edition)` for each edition as the
+  database owner; until it has, the check refuses those books and their chats stop, which is the
+  safe way to fail. The tests that write notes by hand call it too (`serve_through_the_door`).
+  (8) **Designs not taken**: rewriting the tokeniser in SQL (large, and any difference from
+  Python's Unicode handling would be a silent gap); a derived table of whole name groups rebuilt
+  at each publish (it would go stale, on the looser side, if a name were ever taken back other
+  than by a publish); sending the database only the sentence and treating unknown read words as
+  unread (exactness lost: hosted would drop sentences local keeps in rule (b) and the read-name
+  case); hashing names or words to send them out (a dictionary turns hashes back into names);
+  one call per word (slow, and no smaller an oracle). Every changed test is listed in the pull
+  request.
+
+### Step 10 in plain words
+
+**What was lost and is now back.** Every sentence Mothli says is checked before it is shown. One
+check is fixed, with no model in it: if a sentence names a person, a place or another name that the
+book only brings in after where the reader is, the sentence is removed. In hosted mode that check
+stopped working at step 5: to keep later notes away from a reader, the part of Mothli that answers
+was no longer given any name past the reader's place, so it had nothing to compare a sentence with,
+and a later name the writer remembered from a famous book was stopped only by Jev and the second
+look. Now the check runs inside the database, which has every name, and answers only "these words of
+your sentence are later names". So the sentence is removed again, as it was before step 5 and as it
+is in local mode, and the later names still never leave the database. The three spoiler tests that
+had been weakened assert it again: a sentence naming someone not yet met is removed in a book's chat
+and in the home chat across books, even when the checker clears it, and an unremembered chapter is
+again never looser than local mode.
+
+**The risk this adds.** Before this step, the door was the only way Mothli's server could ask the
+database about a book's notes, and it never said anything past the reader's place. Now Mothli's own
+server code can ask a second question: "which of these words are later names in this book?" A
+program that sent word after word could, slowly, find out whether a given word is a later name, or
+whether two words together make one, which the door alone never allowed. It can never get a name it
+did not already guess: only words it sent come back. Who can ask: only Mothli's own web server, with
+the database login it uses for readers, and only about a book of the reader whose session it is
+serving, with a file that has notes; nobody else's login may call it, readers have no way to call it
+themselves, and a reader's browser sends nothing it uses except the reader's own reading. It cannot
+be told a later place than the reader's own. That is acceptable for the same reason the door is: the
+server is Mothli's own code, and what it does with the answer is the same as before (drop the
+sentence); a bug that showed the answer would show only words the writer had already put in the
+sentence. The table of name words cannot be read by that login at all.
+
+**A dropped sentence can hint.** When a sentence is removed for a later name, the reader sees a
+shorter reply. That can hint that the book has someone of that name later on. Local mode has always
+done exactly the same, and the reply never says why a sentence went.
+
+**Where hosted mode is stricter than local mode.** In one case only: when one word belongs to two
+later names (say "Ivan" is both a later nickname of someone the reader has met and part of the name
+of a later person, Ivan Petrov), local mode looks at only one of the two names, which one depending
+on the order the notes were written in, and may let the sentence through; hosted mode removes it if
+either name is new to the reader. A reader would see one sentence fewer, in a rare case. Otherwise,
+for the same notes, the same sentence and the same reading, both modes remove exactly the same
+sentences (the parity tests). One more difference, from how the notes are built rather than how
+they are checked: in local mode a reader's notes reach only as far as they have read, so the check
+there knows no later name at all; in hosted mode the notes of a file reach as far as its furthest
+reader (plus one chapter), so the check knows more later names and removes more sentences that
+name them. That too is the safe side. Two numbers the chat never uses differ in form: a hosted result lists
+the sentence's own words where local mode lists the later names.
 
 **The sentence for the terms and privacy pages** (replaces the free-library one, open items line 254):
 "Mothli's notes on a book's story (who's who and what has happened, chapter by chapter) are made once for

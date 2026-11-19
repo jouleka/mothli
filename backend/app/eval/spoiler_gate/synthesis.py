@@ -433,7 +433,95 @@ def score_recap(db, bm, recap_text, read_text=None):
     stored with NO capitalized token anywhere (keyed on capitalization so epithets don't forbid
     common words; anomalous extractor output only); (4) rule (a)'s mid-clause evidence can be faked
     by Title-Case HEADINGS inside raw prose (pass-3 F-P3-4: an entity named a common heading word,
-    e.g. 'Rid' — contrived, absent from real data, and the reader did see the word capitalized)."""
+    e.g. 'Rid' — contrived, absent from real data, and the reader did see the word capitalized).
+
+    HOSTED (ADR 0044 step 10): a store that cannot hold the later names (a hosted reader's
+    snapshot, handed nothing past their place) offers ``later_name_check``, which asks the
+    database the same question with the same rule (``later_name_question``) and gets back only
+    the sentence's own words: then ``future_entity_leaks`` and ``future_theme_hits`` hold the
+    sentence's matching words (accent-folded for names), not the later names, and
+    ``unread_future_entity_leaks`` holds those whose name the reader has not wholly read (see
+    ``unread_future_names``). Everything else is computed here, as locally."""
+    check = getattr(db, "later_name_check", None)
+    if check is None:
+        future_hits, theme_hits, future = _later_names_here(db, bm, recap_text, read_text)
+        unread = None
+    else:
+        answer = check(bm, later_name_question(recap_text, read_text))
+        recap_words = set(word_tokens(_norm(recap_text)))
+        future_hits = sorted(answer["name_words"])
+        unread = sorted(answer["unread_name_words"])
+        theme_hits = sorted(set(answer["theme_words"]) & recap_words)
+        future = set(answer["exact_name_words"])
+    facts = supplied_facts(db, bm)
+    supplied = _proper_nouns(" ".join(facts["characters"] + facts["chapter_summaries"] + facts["events"]))
+    recap_nouns = _proper_nouns(recap_text)
+    prolepsis = sorted({m.group(0).lower() for m in PROLEPSIS_RE.finditer(recap_text)})
+    ungrounded = sorted(t for t in recap_nouns if t not in supplied and t not in future)
+    from app.eval.spoiler_gate.grounding import ground_recap          # local import: avoids a cycle
+    from app.eval.spoiler_gate.binding import unsupported_event_bindings
+    grounding = ground_recap(recap_text, facts)
+    bindings = unsupported_event_bindings(recap_text, facts)
+    result = {"bookmark": bm, "future_entity_leaks": future_hits, "prolepsis_hits": prolepsis,
+              "future_theme_hits": theme_hits,                          # SOFT (judge-reviewable)
+              "ungrounded_sentences": grounding["hard"],                # HARD (LIT-25: essentially no
+              #                        factual trace — the untraceable-event class the name check misses)
+              "unsupported_event_bindings": bindings,                   # HARD (LIT-27: fact vocabulary
+              #                        rebound to the wrong named subject/object or semantic role)
+              "weakly_grounded_sentences": grounding["soft"],           # SOFT (partial paraphrase band)
+              "ungrounded_name_tokens": ungrounded,
+              "grounded_rate": 1 - len(ungrounded) / max(len(recap_nouns), 1)}
+    if unread is not None:
+        result["unread_future_entity_leaks"] = unread
+    return result
+
+
+def unread_future_names(result, read_words):
+    """The later names of a ``score_recap`` result that still count once the reader's own words
+    are taken into account: a later name every word of which the reader has read (in any case) is
+    not news to them. ``read_words`` is ``set(word_tokens(read_text))`` of the ``read_text`` the
+    score was made with. A hosted score was already decided this way in the database, against
+    every later name a matched word belongs to (``unread_future_entity_leaks``)."""
+    if "unread_future_entity_leaks" in result:
+        return list(result["unread_future_entity_leaks"])
+    return [name for name in result["future_entity_leaks"]
+            if not set(word_tokens(name)) <= read_words]
+
+
+def later_name_question(recap_text, read_text):
+    """What a hosted store sends the database to check ``recap_text`` for later names
+    (``story_memory_later_names``, migration 0035): the sentence's words, as written and with their
+    accents folded, and the reader's own read words from ``read_text`` (None: the eval-only mode,
+    no read evidence). Nothing of the book's notes is in it, and the database answers with words
+    of the sentence only. ``read_also`` and ``read_not`` make ``read_any`` into the read words the
+    chat's own rule uses (``word_tokens(read_text)``, ``unread_future_names``); they are almost
+    always empty."""
+    recap_words = set(word_tokens(_norm(recap_text)))
+    words = recap_words | _proper_nouns(recap_text)
+    question = {"words": sorted(words), "folded": sorted({fold_accents(w) for w in recap_words}),
+                "read_any": None, "read_proper": None, "read_also": None, "read_not": None}
+    if read_text is not None:
+        read_proper, read_any = _read_visibility(read_text)
+        read_words = set(word_tokens(read_text))
+        question.update(read_any=sorted(read_any), read_proper=sorted(read_proper),
+                        read_also=sorted(read_words - read_any),
+                        read_not=sorted(read_any - read_words))
+    return question
+
+
+def name_words_of(text):
+    """The words a hosted edition keeps for one stored name (a person's name, another name, or a
+    theme), worked out by the functions ``score_recap`` uses: its match words, sorted; the same
+    words with their accents folded, in the same order; those that are role words; and every word
+    of the name (what ``unread_future_names`` compares with the reader's words)."""
+    tokens = sorted(_match_tokens(text))
+    return {"tokens": tokens, "folded": [fold_accents(token) for token in tokens],
+            "roles": sorted(set(tokens) & ROLE_NOUNS), "words": sorted(set(word_tokens(text)))}
+
+
+def _later_names_here(db, bm, recap_text, read_text):
+    """Local mode's half of ``score_recap``: the later names, read from the store's audit hatch.
+    Returns (the later names the recap names, the later themes it names, the later name words)."""
     rev = _all_entities_revealed_at(db)
     id2name = {r["entity_id"]: r["canonical_name"] for r in db._audit_all("entities")}
     live_aliases = [a for a in db._audit_all("aliases") if a["retracted_at"] is None]
@@ -510,28 +598,11 @@ def score_recap(db, bm, recap_text, read_text=None):
     fut_by_theme = _apply_parity(themed_future)
     future = {t: n for n, toks in fut_by_ent.items() for t in toks}
     theme_future = {t: n for n, toks in fut_by_theme.items() for t in toks}
-    facts = supplied_facts(db, bm)
-    supplied = _proper_nouns(" ".join(facts["characters"] + facts["chapter_summaries"] + facts["events"]))
     recap_words = set(word_tokens(_norm(recap_text)))             # case-insensitive whole words
-    recap_nouns = _proper_nouns(recap_text)
     # A later name is caught however its accents are written ("Paissy" for "Païssy", 6ak). Folding
     # is used only here, where it can add a hit; the whitelist and reader-parity drops above stay
     # exact, so a read "Adelaïda" never clears a different, later "Adelaida".
     folded_recap = {fold_accents(w) for w in recap_words}
     future_hits = sorted({future[t] for t in future if fold_accents(t) in folded_recap})
     theme_hits = sorted({theme_future[t] for t in theme_future if t in recap_words})
-    prolepsis = sorted({m.group(0).lower() for m in PROLEPSIS_RE.finditer(recap_text)})
-    ungrounded = sorted(t for t in recap_nouns if t not in supplied and t not in future)
-    from app.eval.spoiler_gate.grounding import ground_recap          # local import: avoids a cycle
-    from app.eval.spoiler_gate.binding import unsupported_event_bindings
-    grounding = ground_recap(recap_text, facts)
-    bindings = unsupported_event_bindings(recap_text, facts)
-    return {"bookmark": bm, "future_entity_leaks": future_hits, "prolepsis_hits": prolepsis,
-            "future_theme_hits": theme_hits,                          # SOFT (judge-reviewable)
-            "ungrounded_sentences": grounding["hard"],                # HARD (LIT-25: essentially no
-            #                        factual trace — the untraceable-event class the name check misses)
-            "unsupported_event_bindings": bindings,                   # HARD (LIT-27: fact vocabulary
-            #                        rebound to the wrong named subject/object or semantic role)
-            "weakly_grounded_sentences": grounding["soft"],           # SOFT (partial paraphrase band)
-            "ungrounded_name_tokens": ungrounded,
-            "grounded_rate": 1 - len(ungrounded) / max(len(recap_nouns), 1)}
+    return future_hits, theme_hits, future

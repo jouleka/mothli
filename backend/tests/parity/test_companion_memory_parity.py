@@ -27,7 +27,7 @@ import psycopg
 import pytest
 
 import app.hosted.companion as companion
-from app.eval.spoiler_gate import score_recap
+from app.eval.spoiler_gate import score_recap, unread_future_names
 from app.hosted.companion import CompanionDatabaseBusy
 from app.hosted.companion.memory import (
     HostedBookStore,
@@ -39,7 +39,7 @@ from app.known_names import same_person_names
 from app.memory.dal import _now
 from app.memory.store import Store
 from app.stream_conversation import gate_sentences, sentence_checks
-from app.unicode_text import word_tokens
+from app.unicode_text import fold_accents, word_tokens
 from tests.hosted import test_tenant_postgres as tenant_gate
 from tests.parity._adapters import (
     PostgresParityAdapter,
@@ -255,14 +255,35 @@ def _answers(mem, corpus) -> dict:
         },
     }
     for bookmark in BOOKMARKS:
+        raw = {(sentence, index): score_recap(mem, bookmark, sentence, read_text=text)
+               for sentence in SENTENCES
+               for index, text in enumerate(_read_texts(corpus, bookmark))}
+        texts = dict(enumerate(_read_texts(corpus, bookmark)))
         answers[bookmark] = {
             "view": _view(mem, bookmark),
             "names": [same_person_names(mem, bookmark, read_words, focus) for focus in FOCUS],
-            "recap": {(sentence, index): score_recap(mem, bookmark, sentence, read_text=text)
-                      for sentence in SENTENCES
-                      for index, text in enumerate(_read_texts(corpus, bookmark))},
+            "recap": {key: _verdict(result, key[0], texts[key[1]])
+                      for key, result in raw.items()},
+            "raw": raw,
         }
     return answers
+
+
+def _verdict(result, sentence, text) -> dict:
+    """What a score decides, the same in both modes (ADR 0044 step 10): every field as it is,
+    except that a later name or theme is told by whether the sentence names one, and by whether
+    the chat would drop it (``unread_future_names``). Hosted, the database answers with the
+    sentence's own words, never the later names: checked here too."""
+    read_words = set(word_tokens(text)) if text is not None else set()
+    said = {fold_accents(word) for word in word_tokens(sentence)} | set(word_tokens(sentence))
+    if "unread_future_entity_leaks" in result:
+        for key in ("future_entity_leaks", "unread_future_entity_leaks", "future_theme_hits"):
+            assert set(result[key]) <= said, (sentence, key, result[key])
+    verdict = {key: value for key, value in result.items() if key not in (
+        "future_entity_leaks", "future_theme_hits", "unread_future_entity_leaks")}
+    return {**verdict, "names_a_later_name": bool(result["future_entity_leaks"]),
+            "names_a_later_theme": bool(result["future_theme_hits"]),
+            "dropped_by_the_chat": bool(unread_future_names(result, read_words))}
 
 
 def _local_answers(local, corpus) -> dict:
@@ -276,7 +297,15 @@ def _hosted_answers(dsn, owner, book_id, corpus) -> dict:
 
 
 def _leaks(answers, bookmark, sentence) -> list:
-    return answers[bookmark]["recap"][(sentence, 1)]["future_entity_leaks"]
+    return answers[bookmark]["raw"][(sentence, 1)]["future_entity_leaks"]
+
+
+def _decided(answers) -> dict:
+    """The answers without each score as it was written (hosted names words, local names
+    names): what is compared between the modes."""
+    return {key: ({name: part for name, part in value.items() if name != "raw"}
+                  if isinstance(value, dict) and "raw" in value else value)
+            for key, value in answers.items()}
 
 
 @pytest.mark.postgres
@@ -423,11 +452,12 @@ def test_an_empty_story_memory_behaves_like_local_with_extraction_off(tmp_path, 
         hosted = _hosted_answers(database, owner, book, corpus)
     finally:
         store.close()
-    assert hosted == expected
+    assert _decided(hosted) == _decided(expected)
     assert set(expected["frontier"].values()) == {0}
     assert expected["audit"] == {"entities": [], "aliases": [], "themes": []}
     assert all(result["future_entity_leaks"] == [] for bookmark in BOOKMARKS
-               for result in expected[bookmark]["recap"].values())
+               for answers in (expected, hosted)
+               for result in answers[bookmark]["raw"].values())
     assert expected[4]["recap"][("Dmitri will leave the town soon.", 1)]["prolepsis_hits"]
 
 

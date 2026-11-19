@@ -48,7 +48,7 @@ from tests.hosted import test_jobs_postgres as jobs_gate
 from tests.hosted.test_companion_stream_postgres import Reader
 from tests.hosted.test_tenant_postgres import UnusedOIDCClient
 from tests.ingest._grounding import canned_grounding_verdict
-from tests.parity.test_companion_memory_parity import _audit
+from tests.parity.test_companion_memory_parity import _audit, _verdict
 
 admin_dsn = read_map_gate.admin_dsn
 database = read_map_gate.database
@@ -309,7 +309,10 @@ def answers(mem, atoms, chapters) -> dict:
         result[bookmark] = {
             "view": _view(mem, bookmark),
             "names": [same_person_names(mem, bookmark, read_words, focus) for focus in FOCUS],
-            "recap": {(sentence, index): score_recap(mem, bookmark, sentence, read_text=read)
+            # As each mode decides it (ADR 0044 step 10: a hosted score names the sentence's own
+            # words where a local one names the later names; ``_verdict``).
+            "recap": {(sentence, index): _verdict(
+                          score_recap(mem, bookmark, sentence, read_text=read), sentence, read)
                       for sentence in SENTENCES for index, read in enumerate((None, text))},
         }
     return result
@@ -440,8 +443,8 @@ def test_hosted_chapters_build_the_story_memory_local_mode_builds(
     assert final[3]["names"][2] == [["Mara", "the Keeper"]]
     assert expected_cast[3]["states"]["Mara"] == ({"note": "watching the stranger"}, 3)
     assert expected_cast[2]["states"]["Mara"] == ({"note": "keeping the light"}, 1)
-    assert final[3]["recap"][("Rose rescued Vex.", 1)]["future_entity_leaks"] == ["Rose"]
-    assert final[4]["recap"][("Rose rescued Vex.", 1)]["future_entity_leaks"] == []
+    assert final[3]["recap"][("Rose rescued Vex.", 1)]["dropped_by_the_chat"]       # Rose
+    assert not final[4]["recap"][("Rose rescued Vex.", 1)]["names_a_later_name"]
     assert ("Corvus", "Vex", "rivalry", "distrusts", 3) in expected_cast[3]["relationships"]
     assert re.fullmatch(r"[0-9a-f-]{36}:c1\.xhtml", atoms[0]["key"])
     with psycopg.connect(database) as conn:          # the replaced state is closed, not deleted

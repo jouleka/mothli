@@ -24,7 +24,6 @@ from psycopg import conninfo
 
 from app import stream_conversation
 from app.hosted.auth.api import CSRF_HEADER
-from app.eval.spoiler_gate import score_recap
 from app.hosted.companion.memory import HostedBookStore, StoryMemoryUnavailable
 from app.hosted.companion.source import HostedBookSource
 from app.hosted.companion.spend import SpendStore, set_spend_limits, spend_limits
@@ -352,16 +351,14 @@ def test_a_doubted_sentence_is_withheld_and_the_rest_shown_in_order(chat_app, re
 def test_a_sentence_naming_someone_not_yet_met_is_removed(chat_app, readers, database,
                                                           monkeypatch, memory):
     """A person of part 3 (Vex) when parts 1 and the start of 2 are read. The checker doubts the
-    sentence, as it does any sentence its passages do not hold, with or without a memory.
+    sentence, as it does any sentence its passages do not hold; with a seeded memory the fixed
+    unread-name check removes it even when the checker clears it, and the late alias with it.
 
     Seeded, the edition of the file holds Vex and his late alias, and the door hands the chat
-    neither: nothing past the reader's place reaches the story memory the checks read (ADR 0044
-    section 4). So the fixed unread-name check cannot name them, and a later name the checker
-    clears is left to the second look, as for every book through the door
-    (``test_story_memory_door_postgres.py::
-    test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look``). Until ADR 0044
-    step 5 the reader's own rows held them, unclamped, and this test proved the fixed check
-    removed both sentences even when the checker cleared them."""
+    neither: nothing past the reader's place reaches the web process (ADR 0044 section 4). The
+    fixed check asks the database instead (step 10), which holds them and answers only with the
+    sentence's own words; so it removes both sentences, as it did when the reader's own rows held
+    them (before step 5)."""
     a, book = opened(chat_app, readers, database, memory)
     client = chat_app[2].state.platform_client
     StandIns(client, monkeypatch, reply=f"{line(1, 2)} Vex moved lamp 50 in part 3.",
@@ -376,8 +373,12 @@ def test_a_sentence_naming_someone_not_yet_met_is_removed(chat_app, readers, dat
             assert "Mara" in handed
             for later in ("Vex", "Corvus", "Lamplighter"):
                 assert later not in handed, later
-            for name in ("Vex moved lamp 50 in part 3.", "The Lamplighter moved lamp 50."):
-                assert score_recap(mem, 1, name)["future_entity_leaks"] == [], name
+        for name in ("Vex moved lamp 50 in part 3.", "The Lamplighter moved lamp 50."):
+            models = StandIns(client, monkeypatch, reply=f"{line(1, 2)} {name}")
+            events = a.ask(book)
+            assert sentences(events) == [line(1, 2)], name
+            assert events[-1]["answer"]["dropped_sentences"] == 1
+            assert len(models.checked) >= 1        # the checker was asked and cleared it
 
 
 @pytest.mark.parametrize("memory", MEMORIES)

@@ -914,9 +914,11 @@ class PostgresWorkerRepository:
         ``StoryMemoryMoved`` is raised. A chapter already published raises
         ``ChapterAlreadyPublished`` and writes nothing. Every row must be stamped with the
         chapter's own ordinal: anything else is refused. Raw text, passages and vectors are never
-        written here. The edition's lock is held first, so two publishes into one edition never
+        written here. The words of each name the chapter adds are written beside it
+        (``name_words``, for the later-name check, ADR 0044 step 10). The edition's lock is held first, so two publishes into one edition never
         interleave.
         """
+        from app.hosted.companion.later_names import name_words_row
         from app.hosted.companion.story_memory import COPY_SQL, copy_digest
 
         ordinal = chapter["ordinal"]
@@ -1007,10 +1009,16 @@ class PostgresWorkerRepository:
             source = {"source_chapter_id": chapter_id}
             for row in rows["summaries"]:
                 insert("chapter_summaries", {**source, **row})
+            # Each name's words for the later-name check (ADR 0044 step 10, migration 0035), made
+            # here by the functions the check uses, from the very text published beside them.
+            named = []
             for row in rows["entities"]:
                 insert("entities", {**source, **row})
+                named.append(("entity", row["id"], row["canonical_name"]))
             for row in rows["aliases"]:
-                insert("aliases", {**source, **row})
+                alias_id = uuid.uuid4()
+                insert("aliases", {**source, "id": alias_id, **row})
+                named.append(("alias", alias_id, row["surface_form"]))
             for row in rows["states"]:
                 insert("entity_state", {**source, **row, "status": Jsonb(row["status"])})
             for row in rows["closed_states"]:
@@ -1031,7 +1039,11 @@ class PostgresWorkerRepository:
             for row in rows["participants"]:
                 insert("event_participants", {**source, **row})
             for row in rows["themes"]:
-                insert("themes", {**source, **row})
+                theme_id = uuid.uuid4()
+                insert("themes", {**source, "id": theme_id, **row})
+                named.append(("theme", theme_id, row["name"]))
+            for kind, source_id, text in named:
+                insert("name_words", {**source, **name_words_row(kind, source_id, text)})
             # The receipt is last; every row above refers to it through a deferred foreign key.
             conn.execute(
                 """

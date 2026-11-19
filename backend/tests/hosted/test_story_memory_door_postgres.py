@@ -637,6 +637,31 @@ def screens(mem, bookmark: int) -> dict:
             "chips": [person["name"] for person in notes["cast"]]}
 
 
+# What a local memory built only to the reader's place cannot know: a name of a later chapter. The
+# later-name check asks the database, which holds the whole edition (ADR 0044 step 10), so hosted
+# mode may find one where such a local memory finds none; never the other way.
+LATER_NAME_PARTS = ("names_a_later_name", "names_a_later_theme", "dropped_by_the_chat",
+                    "ungrounded_name_tokens", "grounded_rate")
+
+
+def never_looser_on_later_names(got: dict, expected: dict, at: int) -> int:
+    """Hosted finds every later name local mode finds, and drops every sentence it drops; then
+    ``got``'s later-name parts are set to local mode's, so the rest compares whole. Returns how
+    many sentences hosted mode drops that this local memory cannot."""
+    stricter = 0
+    for bookmark, answer in expected.items():
+        if not isinstance(bookmark, int):
+            continue
+        for key, local in answer["recap"].items():
+            hosted = got[bookmark]["recap"][key]
+            for part in ("names_a_later_name", "names_a_later_theme", "dropped_by_the_chat"):
+                assert hosted[part] >= local[part], (at, bookmark, key, part)
+            stricter += hosted["dropped_by_the_chat"] > local["dropped_by_the_chat"]
+            got[bookmark]["recap"][key] = {**hosted, **{
+                part: local[part] for part in LATER_NAME_PARTS}}
+    return stricter
+
+
 def test_a_reader_of_the_library_edition_gets_what_local_mode_builds_to_their_place(
         shelf, tenant_dsn, worker_dsn, tmp_path, monkeypatch):
     """The break it catches: the door answering a check or a screen differently from a local
@@ -652,6 +677,7 @@ def test_a_reader_of_the_library_edition_gets_what_local_mode_builds_to_their_pl
     Extractor(local_client, monkeypatch)
     with local_book(tmp_path, harbour_book()) as (extract, memory, local_atoms, chapters):
         assert [atom["ordinal"] for atom in atoms] == [1, 2, 3, 4]
+        stricter = 0
         for at in (0, 1, 2, 3, 4):
             if at:
                 extract(local_client, at)
@@ -663,10 +689,14 @@ def test_a_reader_of_the_library_edition_gets_what_local_mode_builds_to_their_pl
                 # Served by the door once it hands anything; at place 0 it hands nothing, the
                 # same as for a book with no edition (ADR 0044 section 4).
                 assert mem.has_rows() == (at > 0)
-                assert answers(mem, atoms, chapters) == expected, at
+                got = answers(mem, atoms, chapters)
+                if at < 4:
+                    stricter += never_looser_on_later_names(got, expected, at)
+                assert got == expected, at
                 assert {bm: screens(mem, bm) for bm in range(0, 6)} == expected_screens, at
             assert expected["frontier"] == at
     # A floor under the comparison: the book exercises what it claims to.
+    assert stricter > 0          # a later name the reader's own local memory could not know
     assert expected[3]["names"][2] == [["Mara", "the Keeper"]]
     assert ("Corvus", "Vex", "rivalry", "distrusts", 3) in expected_screens[3]["ties"]
 
@@ -690,8 +720,8 @@ def test_the_chats_spoiler_probes_through_the_door(
     showing a probe its checks drop. It records plainly what version 1 means: with a checker that
     doubts every name its passages do not hold (the stream tests' probes with no memory) every
     probe goes; with a checker that clears everything, a person or name first met after the place
-    is shown, because nothing stamped after the place is handed out for the fixed check to know
-    (see ``test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look``).
+    is removed too, because the fixed check asks the database about later names (ADR 0044 step
+    10; ``test_a_later_name_the_writer_remembers_is_removed_in_the_database_never_handed_out``).
     Run for a free-library add and an upload of the same file, with a second reader of the file
     at its end, so the one probed is behind them."""
     shelf.source.files[int(ALICE)] = lamps()
@@ -732,7 +762,11 @@ def test_the_chats_spoiler_probes_through_the_door(
                 StandIns(platform, monkeypatch, reply=f"{line(1, 2)} {sentence}")
                 shown = sentences(someone.ask(book))
                 assert (sentence not in shown) == (probe in door_drops[at]), (at, probe)
-    assert door_drops == {1: {"foreshadowing"}, 2: {"foreshadowing"}, 3: {"foreshadowing"}}
+    # Every name not yet met at the place is dropped by the fixed check (ADR 0044 step 10), as a
+    # local memory holding the whole book would; a local memory built only to the place drops
+    # only foreshadowing (``local`` above), so the door is stricter, never looser.
+    assert door_drops == {1: set(PROBES), 2: {"later", "late alias", "foreshadowing"},
+                          3: {"foreshadowing"}}
 
 
 # ---- 6: a later name the writer "remembers" ------------------------------------------------------
@@ -740,37 +774,43 @@ def test_the_chats_spoiler_probes_through_the_door(
 REMEMBERED = "Zephyrine lit the harbour lamps."   # first met in part 4
 
 
-def test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look(
+def test_a_later_name_the_writer_remembers_is_removed_in_the_database_never_handed_out(
         shelf, tenant_dsn, worker_dsn, monkeypatch):
-    """ADR 0042 section 3's probe, with stand-in models (the result decides whether version 2 goes
-    back to the owner; real models are for ``scripts/library_later_name_probe.py``). A reader at
-    chapter 2 of an edition built to the end; the writer names Zephyrine, first met in part 4, as
-    a model remembering the novel would. What it records, plainly:
+    """ADR 0042 section 3's probe, with stand-in models (real models are for
+    ``scripts/library_later_name_probe.py``). A reader at chapter 2 of an edition built to the
+    end; the writer names Zephyrine, first met in part 4, as a model remembering the novel would.
+    What it records, plainly:
 
-    - Through the door the fixed name check cannot know the name: nothing stamped after the
-      place is handed out, so ``score_recap`` finds no leak. The edition's own rows, which the
-      rejected unclamped design would have handed out, would have caught it.
-    - So the sentence is dropped only when Jev or the second look doubts it: with a checker that
-      clears everything it is shown; with one that doubts it, it is not.
-    The break it catches: a later name, or the edition's later rows, reaching the reader's
-    request to block it ("version 2"), which ADR 0042 section 3 did not choose."""
-    account, *_ = built_edition(shelf, worker_dsn, monkeypatch)
+    - Through the door nothing stamped after the place is handed out: the reader's snapshot holds
+      no Zephyrine, and neither the writer nor the checker is told the name.
+    - The fixed name check asks the database (ADR 0044 step 10), which holds the edition's later
+      rows, and is answered with the sentence's own word: so the sentence is removed even with a
+      checker that clears everything, as it was when the edition's rows were handed out unclamped
+      (the design ADR 0042 section 3 rejected), without handing them out.
+    Until step 10 the check could not know the name and the sentence was left to Jev and the
+    second look. The break it catches: a later name let through by the fixed check, or the
+    edition's later rows (or the name) reaching the reader's request."""
+    built_edition(shelf, worker_dsn, monkeypatch)
     someone = reader(shelf, "r2a")
     book = add(someone)
     someone.mark(book, [1, 2])
     with HostedBookStore(tenant_dsn, OwnerId(someone.owner)).book(book) as mem:
-        assert score_recap(mem, 2, REMEMBERED)["future_entity_leaks"] == []
-    # The rows past the place, as a reader who has read to the end is handed them (until ADR 0044
-    # step 5 this read the notes account's own rows, which the web process no longer reads).
+        handed = json.dumps([mem._audit_all(table) for table in ("entities", "aliases", "themes")],
+                            default=str)
+        assert "Mara" in handed and "Zephyrine" not in handed
+        assert score_recap(mem, 2, REMEMBERED)["future_entity_leaks"] == ["zephyrine"]
+    # A reader who has read to the end has met her: no later name for them.
     finished = reader(shelf, "r10a")
     finished_book = add(finished)
     finished.mark(finished_book, list(range(1, PARTS + 1)))
     with HostedBookStore(tenant_dsn, OwnerId(finished.owner)).book(finished_book) as everything:
-        assert score_recap(everything, 2, REMEMBERED)["future_entity_leaks"] == ["Zephyrine"]
+        assert score_recap(everything, 2, REMEMBERED)["future_entity_leaks"] == ["zephyrine"]
+        assert score_recap(everything, PARTS, REMEMBERED)["future_entity_leaks"] == []
 
     platform = shelf.app.state.platform_client
     cleared = StandIns(platform, monkeypatch, reply=f"{tline(1, 2)} {REMEMBERED}")
-    assert sentences(someone.ask(book)) == [tline(1, 2), REMEMBERED]
+    assert sentences(someone.ask(book)) == [tline(1, 2)]
+    assert cleared.checked                  # the checker cleared it; the gate did not
     assert "Zephyrine" not in "\n".join(cleared.prompts)     # the writer was never told the name
     StandIns(platform, monkeypatch, reply=f"{tline(1, 2)} {REMEMBERED}",
              unsupported=("Zephyrine",))
@@ -1234,8 +1274,10 @@ def test_the_chats_spoiler_probes_for_the_furthest_reader_of_an_upload_with_the_
     ``test_the_chats_spoiler_probes_through_the_door`` for the furthest reader of an uploaded
     file, at each place *n* with chapter *n*+1 already built (by the builder reader, at *n* as
     well, whose runs build one chapter ahead). The break it catches: chapter *n*+1 reaching the
-    furthest reader's checks or screens, or the door's fixed checks dropping less than a memory
-    built only to their place."""
+    furthest reader's snapshot or screens, or the door's fixed checks dropping less than a memory
+    built only to their place. (Since ADR 0044 step 10 the names of chapter *n*+1 are checked
+    in the database, so the fixed check drops them; they still never reach the reader's
+    request.)"""
     shelf.source.files[int(ALICE)] = lamps()
     account, _models, _extraction, work = started_edition(shelf, worker_dsn, monkeypatch, ALICE,
                                                           writer=Lamps, through=0)
@@ -1280,7 +1322,12 @@ def test_the_chats_spoiler_probes_for_the_furthest_reader_of_an_upload_with_the_
                 StandIns(platform, monkeypatch, reply=f"{line(1, 2)} {sentence}")
                 shown = sentences(someone.ask(book))
                 assert (sentence not in shown) == (probe in door_drops[at]), (at, probe)
-    assert door_drops == {1: {"foreshadowing"}, 2: {"foreshadowing"}, 3: {"foreshadowing"}}
+    # The fixed check asks the database (ADR 0044 step 10), which holds the chapter built one
+    # ahead: at 1 it knows Corvus (part 2) and drops him, not yet Vex; at 2 it knows Vex and his
+    # late alias. A name of a chapter nobody has reached is in no notes: it is left to Jev and the
+    # second look, as in local mode.
+    assert door_drops == {1: {"in the hole", "foreshadowing"},
+                          2: {"later", "late alias", "foreshadowing"}, 3: {"foreshadowing"}}
 
 
 def test_a_reader_of_another_file_of_the_same_title_is_handed_nothing(

@@ -48,11 +48,12 @@ TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
 # A book's story memory (ADR 0042, ADR 0044): the tables the door reads (the first nine), what a
 # chapter's events name, the old reader corrections, and a book's text cut up for search (no
 # hosted code writes those two). The tenant role holds no privilege on any of them (ADR 0044 step 7); its startup check
-# refuses one held on any table outside its list.
+# refuses one held on any table outside its list. ADR 0044 step 10: and the words of every name,
+# which only the later-name check reads (``story_memory_later_names``).
 STORY_MEMORY_TABLES = (
     "chapters", "ingested_chapters", "chapter_summaries", "entities", "aliases", "entity_state",
     "edges", "events", "themes", "event_participants", "entity_corrections", "chunks",
-    "chunk_embeddings",
+    "chunk_embeddings", "name_words",
 )
 
 # The job worker (ADR 0024): BYPASSRLS, because it schedules across owners. Every owner's
@@ -85,6 +86,8 @@ WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "events": frozenset({"INSERT"}),
     "event_participants": frozenset({"INSERT"}),
     "themes": frozenset({"INSERT"}),
+    # ADR 0044 step 10: each published name's words, for the later-name check (migration 0035).
+    "name_words": frozenset({"INSERT"}),
     # ADR 0044 steps 2 and 3: which account owns the editions, to find a file's edition and to
     # make it on its first chapter.
     "notes_account": frozenset({"SELECT"}),
@@ -103,10 +106,15 @@ WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
 # ADR 0042 part 5 (migration 0026), ADR 0044 step 2 (migration 0032): an edition's story memory
 # is reached by a reader only through the door, which hands out the rows up to the reader's own
 # place and nothing else, for any book of theirs whose file matches an edition.
+# ADR 0044 step 10 (migration 0035): the later-name check, the one other way a reader's session
+# touches an edition: it answers which words of a sentence it is given name something the book
+# reveals after the reader's place, and nothing else; it takes no place, only a lower ceiling.
 TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
     "companion_platform_reserve(numeric,numeric)": frozenset({"EXECUTE"}),
     "companion_platform_adjust(date,numeric,numeric)": frozenset({"EXECUTE"}),
     "story_memory_door(uuid)": frozenset({"EXECUTE"}),
+    "story_memory_later_names(uuid,integer,text[],text[],text[],text[],text[],text[])":
+        frozenset({"EXECUTE"}),
 }
 
 # ADR 0041 part 8: the account purge, run once a day from the command line, never by web or
