@@ -4,6 +4,8 @@
 ("What builds it") and ADR 0041 part 10. Amends ADR 0024 (the extraction job) and, for library
 editions built by the operator (section 3, the owner's decision of 17 November 2026), ADR 0017
 section 3.
+Amended by ADR 0044 (2026-11-18): sections 2, 3, 4, 6 and 7 and parts 3 and 5; notes are now built
+as readers reach each chapter and shared by everyone with the same book file.
 
 File and line references are to `main` at b51f786 (PR #100). Nothing in this record was run against a
 database, a server or a model; every claim about behaviour comes from reading the code cited next to
@@ -240,6 +242,12 @@ allowance answers `status: "waiting"`, and the panels say once, in Mothli's voic
 catch up on the rest tomorrow. The chat never waits for memory.
 
 ### 3. Library books: built once, handed out only up to each reader's place (decided)
+
+**Amended by ADR 0044 (18 November 2026).** The door stays, but it now serves every book, uploads
+included, matched by the file's two fingerprints; nothing is built ahead by the operator, and a
+chapter's notes are written when the first reader reaches it. Per-reader memory (A), its setting
+`HOSTED_READER_STORY_MEMORY` and reader corrections are gone, and the screens say the same for every
+book. The text below is kept as it was decided.
 
 **The owner's decision (17 November 2026):** "build once and hand it out only up to each reader's
 place." His test: "Shouldn't Mothli mostly know only about the current user and what they've read?"
@@ -490,6 +498,11 @@ Rejected: reviewing a sample of fields, skipping review of "simple" chapters, an
 across readers outside design (B). Each lets an unchecked statement into memory.
 
 ### 6. Jobs
+
+**Amended by ADR 0044 (18 November 2026).** A reader's `story_memory` run now builds the next chapter
+of their file's shared edition, one chapter past what they have finished, paid by the notes account;
+one run at a time holds a chapter, across readers. `HOSTED_READER_STORY_MEMORY` and the operator's
+library builds are gone. The text below is kept as it was decided.
 
 **Kind.** A new kind, `story_memory`, on the existing table and worker; not `ingest_book`. `ingest_book`
 is one whole-book job with a per-incarnation idempotency key (`tenant/repository.py:2044`, unique per
