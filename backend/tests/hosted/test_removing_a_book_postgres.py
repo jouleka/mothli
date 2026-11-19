@@ -76,7 +76,7 @@ NOT_A_READERS = {
     table: "a book's story memory: the notes account's edition, never a reader's"
     for table in ("chapters", "ingested_chapters", "chapter_summaries", "entities", "aliases",
                   "entity_state", "edges", "events", "themes", "event_participants",
-                  "entity_corrections", "chunks", "chunk_embeddings")
+                  "entity_corrections", "chunks", "chunk_embeddings", "name_words")
 }
 
 

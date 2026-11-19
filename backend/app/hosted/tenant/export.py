@@ -83,6 +83,7 @@ LEFT_OUT = {
     "entity_state": "what Mothli learned from a book's own pages, not yours",
     "entity_corrections": "what Mothli learned from a book's own pages, not yours",
     "themes": "what Mothli learned from a book's own pages, not yours",
+    "name_words": "the words of the names Mothli learned from a book's own pages, not yours",
     "chunks": "a book's own text, cut up for search, not yours",
     "chunk_embeddings": "numbers computed from a book's own text, not yours",
 }

@@ -18,6 +18,7 @@ from psycopg.types.json import Jsonb
 
 from app.catalog.catalog import Catalog
 from app.eval.spoiler_gate.cache import validity_snapshot
+from app.hosted.companion.later_names import rebuild_name_words
 from app.memory.dal import _now
 from app.memory.store import Store
 
@@ -98,6 +99,9 @@ def serve_through_the_door(conn: psycopg.Connection, scope: tuple, *,
         for table in reversed(EDITION_TABLES):
             conn.execute(f"DELETE FROM {table} WHERE owner_id=%(owner)s AND book_id=%(book)s"
                          " AND book_incarnation=%(incarnation)s", params)
+    # The words of every name, as a publish writes them (ADR 0044 step 10): the later-name check
+    # refuses a book where a name has none.
+    rebuild_name_words(conn.connection, tuple(edition))
     if place is not None:
         set_place(conn.connection, scope, place)
     return edition

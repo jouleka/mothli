@@ -15,8 +15,11 @@ offering exactly the calls those modules make, with the local semantics:
   (``tests/parity/_adapters.py``): ``revealed_at <= bm``, not retracted, valid at ``bm``, aliases
   only of an entity visible at ``bm``, summaries only of a live chapter at or before ``bm``.
 - ``_audit_all("entities" | "aliases" | "themes")``: every row handed, retracted ones included,
-  as locally (``score_recap`` reads them to know what to forbid); the door hands none past the
-  reader's place, so a later name is left to the chat's other checks.
+  as locally; the door hands none past the reader's place.
+- ``later_name_check(bm, question)``: ``score_recap``'s question about later names, asked of the
+  database (``story_memory_later_names``, migration 0035, ADR 0044 step 10), which holds every
+  name of the edition and answers with the sentence's own words only. So a sentence naming
+  someone the reader has not met is still caught, and no later name reaches this process.
 - ``content_language()``, as locally.
 - for the screens (``app.memory_views``, through ``ContentSnapshot``, which leaves out the
   chapters that are not part of the book proper as the local ``ContentMemory`` does):
@@ -53,6 +56,16 @@ _ENTITY_TYPES = frozenset({"character", "place", "faction", "object"})
 # theirs with no edition, one row with every list empty: the same answer as an edition read at
 # place 0. It takes the book and nothing else; the reader is the transaction's owner setting.
 DOOR = "SELECT * FROM public.story_memory_door(%(book)s)"
+
+# The later-name check (ADR 0044 step 10, migration 0035): the reader's book, a ceiling on their
+# place (it can only lower it), the sentence's words and the reader's own read words; the answer
+# holds words of the sentence only, and ``complete`` false when a name of the edition has no
+# words made from its present text (the reply then stops).
+LATER_NAMES = """
+SELECT * FROM public.story_memory_later_names(
+  %(book)s, %(at_most)s, %(words)s::text[], %(folded)s::text[], %(read_any)s::text[],
+  %(read_proper)s::text[], %(read_also)s::text[], %(read_not)s::text[])
+"""
 
 
 class StoryMemoryUnavailable(Exception):
@@ -108,10 +121,13 @@ class StoryMemorySnapshot:
     """One book's story memory as of one moment, immutable, safe to share between threads."""
 
     __slots__ = ("_language", "_chapters", "_completed", "_entities", "_aliases", "_themes",
-                 "_events", "_summaries", "_edges", "_states")
+                 "_events", "_summaries", "_edges", "_states", "_later")
 
-    def __init__(self, payload) -> None:
-        values = {"_language": payload["content_language"]}
+    def __init__(self, payload, later=None) -> None:
+        """``later(bm, question)`` asks the database about later names (``HostedBookStore``);
+        a snapshot without it refuses that question rather than answer it from the handed rows,
+        which hold no later name."""
+        values = {"_language": payload["content_language"], "_later": later}
         values["_chapters"] = _frozen(
             {"chapter_key": _text(row["key"]), "revealed_at": _ordinal(row["ordinal"]),
              "title": _text(row["title"], optional=True),
@@ -211,10 +227,22 @@ class StoryMemorySnapshot:
         finished chapter it hands none, whether or not an edition exists (ADR 0044 section 4)."""
         return bool(self._chapters)
 
+    def later_name_check(self, bookmark, question):
+        """``score_recap``'s later names, from the database (``later_name_question`` is the
+        question): which of the sentence's words name something revealed after ``bookmark``, or
+        after the reader's place if that is lower. Only words of the sentence come back.
+        Raises ``StoryMemoryUnavailable`` when it cannot be answered: a sentence is never let
+        through unchecked."""
+        if not isinstance(bookmark, int) or isinstance(bookmark, bool):
+            raise ValueError(f"bookmark must be an int chapter ordinal, got {bookmark!r}")
+        if self._later is None:
+            raise StoryMemoryUnavailable("the later names cannot be checked")
+        return self._later(bookmark, question)
+
     def _audit_all(self, table):
-        """Every row handed of one of the three tables ``score_recap`` reads (none past the
-        reader's place: the door hands none). As locally, only for the checks; never shown.
-        """
+        """Every row handed of one of the three tables (none past the reader's place: the door
+        hands none). As locally, only for the checks; never shown. ``score_recap`` asks the
+        database about later names instead (``later_name_check``)."""
         rows = {"entities": self._entities, "aliases": self._aliases,
                 "themes": self._themes}.get(table)
         if rows is None:
@@ -439,6 +467,20 @@ class HostedBookStore(OwnerBoundAdapter):
         if payload is None:
             raise LookupError("unknown book")
         try:
-            return StoryMemorySnapshot(payload)
+            return StoryMemorySnapshot(
+                payload, later=lambda bookmark, question: self._later_names(book, bookmark,
+                                                                            question))
         except (KeyError, TypeError, ValueError) as exc:
             raise StoryMemoryUnavailable("the story memory is malformed") from exc
+
+    def _later_names(self, book, bookmark, question) -> dict:
+        """One call of the later-name check for this reader's book (``LATER_NAMES``)."""
+        try:
+            with self._transaction() as conn:
+                row = conn.execute(LATER_NAMES, {"book": book, "at_most": bookmark,
+                                                 **question}).fetchone()
+        except (CompanionDatabaseBusy, psycopg.Error) as exc:
+            raise StoryMemoryUnavailable("the later names could not be checked") from exc
+        if row is None or row["complete"] is not True:
+            raise StoryMemoryUnavailable("the later names could not be checked")
+        return row

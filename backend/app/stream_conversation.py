@@ -31,7 +31,7 @@ from app.conversation_jev import CONDITIONALITY, DECISION_LIMITS, FIT, POLICY, S
 from app.conversation_pipeline import compact_candidates
 from app.conversation_turns import classify_turn
 from app.cost import CostCeilingExceeded, budgeted_completion, pricing_known
-from app.eval.spoiler_gate import score_recap
+from app.eval.spoiler_gate import score_recap, unread_future_names
 from app.eval.spoiler_gate.binding import unsupported_event_bindings
 from app.eval.spoiler_gate.grounding import STOPWORDS
 from app.known_names import first_mention, names_note, same_person_names, text_same_person
@@ -384,8 +384,7 @@ def sentence_checks(*, book_id, catalog, store, settings, writer, jev_run, note,
         started_call = perf_counter()
         with store.book(book_id) as mem:
             result = score_recap(mem, durable(mem), sentence, read_text=read_text)
-        leaks = [name for name in result["future_entity_leaks"]
-                 if not set(word_tokens(name)) <= read_words]
+        leaks = unread_future_names(result, read_words)
         bindings = unsupported_event_bindings(sentence, facts) if sources else []
         note("safety", started_call)
         return not (leaks or result["prolepsis_hits"] or bindings)

@@ -121,6 +121,7 @@ def test_every_tenant_table_has_non_null_owner_and_rls(database: str) -> None:
         "chapter_notes",
         "recollections",
         "recollection_cursors",
+        "name_words",
     }
 
     with psycopg.connect(database) as conn:
@@ -987,7 +988,8 @@ def test_a_new_database_has_one_notes_account_that_never_signs_in(database: str)
                             (account,)).fetchone()[0] == 1
         assert conn.execute("SELECT count(*) FROM books WHERE owner_id = %s",
                             (account,)).fetchone()[0] == 0
-        assert _definers(conn) == _DEFINERS
+        # 0035 adds the later-name check (its own test below).
+        assert _definers(conn) == _DEFINERS | {_LATER_NAMES}
     apply_migrations(database)
     with psycopg.connect(database) as conn:
         assert conn.execute("SELECT account_id FROM notes_account").fetchall() == [(account,)]
@@ -1056,7 +1058,7 @@ def test_one_build_per_chapter_marks_the_editions_keeps_one_a_file_and_adds_one_
             "SELECT proowner::regrole::text, proacl::text, prosecdef, provolatile, proconfig, "
             "pg_get_function_identity_arguments(oid), pg_get_function_result(oid) "
             "FROM pg_proc WHERE oid = %s::regprocedure", (_NEW_DOOR,)).fetchone() == record
-        assert _definers(conn) == _DEFINERS
+        assert _definers(conn) == _DEFINERS | {_LATER_NAMES}
         before, after = _EDITION_MARK
         assert body.count(before) == 1
         assert conn.execute("SELECT prosrc FROM pg_proc WHERE oid = %s::regprocedure",
@@ -1146,6 +1148,68 @@ def test_the_edition_holders_mark_starts_empty_changes_nothing_else_and_fits_onl
         with pytest.raises(psycopg.errors.CheckViolation):
             with psycopg.connect(database) as conn:
                 conn.execute("UPDATE books SET no_holder_since = now() WHERE id = %s", (book,))
+
+
+# ---- 0035: the later-name check in the database (ADR 0044 step 10) -----------------------------
+
+LATER_NAME_WORDS = 35
+_LATER_NAMES = "story_memory_later_names(uuid,integer,text[],text[],text[],text[],text[],text[])"
+
+
+def test_the_later_name_words_start_empty_change_nothing_else_and_only_the_owner_may_call(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0035 with an edition holding a person: a
+    book or a note changed, the door changed, words made up for a name by the migration (nothing
+    was deployed before it, so no edition needs them, and the check refuses an edition with a
+    name that has none: ADR 0044 step 10); the new table without forced row security, or with a
+    privilege for PUBLIC; the check callable by PUBLIC, not a security definer, with another
+    search path, or taking anything but the book, a ceiling, the sentence and the read words."""
+    _apply_before(database, LATER_NAME_WORDS, monkeypatch)
+    a, b = "a" * 64, "b" * 64
+    with psycopg.connect(database) as conn:
+        [(account,)] = conn.execute("SELECT account_id FROM notes_account").fetchall()
+        edition = _notes_book(conn, account, "edition aaaaaaaaaaaa", a, b)
+        conn.execute("UPDATE books SET edition_of = owner_id WHERE id = %s", (edition,))
+        [(incarnation,)] = conn.execute("SELECT incarnation FROM books WHERE id = %s",
+                                        (edition,)).fetchall()
+        chapter = uuid.uuid4()
+        conn.execute("INSERT INTO chapters (owner_id, book_id, book_incarnation, id, chapter_key,"
+                     " revealed_at, content_hash) VALUES (%s, %s, %s, %s, 'k', 1, %s)",
+                     (account, edition, incarnation, chapter, a))
+        conn.execute("INSERT INTO ingested_chapters (owner_id, book_id, book_incarnation,"
+                     " chapter_id, content_hash, completed_at) VALUES (%s, %s, %s, %s, %s, now())",
+                     (account, edition, incarnation, chapter, a))
+        conn.execute("INSERT INTO entities (owner_id, book_id, book_incarnation, source_chapter_id,"
+                     " canonical_name, entity_type, revealed_at) VALUES (%s, %s, %s, %s, 'Vex',"
+                     " 'character', 2)", (account, edition, incarnation, chapter))
+        books = conn.execute("SELECT to_jsonb(book) FROM books AS book ORDER BY id").fetchall()
+        people = conn.execute("SELECT to_jsonb(person) FROM entities AS person").fetchall()
+        door = conn.execute("SELECT prosrc FROM pg_proc WHERE oid = %s::regprocedure",
+                            (_NEW_DOOR,)).fetchone()[0]
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT to_jsonb(book) FROM books AS book ORDER BY id"
+                            ).fetchall() == books
+        assert conn.execute("SELECT to_jsonb(person) FROM entities AS person").fetchall() == people
+        assert conn.execute("SELECT prosrc FROM pg_proc WHERE oid = %s::regprocedure",
+                            (_NEW_DOOR,)).fetchone()[0] == door
+        assert conn.execute("SELECT count(*) FROM name_words").fetchone()[0] == 0
+        assert conn.execute("SELECT relrowsecurity AND relforcerowsecurity FROM pg_class"
+                            " WHERE oid = 'public.name_words'::regclass").fetchone()[0]
+        assert not any(conn.execute(
+            "SELECT has_table_privilege('public', 'public.name_words', %s)", (privilege,)
+        ).fetchone()[0] for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"))
+        assert conn.execute(
+            "SELECT prosecdef, provolatile, proconfig, pg_get_function_identity_arguments(oid)"
+            " FROM pg_proc WHERE oid = %s::regprocedure", (_LATER_NAMES,)).fetchone() == (
+            True, "s", ["search_path=pg_catalog, public, pg_temp"],
+            "book uuid, at_most integer, sentence_words text[], sentence_folded text[], "
+            "read_any text[], read_proper text[], read_also text[], read_not text[]")
+        assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
+                                (_LATER_NAMES,)).fetchone()[0]
+        assert _definers(conn) == _DEFINERS | {_LATER_NAMES}
 
 
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:

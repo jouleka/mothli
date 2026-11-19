@@ -326,15 +326,13 @@ def test_a_sentence_past_any_books_place_is_removed_across_books(home_app, reade
                                                                  monkeypatch, memory):
     """The local home chat's spoiler probes, hosted: a sentence naming someone met only past the
     reader's place (in its own book or put in another book's mouth), a late alias, or
-    foreshadowing is removed; the checker doubts what its passages do not hold.
+    foreshadowing is removed; the checker doubts what its passages do not hold, and with a seeded
+    memory the fixed name check removes it even when the checker clears it.
 
     Seeded, the edition of the lamp book's file holds Vex and his late alias, and the door hands
-    the home chat neither (ADR 0044 section 4): the fixed name check cannot name them, and a later
-    name the checker clears is left to the second look, as for every book through the door
-    (``test_story_memory_door_postgres.py::
-    test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look``). Until ADR 0044
-    step 5 the reader's own rows held them, unclamped, and the seeded case proved the fixed check
-    removed those sentences even when the checker cleared them."""
+    the home chat neither (ADR 0044 section 4); the fixed name check asks the database about
+    them (step 10), so it still removes those sentences, as it did when the reader's own rows
+    held them (before step 5), while no later name reaches the web process."""
     _client, _tokens, app = home_app
     a, lamps, _carts, _unread = shelf(home_app, readers)
     if memory == "seeded":
@@ -348,6 +346,9 @@ def test_a_sentence_past_any_books_place_is_removed_across_books(home_app, reade
         (f"{lamp(1, 2)} Jonas is going to lose cart 1.", []),
     ]
     if memory == "seeded":
+        probes += [(f"{lamp(1, 2)} Vex moved lamp 50 in part 3.", []),
+                   (f"{lamp(1, 2)} Jonas met Vex in section 1.", []),
+                   (f"{lamp(1, 2)} The Lamplighter moved lamp 50.", [])]
         with HostedBookStore(app.state.companion_dsn, OwnerId(a.owner)).book(lamps) as mem:
             handed = json.dumps([mem._audit_all(table) for table in ("entities", "aliases")],
                                 default=str)

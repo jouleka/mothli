@@ -81,7 +81,7 @@ worker_dsn = jobs_gate.worker_dsn
 
 MEMORY_TABLES = ("chapters", "ingested_chapters", "chapter_summaries", "entities", "aliases",
                  "edges", "events", "event_participants", "themes", "entity_state",
-                 "entity_corrections", "chunks", "chunk_embeddings")
+                 "entity_corrections", "chunks", "chunk_embeddings", "name_words")
 ALL_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 
 
@@ -627,6 +627,7 @@ def test_the_worker_role_holds_exactly_what_a_publish_needs(worker_dsn, database
         "edges": {"INSERT"}, "events": {"INSERT"}, "event_participants": {"INSERT"},
         "themes": {"INSERT"}, "entity_corrections": set(), "chunks": set(),
         "chunk_embeddings": set(), "books": {"SELECT", "INSERT"}, "source_objects": set(),
+        "name_words": {"INSERT"},
     }
     for table, privileges in expected.items():
         assert WORKER_TABLE_PRIVILEGES.get(table, frozenset()) == privileges, table

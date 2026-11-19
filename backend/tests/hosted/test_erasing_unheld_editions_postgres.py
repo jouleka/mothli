@@ -396,8 +396,9 @@ def test_the_last_holder_gone_the_edition_is_marked_kept_at_29_days_and_erased_a
     ref = give_the_edition_a_file(app, database, scope)
     assert app.state.object_storage.exists(ref)
     whole = edition_rows(database, scope)
+    # The words of its names too (ADR 0044 step 10): they go with it, through its chapters.
     assert all(whole[table] for table in ("chapters", "ingested_chapters", "entities",
-                                          "chapter_summaries", "source_objects"))
+                                          "chapter_summaries", "source_objects", "name_words"))
     kept = notes_kept(database)
     assert kept["cost_ledger"] and kept["owner_limits"] and kept["users"]
 
