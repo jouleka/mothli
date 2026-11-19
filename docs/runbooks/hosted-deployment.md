@@ -86,8 +86,8 @@ step 2, never into an email, a chat or a document.
    **For Mothli's chat**, also fill in the two AI keys in `deploy/app.env`: `OPENAI_API_KEY` (or
    `ANTHROPIC_API_KEY` instead) and `TYPESAFE_API_KEY`. Everything else the chat needs is already
    set there; leave it as it is. Then turn on the job worker, which writes Mothli's notes on
-   finished chapters and what it remembers about readers: in `deploy/.env`, remove the `#` in
-   front of this line:
+   finished chapters, what it remembers about readers and its notes on every book's story (step
+   4b): in `deploy/.env`, remove the `#` in front of this line:
    ```
    COMPOSE_PROFILES=worker
    ```
@@ -179,55 +179,30 @@ next run; nothing of it is shown to anyone meanwhile. The audit log of an erased
 docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.audit show --owner READER_ID
 ```
 
-## 4b. Story memory (when you choose)
+## 4b. Story memory: who's who and the story so far
 
-With the worker on (`COMPOSE_PROFILES=worker` in `deploy/.env`) and `HOSTED_STORY_MEMORY=true` in
-`deploy/app.env`, Mothli keeps who's who and the story so far for every reader's book, uploaded
-or from the free library: made once for each exact book file, a chapter at a time, one chapter
-ahead of the furthest reader, and handed to each reader only up to where they are (ADR 0044).
-Mothli pays for it, never a reader: it is spent from the notes account (the reserved account the
-database makes), at most `HOSTED_STORY_MEMORY_USD_PER_DAY` a day ($10 unless you set it), and
-the platform's daily cap still applies. No step is needed for that. One reader's reading may be
-the first to have at most 30 new chapters made a day, 300 a month, and 5 new book files a month
-(`HOSTED_STORY_MEMORY_NEW_CHAPTERS_PER_DAY`, `..._PER_MONTH`, `HOSTED_STORY_MEMORY_NEW_FILES_PER_MONTH`):
-guards against abuse that a real reader should never meet. Raise one if a real reader does.
+Mothli keeps notes on every reader's book, uploaded or from the free library: who's who and the
+story so far. They are made once for each exact book file, a chapter at a time, as readers reach
+the chapters (one chapter ahead of the reader furthest on), and each reader is handed them only
+up to where they are (ADR 0044). There is nothing to run and no title to choose: it is on in
+`deploy/app.env` (`HOSTED_STORY_MEMORY=true`, as the template sets it) and is done by the job
+worker, so the worker must be on (`COMPOSE_PROFILES=worker` in `deploy/.env`, step 2.5). With no
+AI keys it is off, like the chat. Keep it on: with it off the story panels keep telling readers
+"No one yet. Keep reading and I'll keep track of who's who.", which would never come true.
 
-Until it is removed (ADR 0044 step 6), you can also prepare a free-library title ahead of its
-readers. You choose which titles; nothing is prepared ahead until you run this.
+**What it costs, and who pays.** Mothli pays, never a reader: about $0.09 a chapter at today's
+prices (about $7 for a whole novel), once per book file however many readers have it. It is
+spent from the notes account (a reserved account the database makes for itself; nobody signs in
+to it), at most `HOSTED_STORY_MEMORY_USD_PER_DAY` a day ($10 unless you set it), and that counts
+toward the platform's daily cap, `HOSTED_PLATFORM_USD_PER_DAY` ($15). A chapter that does not fit
+waits for the next day; readers keep reading meanwhile.
 
-1. Start it for the titles you want, by their free-library numbers (the number in the book's
-   Project Gutenberg address, for example 1342 for *Pride and Prejudice*):
-   ```
-   docker compose -f deploy/compose.yaml run --rm library python -m app.hosted.library_memory build 1342 11
-   ```
-   The first run makes the library account, a reserved account nobody signs in to, and prints
-   its id (`library account ...`). Each title is fetched and added to that account as a reader's
-   add would, and the worker then prepares it one chapter at a time. A title that could not be
-   added prints the reader's own line for it (a full shelf, for example: raise the account's
-   `--max-books` or `--max-library-bytes` with the limits tool below, then run `build` again).
-2. **What it may spend** (about $7 for a novel of that length at today's prices). The library
-   account is the notes account: it spends under the notes ceiling above, never from a reader's
-   allowance, and the platform's daily cap still applies to it. To give it a ceiling of its own
-   (for example $10 a day and $50 a month), which then replaces `HOSTED_STORY_MEMORY_USD_PER_DAY`
-   for all story memory:
-   ```
-   docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.limits set LIBRARY_ACCOUNT_ID --max-spend-usd-per-day 10 --max-spend-usd-per-month 50
-   ```
-3. See how each title stands, as often as you like:
-   ```
-   docker compose -f deploy/compose.yaml run --rm library
-   ```
-   One line per title, for example
-   `1342 Pride and Prejudice: built through chapter 12 of 61, 0 unremembered, $1.0412, building`.
-   "unremembered" counts chapters Mothli could not make notes on (readers see a short line for
-   each). "waiting for tomorrow" means a day's cap was reached. "stopped: three chapters in a row
-   could not be remembered" means the model is failing and nothing more is spent on that title;
-   look at the AI account before trying again.
-
-Running `build` again is safe: a title already prepared is left alone and one half prepared
-carries on. A reader whose copy of a title is a different file (Project Gutenberg changed it)
-gets no prepared notes for it. The library command has its own database role
-(`MOTHLI_DB_LIBRARY_PASSWORD` in `deploy/.env`), which only this step has.
+**Guards against abuse**, which a real reader should never meet: one reader's reading may be the
+first to have at most 30 new chapters made a day, 300 a month, and 5 new book files a month
+(`HOSTED_STORY_MEMORY_NEW_CHAPTERS_PER_DAY`, `HOSTED_STORY_MEMORY_NEW_CHAPTERS_PER_MONTH`,
+`HOSTED_STORY_MEMORY_NEW_FILES_PER_MONTH`). Chapters someone else's reading already made never
+count. All five settings are in the caps section of `deploy/app.env`, commented out at their
+defaults; raise one if a real reader ever reaches it.
 
 ## 5. Restoring
 
