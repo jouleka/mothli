@@ -691,8 +691,9 @@ def _stored_key_world(conn) -> dict:
 def _kept_rows(conn) -> dict:
     # A column a later migration adds is no change to a book: 0031's split fingerprint comes
     # empty on rows already there, which its own test checks, and so does 0033's edition mark on
-    # a reader's book (its own test checks it). Nor is the notes account 0032 makes on a database
-    # without one a change to anyone's account (its own test checks it).
+    # a reader's book (its own test checks it), and 0034's "no holder since" mark of an edition
+    # (its own test checks it). Nor is the notes account 0032 makes on a database without one a
+    # change to anyone's account (its own test checks it).
     account = "notes_account" if conn.execute(
         "SELECT to_regclass('public.notes_account')").fetchone()[0] else "library_account"
     return {"users": conn.execute(
@@ -700,6 +701,7 @@ def _kept_rows(conn) -> dict:
         "ORDER BY 1, 2").fetchall(),
         "cost_ledger": conn.execute("SELECT * FROM cost_ledger ORDER BY 1, 2").fetchall()} | {
         "books": conn.execute("SELECT to_jsonb(book) - 'split_hash' - 'edition_of' "
+                              "- 'no_holder_since' "
                               "FROM books AS book ORDER BY owner_id, id").fetchall()} | {
         "jobs": conn.execute("SELECT owner_id, id, book_id, kind, state, idempotency_key "
                              "FROM jobs ORDER BY id").fetchall()}
@@ -1047,8 +1049,9 @@ def test_one_build_per_chapter_marks_the_editions_keeps_one_a_file_and_adds_one_
     with psycopg.connect(database) as conn:
         marked = dict(conn.execute("SELECT id, edition_of FROM books").fetchall())
         assert marked == {first: account, second: None, gone: None, unsplit: None, mine: None}
-        assert conn.execute("SELECT to_jsonb(book) - 'edition_of' FROM books AS book "
-                            "ORDER BY id").fetchall() == books
+        # (0034's "no holder since" comes empty on every row; its own test checks it.)
+        assert conn.execute("SELECT to_jsonb(book) - 'edition_of' - 'no_holder_since' "
+                            "FROM books AS book ORDER BY id").fetchall() == books
         assert conn.execute(
             "SELECT proowner::regrole::text, proacl::text, prosecdef, provolatile, proconfig, "
             "pg_get_function_identity_arguments(oid), pg_get_function_result(oid) "
@@ -1102,6 +1105,47 @@ def test_one_build_per_chapter_marks_the_editions_keeps_one_a_file_and_adds_one_
                 job(state, 1)
             with pytest.raises(psycopg.errors.UniqueViolation):
                 job(state, 2)
+
+
+# ---- 0034: the "no holder since" mark of an edition (ADR 0044 step 8) ----------------------------
+
+EDITION_HOLDERS = 34
+
+
+def test_the_edition_holders_mark_starts_empty_changes_nothing_else_and_fits_only_an_edition(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0034 with an edition and a reader's copy
+    of its file: a mark set by the migration (an edition would start its 30 days at the
+    deployment), any other value of a book or the door changed, or the mark accepted on a book
+    that is not a live edition (a reader's book, an unmarked copy of the notes account)."""
+    _apply_before(database, EDITION_HOLDERS, monkeypatch)
+    reader = uuid.uuid4()
+    a, b = "a" * 64, "b" * 64
+    with psycopg.connect(database) as conn:
+        [(account,)] = conn.execute("SELECT account_id FROM notes_account").fetchall()
+        edition = _notes_book(conn, account, "edition aaaaaaaaaaaa", a, b)
+        conn.execute("UPDATE books SET edition_of = owner_id WHERE id = %s", (edition,))
+        copy = _notes_book(conn, account, "A copy", a, b, age=1)
+        conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (reader,))
+        mine = _notes_book(conn, reader, "Mine", a, b)
+        books = conn.execute("SELECT to_jsonb(book) FROM books AS book ORDER BY id").fetchall()
+        door = conn.execute("SELECT prosrc FROM pg_proc WHERE oid = %s::regprocedure",
+                            (_NEW_DOOR,)).fetchone()[0]
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT to_jsonb(book) - 'no_holder_since' FROM books AS book "
+                            "ORDER BY id").fetchall() == books
+        assert conn.execute("SELECT count(*) FROM books WHERE no_holder_since IS NOT NULL"
+                            ).fetchone()[0] == 0
+        assert conn.execute("SELECT prosrc FROM pg_proc WHERE oid = %s::regprocedure",
+                            (_NEW_DOOR,)).fetchone()[0] == door
+        conn.execute("UPDATE books SET no_holder_since = now() WHERE id = %s", (edition,))
+    for book in (copy, mine):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with psycopg.connect(database) as conn:
+                conn.execute("UPDATE books SET no_holder_since = now() WHERE id = %s", (book,))
 
 
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:
