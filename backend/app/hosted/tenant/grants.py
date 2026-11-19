@@ -10,9 +10,13 @@ from __future__ import annotations
 
 TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "books": frozenset({"SELECT", "INSERT", "UPDATE"}),
-    # DELETE on source_objects, reading_state, reader_preferences, the three marks and chapters:
-    # removing a book erases what was about it (ADR 0041 part 8). Deleting a book's chapters
-    # takes its whole story memory with them (migration 0024).
+    # DELETE on source_objects, reading_state, reader_preferences and the three marks: removing a
+    # book erases what was about it (ADR 0041 part 8).
+    #
+    # Nothing on the story memory tables (``STORY_MEMORY_TABLES``, ADR 0044 step 7): a book's
+    # notes are an edition's, the notes account's rows, and a reader's session reaches them only
+    # by executing the door (``story_memory_door`` below), which hands out the rows up to the
+    # reader's own place. No reader owns a memory row or corrects one.
     "source_objects": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
     "reading_state": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
     "reader_preferences": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
@@ -20,17 +24,6 @@ TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "highlights": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
     "annotations": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
     "bookmarks": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
-    "chapters": frozenset({"SELECT", "DELETE"}),
-    "ingested_chapters": frozenset({"SELECT"}),
-    "chapter_summaries": frozenset({"SELECT"}),
-    "entities": frozenset({"SELECT", "INSERT", "UPDATE"}),
-    "aliases": frozenset({"SELECT", "INSERT"}),
-    "edges": frozenset({"SELECT", "INSERT"}),
-    "events": frozenset({"SELECT"}),
-    "event_participants": frozenset({"SELECT", "INSERT"}),
-    "entity_state": frozenset({"SELECT", "INSERT"}),
-    "entity_corrections": frozenset({"SELECT", "INSERT"}),
-    "themes": frozenset({"SELECT"}),
     "cost_ledger": frozenset({"SELECT", "INSERT"}),
     "cost_reservations": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "jobs": frozenset({"SELECT", "INSERT", "UPDATE"}),
@@ -51,6 +44,16 @@ TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "recollections": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
     "recollection_cursors": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
 }
+
+# A book's story memory (ADR 0042, ADR 0044): the tables the door reads (the first nine), what a
+# chapter's events name, the old reader corrections, and a book's text cut up for search (no
+# hosted code writes those two). The tenant role holds no privilege on any of them (ADR 0044 step 7); its startup check
+# refuses one held on any table outside its list.
+STORY_MEMORY_TABLES = (
+    "chapters", "ingested_chapters", "chapter_summaries", "entities", "aliases", "entity_state",
+    "edges", "events", "themes", "event_participants", "entity_corrections", "chunks",
+    "chunk_embeddings",
+)
 
 # The job worker (ADR 0024): BYPASSRLS, because it schedules across owners. Every owner's
 # companion work after a claim goes through the tenant role instead (ADR 0041 section 5); the

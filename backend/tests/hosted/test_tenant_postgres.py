@@ -425,17 +425,6 @@ def test_every_enabled_tenant_endpoint_requires_a_session(tenant_app, corpus: di
             },
         ),
         ("POST", f"/api/books/{book}/position/reset", {"position_epoch": 0}),
-        ("GET", f"/api/books/{book}/memory", None),
-        ("GET", f"/api/books/{book}/memory-corrections", None),
-        (
-            "POST", f"/api/books/{book}/memory-corrections",
-            {
-                "source_entity_id": str(uuid.uuid4()),
-                "canonical_name": "Corrected name",
-                "reason": "Reader correction",
-                "bookmark": 1,
-            },
-        ),
         ("GET", "/api/costs", None),
         ("GET", "/api/classics", None),
         ("GET", "/api/classics/front", None),
@@ -877,19 +866,16 @@ def test_owner_limits_are_visible_atomic_and_owner_scoped(
         ).fetchone()[0] == 0
 
 
-def test_own_memory_is_bookmark_bounded_and_reset_is_csrf_epoch_bound(
-    tenant_app, corpus: dict
-) -> None:
+def test_reset_is_csrf_epoch_bound(tenant_app, corpus: dict) -> None:
+    """The break it catches: a reset of the reader's place without the CSRF token, or one that
+    applies an old epoch. ADR 0044 step 7: the reader's own memory snapshot this test also read
+    (``GET /memory``) is gone, and the place answers without counting memory rows, which a
+    reader's session can no longer read; a book's notes reach a reader only through the door
+    (``test_no_reader_memory_writes_postgres.py``)."""
     client, tokens, _app = tenant_app
     csrf = _become(client, tokens, "a")
-    snapshot = client.get(f"/api/books/{corpus['book_a']}/memory")
-    assert snapshot.status_code == 200
-    assert snapshot.headers["cache-control"] == "private, no-store"
-    text = snapshot.text
-    assert "A Visible One" in text and "A private summary" in text
-    assert "A Future Secret" not in text
     position = client.get(f"/api/books/{corpus['book_a']}/position")
-    assert position.json()["receipt_count"] == 1
+    assert position.status_code == 200 and "receipt_count" not in position.json()
     assert client.post(
         f"/api/books/{corpus['book_a']}/position/reset", json={"position_epoch": 0}
     ).status_code == 403
@@ -907,65 +893,6 @@ def test_own_memory_is_bookmark_bounded_and_reset_is_csrf_epoch_bound(
         json={"position_epoch": 0},
         headers={CSRF_HEADER: csrf},
     ).status_code == 409
-
-
-def test_reader_memory_corrections_are_owner_scoped_and_frontier_bounded(
-    tenant_app, corpus: dict, database: str
-) -> None:
-    client, tokens, _app = tenant_app
-    with psycopg.connect(database) as conn:
-        conn.execute(
-            "UPDATE reading_state SET bookmark=2 WHERE owner_id=%s AND book_id=%s",
-            (corpus["owner_a"], corpus["book_a"]),
-        )
-    csrf_a = _become(client, tokens, "a")
-    body = {
-        "source_entity_id": str(corpus["entity_1"]),
-        "canonical_name": "A Visible One Corrected",
-        "reason": "The completed text establishes the longer name.",
-        "bookmark": 2,
-    }
-    assert client.post(
-        f"/api/books/{corpus['book_a']}/memory-corrections", json=body
-    ).status_code == 403
-    corrected = client.post(
-        f"/api/books/{corpus['book_a']}/memory-corrections",
-        json=body,
-        headers={CSRF_HEADER: csrf_a},
-    )
-    assert corrected.status_code == 200
-    item = corrected.json()["items"][-1]
-    assert item["source_entities"] == [{
-        "entity_id": str(corpus["entity_1"]), "name": "A Visible One"
-    }]
-    assert item["target_entities"][0]["name"] == "A Visible One Corrected"
-    assert client.get(
-        f"/api/books/{corpus['book_a']}/memory-corrections?bookmark=1"
-    ).json()["items"] == []
-    assert len(client.get(
-        f"/api/books/{corpus['book_a']}/memory-corrections?bookmark=2"
-    ).json()["items"]) == 1
-
-    csrf_b = _become(client, tokens, "b")
-    assert client.get(
-        f"/api/books/{corpus['book_a']}/memory-corrections"
-    ).status_code == 404
-    foreign = client.post(
-        f"/api/books/{corpus['book_a']}/memory-corrections",
-        json=body,
-        headers={CSRF_HEADER: csrf_b},
-    )
-    assert foreign.status_code == 404
-    with psycopg.connect(database) as conn:
-        row = conn.execute(
-            "SELECT invalid_at FROM entities WHERE owner_id=%s AND id=%s",
-            (corpus["owner_a"], corpus["entity_1"]),
-        ).fetchone()
-        assert row == (2,)
-        assert conn.execute(
-            "SELECT count(*) FROM entity_corrections WHERE owner_id=%s AND book_id=%s",
-            (corpus["owner_a"], corpus["book_a"]),
-        ).fetchone() == (1,)
 
 
 def test_two_device_position_merge_is_monotonic_observable_and_rewindable(
@@ -1381,7 +1308,6 @@ def test_repository_owner_predicates_hold_when_rls_is_bypassed(database: str, co
     assert asyncio.run(repository.list_reader_marks(owner_b, corpus["book_a"])) is None
     assert asyncio.run(repository.get_position(owner_b, corpus["book_a"])) is None
     assert asyncio.run(repository.get_reader_preferences(owner_b, corpus["book_a"])) is None
-    assert asyncio.run(repository.memory_snapshot(owner_b, corpus["book_a"])) is None
     assert asyncio.run(repository.list_costs(owner_b, corpus["book_a"])) is None
     assert asyncio.run(repository.source_object(owner_b, corpus["book_a"])) is None
     assert not asyncio.run(repository.remove_book(owner_b, corpus["book_a"]))
@@ -1412,13 +1338,13 @@ def test_tenant_role_is_rls_enforced_and_privilege_allow_list_is_exact(
         assert conn.execute(
             "SELECT rolsuper,rolbypassrls,rolinherit FROM pg_roles WHERE rolname=%s", (role,)
         ).fetchone() == (False, False, False)
-        conn.execute(sql.SQL("REVOKE SELECT ON themes FROM {}").format(sql.Identifier(role)))
+        conn.execute(sql.SQL("REVOKE SELECT ON chapter_notes FROM {}").format(sql.Identifier(role)))
     try:
         with pytest.raises(AuthConfigurationError, match="allow-list"):
             asyncio.run(repository.check_runtime_role())
     finally:
         with psycopg.connect(database, autocommit=True) as conn:
-            conn.execute(sql.SQL("GRANT SELECT ON themes TO {}").format(sql.Identifier(role)))
+            conn.execute(sql.SQL("GRANT SELECT ON chapter_notes TO {}").format(sql.Identifier(role)))
 
     with psycopg.connect(database, autocommit=True) as conn:
         conn.execute(sql.SQL("GRANT DELETE ON books TO {}").format(sql.Identifier(role)))

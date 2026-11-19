@@ -37,7 +37,7 @@ from datetime import timedelta
 
 import psycopg
 import pytest
-from psycopg import sql
+from psycopg import errors, sql
 from psycopg.rows import dict_row
 
 from app.hosted.companion.jobs import CompanionJobs, StoryMemoryQueue
@@ -96,16 +96,14 @@ readers = read_map_gate.readers
 worker_dsn = jobs_gate.worker_dsn
 memory_app = memory_gate.memory_app
 
-# The tenant role's privileges on books and the memory tables as they were before this step
-# (``grants.py`` on main at da1023d): the tenant role gains nothing here.
-TENANT_BEFORE = {
+# The tenant role's privileges on books and the memory tables: it gained nothing in step 3 and
+# lost every memory table in step 7 (ADR 0044 section 4 point 3).
+TENANT_NOW = {
     "books": {"SELECT", "INSERT", "UPDATE"}, "source_objects": {"SELECT", "INSERT", "UPDATE",
                                                                 "DELETE"},
-    "chapters": {"SELECT", "DELETE"}, "ingested_chapters": {"SELECT"},
-    "chapter_summaries": {"SELECT"}, "entities": {"SELECT", "INSERT", "UPDATE"},
-    "aliases": {"SELECT", "INSERT"}, "edges": {"SELECT", "INSERT"}, "events": {"SELECT"},
-    "event_participants": {"SELECT", "INSERT"}, "entity_state": {"SELECT", "INSERT"},
-    "entity_corrections": {"SELECT", "INSERT"}, "themes": {"SELECT"},
+    "chapters": set(), "ingested_chapters": set(), "chapter_summaries": set(), "entities": set(),
+    "aliases": set(), "edges": set(), "events": set(), "event_participants": set(),
+    "entity_state": set(), "entity_corrections": set(), "themes": set(),
 }
 EDITION_TABLES = ("chapters", "ingested_chapters", "chapter_summaries", "entities", "aliases",
                   "edges", "events", "event_participants", "themes", "entity_state",
@@ -562,7 +560,8 @@ def test_a_readers_session_never_selects_an_edition_row_before_or_after_their_ow
     """The second spoiler property. The break it catches: a reader's tenant session reading an
     edition's book row or any of its notes directly (around the door, which bounds them by the
     reader's place), before their own job has built any of it or after it has; row-level
-    security not forced on a memory table; or the tenant role gaining a privilege."""
+    security not forced on a memory table; or the tenant role gaining a privilege, or holding
+    any on a memory table (ADR 0044 step 7: the database refuses such a read outright)."""
     _client, _tokens, app = memory_app
     extraction = extraction_client()
     Lamps(extraction, monkeypatch)
@@ -580,12 +579,20 @@ def test_a_readers_session_never_selects_an_edition_row_before_or_after_their_ow
                 "SELECT count(*) FROM books WHERE id=%s OR owner_id=%s", (edition[1], edition[0])
             ).fetchone()[0]
             for table in EDITION_TABLES:
-                found[table] = conn.execute(
-                    sql.SQL("SELECT count(*) FROM {} WHERE book_id=%s OR owner_id=%s").format(
-                        sql.Identifier(table)), (edition[1], edition[0])).fetchone()[0]
+                try:
+                    with conn.transaction():
+                        found[table] = conn.execute(
+                            sql.SQL("SELECT count(*) FROM {} WHERE book_id=%s OR owner_id=%s")
+                            .format(sql.Identifier(table)), (edition[1], edition[0])
+                        ).fetchone()[0]
+                except errors.InsufficientPrivilege:
+                    found[table] = "refused"
         return found
 
-    nothing = {"books": 0, **{table: 0 for table in EDITION_TABLES}}
+    # ADR 0044 step 7: the memory tables refuse a reader's session outright; before it, row
+    # security answered 0 rows.
+    nothing = {"books": 0, "source_objects": 0,
+               **{table: "refused" for table in EDITION_TABLES if table != "source_objects"}}
     assert book_memory(database, edition)["entities"]
     assert seen_by_a() == nothing                          # before A's job built any
     a.read(book_a, 1, 1, 2)
@@ -602,7 +609,7 @@ def test_a_readers_session_never_selects_an_edition_row_before_or_after_their_ow
             assert conn.execute("SELECT relrowsecurity AND relforcerowsecurity FROM pg_class"
                                 " WHERE oid=%s::regclass", (f"public.{table}",)
                                 ).fetchone()[0], table
-    for table, privileges in TENANT_BEFORE.items():
+    for table, privileges in TENANT_NOW.items():
         assert TENANT_TABLE_PRIVILEGES.get(table, frozenset()) == privileges, table
 
 
