@@ -55,7 +55,7 @@ from tests.hosted.test_companion_stream_postgres import (  # noqa: F401  (autous
     Reader,
     restore_caps,
 )
-from tests.hosted.test_library_story_memory_postgres import (
+from tests.hosted.test_story_memory_door_postgres import (
     LONG,
     NAMES,
     Writer,
@@ -340,7 +340,7 @@ def test_one_live_edition_per_file_is_the_databases_rule_and_the_door_finds_one(
                          (a.owner, book_a))
 
     # The door: one row, from the one marked edition. An unmarked copy of the file under the
-    # notes account (the operator's command keeps one until step 6) is never an edition.
+    # notes account (one the operator's command left before step 6) is never an edition.
     with psycopg.connect(database) as conn:
         conn.execute("INSERT INTO books (owner_id,title,schema_version,file_hash,split_hash,"
                      "created_at) VALUES (%s,'a copy',1,%s,%s,now()-interval '1 day')",

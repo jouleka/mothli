@@ -51,7 +51,7 @@ from tests.hosted.test_companion_stream_postgres import (  # noqa: F401  (autous
     restore_caps,
     sentences,
 )
-from tests.hosted.test_library_story_memory_postgres import PARTS, Writer, long_lamps, tpage
+from tests.hosted.test_story_memory_door_postgres import PARTS, Writer, long_lamps, tpage
 from tests.hosted.test_story_memory_jobs_postgres import (
     MEMORY,
     TOMORROW,
@@ -470,7 +470,6 @@ REACH = {
     "commit_chapter_memory": lambda claim, **publish: ("writes", publish["chapter"]["ordinal"]),
     "edition_of": lambda claim, **_create: None,
     "first_builds": lambda owner_id: None,
-    "is_library_account": lambda owner_id: None,
     "heartbeat": lambda claim, **_lease: None,
     "start": lambda claim: None,
     "succeed": lambda claim: None,

@@ -180,9 +180,8 @@ async def add_classic(classic_id: str, request: Request, response: Response,
 
 
 async def add_entry(request, owner_id: OwnerId, entry: dict) -> dict:
-    """The add itself, for one catalogue entry: the reader's route above, and the operator's
-    library build (``app.hosted.library_memory``), which adds a book to the library account by
-    exactly this path. Only ``request.app.state`` is read."""
+    """The add itself, for one catalogue entry, called by the reader's route above. Only
+    ``request.app.state`` is read."""
     settings = request.app.state.settings
     tag = source_tag(entry)
     if owner_id.value in _fetching:

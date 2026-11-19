@@ -331,7 +331,7 @@ def test_a_sentence_past_any_books_place_is_removed_across_books(home_app, reade
     Seeded, the edition of the lamp book's file holds Vex and his late alias, and the door hands
     the home chat neither (ADR 0044 section 4): the fixed name check cannot name them, and a later
     name the checker clears is left to the second look, as for every book through the door
-    (``test_library_story_memory_postgres.py::
+    (``test_story_memory_door_postgres.py::
     test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look``). Until ADR 0044
     step 5 the reader's own rows held them, unclamped, and the seeded case proved the fixed check
     removed those sentences even when the checker cleared them."""

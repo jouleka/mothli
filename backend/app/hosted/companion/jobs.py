@@ -483,10 +483,9 @@ class CompanionJobs:
         with ``UNREMEMBERED_IN_A_ROW`` chapters in a row kept unremembered is stopped, for every
         reader, before anything is spent, with ``too_many_unremembered``.
 
-        The library account's books (ADR 0042 part 5, until ADR 0044 step 6) take the same path;
-        only their target is the book's last chapter, and no guard applies to them (the operator
-        builds them; the notes ceiling still does)."""
-        library = repository.is_library_account(claim.owner_id)
+        Every book takes this one path, however its reader got the file (ADR 0044 step 6). A
+        job of the notes account's own (one the removed operator's command queued) finds no read
+        page of its book, so its target is 0 and it builds nothing."""
         owner = OwnerId(claim.owner_id)
         catalog = HostedCompanionCatalog(self._dsn, owner)
         book_id = str(claim.book_id)
@@ -500,12 +499,7 @@ class CompanionJobs:
             return              # deleted, or uploaded again since: nothing of this job is left
         try:
             source = HostedBookSource(self._storage, catalog, self._sources)
-            if library:
-                book = catalog.get_book(book_id)
-                _manifest, chapters = source.verified_source(book_id, book)
-                target = max(chapter["ordinal"] for chapter in chapters)
-            else:
-                target = story_memory_target(book_id, catalog, self._settings, source)
+            target = story_memory_target(book_id, catalog, self._settings, source)
             edition = repository.edition_of(claim)
             ordinal = 1 if edition is None else repository.next_chapter(edition, through=target)
             if ordinal > target:
@@ -513,7 +507,7 @@ class CompanionJobs:
             if edition is not None and repository.unremembered_before(
                     edition, ordinal) >= UNREMEMBERED_IN_A_ROW:
                 raise _Stopped()
-            if not library and _guarded(repository, claim.owner_id, ordinal, self._settings):
+            if _guarded(repository, claim.owner_id, ordinal, self._settings):
                 # This reader's runs would be the first to build one chapter too many today or
                 # this month: nothing is spent or made; the work waits for the next UTC day.
                 queue.ensure(book_id, tomorrow=True)

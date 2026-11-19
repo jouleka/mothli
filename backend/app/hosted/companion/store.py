@@ -110,7 +110,7 @@ class _BookStore(OwnerBoundAdapter):
     def set_bookmark(self, book_id, bookmark):
         """Set the chapter counter exactly, lowering it if need be (only the read map calls this).
 
-        It writes ``memory_through``, the reader's place for the library door, and nothing else
+        It writes ``memory_through``, the reader's place for the door, and nothing else
         in the app writes that column; the older counter the device position route raises is
         set to the same value, as before, so the reader's position still follows the map.
         Lowering never reveals anything. The cross-device position clock is left alone: this is

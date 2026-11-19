@@ -735,6 +735,45 @@ can be built side by side.
   UTC reads as "waiting" for those minutes; left as it is. (8) The tenant role's grants, the
   operator's command and the reader-chapter readers of `tenant/repository.py` are untouched
   (steps 6 and 7). Every changed test is listed in the pull request.
+- Built on 19 November 2026 in PR #127: step 6, the operator's path deleted, with no
+  migration, except (1) **the notes account needed nothing from the command**: migration 0032
+  already makes it on a database without one, suspended, with its `owner_limits` row (the
+  `users_ensure_owner_limits` rule) and no day or month cap of its own, so the notes ceiling
+  applies; it keeps the name the command gave it, "Mothli library", which no reader sees, since
+  an existing migration may not change. No role membership was ever involved. A test on a
+  database migrated from nothing proves a reader's first read page builds chapter 1, handed to
+  them once they finish it, with no step of anyone's. (2) **The library role is dropped by the
+  role script**: `prepare` drops `<prefix>_library` where an earlier deployment made it (`DROP
+  OWNED BY`, then `DROP ROLE`; it owns nothing), `RETIRED_ROLE_KEYS` in
+  `scripts/hosted_roles.py`. A backup made before this step would hold grants to that role and
+  could not be restored by `deploy/restore.sh` (its `pg_restore` stops on the first error); no
+  deployment exists, so no such backup does. (3) **Editions the command made are left as they
+  are**: a notes-account `books` row that is a real copy (its stored file, title and free-library
+  source), marked as its file's edition since step 3, is an edition like any other: readers' runs
+  build into it and the door serves it. A job of the notes account's own that the command
+  queued now takes the readers' path, finds no read page and builds nothing. No data migration.
+  Such an edition still keeps a stored file under the notes account, which section 2 says
+  Mothli should not keep: step 8, which erases editions nobody holds, must remove that file
+  too when it erases one (left to it; none exists in production). (4) `is_library_account` and
+  the library branch went from the run; the publish's check that the rows name no reader lost
+  its exception for the library account's own copy (it now refuses the claimed owner, book and
+  incarnation outright). The worker keeps `SELECT` on `notes_account`, which finding and making
+  an edition need; only its comment changed. (5) **The setting is on in the template**:
+  `HOSTED_STORY_MEMORY=true` in `deploy/app.env.example`; with no AI keys it is now turned off
+  with the chat (`config.py`), as the chat's switches are, so a server without keys still
+  starts. Runbook step 4b now says notes are built for every book with no step, about $0.09 a
+  chapter from the notes ceiling ($10 a day) under the platform's day ($15), and where the five
+  settings are. (6) `test_migrations.py` needed no change: the line the record names is
+  `notes_account` among the tables with no owner, which stays because the table stays.
+  (7) **The door tests are in `test_story_memory_door_postgres.py`** (renamed with `git mv`):
+  every edition there is built by a builder reader's own runs (a free-library add, a read page
+  written into the read map, chapters marked), never by the command; `:743` (the command builds
+  a whole title) and `:871` (the library role is exactly what the command needs) are deleted;
+  the three-in-a-row test lost the command's report and second `build`; the door's
+  executable-by check names the purge role where it named the library role. Every change is
+  listed in the pull request. (8) No `source_kind` or "library" branch is left in the
+  story-memory path; the correction refusal's free-library line (`LIBRARY_MEMORY_FIXED`) is
+  step 7's.
 
 **The sentence for the terms and privacy pages** (replaces the free-library one, open items line 254):
 "Mothli's notes on a book's story (who's who and what has happened, chapter by chapter) are made once for

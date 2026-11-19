@@ -82,8 +82,8 @@ WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "events": frozenset({"INSERT"}),
     "event_participants": frozenset({"INSERT"}),
     "themes": frozenset({"INSERT"}),
-    # ADR 0042 part 5: whether a claimed job is the library account's (since ADR 0044 step 2,
-    # the notes account's), whose editions are built whole rather than up to a read map.
+    # ADR 0044 steps 2 and 3: which account owns the editions, to find a file's edition and to
+    # make it on its first chapter.
     "notes_account": frozenset({"SELECT"}),
     # ADR 0044 step 3: a run builds into the edition of its reader's file. SELECT to read the
     # claimed book's two fingerprints and find the edition with the same; INSERT to make the
@@ -104,15 +104,6 @@ TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
     "companion_platform_reserve(numeric,numeric)": frozenset({"EXECUTE"}),
     "companion_platform_adjust(date,numeric,numeric)": frozenset({"EXECUTE"}),
     "story_memory_door(uuid)": frozenset({"EXECUTE"}),
-}
-
-# ADR 0042 part 5: the operator's library build (python -m app.hosted.library_memory). Its own
-# role only makes the library account once and finds it again, with row security on; adding,
-# queueing and reporting the account's books go through the tenant role bound to that account,
-# as a reader's add does. Never in web or worker.
-LIBRARY_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
-    "users": frozenset({"INSERT"}),
-    "notes_account": frozenset({"SELECT", "INSERT"}),
 }
 
 # ADR 0041 part 8: the account purge, run once a day from the command line, never by web or

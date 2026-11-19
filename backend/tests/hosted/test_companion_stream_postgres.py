@@ -358,7 +358,7 @@ def test_a_sentence_naming_someone_not_yet_met_is_removed(chat_app, readers, dat
     neither: nothing past the reader's place reaches the story memory the checks read (ADR 0044
     section 4). So the fixed unread-name check cannot name them, and a later name the checker
     clears is left to the second look, as for every book through the door
-    (``test_library_story_memory_postgres.py::
+    (``test_story_memory_door_postgres.py::
     test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look``). Until ADR 0044
     step 5 the reader's own rows held them, unclamped, and this test proved the fixed check
     removed both sentences even when the checker cleared them."""

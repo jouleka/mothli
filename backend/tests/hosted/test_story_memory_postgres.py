@@ -333,7 +333,7 @@ def test_a_correction_during_extraction_is_respected_and_the_chapter_prepared_ag
     hosted mode must too, and without paying for the extraction again.
 
     ADR 0044 step 3: the chapter is the edition's, and no reader corrects an edition (the route
-    refuses a book the door serves, ``test_library_story_memory_postgres.py``). The publish's
+    refuses a book the door serves, ``test_story_memory_door_postgres.py``). The publish's
     check that the memory below the chapter reads as it was copied stays (ADR 0044 section 7:
     it also catches two publishes a bug let through); it is shown here with the very same
     correction, made on the edition by the tenant role bound to the notes account, at a place
