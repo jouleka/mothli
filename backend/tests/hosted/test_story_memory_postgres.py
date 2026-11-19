@@ -9,8 +9,8 @@ the chapter's calls are settled is settled once by the next run; no chapter text
 vector reaches Postgres; two readers of two files never touch each other's notes, on the
 row-security role and through a superuser connection; removing the book and erasing the account
 leave nothing of the reader's; the worker role holds exactly its grants; and the chapter is paid
-within the reader's allowance, admitted whole. Stand-in models only: nothing is called and nothing
-paid.
+by the notes account within its ceiling, admitted whole, never by the reader (ADR 0044 step 4).
+Stand-in models only: nothing is called and nothing paid.
 
 ADR 0044 step 3: every chapter is built into the edition of the reader's file (the notes
 account's book with the same two fingerprints) and the reader owns no story memory row; the
@@ -33,7 +33,7 @@ import app.hosted.companion.story_memory as story_memory_module
 import app.hosted.jobs as jobs_module
 from app.cost.limits import CostCeilingExceeded
 from app.hosted.companion.memory import HostedBookStore
-from app.hosted.companion.store import ChapterCatalog, HostedCompanionCatalog
+from app.hosted.companion.store import ChapterCatalog, HostedCompanionCatalog, NotesCatalog
 from app.hosted.companion.story_memory import ChapterOutOfOrder
 from app.hosted.jobs import (
     ChapterAlreadyPublished,
@@ -145,6 +145,19 @@ def spend_of(dsn: str, owner: uuid.UUID) -> tuple[list[dict], list[dict]]:
                              "ORDER BY recorded_at,id", (owner,)).fetchall())
 
 
+def notes_account(dsn: str) -> uuid.UUID:
+    """The notes account (ADR 0044 section 2): it holds every edition and, from ADR 0044 step 4,
+    pays for every chapter of story memory."""
+    with psycopg.connect(dsn) as conn:
+        [(account,)] = conn.execute("SELECT account_id FROM notes_account").fetchall()
+    return account
+
+
+def notes_spend(dsn: str) -> tuple[list[dict], list[dict]]:
+    """What story memory spent: the notes account's reservations and ledger (ADR 0044 step 4)."""
+    return spend_of(dsn, notes_account(dsn))
+
+
 def settled_once(dsn: str, owner: uuid.UUID) -> list[dict]:
     """Every reservation of the owner is settled or released, and each settled one is in the
     ledger exactly once, at its noted size. Returns the ledger."""
@@ -207,10 +220,12 @@ def test_a_publish_cut_off_before_it_commits_leaves_nothing_and_is_never_seen_ha
     assert seen == [([], []), ([], [])]
     assert all(rows == [] for rows in edition_memory(database, owner, book).values())
     assert no_memory_of_their_own(database, owner)
-    reservations, _ledger = spend_of(database, owner)
-    assert {row["purpose"] for row in settled_once(database, owner)} >= {
+    # ADR 0044 step 4: the calls are the notes account's, never the reader's.
+    reservations, _ledger = notes_spend(database)
+    assert {row["purpose"] for row in settled_once(database, notes_account(database))} >= {
         "extraction-commit-aborted", "extraction-review"}
     assert all(row["state"] != "reserved" for row in reservations)
+    assert spend_of(database, owner) == ([], [])
 
     monkeypatch.setattr(jobs_module, "record_event", real_event)
     assert remember(app, worker_dsn, owner, book, client, 1) is True
@@ -233,7 +248,7 @@ def test_a_chapter_is_published_once_and_a_second_publish_changes_nothing(
     monkeypatch.setattr(PostgresWorkerRepository, "commit_chapter_memory", recorded)
     assert remember(app, worker_dsn, owner, book, client, 1) is True
     before, calls, spend = edition_memory(database, owner, book), list(extractor.calls), \
-        spend_of(database, owner)
+        notes_spend(database)
 
     # The same publish again, as a worker that lost track of its first would send it.
     repository, claim = claimed(app, worker_dsn, owner, book)
@@ -244,14 +259,14 @@ def test_a_chapter_is_published_once_and_a_second_publish_changes_nothing(
     assert remember(app, worker_dsn, owner, book, client, 1) is False
     assert edition_memory(database, owner, book) == before
     assert extractor.calls == calls
-    assert spend_of(database, owner) == spend
+    assert notes_spend(database) == spend and spend_of(database, owner) == ([], [])
     assert len(before["ingested_chapters"]) == 1 and len(before["entities"]) == 2
     assert no_memory_of_their_own(database, owner)
 
     # Out of order: chapter 3 before chapter 2 is refused before anything is spent.
     with pytest.raises(ChapterOutOfOrder):
         remember(app, worker_dsn, owner, book, client, 3)
-    assert extractor.calls == calls and spend_of(database, owner) == spend
+    assert extractor.calls == calls and notes_spend(database) == spend
 
 
 # ---- 3: a lost lease publishes nothing ------------------------------------------------------------
@@ -275,7 +290,7 @@ def test_a_lease_another_worker_took_spends_and_publishes_nothing(harbour, worke
     with pytest.raises(LostLeaseError):
         remember(app, worker_dsn, owner, book, client, 1, claim=(repository, first))
     assert extractor.calls == []
-    assert spend_of(database, owner) == ([], [])
+    assert spend_of(database, owner) == ([], []) == notes_spend(database)
     assert all(rows == [] for rows in edition_memory(database, owner, book).values())
     assert no_memory_of_their_own(database, owner)
 
@@ -303,7 +318,7 @@ def test_a_lease_lost_during_the_chapter_is_refused_at_the_publish(harbour, work
     assert extractor.calls.count("Extraction") == 1
     assert all(rows == [] for rows in edition_memory(database, owner, book).values())
     assert no_memory_of_their_own(database, owner)
-    assert {row["purpose"] for row in settled_once(database, owner)} >= {
+    assert {row["purpose"] for row in settled_once(database, notes_account(database))} >= {
         "extraction-commit-aborted"}
 
 
@@ -399,10 +414,11 @@ def test_a_correction_during_extraction_is_respected_and_the_chapter_prepared_ag
 def test_a_crash_after_the_publish_is_settled_once_by_the_next_run(harbour, worker_dsn, database,
                                                                    monkeypatch):
     """The break it catches: a chapter's deferred extraction calls left reserved for good after
-    a crash between the publish and settling them (a reader's allowance held by money spent
+    a crash between the publish and settling them (the notes account's day held by money spent
     long ago), or settled twice (charged twice) when the chapter is run again."""
     app, client, extractor, owner, book = harbour
     real_finalize = ChapterCatalog.finalize_ingest
+    account = notes_account(database)
 
     def crashes(self, book_id, n, **kwargs):
         raise KeyboardInterrupt("the worker died after the publish")
@@ -410,7 +426,7 @@ def test_a_crash_after_the_publish_is_settled_once_by_the_next_run(harbour, work
     monkeypatch.setattr(ChapterCatalog, "finalize_ingest", crashes)
     with pytest.raises(KeyboardInterrupt):
         remember(app, worker_dsn, owner, book, client, 1)
-    reservations, _ledger = spend_of(database, owner)
+    reservations, _ledger = notes_spend(database)
     left = [row for row in reservations if row["state"] == "reserved"]
     assert [row["purpose"] for row in left] == ["extraction"]
     assert left[0]["actual_usd"] == left[0]["reserved_usd"]           # its noted size
@@ -419,11 +435,12 @@ def test_a_crash_after_the_publish_is_settled_once_by_the_next_run(harbour, work
     monkeypatch.setattr(ChapterCatalog, "finalize_ingest", real_finalize)
     calls = len(extractor.calls)
     assert remember(app, worker_dsn, owner, book, client, 2) is True   # the next chapter's run
-    ledger = settled_once(database, owner)
+    ledger = settled_once(database, account)
     assert [row["purpose"] for row in ledger].count("extraction") == 1
     assert extractor.calls[calls:] == []                               # the map page: no call
     assert remember(app, worker_dsn, owner, book, client, 2) is False  # and again: no change
-    assert settled_once(database, owner) == ledger
+    assert settled_once(database, account) == ledger
+    assert spend_of(database, owner) == ([], [])
 
 
 def test_a_run_that_died_mid_chapter_is_settled_and_the_chapter_done_on_the_next(
@@ -439,10 +456,11 @@ def test_a_run_that_died_mid_chapter_is_settled_and_the_chapter_done_on_the_next
     with pytest.raises(KeyboardInterrupt):
         remember(app, worker_dsn, owner, book, client, 1)
     extractor.hook = None
-    assert any(row["state"] == "reserved" for row in spend_of(database, owner)[0])
+    assert any(row["state"] == "reserved" for row in notes_spend(database)[0])
     assert remember(app, worker_dsn, owner, book, client, 1) is True
-    ledger = settled_once(database, owner)
+    ledger = settled_once(database, notes_account(database))
     assert "extraction-abandoned" in {row["purpose"] for row in ledger}
+    assert spend_of(database, owner) == ([], [])
 
 
 # ---- 6: nothing that must stay out reaches Postgres --------------------------------------------
@@ -657,51 +675,61 @@ def test_the_worker_role_holds_exactly_what_a_publish_needs(worker_dsn, database
 
 # ---- 10: money ----------------------------------------------------------------------------------
 
-def test_a_chapter_is_paid_within_the_allowance_admitted_whole(hosted_app, readers, worker_dsn,
-                                                              database, monkeypatch):
-    """The break it catches: extraction paid outside the reader's allowance or under other
-    purposes than local mode's phase names; a chapter refused half-way by the day cap once its
-    first call was admitted (its paid calls thrown away, and paid again the next day); or a
-    reader already at the cap spending anything at all."""
+def test_a_chapter_is_paid_by_the_notes_account_within_its_ceiling_admitted_whole(
+        hosted_app, readers, worker_dsn, database, monkeypatch):
+    """ADR 0044 section 5 (step 4 moved this test from the reader's allowance to the notes
+    account's). The break it catches: extraction paid outside the notes account's ceiling, by a
+    reader, against anything but the edition, or under other purposes than local mode's phase
+    names; a chapter refused half-way by the ceiling once its first call was admitted (its paid
+    calls thrown away, and paid again the next day); or a chapter begun with the notes account
+    already at its ceiling spending anything at all. The ceiling here is the notes account's own
+    ``owner_limits`` row, which wins over the setting."""
     _client, _tokens, app = hosted_app
     client = extraction_client()
     extractor = Extractor(client, monkeypatch, usage=(500, 200))   # $0.0015 a call at terra
     a, b = readers["a"], readers["b"]
-    for owner in (a, b):
-        update_limits(database, owner, {"max_spend_usd_per_day": Decimal("0.001")})
+    account = notes_account(database)
+    update_limits(database, account, {"max_spend_usd_per_day": Decimal("0.001")})
     a_book = hosted_book(hosted_app, "a", harbour_book())
-    b_book = hosted_book(hosted_app, "b", harbour_book())
+    b_book = hosted_book(hosted_app, "b", harbour_book("The Harbour Book, Second Printing"))
 
-    # Checked call by call (the plain catalog), the review's settled cost reaches the cap and
-    # the chapter's next call is refused part-way: the case this is about.
-    monkeypatch.setattr(story_memory_module, "ChapterCatalog", HostedCompanionCatalog)
+    # Checked call by call (a catalog that admits no chapter whole), the review's settled cost
+    # reaches the ceiling and the chapter's next call is refused part-way: the case this is about.
+    class CallByCall(HostedCompanionCatalog):
+        __slots__ = ()
+        _NOTES = True
+
+    monkeypatch.setattr(story_memory_module, "NotesCatalog", CallByCall)
     with pytest.raises(CostCeilingExceeded):
         remember(app, worker_dsn, b, b_book, client, 1)
     assert edition_memory(database, b, b_book)["ingested_chapters"] == []
-    monkeypatch.setattr(story_memory_module, "ChapterCatalog", ChapterCatalog)
+    monkeypatch.setattr(story_memory_module, "NotesCatalog", NotesCatalog)
+    with psycopg.connect(database) as conn:
+        conn.execute("DELETE FROM cost_ledger WHERE owner_id=%s", (account,))
+        conn.execute("DELETE FROM cost_reservations WHERE owner_id=%s", (account,))
 
-    # Admitted whole: the same chapter for A is finished, past the cap by that one chapter.
+    # Admitted whole: chapter 1 for A is finished, past the ceiling by that one chapter.
     assert remember(app, worker_dsn, a, a_book, client, 1) is True
-    ledger = settled_once(database, a)
+    _account, edition = edition_of(database, a, a_book)
+    ledger = settled_once(database, account)
     assert {row["purpose"] for row in ledger} == {"extraction", "extraction-review"}
-    assert all(row["book_id"] == uuid.UUID(a_book) and row["chapter_ordinal"] == 1
-               for row in ledger)
+    assert all(row["book_id"] == edition and row["chapter_ordinal"] == 1 for row in ledger)
     spent = sum(row["usd"] for row in ledger)
     assert spent > Decimal("0.001")
-    reservations, _ledger = spend_of(database, a)
+    reservations, _ledger = notes_spend(database)
     # The stub embedder's free calls are reserved like any other and released at zero.
     assert {(row["purpose"], row["state"]) for row in reservations} == {
         ("embedding", "released"), ("extraction", "settled"), ("extraction-review", "settled")}
     assert {row["phase"] for row in reservations} == {"synthesis"}
+    assert spend_of(database, a) == ([], []) == spend_of(database, b)
 
-    # At the cap: the next chapter is refused at its first call and spends nothing.
+    # At the ceiling: the next chapter is refused at its first call and spends nothing.
     calls = list(extractor.calls)
     with psycopg.connect(database) as conn:
         conn.execute("DELETE FROM jobs WHERE owner_id=%s AND state='pending'", (a,))
-    update_limits(database, a, {"max_spend_usd_per_day": Decimal("1")})
     held = claimed(app, worker_dsn, a, a_book)
-    update_limits(database, a, {"max_spend_usd_per_day": Decimal("0.001")})
-    before = spend_of(database, a)
+    before = notes_spend(database)
     with pytest.raises(CostCeilingExceeded):
         remember(app, worker_dsn, a, a_book, client, 2, claim=held)
-    assert spend_of(database, a) == before and extractor.calls == calls
+    assert notes_spend(database) == before and extractor.calls == calls
+    assert spend_of(database, a) == ([], [])

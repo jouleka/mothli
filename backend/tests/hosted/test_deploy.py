@@ -181,7 +181,7 @@ def test_every_setting_hosted_startup_requires_has_a_place_in_the_deployment() -
             if re.match(r"^[A-Z_]+=", line):
                 setting, value = line.split("=", 1)
                 assert (value.startswith(("GENERATE_WITH_", "OWNER_MUST_FILL_IN", "https://OWNER"))
-                        or value in {"0.10", "2.00", "5.00", "local-placeholder"}
+                        or value in {"0.10", "2.00", "15.00", "local-placeholder"}
                         or value.endswith("OWNER_MUST_FILL_IN.example")
                         or (name == "app.env.example" and working.get(setting) == value)), line
 
@@ -265,7 +265,7 @@ def test_the_template_with_both_ai_keys_filled_in_gives_a_working_checked_chat(
     assert companion_kinds(settings) == {"chapter_notes", "recollect"}
     assert not settings.hosted_story_memory                  # the owner decides that one
     assert (settings.hosted_reader_usd_per_day, settings.hosted_reader_usd_per_month,
-            settings.hosted_platform_usd_per_day) == (0.10, 2.00, 5.00)
+            settings.hosted_platform_usd_per_day) == (0.10, 2.00, 15.00)
     # And it starts, with the platform's writer and Jev built (no call is made).
     with TestClient(hosted_app(settings), base_url="https://reader.example") as client:
         platform = client.app.state.platform_client

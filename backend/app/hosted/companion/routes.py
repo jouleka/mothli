@@ -76,14 +76,20 @@ def _notes_queue(request: Request, owner_id: OwnerId) -> ChapterNotesQueue:
     return ChapterNotesQueue(request.app.state.companion_dsn, owner_id)
 
 
-def _finished(request: Request, owner_id: OwnerId, book: str) -> None:
-    """A chapter was finished: ask for its notes and, while a reader's own story memory is on,
-    for the book's story memory (ADR 0042 section 2). Neither is waited for."""
-    settings = request.app.state.settings
-    if _notes_wanted(settings):
-        _notes_queue(request, owner_id).ensure(book)
-    if settings.hosted_story_memory and settings.hosted_reader_story_memory:
+def _story_memory(request: Request, owner_id: OwnerId, book: str) -> None:
+    """Ask for the book's story memory (ADR 0044 section 3), for every hosted reader's book,
+    whichever way the file came, while story memory is on. Not waited for: the run decides how
+    far to build, and builds nothing before the reader has read a page."""
+    if request.app.state.settings.hosted_story_memory:
         StoryMemoryQueue(request.app.state.companion_dsn, owner_id).ensure(book)
+
+
+def _finished(request: Request, owner_id: OwnerId, book: str) -> None:
+    """A chapter was finished: ask for its notes and for the book's story memory (ADR 0042
+    section 2, ADR 0044 section 3). Neither is waited for."""
+    if _notes_wanted(request.app.state.settings):
+        _notes_queue(request, owner_id).ensure(book)
+    _story_memory(request, owner_id, book)
 
 
 def _bound(request: Request, owner_id: OwnerId, catalog_type=HostedCompanionCatalog, store=None):
@@ -123,11 +129,16 @@ def put_read_page(book_id: uuid.UUID, body: ReadPage, request: Request,
 
     A skimmed page is checked the same way and only remembered. A page in no chapter (a cover,
     Project Gutenberg's own page) is accepted and adds nothing. A page that finishes a chapter
-    asks for that chapter's notes, as locally (a durable job here).
+    asks for that chapter's notes, as locally (a durable job here), and for the book's story
+    memory; so does the first page of the book read and not skimmed (ADR 0044 section 3: the
+    first chapter's notes are made when a reader first reads a page, not when the file is added).
     """
     catalog, source, settings = _bound(request, owner_id)
     book = str(book_id)
     try:
+        held = catalog.get_book(book) if settings.hosted_story_memory and not body.skimmed else None
+        first = held is not None and not catalog.has_read_page(book,
+                                                               incarnation=held["incarnation"])
         finished = record_page(book, body.start, body.end, catalog, settings, source,
                                skimmed=body.skimmed)
         if body.skimmed or finished is None:          # skimmed, or a page in no chapter
@@ -145,6 +156,8 @@ def put_read_page(book_id: uuid.UUID, body: ReadPage, request: Request,
         raise HTTPException(422, "page could not be verified against the source") from exc
     if finished:
         _finished(request, owner_id, book)
+    elif first:
+        _story_memory(request, owner_id, book)
     return point
 
 

@@ -1,4 +1,5 @@
-"""The read map's seven catalog methods over Postgres, for one owner (ADR 0041 part 1).
+"""The read map's seven catalog methods over Postgres, for one owner (ADR 0041 part 1), and
+``has_read_page``, which only hosted story memory asks (ADR 0044 section 3).
 
 Same names, arguments and return shapes as ``app.catalog.catalog.Catalog``; ranges are merged by
 the local catalog's own rule. Read-then-write methods hold the per-book advisory lock inside their
@@ -120,6 +121,19 @@ class ReadMapStore(OwnerBoundAdapter):
                      SET atom=excluded.atom,source_offset=excluded.source_offset,
                          updated_at=now()""",
                 (self._owner.value, as_uuid(book_id), as_uuid(incarnation), atom, offset))
+
+    def has_read_page(self, book_id, *, incarnation):
+        """Whether the reader has read a page of this book, one reported page by page and not
+        skimmed (``source='read'``): not chapters they marked read, not their reading imported
+        from elsewhere, not the map's first seeding. Hosted mode's alone: story memory builds
+        nothing for a book until it is true (ADR 0044 section 3)."""
+        with self._transaction() as conn:
+            row = conn.execute(
+                """SELECT EXISTS (SELECT 1 FROM public.read_ranges
+                                  WHERE owner_id=%s AND book_id=%s AND book_incarnation=%s
+                                    AND source='read') AS read""",
+                (self._owner.value, as_uuid(book_id), as_uuid(incarnation))).fetchone()
+        return row["read"]
 
     def get_read_position(self, book_id, *, incarnation):
         with self._transaction() as conn:

@@ -650,6 +650,52 @@ can be built side by side.
   checks, as in the library door's own probe test), because a reader no longer has unclamped
   rows of their own; it still checks it is never looser than local mode. Every changed test is
   listed in the pull request.
+- Built on 18 November 2026 in PR #125: step 4, trigger, one ahead, money, as designed, with no
+  migration, except (1) **the first page of a book read, not skimmed, asks for the job too**,
+  besides a page that finishes a chapter and "I've read this": section 3's trigger names only
+  those two, but "chapter 1 is built when a reader first reads a page" needs it; later pages that
+  finish nothing ask for nothing. (2) "A read page" is a page reported as read (`read_ranges`
+  with source `read`): chapters marked read, reading imported from elsewhere and the map's first
+  seeding do not count, and marking every chapter "not read" takes the pages away again, so the
+  target goes back to 0. The target is `story_memory_target` in `companion/jobs.py`:
+  `min(finished_through + 1, the book's last chapter)` from the reader's own read map, or 0 with
+  no read page. (3) **The guards are applied by the run, not by the claim**: the claim only stops
+  applying the reader's dollar check to `story_memory` jobs (a capped reader's other jobs still
+  move to tomorrow, and no longer take that reader's story memory with them). A run checks the
+  guards only when it would be the first to build a chapter (the edition's next missing chapter
+  lies within its target), before it makes the edition or takes the slot; past one it spends
+  nothing and asks for its reader's next run at the next UTC midnight (a new waiting job; the
+  run's own job succeeds), which the screens already show as waiting. In the claim a guard would
+  hold a reader whose next chapters other readers had built. (4) The count is the reader's own
+  `story_memory` jobs whose run published, marked `"published": true` in `payload_metadata` by
+  `commit_chapter_memory` in the publishing transaction, timed by the job's end (`completed_at`;
+  a job not yet ended is not counted) and read by `first_builds`; a new file is a published
+  chapter 1. Two runs of one reader's two books at once (two may run, `max_provider_concurrency`)
+  can pass a guard by one chapter. (5) **No setup step**: the notes account pays through
+  `NotesCatalog` (`companion/store.py`), whose default day cap is `HOSTED_STORY_MEMORY_USD_PER_DAY`
+  ($10, a default in code) and which has no default month cap; a cap set on the notes account's
+  own `owner_limits` row wins, so runbook step 4b's limits command still works. The platform's
+  day defaults to $15 in code and in `deploy/app.env.example`. The guards are
+  `HOSTED_STORY_MEMORY_NEW_CHAPTERS_PER_DAY` (30), `..._PER_MONTH` (300) and
+  `HOSTED_STORY_MEMORY_NEW_FILES_PER_MONTH` (5). (6) A chapter whose first call the notes ceiling
+  or the platform's day refuses waits for the next UTC midnight the same way (before, it failed
+  `budget_exceeded` and was retried until the claim found its reader capped). (7) **Step 3's
+  `settle_left_open` is removed**: it settled one reader's calls left open on chapters the
+  edition held, because their spend was that reader's. Now every call is the notes account's,
+  against the edition, so a call left open on a chapter is settled, whoever's run made it, by the
+  next run that takes that chapter's slot (as abandoned) or builds the chapter after it (the
+  shared code's `finalize_ingest` of the chapter before); a sweep over earlier chapters, across
+  readers, could have raced a run settling its own chapter. (8) The notes account's
+  `max_companion_calls_in_flight` (8 by default) now counts every reader's chapters together;
+  one worker runs one job at a time, so it is not reached, but more workers need it raised.
+  (9) The library account's books (until step 6) meet no guard and pay under the notes ceiling,
+  not the readers' default caps. (10) `HOSTED_READER_STORY_MEMORY` is gone from the code, the
+  template and the tests; a line of it left in an environment file is ignored. (11) The first
+  spoiler property is restated for one ahead and proven twice: the step 3 test of a reader at
+  chapter 3 now allows a question about chapter 3 (n+1) and still no notes past chapter 2, and a
+  new test lists every method of the worker's repository a run may call with how far into the
+  edition each reaches, so a new way of reading the edition fails it until it is listed with its
+  bound. Every changed test is listed in the pull request.
 
 **The sentence for the terms and privacy pages** (replaces the free-library one, open items line 254):
 "Mothli's notes on a book's story (who's who and what has happened, chapter by chapter) are made once for

@@ -21,6 +21,12 @@ that began under the cap is finished and not cut off mid-way (``ReplyCatalog`` i
 A reader can therefore end a day past the cap by at most the replies under way when it was
 reached; background work is checked call by call and has no such allowance.
 
+Story memory is never a reader's spend (ADR 0044 section 5): a chapter's calls are reserved by a
+store bound to the notes account (``NotesCatalog`` in ``store.py``) against the edition being
+built, under the same rules, with the notes account's own caps: its ``owner_limits`` day cap, or
+the notes ceiling (``HOSTED_STORY_MEMORY_USD_PER_DAY``) where that is NULL, and a month cap only
+where its row sets one. The platform's day counts those calls as it counts every other.
+
 A reservation counts as in flight for ``IN_FLIGHT_MINUTES``. One still open after that was left
 by a process that died: it no longer holds a place among the calls in flight, and since nobody
 knows what it cost, it is counted as spent, at its reserved size, on the day it was made.
@@ -78,12 +84,14 @@ def _reader_spent() -> str:
 @dataclass(frozen=True)
 class SpendLimits:
     """The caps from the environment (``HOSTED_READER_USD_PER_DAY``, ``..._PER_MONTH``,
-    ``HOSTED_PLATFORM_USD_PER_DAY``). The reader's two are defaults for a reader whose
-    ``owner_limits`` row leaves its own cap NULL. The amounts are to be confirmed by the owner."""
+    ``HOSTED_PLATFORM_USD_PER_DAY``, ``HOSTED_STORY_MEMORY_USD_PER_DAY``). The reader's two are
+    defaults for a reader whose ``owner_limits`` row leaves its own cap NULL; the last is the
+    notes account's day ceiling where its row leaves its own NULL (ADR 0044 section 5)."""
 
     reader_usd_per_day: Decimal = Decimal("0.10")
     reader_usd_per_month: Decimal = Decimal("2.00")
-    platform_usd_per_day: Decimal = Decimal("5.00")
+    platform_usd_per_day: Decimal = Decimal("15.00")
+    notes_usd_per_day: Decimal = Decimal("10.00")
 
 
 _limits_guard = threading.Lock()
@@ -96,11 +104,12 @@ def _money(value) -> Decimal:
     return Decimal(str(value)).quantize(_CENT_FRACTION, rounding=ROUND_HALF_EVEN)
 
 
-def set_spend_limits(*, reader_usd_per_day, reader_usd_per_month, platform_usd_per_day) -> None:
+def set_spend_limits(*, reader_usd_per_day, reader_usd_per_month, platform_usd_per_day,
+                     notes_usd_per_day=SpendLimits.notes_usd_per_day) -> None:
     """Set this process's caps from settings (startup only, like the connection limit)."""
     global _limits
     values = [_money(value) for value in (reader_usd_per_day, reader_usd_per_month,
-                                          platform_usd_per_day)]
+                                          platform_usd_per_day, notes_usd_per_day)]
     if any(not value.is_finite() or value < 0 for value in values):
         raise ValueError("spend caps must be finite and non-negative")
     with _limits_guard:
@@ -111,16 +120,20 @@ def spend_limits() -> SpendLimits:
     return _limits
 
 
-def _reader_cap_reached(used, policy, limits) -> str | None:
-    """"day" or "month" when that companion allowance of the reader is used up, else None: the
-    reader's own ``owner_limits`` cap, or the process default where it is NULL."""
+def _reader_cap_reached(used, policy, limits, *, notes: bool = False) -> str | None:
+    """"day" or "month" when that companion allowance of the owner is used up, else None: the
+    owner's own ``owner_limits`` cap, or the process default where it is NULL. For the notes
+    account (``notes``) the default day cap is the notes ceiling and there is no default month
+    cap (ADR 0044 section 5): only one its row sets."""
     day_cap = policy["max_spend_usd_per_day"]
     month_cap = policy["max_spend_usd_per_month"]
-    day_cap = limits.reader_usd_per_day if day_cap is None else day_cap
-    month_cap = limits.reader_usd_per_month if month_cap is None else month_cap
+    if day_cap is None:
+        day_cap = limits.notes_usd_per_day if notes else limits.reader_usd_per_day
+    if month_cap is None and not notes:
+        month_cap = limits.reader_usd_per_month
     if used["day"] >= day_cap:
         return "day"
-    if used["month"] >= month_cap:
+    if month_cap is not None and used["month"] >= month_cap:
         return "month"
     return None
 
@@ -198,6 +211,9 @@ def _number(value):
 
 class SpendStore(OwnerBoundAdapter):
     __slots__ = ()
+    # Whether this store pays for story memory as the notes account (``NotesCatalog``), whose
+    # default caps are the notes ceiling's rather than a reader's.
+    _NOTES = False
 
     # ---- which spend a book id names --------------------------------------------------------
     def _spend_book(self, conn, book_id):
@@ -295,7 +311,7 @@ class SpendStore(OwnerBoundAdapter):
                       COALESCE((SELECT sum(usd) FROM public.cost_ledger
                         WHERE owner_id=%(o)s),0) AS lifetime""",
                 {"o": owner}).fetchone()
-            reached = _reader_cap_reached(used, policy, limits)
+            reached = _reader_cap_reached(used, policy, limits, notes=self._NOTES)
             lifetime_cap = policy["max_spend_usd"]
             if under_way:
                 pass                                   # admitted with its first call: it finishes

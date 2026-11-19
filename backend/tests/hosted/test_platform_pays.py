@@ -136,11 +136,13 @@ PAID = {"openai_api_key": KEY_CANARY, "jev_enabled": True, "typesafe_api_key": J
 
 
 def test_the_cap_settings_have_the_owners_provisional_defaults(tmp_path) -> None:
-    """The break it catches: a cap default drifting from the amounts the owner was told (to be
-    confirmed by the owner: $0.10 per reader per day, $2.00 per month, $5.00 platform per day)."""
+    """The break it catches: a cap default drifting from the amounts the owner was told ($0.10
+    per reader per day, $2.00 per month, to be confirmed by the owner; the platform's day $15,
+    raised from $5 by the owner on 18 November 2026 so that story memory and the chat do not
+    starve each other, ADR 0044 section 5)."""
     settings = hosted_settings(tmp_path)
     assert (settings.hosted_reader_usd_per_day, settings.hosted_reader_usd_per_month,
-            settings.hosted_platform_usd_per_day) == (0.10, 2.00, 5.00)
+            settings.hosted_platform_usd_per_day) == (0.10, 2.00, 15.00)
 
 
 @pytest.mark.parametrize("setting, value", [
@@ -264,7 +266,7 @@ def _concrete(path: str) -> str:
 
 
 @pytest.mark.parametrize("values", [
-    {}, CHAT_ON, {**CHAT_ON, "hosted_story_memory": True, "hosted_reader_story_memory": True},
+    {}, CHAT_ON, {**CHAT_ON, "hosted_story_memory": True},
 ], ids=["nothing-paid", "chat", "chat-and-story-memory"])
 def test_the_reader_key_paths_do_not_exist_in_hosted_mode_whatever_the_settings(values,
                                                                                 tmp_path) -> None:

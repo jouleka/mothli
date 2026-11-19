@@ -15,8 +15,9 @@ are fully read, writes from those chapters alone and keeps only sentences that p
 which read only the reader's own messages and keep only notes Jev finds the reader said; its
 queue, ``RecollectQueue``, is the ``recollector`` the chats are given. ``story_memory`` (ADR 0042
 part 3) is ``remember_chapter`` for the next chapter of the reader's file's edition (ADR 0044 step
-3) that the reader has finished, one chapter per run; its queue, ``StoryMemoryQueue``, is asked
-where the notes queue is. Nothing here decides what a reader may be shown: the door does.
+3), up to one chapter past what the reader has finished (step 4), one chapter per run, paid by the
+notes account; its queue, ``StoryMemoryQueue``, is asked where the notes queue is. Nothing here
+decides what a reader may be shown: the door does.
 """
 
 from __future__ import annotations
@@ -35,13 +36,13 @@ from app.home_conversation import HOME
 from app.hosted.companion import CompanionDatabaseBusy, OwnerBoundAdapter, as_uuid
 from app.hosted.companion.memory import HostedBookStore
 from app.hosted.companion.source import HostedBookSource
+from app.hosted.companion.spend import AllowanceReached
 from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.companion.store_recollections import RecollectionCursorMoved
 from app.hosted.companion.story_memory import (
     SelfRelation,
     WorkingCopyMismatch,
     remember_chapter,
-    settle_left_open,
 )
 from app.hosted.jobs import (
     CHAPTER_FAILURES,
@@ -82,12 +83,13 @@ class ChapterNotesQueue(OwnerBoundAdapter):
     __slots__ = ()
     KIND, KEY, PRIORITY = "chapter_notes", "chapter-notes", COMPANION_PRIORITY
 
-    def ensure(self, book_id, *, after: timedelta | None = None) -> bool:
+    def ensure(self, book_id, *, after: timedelta | None = None, tomorrow: bool = False) -> bool:
         """Insert a waiting job of this queue's kind for this reader's live book; True if one was
-        added. With ``after``, the job waits that long before it may be claimed. A job already
-        waiting for the book, a book that is not this reader's, or a database that cannot be
-        reached adds nothing: as locally, the next page turn or reply asks again, and the
-        caller's answer never depends on it."""
+        added. With ``after``, the job waits that long before it may be claimed; with
+        ``tomorrow``, until the start of the next UTC day (as the claim moves a capped reader's
+        job). A job already waiting for the book, a book that is not this reader's, or a database
+        that cannot be reached adds nothing: as locally, the next page turn or reply asks again,
+        and the caller's answer never depends on it."""
         try:
             book = as_uuid(book_id)
         except LookupError:
@@ -100,12 +102,14 @@ class ChapterNotesQueue(OwnerBoundAdapter):
                          (owner_id,book_id,book_incarnation,kind,idempotency_key,priority,
                           run_after)
                        SELECT book.owner_id,book.id,book.incarnation,%s,%s,%s,
-                              now()+(%s*interval '1 second')
+                              CASE WHEN %s THEN (date_trunc('day', now() AT TIME ZONE 'UTC')
+                                                 + interval '1 day') AT TIME ZONE 'UTC'
+                                   ELSE now()+(%s*interval '1 second') END
                        FROM public.books AS book
                        WHERE book.owner_id=%s AND book.id=%s AND book.deleted_at IS NULL
                        ON CONFLICT DO NOTHING
                        RETURNING id""",
-                    (self.KIND, f"{self.KEY}:{uuid.uuid4().hex}", self.PRIORITY, wait,
+                    (self.KIND, f"{self.KEY}:{uuid.uuid4().hex}", self.PRIORITY, tomorrow, wait,
                      self._owner.value, book)).fetchone()
         except (psycopg.Error, CompanionDatabaseBusy):
             return False
@@ -114,9 +118,9 @@ class ChapterNotesQueue(OwnerBoundAdapter):
 
 class StoryMemoryQueue(ChapterNotesQueue):
     """One hosted reader's story-memory queue (ADR 0042 part 3): ``ensure`` asks for the notes of
-    their book's file (its edition, ADR 0044 step 3) to be carried on to the chapters they have
-    finished, one chapter per run. A book the door already serves asks too: its edition is
-    built further by its readers' own runs."""
+    their book's file (its edition, ADR 0044 step 3) to be carried on to one chapter past the
+    chapters they have finished (ADR 0044 step 4), one chapter per run. Every hosted reader's
+    book asks, whichever way the file came."""
 
     __slots__ = ()
     KIND, KEY, PRIORITY = "story_memory", "story-memory", STORY_MEMORY_PRIORITY
@@ -305,6 +309,41 @@ def story_memory_failure(exc: Exception) -> SanitizedFailure | None:
     return None
 
 
+def story_memory_target(book_id: str, catalog, settings, source) -> int:
+    """How far a reader's story-memory runs build their book's edition (ADR 0044 section 3):
+    one chapter past the last chapter up to which they have finished every chapter (the read
+    map's ``finished_through``), never past the book's last chapter, and 0 until they have read
+    a page of the book that was not skimmed (``has_read_page``), so adding a file, skimming it,
+    or marking chapters read without reading a page of it builds nothing. Never the chapter
+    counter a device can push. The door still hands the reader only up to their own place: the
+    chapter ahead is built for them, not shown to them."""
+    _point, _read, state, manifest, book, _held = read_snapshot(book_id, catalog, settings,
+                                                                source)
+    if not catalog.has_read_page(book_id, incarnation=book["incarnation"]):
+        return 0
+    return min(state["finished_through"] + 1, len(manifest["atoms"]))
+
+
+def _guarded(repository: PostgresWorkerRepository, owner_id, ordinal: int, settings) -> bool:
+    """Whether a run of this reader's that would be the first to build chapter ``ordinal`` of an
+    edition is past a guard (ADR 0044 section 5): as many new chapters as
+    ``HOSTED_STORY_MEMORY_NEW_CHAPTERS_PER_DAY`` today or ``..._PER_MONTH`` this month, or, for
+    chapter 1 (a new edition), as many new files as ``..._NEW_FILES_PER_MONTH`` this month."""
+    built = repository.first_builds(owner_id)
+    return (built["day"] >= settings.hosted_story_memory_new_chapters_per_day
+            or built["month"] >= settings.hosted_story_memory_new_chapters_per_month
+            or (ordinal == 1 and built["files"] >= settings.hosted_story_memory_new_files_per_month))
+
+
+def _until_tomorrow(exc: BaseException) -> bool:
+    """Whether a run's failure is its first call refused for a day or month cap (the notes
+    ceiling, or the platform's day): nothing was spent, and only the next UTC day can admit it.
+    Not the calls in flight (retried soon) nor a per-call ceiling (the chapter's own size)."""
+    cause = exc.__cause__
+    return (isinstance(exc, CostCeilingExceeded) and isinstance(cause, AllowanceReached)
+            and cause.limit != "calls_in_flight")
+
+
 class CompanionJobs:
     """The worker's handler for the companion's kinds: ``handler(claim, repository)``."""
 
@@ -350,7 +389,8 @@ class CompanionJobs:
         set_connection_limit(settings.hosted_companion_db_connections)
         set_spend_limits(reader_usd_per_day=settings.hosted_reader_usd_per_day,
                          reader_usd_per_month=settings.hosted_reader_usd_per_month,
-                         platform_usd_per_day=settings.hosted_platform_usd_per_day)
+                         platform_usd_per_day=settings.hosted_platform_usd_per_day,
+                         notes_usd_per_day=settings.hosted_story_memory_usd_per_day)
         return cls(tenant_dsn=tenant_dsn, settings=settings,
                    client=build_platform_clients(settings),
                    storage=build_object_storage(settings),
@@ -416,13 +456,26 @@ class CompanionJobs:
     def _story_memory(self, claim: ClaimedJob, lease: _Lease,
                       repository: PostgresWorkerRepository) -> None:
         """One chapter of the story memory of the claimed book's file (ADR 0042 sections 2 and 6,
-        ADR 0044 step 3): the next chapter of the file's **edition** without notes, only when this
-        reader has finished it, built from this reader's own copy and published into the edition
-        (made now, on its first chapter). The target is the read map's ``finished_through``, read
-        now through the tenant role, never the chapter counter a device can push. After the
-        chapter, the next run is asked for if the target lies further on; a lowered target ("I
-        haven't read this") stops the work at the next run. A book whose edition others built
-        past this reader's target costs nothing and reads nothing past it.
+        ADR 0044 steps 3 and 4): the next chapter of the file's **edition** without notes, up to
+        one chapter past what this reader has finished, built from this reader's own copy and
+        published into the edition (made now, on its first chapter).
+
+        The target (``story_memory_target``) is the read map's ``finished_through`` plus one,
+        never past the book's last chapter, and 0 until the reader has read a page of the book
+        that was not skimmed; it is read now through the tenant role, never from the chapter
+        counter a device can push. After the chapter, the next run is asked for if the target
+        lies further on; a lowered target ("I haven't read this") stops the work at the next run.
+        A book whose edition others built past this reader's target costs nothing and reads
+        nothing past it: of the edition, a run reads the notes of the chapters before the one it
+        builds and asks only whether chapters up to the target exist or are unremembered.
+
+        Mothli pays (ADR 0044 section 5): the chapter's calls are the notes account's, against
+        the edition. A run that would be the first to build a chapter, from a reader past a
+        guard (``HOSTED_STORY_MEMORY_NEW_CHAPTERS_PER_DAY`` and ``..._PER_MONTH``, and
+        ``..._NEW_FILES_PER_MONTH`` for chapter 1 of a new edition, counted by
+        ``first_builds``), or refused at its first call by the notes ceiling or the platform's
+        day, spends nothing, and asks for this reader's next run at the start of the next UTC
+        day. A chapter admitted at its first call finishes.
 
         One run of any reader builds a chapter: a run that finds the chapter's build slot taken
         spends nothing and asks for this reader's next run ``CHAPTER_TAKEN_WAIT`` later. Two
@@ -431,14 +484,13 @@ class CompanionJobs:
         reader, before anything is spent, with ``too_many_unremembered``.
 
         The library account's books (ADR 0042 part 5, until ADR 0044 step 6) take the same path;
-        only their target is the book's last chapter, and they run whatever
-        ``HOSTED_READER_STORY_MEMORY`` says."""
+        only their target is the book's last chapter, and no guard applies to them (the operator
+        builds them; the notes ceiling still does)."""
         library = repository.is_library_account(claim.owner_id)
-        if not (library or self._settings.hosted_reader_story_memory):
-            return              # a reader's book gets no story memory while this is off
         owner = OwnerId(claim.owner_id)
         catalog = HostedCompanionCatalog(self._dsn, owner)
         book_id = str(claim.book_id)
+        queue = StoryMemoryQueue(self._dsn, owner)
 
         def gone() -> bool:
             book = catalog.get_book(book_id)
@@ -453,27 +505,26 @@ class CompanionJobs:
                 _manifest, chapters = source.verified_source(book_id, book)
                 target = max(chapter["ordinal"] for chapter in chapters)
             else:
-                _point, _read, state, *_rest = read_snapshot(book_id, catalog, self._settings,
-                                                             source)
-                target = state["finished_through"]
+                target = story_memory_target(book_id, catalog, self._settings, source)
             edition = repository.edition_of(claim)
             ordinal = 1 if edition is None else repository.next_chapter(edition, through=target)
-            if ordinal > 1:
-                # Every chapter before is the edition's: whatever this reader's runs left open
-                # on them (a run that died, perhaps since built by another reader) is settled.
-                settle_left_open(claim, tenant_dsn=self._dsn, before=ordinal)
             if ordinal > target:
-                return          # nothing finished past what is built: nothing to do or spend
+                return          # nothing to build up to the target: nothing to do or spend
             if edition is not None and repository.unremembered_before(
                     edition, ordinal) >= UNREMEMBERED_IN_A_ROW:
                 raise _Stopped()
+            if not library and _guarded(repository, claim.owner_id, ordinal, self._settings):
+                # This reader's runs would be the first to build one chapter too many today or
+                # this month: nothing is spent or made; the work waits for the next UTC day.
+                queue.ensure(book_id, tomorrow=True)
+                return
             edition = edition or repository.edition_of(claim, create=True)
             try:
                 failed = repository.begin_story_memory_chapter(claim, edition, ordinal)
             except ChapterTaken:
                 # Another run, of any reader of this file, is building this chapter: nothing
                 # is spent here; this reader's next run comes a little later.
-                StoryMemoryQueue(self._dsn, owner).ensure(book_id, after=CHAPTER_TAKEN_WAIT)
+                queue.ensure(book_id, after=CHAPTER_TAKEN_WAIT)
                 return
             remember_chapter(claim, repository, edition=edition, hold=lease.hold,
                              tenant_dsn=self._dsn, settings=self._settings,
@@ -492,6 +543,11 @@ class CompanionJobs:
                 return
             raise
         except Exception as exc:
+            if _until_tomorrow(exc) and not lease.stopped():
+                # The notes ceiling, or the platform's day, refused the chapter's first call:
+                # nothing was spent; the chapter waits whole for the next UTC day.
+                queue.ensure(book_id, tomorrow=True)
+                return
             failure = story_memory_failure(exc)
             if failure is None or lease.stopped():
                 raise
@@ -502,10 +558,10 @@ class CompanionJobs:
                     claim, provider=self._extraction_client.provider, reason="unauthorized",
                     pause_for=timedelta(seconds=NotesBuilder.PAUSE_SECONDS))
             if failure.code in CHAPTER_FAILURES:
-                StoryMemoryQueue(self._dsn, owner).ensure(book_id)      # the chapter's next run
+                queue.ensure(book_id)                                   # the chapter's next run
             raise HandledJobFailure(failure) from None
         if ordinal < target:
-            StoryMemoryQueue(self._dsn, owner).ensure(book_id)
+            queue.ensure(book_id)
 
     def _recollect(self, claim: ClaimedJob, lease: _Lease) -> None:
         """``Recollector.catch_up`` (``app/recollections.py``) for one conversation, around the
