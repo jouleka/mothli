@@ -609,7 +609,7 @@ def test_an_unremembered_chapter_is_never_looser_than_local_mode_on_the_spoiler_
     # handed through the door only up to the reader's place, so at each place the chat's checks
     # know what the door hands there (``served``), never a later chapter; still never looser
     # than local mode, and the rest is Jev's and the second look's
-    # (``test_library_story_memory_postgres.py::test_the_chats_spoiler_probes_through_the_door``
+    # (``test_story_memory_door_postgres.py::test_the_chats_spoiler_probes_through_the_door``
     # and ``::test_a_later_name_the_writer_remembers_is_left_to_jev_and_the_second_look``).
     platform = app.state.platform_client
     served = {}

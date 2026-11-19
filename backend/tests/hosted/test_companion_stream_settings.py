@@ -178,7 +178,10 @@ def test_story_memory_settings_refuse_what_cannot_work(tmp_path) -> None:
     assert client.provider == "openai-compatible"
     assert client._model_for("cheap") == client._model_for("large") != "gpt-6-luna"
     with pytest.raises(ValueError, match="story memory in hosted mode requires"):
-        hosted_settings(tmp_path, hosted_story_memory=True)
+        hosted_settings(tmp_path, **without("reader_conversation_jev"), hosted_story_memory=True)
+    # ADR 0044 step 6: the template turns it on; with no AI keys at all it is off, as the chat is,
+    # and the server starts.
+    assert not hosted_settings(tmp_path, hosted_story_memory=True).hosted_story_memory
     with pytest.raises(ValueError, match="the streamed chat in hosted mode requires"):
         hosted_settings(tmp_path, **without("openai_api_key"), hosted_story_memory=True)
     with pytest.raises(ValueError, match="HOSTED_STORY_MEMORY is a hosted-mode setting"):

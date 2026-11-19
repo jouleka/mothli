@@ -55,9 +55,10 @@ def provisioned():
             admin.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
                           "WHERE datname = %s AND pid <> pg_backend_pid()", (name,))
             admin.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(name)))
-            for role in roles.ALL_ROLES:
-                admin.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(
-                    sql.Identifier(roles.role_name(prefix, role))))
+            # With the library command's role, which a test below makes as an old deployment had.
+            for role in [*(roles.role_name(prefix, role) for role in roles.ALL_ROLES),
+                         f"{prefix}_library"]:
+                admin.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
 
 
 def run(database: str, statement: str, role: str) -> None:
@@ -127,6 +128,52 @@ def test_one_grant_more_or_less_refuses_and_the_script_restores_exactly(provisio
             check()
         roles.grant(database, prefix)
         roles.verify(database, env, prefix)
+
+
+def test_a_deployment_makes_no_library_role_drops_an_old_one_and_has_its_notes_account(
+        provisioned) -> None:
+    """ADR 0044 step 6: the library command and its database role are gone; the role script, not
+    a migration, drops the role where an earlier deployment made it. The break it catches: a
+    fresh deployment that still makes the role, or a server deployed before this step keeping it,
+    with its sign-in and its grants on ``users`` and ``notes_account``, after the next
+    deployment; or a fresh deployment whose notes account (the only account notes are built for,
+    made by the migrations) is missing, or would need the removed command to exist."""
+    roles, prefix, env, database, dsn, _marker = provisioned
+    old = f"{prefix}_library"
+
+    def exists() -> bool:
+        with psycopg.connect(database) as conn:
+            return conn.execute("SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s)",
+                                (old,)).fetchone()[0]
+
+    assert not exists()
+    with psycopg.connect(database) as conn:
+        [(account,)] = conn.execute("SELECT account_id FROM notes_account").fetchall()
+        assert conn.execute("SELECT status FROM users WHERE id = %s",
+                            (account,)).fetchone() == ("suspended",)
+        assert conn.execute("SELECT count(*) FROM owner_limits WHERE owner_id = %s",
+                            (account,)).fetchone() == (1,)
+
+    # A server deployed before this step: the role, signed in to, with what it was granted.
+    with psycopg.connect(database, autocommit=True) as conn:
+        role = sql.Identifier(old)
+        conn.execute(sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOINHERIT NOBYPASSRLS "
+                             "PASSWORD {}").format(role, sql.Literal(secrets.token_hex(32))))
+        conn.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+            sql.Identifier(env["MOTHLI_DB_NAME"]), role))
+        conn.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(role))
+        conn.execute(sql.SQL("GRANT INSERT ON users TO {}").format(role))
+        conn.execute(sql.SQL("GRANT SELECT, INSERT ON notes_account TO {}").format(role))
+    assert exists()
+    # The next deployment, step by step as `deploy` runs it.
+    roles.prepare(database, env, prefix)
+    roles.migrate(roles.role_dsn(env, prefix, roles.OWNER))
+    roles.grant(database, prefix)
+    roles.mark(database)
+    roles.verify(database, env, prefix)
+    assert not exists()
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT account_id FROM notes_account").fetchall() == [(account,)]
 
 
 def test_readiness_follows_the_database(provisioned) -> None:

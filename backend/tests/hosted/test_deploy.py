@@ -92,7 +92,7 @@ def test_the_role_script_matches_every_startup_check_as_written() -> None:
         assert tables == by_key[key].tables
         assert functions == {}
     assert [role.bypass_rls for role in roles.RUNTIME_ROLES] == [
-        True, False, True, True, True, True, False]
+        True, False, True, True, True, True]
     assert [role.key for role in roles.RUNTIME_ROLES if role.owner_tables] == ["purge"]
     # The worker reads the money records for its cap check and writes none of them: every living
     # job reserves, notes and settles its spend as the tenant role (companion/spend.py).
@@ -175,7 +175,8 @@ def test_every_setting_hosted_startup_requires_has_a_place_in_the_deployment() -
     # filled in) and the chat's switches set to the values it works with.
     working = {"READER_PAGE_CONTEXT": "true", "READER_READ_MAP": "true", "JEV_ENABLED": "true",
                "READER_CONVERSATION_JEV": "true", "OPENAI_API_KEY": "", "TYPESAFE_API_KEY": "",
-               "HOSTED_JOB_HANDLER": "app.hosted.companion.jobs:CompanionJobs"}
+               "HOSTED_JOB_HANDLER": "app.hosted.companion.jobs:CompanionJobs",
+               "HOSTED_STORY_MEMORY": "true"}
     for name in (".env.example", "app.env.example"):
         for line in (DEPLOY / name).read_text(encoding="utf-8").splitlines():
             if re.match(r"^[A-Z_]+=", line):
@@ -201,6 +202,31 @@ def test_no_deployment_file_asks_for_the_removed_reader_key_settings() -> None:
         assert not [name for name in removed if name in text], path.name
     assert "HOSTED_STORAGE_FILESYSTEM_KEY=" in (DEPLOY / "app.env.example").read_text(
         encoding="utf-8")
+
+
+def test_nothing_in_the_deployment_names_the_removed_library_command_or_its_role() -> None:
+    """ADR 0044 step 6: every book's notes are built as readers reach its chapters, so the
+    operator's command that built free-library books ahead of readers, its database role and its
+    runbook step are gone. The break it catches: a template, compose service, script or runbook
+    still asking the owner for the role's password or to run the command (the deployment would
+    stop on a password nobody needs, or a step would name a module that is not there); the role
+    script still making the role; or the command's module or its privilege list left behind."""
+    from app.hosted.tenant import grants
+
+    removed = ("library_memory", "MOTHLI_DB_LIBRARY_PASSWORD", "HOSTED_LIBRARY_DSN",
+               "_library:", "LIBRARY_TABLE_PRIVILEGES", "PostgresLibraryAccount")
+    files = [*DEPLOY.glob("*.example"), *DEPLOY.glob(".*.example"), *DEPLOY.glob("*.yaml"),
+             *DEPLOY.glob("*.sh"), DEPLOY / "Dockerfile", BACKEND / "scripts" / "hosted_roles.py",
+             REPO / "docs" / "runbooks" / "hosted-deployment.md"]
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        assert not [name for name in removed if name in text], path.name
+    compose = (DEPLOY / "compose.yaml").read_text(encoding="utf-8")
+    assert "\n  library:\n" not in compose
+    roles = load_roles()
+    assert "library" not in [role.key for role in roles.ALL_ROLES]
+    assert not hasattr(grants, "LIBRARY_TABLE_PRIVILEGES")
+    assert not (BACKEND / "app" / "hosted" / "library_memory.py").exists()
 
 
 def template_values() -> dict[str, str]:
@@ -244,14 +270,16 @@ def test_the_template_with_both_ai_keys_filled_in_gives_a_working_checked_chat(
 ) -> None:
     """The break it catches: an owner following the runbook, filling in the two AI keys the
     template asks for, and getting a server whose chat can never answer (its switches commented
-    out, as before this test), or one that refuses to start. The chat's switches are in the
-    template, set; the worker's dispatcher is named, with the kinds the chat needs."""
+    out, as before this test), or one that refuses to start; or one whose story panels promise
+    to keep track of who's who and never do (story memory off, as before ADR 0044 step 6). The
+    chat's switches and story memory are in the template, set; the worker's dispatcher is named,
+    with the kinds the chat and story memory need."""
     from app.hosted.companion.jobs import companion_kinds
 
     template = template_values()
     assert template["OPENAI_API_KEY"] == "" and template["TYPESAFE_API_KEY"] == ""
     for switch in ("READER_PAGE_CONTEXT", "READER_READ_MAP", "JEV_ENABLED",
-                   "READER_CONVERSATION_JEV"):
+                   "READER_CONVERSATION_JEV", "HOSTED_STORY_MEMORY"):
         assert template[switch] == "true", switch
     # Streaming follows READER_CONVERSATION_JEV; hosted mode refuses it turned off.
     assert "READER_CONVERSATION_STREAM" not in template
@@ -262,10 +290,15 @@ def test_the_template_with_both_ai_keys_filled_in_gives_a_working_checked_chat(
     assert settings.companion_chat()
     assert settings.jev_enabled and settings.reader_conversation_stream
     assert settings.reader_story_notes and settings.reader_recollections
-    assert companion_kinds(settings) == {"chapter_notes", "recollect"}
-    assert not settings.hosted_story_memory                  # the owner decides that one
+    assert settings.hosted_story_memory
+    assert companion_kinds(settings) == {"chapter_notes", "recollect", "story_memory"}
     assert (settings.hosted_reader_usd_per_day, settings.hosted_reader_usd_per_month,
             settings.hosted_platform_usd_per_day) == (0.10, 2.00, 15.00)
+    # Mothli pays for notes from the notes ceiling, under the platform's day (ADR 0044).
+    assert (settings.hosted_story_memory_usd_per_day,
+            settings.hosted_story_memory_new_chapters_per_day,
+            settings.hosted_story_memory_new_chapters_per_month,
+            settings.hosted_story_memory_new_files_per_month) == (10.00, 30, 300, 5)
     # And it starts, with the platform's writer and Jev built (no call is made).
     with TestClient(hosted_app(settings), base_url="https://reader.example") as client:
         platform = client.app.state.platform_client
@@ -279,8 +312,10 @@ def test_the_template_with_the_ai_keys_left_empty_starts_without_a_chat(monkeypa
     the chat's switches being on in the template."""
     settings = template_settings(monkeypatch, tmp_path)
     assert not settings.companion_chat()
+    # Story memory follows the chat: its line in the template is on, and with no AI accounts it
+    # is off, rather than stopping the server.
     assert not (settings.jev_enabled or settings.reader_story_notes
-                or settings.reader_recollections)
+                or settings.reader_recollections or settings.hosted_story_memory)
     assert settings.reader_read_map and settings.reader_page_context
     with TestClient(hosted_app(settings), base_url="https://reader.example") as client:
         assert client.app.state.platform_client is None
