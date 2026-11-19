@@ -308,9 +308,13 @@ def _remembered(request: Request, owner_id: OwnerId, book: str):
     of this reader's, its source checked against its story memory, then the place, how much
     memory is complete and how building it goes. ``(state, memory, place, durable, job)``.
 
-    A book that is not this reader's is the same 404 as one that does not exist; a book of
-    theirs with no story memory (none built and none being built) answers 404 too, which the
-    panels show as their "not yet" lines."""
+    A book that is not this reader's is the same 404 as one that does not exist. Every book of
+    theirs has story memory in principle (ADR 0044): before their first finished chapter it is
+    the same empty one, whether or not an edition of their file exists, as locally for a book
+    nothing was extracted from. How building goes (``job``) is told only while the reader has
+    finished chapters the door does not hand them yet: that is the only time it can matter to
+    them, and at any other time it would differ between the first reader of a file and a later
+    one (the first's run is building the next chapter, a later one's has nothing to build)."""
     store = HostedBookStore(request.app.state.companion_dsn, owner_id)
     catalog, source, settings = _bound(request, owner_id, store=store)
     try:
@@ -318,8 +322,8 @@ def _remembered(request: Request, owner_id: OwnerId, book: str):
                                                                      source)
         with store.book(book) as mem:
             durable = mem.completion_frontier(manifest["atoms"])
-            built = mem.has_rows()
-        job = store.memory_job(book)
+        place = _place(state)
+        job = store.memory_job(book) if durable < place else None
     except (CompanionDatabaseBusy, StoryMemoryUnavailable) as exc:
         raise HTTPException(503, "the reading service is busy; try again shortly") from exc
     except LookupError as exc:
@@ -328,9 +332,7 @@ def _remembered(request: Request, owner_id: OwnerId, book: str):
         raise HTTPException(409, "atom-set mismatch (re-import the book)") from exc
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(409, "story memory could not be verified against the source") from exc
-    if not built and job is None:
-        raise HTTPException(404, "no story memory for this book")
-    return state, ContentSnapshot(mem, manifest), _place(state), durable, job
+    return state, ContentSnapshot(mem, manifest), place, durable, job
 
 
 @router.get("/graph")
@@ -376,7 +378,8 @@ def story_notes(book_id: uuid.UUID, request: Request, bookmark: int | None = _BO
 @router.get("/ingest")
 def story_progress(book_id: uuid.UUID, request: Request, owner_id: OwnerId = Depends(_owner)):
     """How many chapters' story memory is complete, and whether more is on its way (``running``)
-    or waits for the reader's next day (``waiting``): the local ``/ingest``."""
+    or waits for the next UTC day (``waiting``), told only while the reader has finished chapters
+    whose notes they are not handed yet (``_remembered``): the local ``/ingest``."""
     state, _memory, _place_, durable, job = _remembered(request, owner_id, str(book_id))
     return ingest_payload(state["ingest_progress"], durable,
                           {"status": job or "idle", "flags": [], "error": None})

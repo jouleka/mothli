@@ -355,9 +355,9 @@ class _Copy:
 
     def _story(self, book_id: str, state: dict, manifest: dict) -> dict:
         """Who Mothli knows and the story so far, as the story screens show them now: the view
-        at the reader's place (ADR 0042 section 7), never rows. For a free-library book that is
-        what the door hands this reader, which holds nothing past their place anyway. Nothing
-        when the book has no story memory."""
+        at the reader's place (ADR 0042 section 7), never rows: what the door hands this reader
+        of the edition of their file, which holds nothing past their place anyway. Nothing when
+        it hands no chapter (before the first finished one, whether or not an edition exists)."""
         try:
             with self._store.book(book_id) as mem:
                 if not mem.has_rows():

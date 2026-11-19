@@ -372,7 +372,7 @@ function csrfHeaders(): Record<string, string> {
 }
 
 /** Routes this server does not have at all, learned from its first "Not Found" this session:
- * hosted mode has no story memory or chapter notes yet. Asked once, then
+ * hosted mode has none of the reader-key routes, for example. Asked once, then
  * answered here with the same 404, so the console and the server's log are not filled with the
  * same refusal on every page. A 404 that says anything else (a book the reader does not have, a
  * switched-off feature) is never kept: those can change and are asked every time. */

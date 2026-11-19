@@ -4,8 +4,9 @@ the story memory screens.
 ADR 0041 section 4 (part 4) and ADR 0042 part 4. The companion modules use ``store.book(book_id)``
 for ``completion_frontier``, the name groups (``known_names.same_person_names``) and the fixed check
 ``score_recap`` that removes a sentence naming someone the reader has not met. Locally that is a
-``MemoryDB``; here it is an immutable snapshot of this owner's Postgres memory rows for the book's
-live incarnation, offering exactly the calls those modules make, with the local semantics:
+``MemoryDB``; here it is an immutable snapshot of what the door hands this reader of the edition of
+their book's file (ADR 0044 section 4: only up to their own place; a reader owns no memory rows),
+offering exactly the calls those modules make, with the local semantics:
 
 - ``completion_frontier(atoms)``: the atoms, in order, whose chapter has a live completion
   receipt for its current content at that ordinal (``MemoryDB.completion_frontier``).
@@ -13,15 +14,16 @@ live incarnation, offering exactly the calls those modules make, with the local 
   ``timeline``, ``chapters``, bounded by the predicates of the parity suite
   (``tests/parity/_adapters.py``): ``revealed_at <= bm``, not retracted, valid at ``bm``, aliases
   only of an entity visible at ``bm``, summaries only of a live chapter at or before ``bm``.
-- ``_audit_all("entities" | "aliases" | "themes")``: every row, future and retracted ones
-  included, as locally: ``score_recap`` needs the future names to know what to forbid.
+- ``_audit_all("entities" | "aliases" | "themes")``: every row handed, retracted ones included,
+  as locally (``score_recap`` reads them to know what to forbid); the door hands none past the
+  reader's place, so a later name is left to the chat's other checks.
 - ``content_language()``, as locally.
 - for the screens (``app.memory_views``, through ``ContentSnapshot``, which leaves out the
   chapters that are not part of the book proper as the local ``ContentMemory`` does):
   ``view(bm).relationships``, ``current_state`` and ``bio``, with the parity suite's predicates
   for edges and entity state; an end (``invalid_at``) is never handed out.
 
-Loading is one statement in one short transaction, so every table is read at one moment (a
+Loading is one call of the door in one short transaction, so every table is read at one moment (a
 receipt can never be seen without the rows published before it). One store is built per request;
 it loads each book once and every later ``book()`` of that request, from any thread, gets the same
 snapshot. Nothing outlives the store, so nothing is cached across requests. A snapshot that
@@ -44,113 +46,13 @@ from app.language import normalize_content_language
 
 _ENTITY_TYPES = frozenset({"character", "place", "faction", "object"})
 
-# One statement: every subquery sees the same database snapshot. Each names the owner, and the
-# transaction sets it for row-level security as well. Rows of a deleted book are never read.
-_LOAD = """
-SELECT book.content_language,
-  COALESCE((SELECT json_agg(json_build_object(
-              'key', chapter.chapter_key, 'ordinal', chapter.revealed_at, 'title', chapter.title,
-              'part_label', chapter.part_label, 'kind', chapter.kind,
-              'live', chapter.retracted_at IS NULL)
-            ORDER BY chapter.revealed_at, chapter.chapter_key, chapter.id)
-            FROM public.chapters AS chapter
-            WHERE chapter.owner_id=%(owner)s AND chapter.book_id=book.id
-              AND chapter.book_incarnation=book.incarnation), '[]'::json) AS chapters,
-  COALESCE((SELECT json_agg(json_build_object('key', chapter.chapter_key,
-                                              'ordinal', chapter.revealed_at))
-            FROM public.ingested_chapters AS receipt
-            JOIN public.chapters AS chapter
-              ON (chapter.owner_id, chapter.book_id, chapter.book_incarnation, chapter.id)
-               = (receipt.owner_id, receipt.book_id, receipt.book_incarnation, receipt.chapter_id)
-            WHERE receipt.owner_id=%(owner)s AND receipt.book_id=book.id
-              AND receipt.book_incarnation=book.incarnation
-              AND receipt.retracted_at IS NULL AND chapter.retracted_at IS NULL
-              AND receipt.content_hash=chapter.content_hash), '[]'::json) AS completed,
-  COALESCE((SELECT json_agg(json_build_object(
-              'id', entity.id, 'name', entity.canonical_name, 'type', entity.entity_type,
-              'revealed_at', entity.revealed_at, 'invalid_at', entity.invalid_at,
-              'recorded_at', entity.recorded_at, 'retracted_at', entity.retracted_at)
-            ORDER BY entity.recorded_at, entity.id)
-            FROM public.entities AS entity
-            WHERE entity.owner_id=%(owner)s AND entity.book_id=book.id
-              AND entity.book_incarnation=book.incarnation), '[]'::json) AS entities,
-  COALESCE((SELECT json_agg(json_build_object(
-              'id', alias.id, 'entity_id', alias.entity_id, 'surface_form', alias.surface_form,
-              'revealed_at', alias.revealed_at, 'recorded_at', alias.recorded_at,
-              'retracted_at', alias.retracted_at)
-            ORDER BY alias.recorded_at, alias.id)
-            FROM public.aliases AS alias
-            WHERE alias.owner_id=%(owner)s AND alias.book_id=book.id
-              AND alias.book_incarnation=book.incarnation), '[]'::json) AS aliases,
-  COALESCE((SELECT json_agg(json_build_object(
-              'id', theme.id, 'name', theme.name, 'description', theme.description,
-              'revealed_at', theme.revealed_at, 'invalid_at', theme.invalid_at,
-              'recorded_at', theme.recorded_at, 'retracted_at', theme.retracted_at)
-            ORDER BY theme.recorded_at, theme.id)
-            FROM public.themes AS theme
-            WHERE theme.owner_id=%(owner)s AND theme.book_id=book.id
-              AND theme.book_incarnation=book.incarnation), '[]'::json) AS themes,
-  COALESCE((SELECT json_agg(json_build_object(
-              'id', event.id, 'revealed_at', event.revealed_at, 'invalid_at', event.invalid_at,
-              'order_idx', event.order_idx, 'summary', event.summary, 'kind', event.kind,
-              'live', event.retracted_at IS NULL)
-            ORDER BY event.recorded_at, event.id)
-            FROM public.events AS event
-            WHERE event.owner_id=%(owner)s AND event.book_id=book.id
-              AND event.book_incarnation=book.incarnation), '[]'::json) AS events,
-  COALESCE((SELECT json_agg(json_build_object(
-              'kind', summary.kind, 'summary', summary.summary,
-              'revealed_at', summary.revealed_at, 'invalid_at', summary.invalid_at,
-              'live', summary.retracted_at IS NULL, 'chapter_key', chapter.chapter_key,
-              'chapter_ordinal', chapter.revealed_at,
-              'chapter_live', chapter.retracted_at IS NULL)
-            ORDER BY summary.recorded_at, summary.id)
-            FROM public.chapter_summaries AS summary
-            JOIN public.chapters AS chapter
-              ON (chapter.owner_id, chapter.book_id, chapter.book_incarnation, chapter.id)
-               = (summary.owner_id, summary.book_id, summary.book_incarnation,
-                  summary.source_chapter_id)
-            WHERE summary.owner_id=%(owner)s AND summary.book_id=book.id
-              AND summary.book_incarnation=book.incarnation), '[]'::json) AS summaries,
-  COALESCE((SELECT json_agg(json_build_object(
-              'id', edge.id, 'src', edge.src_entity_id, 'dst', edge.dst_entity_id,
-              'type', edge.relationship_type, 'label', edge.label,
-              'revealed_at', edge.revealed_at, 'invalid_at', edge.invalid_at,
-              'live', edge.retracted_at IS NULL)
-            ORDER BY edge.recorded_at, edge.id)
-            FROM public.edges AS edge
-            WHERE edge.owner_id=%(owner)s AND edge.book_id=book.id
-              AND edge.book_incarnation=book.incarnation), '[]'::json) AS edges,
-  COALESCE((SELECT json_agg(json_build_object(
-              'id', state.id, 'entity_id', state.entity_id, 'status', state.status,
-              'revealed_at', state.revealed_at, 'invalid_at', state.invalid_at,
-              'live', state.retracted_at IS NULL)
-            ORDER BY state.recorded_at, state.id)
-            FROM public.entity_state AS state
-            WHERE state.owner_id=%(owner)s AND state.book_id=book.id
-              AND state.book_incarnation=book.incarnation), '[]'::json) AS states
-FROM public.books AS book
-WHERE book.owner_id=%(owner)s AND book.id=%(book)s AND book.deleted_at IS NULL
-"""
-
-# The door (ADR 0042 section 3, ADR 0044 section 4, migration 0032): for any live book of the
-# reader whose file matches an edition on both fingerprints, the edition's rows up to the
-# reader's own place, worked out in the database from the reader's rows, in the shape of
-# ``_LOAD``. For a live book of theirs with no edition, one row with every list empty: the same
-# answer as an edition read at place 0. It takes the book and nothing else; the reader is the
-# transaction's owner setting.
+# The door (ADR 0042 section 3, ADR 0044 section 4, migration 0032), the only way a reader's
+# story memory is read: for any live book of the reader whose file matches an edition on both
+# fingerprints, the edition's rows up to the reader's own place, worked out in the database from
+# the reader's rows: the book's content language and one JSON list per table. For a live book of
+# theirs with no edition, one row with every list empty: the same answer as an edition read at
+# place 0. It takes the book and nothing else; the reader is the transaction's owner setting.
 DOOR = "SELECT * FROM public.story_memory_door(%(book)s)"
-
-# The door's lists. It has served a book when it hands anything in one of them.
-DOOR_LISTS = ("chapters", "completed", "entities", "aliases", "themes", "events", "summaries",
-              "edges", "states")
-
-
-def door_served(payload) -> bool:
-    """Whether the door's answer holds anything of an edition. An answer with every list empty
-    (a book with no edition, or one read to place 0) serves nothing, and the two cannot be told
-    apart."""
-    return payload is not None and any(payload[name] for name in DOOR_LISTS)
 
 
 class StoryMemoryUnavailable(Exception):
@@ -206,11 +108,10 @@ class StoryMemorySnapshot:
     """One book's story memory as of one moment, immutable, safe to share between threads."""
 
     __slots__ = ("_language", "_chapters", "_completed", "_entities", "_aliases", "_themes",
-                 "_events", "_summaries", "_edges", "_states", "shared")
+                 "_events", "_summaries", "_edges", "_states")
 
-    def __init__(self, payload, *, shared: bool = False) -> None:
-        values = {"shared": bool(shared)}
-        values["_language"] = payload["content_language"]
+    def __init__(self, payload) -> None:
+        values = {"_language": payload["content_language"]}
         values["_chapters"] = _frozen(
             {"chapter_key": _text(row["key"]), "revealed_at": _ordinal(row["ordinal"]),
              "title": _text(row["title"], optional=True),
@@ -306,16 +207,13 @@ class StoryMemorySnapshot:
         return SnapshotView(self, bookmark)
 
     def has_rows(self):
-        """Whether this book has story memory: a chapter of it was written, or the door hands
-        this reader something of an edition (``shared``). Before the first chapter the door hands
-        nothing whether or not an edition exists (ADR 0044 section 4), so that reader is told
-        the same as for a book with no edition."""
-        return self.shared or bool(self._chapters)
+        """Whether the door hands this reader any chapter of an edition. Before their first
+        finished chapter it hands none, whether or not an edition exists (ADR 0044 section 4)."""
+        return bool(self._chapters)
 
     def _audit_all(self, table):
-        """Every row of one of the three tables ``score_recap`` reads, future ones included.
-
-        As locally, these are only the blocklist of names not yet revealed; never shown.
+        """Every row handed of one of the three tables ``score_recap`` reads (none past the
+        reader's place: the door hands none). As locally, only for the checks; never shown.
         """
         rows = {"entities": self._entities, "aliases": self._aliases,
                 "themes": self._themes}.get(table)
@@ -529,32 +427,18 @@ class HostedBookStore(OwnerBoundAdapter):
                 snapshot = self._snapshots[book] = self._load(book)
             return snapshot
 
-    def shared(self, book_id) -> bool:
-        """Whether this reader's book is served through the door: the door hands them something
-        of an edition of their file (``door_served``). Raises ``LookupError`` for a book not
-        theirs."""
-        return self._snapshot(book_id).shared
-
     def _load(self, book) -> StoryMemorySnapshot:
-        """The door's answer when it hands anything, else this reader's own rows: never both,
-        and never an edition's rows by any other way (row-level security hides them). The door
-        comes first (ADR 0044 section 4): a book with its own rows and an edition the door
-        serves is answered by the door alone. Where the door hands nothing (no edition, or
-        place 0), a reader's own rows (built by the per-reader path before ADR 0044 step 3; only
-        in tests) answer as before; without them the answer is the same empty memory either
-        way."""
+        """The door's answer, and nothing else (ADR 0044 section 4): the edition of the reader's
+        file up to their place, or, for a book of theirs with no edition, the same empty answer
+        as an edition read at place 0. A reader's own memory rows, if any, are never read."""
         try:
             with self._transaction() as conn:
                 payload = conn.execute(DOOR, {"book": book}).fetchone()
-                shared = door_served(payload)
-                if not shared:
-                    payload = conn.execute(_LOAD, {"owner": self._owner.value,
-                                                   "book": book}).fetchone()
         except (CompanionDatabaseBusy, psycopg.Error) as exc:
             raise StoryMemoryUnavailable("the story memory could not be read") from exc
         if payload is None:
             raise LookupError("unknown book")
         try:
-            return StoryMemorySnapshot(payload, shared=shared)
+            return StoryMemorySnapshot(payload)
         except (KeyError, TypeError, ValueError) as exc:
             raise StoryMemoryUnavailable("the story memory is malformed") from exc
