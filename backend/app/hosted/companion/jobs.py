@@ -485,7 +485,12 @@ class CompanionJobs:
 
         Every book takes this one path, however its reader got the file (ADR 0044 step 6). A
         job of the notes account's own (one the removed operator's command queued) finds no read
-        page of its book, so its target is 0 and it builds nothing."""
+        page of its book, so its target is 0 and it builds nothing.
+
+        An edition erased while a run builds in it (nobody held its file for 30 days, ADR 0044
+        section 6; the publish takes the edition's lock and refuses an edition no longer live)
+        ends the run without a failure: it asks for this reader's next run, which builds the
+        file's new edition from its first chapter."""
         owner = OwnerId(claim.owner_id)
         catalog = HostedCompanionCatalog(self._dsn, owner)
         book_id = str(claim.book_id)
@@ -494,6 +499,16 @@ class CompanionJobs:
         def gone() -> bool:
             book = catalog.get_book(book_id)
             return book is None or book["incarnation"] != str(claim.book_incarnation)
+
+        edition = None
+
+        def erased() -> bool:
+            # The edition this run built in was erased under it (nobody held its file for 30
+            # days, ADR 0044 section 6): its publish was refused, or found nothing to build on.
+            try:
+                return edition is not None and repository.edition_of(claim) != edition
+            except LookupError:
+                return False
 
         if gone():
             return              # deleted, or uploaded again since: nothing of this job is left
@@ -537,6 +552,11 @@ class CompanionJobs:
                 return
             raise
         except Exception as exc:
+            if not lease.stopped() and erased():
+                # Nothing was published into it; this reader's next run builds the file's new
+                # edition from its first chapter.
+                queue.ensure(book_id)
+                return
             if _until_tomorrow(exc) and not lease.stopped():
                 # The notes ceiling, or the platform's day, refused the chapter's first call:
                 # nothing was spent; the chapter waits whole for the next UTC day.
