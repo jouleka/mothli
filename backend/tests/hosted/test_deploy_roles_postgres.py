@@ -99,7 +99,8 @@ def test_one_grant_more_or_less_refuses_and_the_script_restores_exactly(provisio
         ("GRANT SELECT ON platform_spend_days TO {}", tenant,
          lambda: asyncio.run(PostgresTenantRepository(dsn["tenant"]).check_runtime_role()),
          AuthConfigurationError),
-        ("REVOKE SELECT ON themes FROM {}", tenant,
+        # (ADR 0044 step 7: the tenant role holds nothing on a story memory table.)
+        ("GRANT SELECT ON themes TO {}", tenant,
          lambda: asyncio.run(PostgresTenantRepository(dsn["tenant"]).check_runtime_role()),
          AuthConfigurationError),
         # (ADR 0044 step 3 gave the worker SELECT on books; it must never read a stored file.)

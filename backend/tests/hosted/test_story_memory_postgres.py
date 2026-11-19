@@ -322,48 +322,39 @@ def test_a_lease_lost_during_the_chapter_is_refused_at_the_publish(harbour, work
         "extraction-commit-aborted"}
 
 
-# ---- 4: a correction during extraction --------------------------------------------------------
+# ---- 4: the memory below the chapter moved during extraction -----------------------------------
 
-def test_a_correction_during_extraction_is_respected_and_the_chapter_prepared_again(
+def test_memory_that_moved_during_extraction_is_refused_and_the_chapter_prepared_again(
         hosted_app, harbour, worker_dsn, database, tenant_dsn, monkeypatch):
-    """The break it catches: a chapter extracted against the roster from before a reader's
-    correction published as it was prepared, tying its events and her new state to the identity
-    the reader just retired (invisible from the correction on), so the chapter's facts about her
-    are lost and the correction undone. Local mode prepares again on ``StalePreparedRoster``;
-    hosted mode must too, and without paying for the extraction again.
+    """The break it catches: a chapter extracted against a copy of the memory below it that
+    changed before the publish, published as it was prepared, so its rows are tied to an
+    edition that no longer reads as it was copied. Local mode prepares again on
+    ``StalePreparedRoster``; hosted mode must too, and without paying for the extraction again.
 
-    ADR 0044 step 3: the chapter is the edition's, and no reader corrects an edition (the route
-    refuses a book the door serves, ``test_story_memory_door_postgres.py``). The publish's
-    check that the memory below the chapter reads as it was copied stays (ADR 0044 section 7:
-    it also catches two publishes a bug let through); it is shown here with the very same
-    correction, made on the edition by the tenant role bound to the notes account, at a place
-    given to the edition for it."""
+    ADR 0044 step 7: no reader corrects notes, so nothing in the product moves the memory below
+    a chapter between its copy and its publish; until this step a reader's correction did, and
+    this test made one. The publish's check stays (ADR 0044 section 7: it is cheap, and it also
+    catches two publishes that a bug let through), so here the database owner moves the edition
+    instead: another name for Mara, at chapter 3, while chapter 4 is being extracted."""
     app, client, extractor, owner, book = harbour
     http, tokens, _app = hosted_app
     a = Reader(http, tokens, "a", owner)
     for ordinal in (1, 2, 3):
         assert remember(app, worker_dsn, owner, book, client, ordinal) is True
-    a.mark(book, [1, 2, 3])
-    refused = a.call("POST", f"/api/books/{book}/memory-corrections",
-                     {"source_entity_id": str(uuid.uuid4()), "canonical_name": "Marabel",
-                      "reason": "her full name", "bookmark": 3})
-    assert refused.status_code == 409                 # the reader's own route: refused
     account, edition = edition_of(database, owner, book)
-    with psycopg.connect(database) as conn:
-        [(incarnation,)] = conn.execute("SELECT incarnation FROM books WHERE owner_id=%s"
-                                        " AND id=%s", (account, edition)).fetchall()
-        conn.execute("INSERT INTO reading_state (owner_id,book_id,book_incarnation,bookmark)"
-                     " VALUES (%s,%s,%s,3)", (account, edition, incarnation))
     mara = entity_id(database, account, "Mara")
-    corrected = []
+    moved = []
 
-    def correct(marker):
-        if marker == "rescued" and not corrected:
-            result = asyncio.run(PostgresTenantRepository(tenant_dsn).replace_memory_entity(
-                OwnerId(account), edition, source_entity_id=mara, canonical_name="Marabel",
-                reason="her full name", bookmark=3))
-            assert result is not None
-            corrected.append(result)
+    def move(marker):
+        if marker == "rescued" and not moved:
+            with psycopg.connect(database) as conn:
+                conn.execute(
+                    "INSERT INTO aliases (owner_id,book_id,book_incarnation,id,entity_id,"
+                    "source_chapter_id,surface_form,revealed_at) SELECT owner_id,book_id,"
+                    "book_incarnation,%s,%s,id,'Marabel',revealed_at FROM chapters"
+                    " WHERE owner_id=%s AND book_id=%s AND revealed_at=3",
+                    (uuid.uuid4(), mara, account, edition))
+            moved.append(marker)
 
     outcomes = []
     real_commit = PostgresWorkerRepository.commit_chapter_memory
@@ -378,13 +369,12 @@ def test_a_correction_during_extraction_is_respected_and_the_chapter_prepared_ag
         return result
 
     monkeypatch.setattr(PostgresWorkerRepository, "commit_chapter_memory", recorded)
-    extractor.hook = correct
+    extractor.hook = move
     calls = len(extractor.calls)
     assert remember(app, worker_dsn, owner, book, client, 4) is True
-    assert corrected and outcomes == [StoryMemoryMoved, "published"]
+    assert moved and outcomes == [StoryMemoryMoved, "published"]
     assert extractor.calls[calls:].count("Extraction") == 1          # not paid for again
 
-    marabel = entity_id(database, account, "Marabel")
     with psycopg.connect(database, row_factory=dict_row) as conn:
         at_four = conn.execute(
             "SELECT 'state' AS kind,entity_id FROM entity_state"
@@ -392,20 +382,16 @@ def test_a_correction_during_extraction_is_respected_and_the_chapter_prepared_ag
             " UNION ALL SELECT 'participant',entity_id FROM event_participants"
             " WHERE owner_id=%(o)s AND book_id=%(b)s AND revealed_at=4",
             {"o": account, "b": edition}).fetchall()
-        closed = conn.execute("SELECT entity_id FROM entity_state WHERE owner_id=%s"
-                              " AND book_id=%s AND invalid_at=4", (account, edition)).fetchall()
         named = conn.execute("SELECT canonical_name FROM entities WHERE owner_id=%s"
                              " AND book_id=%s AND revealed_at=4", (account, edition)).fetchall()
-    assert {("state", marabel), ("participant", marabel)} <= {
+    assert {("state", mara), ("participant", mara)} <= {
         (row["kind"], row["entity_id"]) for row in at_four}
-    assert mara not in {row["entity_id"] for row in at_four}
-    assert [row["entity_id"] for row in closed] == [marabel]      # the state copied to her
     assert [row["canonical_name"] for row in named] == ["Rose"]   # no second Mara made
-    a.mark(book, [4])
+    a.mark(book, [1, 2, 3, 4])
     with HostedBookStore(tenant_dsn, OwnerId(owner)).book(book) as mem:
         view = mem.view(4)
         assert [row["canonical_name"] for row in view.characters()] == [
-            "Corvus", "Vex", "Marabel", "Rose"]
+            "Mara", "Corvus", "Vex", "Rose"]
         assert [event["summary"] for event in view.timeline()][-1] == "The Keeper lit the lantern."
 
 
@@ -645,11 +631,12 @@ def test_the_worker_role_holds_exactly_what_a_publish_needs(worker_dsn, database
     for table, privileges in expected.items():
         assert WORKER_TABLE_PRIVILEGES.get(table, frozenset()) == privileges, table
         assert held_privileges(database, role, table) == privileges, table
-    # The tenant role gains nothing: it already reads memory and writes corrections.
-    assert TENANT_TABLE_PRIVILEGES["edges"] == {"SELECT", "INSERT"}
-    assert TENANT_TABLE_PRIVILEGES["themes"] == {"SELECT"}
+    # The tenant role holds nothing on a memory table (ADR 0044 step 7): a reader's session
+    # reaches the notes only through the door.
     tenant = conninfo.conninfo_to_dict(tenant_dsn)["user"]
-    assert held_privileges(database, tenant, "events") == {"SELECT"}
+    for table in MEMORY_TABLES:
+        assert table not in TENANT_TABLE_PRIVILEGES, table
+        assert held_privileges(database, tenant, table) == set(), table
     check = PostgresWorkerRepository(worker_dsn)
     check.check_runtime_role()
     for grant, undo in (

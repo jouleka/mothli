@@ -9,7 +9,8 @@ confirmation (frontend/src/shelf/RemoveBook.tsx) says exactly this. Stand-in wri
 
 Which tables are erased is found from the database's own catalogue: every table with an owner and
 a book is either erased by ``remove_book`` (``ERASED_WITH_THE_BOOK``, or through a cascade from one
-of those), or kept here with its reason. A table a later migration adds is one or the other, or
+of those), or kept here with its reason, or a story memory table, which holds no reader's rows
+(ADR 0044). A table a later migration adds is one or the other, or
 ``test_every_table_about_a_book_is_erased_or_kept_for_a_reason`` fails.
 """
 
@@ -21,7 +22,6 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from psycopg import sql
-from psycopg.types.json import Jsonb
 
 from app.chapter_notes import VERSION, text_hash
 from app.hosted.companion.store import HostedCompanionCatalog
@@ -67,6 +67,16 @@ KEPT = {
     "cost_ledger": "what the book's replies cost: the owner's money record",
     "cost_reservations": "what the book's replies held against the caps: the owner's money record",
     "jobs": "its background work, cancelled; the money records refer to it; no words in it",
+}
+# Tables with an owner and a book that hold no reader's rows at all: a book's story memory is its
+# edition's, rows of the notes account, never a reader's (ADR 0044), and the tenant role holds no
+# privilege on them (step 7). Removing a book leaves the edition for the other readers of the file
+# and clears the reader's link to it (the fingerprints on their book's row).
+NOT_A_READERS = {
+    table: "a book's story memory: the notes account's edition, never a reader's"
+    for table in ("chapters", "ingested_chapters", "chapter_summaries", "entities", "aliases",
+                  "entity_state", "edges", "events", "themes", "event_participants",
+                  "entity_corrections", "chunks", "chunk_embeddings")
 }
 
 
@@ -138,59 +148,14 @@ def everything_of(dsn: str, owner: uuid.UUID) -> dict[str, list[str]]:
             .format(sql.Identifier(table)), (owner,)).fetchall()) for table in tables}
 
 
-def story_memory(dsn: str, owner: uuid.UUID, book: str) -> None:
-    """A row in every table of a book's story memory, as extraction would write them, made up, as
-    the database owner."""
+def a_cost(dsn: str, owner: uuid.UUID, book: str) -> None:
+    """A money record of the book, made up, as the database owner. (Until ADR 0044 step 7 this
+    also made a row in every table of a book's story memory under the reader; a reader owns none
+    since step 5, and their session can make none since step 7.)"""
     with psycopg.connect(dsn) as conn:
         incarnation = conn.execute("SELECT incarnation FROM books WHERE owner_id=%s AND id=%s",
                                    (owner, uuid.UUID(book))).fetchone()[0]
         scope = (owner, uuid.UUID(book), incarnation)
-        chapter, entity, other, event, chunk = (uuid.uuid4() for _ in range(5))
-        conn.execute("INSERT INTO chapters (owner_id,book_id,book_incarnation,id,chapter_key,"
-                     "revealed_at,title,content_hash) VALUES (%s,%s,%s,%s,'made-up-1',1,'Part 1',"
-                     "%s)", (*scope, chapter, "a" * 64))
-        conn.execute("INSERT INTO ingested_chapters (owner_id,book_id,book_incarnation,chapter_id,"
-                     "content_hash,completed_at) VALUES (%s,%s,%s,%s,%s,now())",
-                     (*scope, chapter, "a" * 64))
-        for entity_id, name in ((entity, "Mara"), (other, "Corvus")):
-            conn.execute("INSERT INTO entities (owner_id,book_id,book_incarnation,id,"
-                         "source_chapter_id,canonical_name,entity_type,revealed_at) "
-                         "VALUES (%s,%s,%s,%s,%s,%s,'character',1)",
-                         (*scope, entity_id, chapter, name))
-        conn.execute("INSERT INTO aliases (owner_id,book_id,book_incarnation,id,entity_id,"
-                     "source_chapter_id,surface_form,revealed_at) VALUES (%s,%s,%s,%s,%s,%s,"
-                     "'Mar',1)", (*scope, uuid.uuid4(), entity, chapter))
-        conn.execute("INSERT INTO edges (owner_id,book_id,book_incarnation,id,source_chapter_id,"
-                     "src_entity_id,dst_entity_id,relationship_type,label,revealed_at) "
-                     "VALUES (%s,%s,%s,%s,%s,%s,%s,'social','knows',1)",
-                     (*scope, uuid.uuid4(), chapter, entity, other))
-        conn.execute("INSERT INTO events (owner_id,book_id,book_incarnation,id,source_chapter_id,"
-                     "order_idx,summary,revealed_at) VALUES (%s,%s,%s,%s,%s,0,'Lamps moved',1)",
-                     (*scope, event, chapter))
-        conn.execute("INSERT INTO event_participants (owner_id,book_id,book_incarnation,event_id,"
-                     "entity_id,source_chapter_id,role,revealed_at) "
-                     "VALUES (%s,%s,%s,%s,%s,%s,'mover',1)", (*scope, event, entity, chapter))
-        conn.execute("INSERT INTO entity_state (owner_id,book_id,book_incarnation,entity_id,"
-                     "source_chapter_id,status,revealed_at) VALUES (%s,%s,%s,%s,%s,%s,1)",
-                     (*scope, entity, chapter, Jsonb({"note": "made up"})))
-        conn.execute("INSERT INTO entity_corrections (owner_id,book_id,book_incarnation,"
-                     "source_chapter_id,correction_kind,source_entity_ids,target_entity_ids,"
-                     "assignments,revealed_at) VALUES (%s,%s,%s,%s,'replace',%s,%s,%s,1)",
-                     (*scope, chapter, Jsonb([str(entity)]), Jsonb([str(entity)]), Jsonb({})))
-        conn.execute("INSERT INTO themes (owner_id,book_id,book_incarnation,id,source_chapter_id,"
-                     "name,description,revealed_at) VALUES (%s,%s,%s,%s,%s,'light','made up',1)",
-                     (*scope, uuid.uuid4(), chapter))
-        conn.execute("INSERT INTO chapter_summaries (owner_id,book_id,book_incarnation,id,"
-                     "source_chapter_id,kind,summary,revealed_at) "
-                     "VALUES (%s,%s,%s,%s,%s,'chapter','Lamps moved.',1)",
-                     (*scope, uuid.uuid4(), chapter))
-        conn.execute("INSERT INTO chunks (owner_id,book_id,book_incarnation,id,chapter_id,"
-                     "revealed_at,text) VALUES (%s,%s,%s,%s,%s,1,'Mara moved lamp 1.')",
-                     (*scope, chunk, chapter))
-        conn.execute("INSERT INTO chunk_embeddings (owner_id,book_id,book_incarnation,chunk_id,"
-                     "embedding_model,embedding_dimension,embedding_space,distance_metric,"
-                     "embedding) VALUES (%s,%s,%s,%s,'made-up',3,'made-up','cosine',"
-                     "'[0,1,0]'::vector)", (*scope, chunk))
         job = conn.execute("SELECT id FROM jobs WHERE owner_id=%s AND book_id=%s LIMIT 1",
                            scope[:2]).fetchone()[0]
         conn.execute("INSERT INTO cost_ledger (owner_id,id,book_id,book_incarnation,job_id,phase,"
@@ -241,18 +206,24 @@ def a_full_book(client, tokens, app, readers, label: str, monkeypatch=None) -> t
 def test_every_table_about_a_book_is_erased_or_kept_for_a_reason(database) -> None:
     """The break it catches: a table a later migration adds with an owner and a book that removing
     a book neither erases (directly or through a cascade from what it erases) nor keeps for a
-    stated reason; or a kept table the tenant role could delete from."""
+    stated reason; or a kept table the tenant role could delete from. ADR 0044 step 7: or a
+    story memory table the tenant role holds anything on, or that removing a book erases from
+    (it would be the edition every other reader of the file is handed)."""
     with psycopg.connect(database) as conn:
         tables = set(owner_book_tables(conn))
         erased = set(ERASED_WITH_THE_BOOK) | cascades_from(conn, ERASED_WITH_THE_BOOK)
-    assert set(KEPT) <= tables
-    assert tables - set(KEPT) <= erased, sorted(tables - set(KEPT) - erased)
-    assert not set(KEPT) & erased
-    # The tenant role holds exactly the DELETE it needs for this, and none on what is kept.
+    assert set(KEPT) <= tables and set(NOT_A_READERS) <= tables
+    left = tables - set(KEPT) - set(NOT_A_READERS)
+    assert left <= erased, sorted(left - erased)
+    assert not (set(KEPT) | set(NOT_A_READERS)) & erased
+    # The tenant role holds exactly the DELETE it needs for this, none on what is kept, and
+    # nothing at all on story memory.
     for table in ERASED_WITH_THE_BOOK:
         assert "DELETE" in TENANT_TABLE_PRIVILEGES[table], table
     for table in (*KEPT, "books", "audit_events"):
         assert "DELETE" not in TENANT_TABLE_PRIVILEGES.get(table, frozenset()), table
+    for table in NOT_A_READERS:
+        assert table not in TENANT_TABLE_PRIVILEGES, table
 
 
 def test_removing_a_book_erases_its_reading_keeps_the_money_and_never_brings_it_back(
@@ -266,7 +237,7 @@ def test_removing_a_book_erases_its_reading_keeps_the_money_and_never_brings_it_
     client, tokens, app, objects = notes_app
     a, lamps = a_full_book(client, tokens, app, readers, "a")
     upload(client, tokens, "a", cart_book())          # the shelf is not empty afterwards
-    story_memory(database, a.owner, lamps)
+    a_cost(database, a.owner, lamps)
     book_id = uuid.UUID(lamps)
 
     # Before: each of them reaches a reply (so their absence later means something).
@@ -286,7 +257,7 @@ def test_removing_a_book_erases_its_reading_keeps_the_money_and_never_brings_it_
     # Every table that is erased holds something of this book first, the kept ones included
     # where this book has them, so "nothing afterwards" is a real change.
     empty = {table for table, found in held.items() if not found}
-    assert empty <= {"cost_reservations"}, sorted(empty)
+    assert empty <= {"cost_reservations", *NOT_A_READERS}, sorted(empty)
     costs = held["cost_ledger"]
 
     assert a.call("DELETE", f"/api/books/{lamps}").status_code == 204
@@ -356,8 +327,8 @@ def test_removing_a_book_moves_nothing_of_another_reader_with_the_same_book(
     client, tokens, app, _objects = notes_app
     a, lamps_a = a_full_book(client, tokens, app, readers, "a")
     b, lamps_b = a_full_book(client, tokens, app, readers, "b")
-    story_memory(database, a.owner, lamps_a)
-    story_memory(database, b.owner, lamps_b)
+    a_cost(database, a.owner, lamps_a)
+    a_cost(database, b.owner, lamps_b)
     a_before = everything_of(database, a.owner)
 
     # B cannot remove A's book: the same answer as a book that does not exist, and nothing of A's

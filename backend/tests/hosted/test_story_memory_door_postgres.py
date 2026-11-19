@@ -59,7 +59,7 @@ from app.hosted.tenant import api as hosted_api
 from app.hosted.tenant import classics as hosted_classics
 from app.hosted.tenant.grants import purge_grants
 from app.hosted.tenant.models import OwnerId
-from app.hosted.tenant.repository import LIBRARY_MEMORY_FIXED, PostgresTenantRepository
+from app.hosted.tenant.repository import PostgresTenantRepository
 from app.ingest.extraction.chapter_text import segment_for_ingest, split_hash_of
 from app.main import create_app
 from app.memory_views import graph_payload, notes_payload
@@ -819,13 +819,15 @@ def test_the_edition_tells_no_reader_anything_of_another_and_its_account_is_nobo
     assert sentences(a.ask(book_a)) == [tline(5, 1), "Reader A's own line."]
     for path in ("graph", "notes", "ingest", "conversation", "read-map"):
         assert get(a, f"/api/books/{book_a}/{path}").status_code == 200, path
+    # No reader corrects notes, for any book (ADR 0044 step 7): the correction route and the
+    # reader's own memory routes are gone, and answer as a route that never existed.
     refused = a.call("POST", f"/api/books/{book_a}/memory-corrections", {
         "source_entity_id": str(uuid.uuid4()), "canonical_name": "Someone Else",
         "reason": "a typo", "bookmark": 5})
-    assert refused.status_code == 409 and refused.json()["detail"] == LIBRARY_MEMORY_FIXED
+    assert (refused.status_code, refused.json()) == (404, {"detail": "Not Found"})
     for own in ("memory", "memory-corrections"):
-        shown = get(a, f"/api/books/{book_a}/{own}").json()
-        assert not [name for name in NAMES if name in json.dumps(shown)], own
+        shown = get(a, f"/api/books/{book_a}/{own}")
+        assert (shown.status_code, shown.json()) == (404, {"detail": "Not Found"}), own
     copy_of(a.call("GET", "/api/account/export"))
     assert everything_of(database, account) == edition and models.calls == calls
     # ADR 0044 step 4: "I've read this" asks for each reader's job, for any book; with no page

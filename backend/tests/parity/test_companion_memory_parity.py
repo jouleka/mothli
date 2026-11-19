@@ -389,13 +389,18 @@ def test_one_readers_snapshot_never_holds_another_readers_rows(seeded, tenant_ds
             names = {row["canonical_name"] for row in mem._audit_all("entities")}
             assert names == a_names and not names & {"Zinaida", "Kolya"}
 
-    # Row-level security is really on for the tenant role: with B's owner set, a query with no
-    # owner predicate at all sees no edition's rows, B's file's or A's (ADR 0044: they are the
-    # notes account's, and only the door hands them out).
-    with psycopg.connect(tenant_dsn) as conn, conn.transaction():
-        conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(b_owner),))
-        seen = {row[0] for row in conn.execute("SELECT canonical_name FROM entities").fetchall()}
-    assert seen == set()
+    # The tenant role cannot read a memory table at all: with B's owner set, a query with no
+    # owner predicate is refused before row security is reached, so it sees no edition's rows,
+    # B's file's or A's (ADR 0044: they are the notes account's, and only the door hands them
+    # out; step 7 took the role's privileges on them, where row security alone answered none).
+    with psycopg.connect(tenant_dsn) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+            conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(b_owner),))
+            conn.execute("SELECT canonical_name FROM entities").fetchall()
+    # Row security is still forced on the table, a second layer under the missing privilege.
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT relrowsecurity AND relforcerowsecurity FROM pg_class"
+                            " WHERE oid='public.entities'::regclass").fetchone()[0]
 
 
 @pytest.mark.postgres
