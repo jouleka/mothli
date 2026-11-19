@@ -9,6 +9,16 @@ _CONTAINER = ('<?xml version="1.0"?><container version="1.0" '
               '</rootfiles></container>')
 
 
+def member(name: str) -> zipfile.ZipInfo:
+    """A zip member stamped with one fixed time. ``writestr`` with a bare name stamps the clock
+    (to two seconds), so the same book made twice a moment apart would be two files: another
+    file hash, so another edition (ADR 0044), and a second reader of "the same file" would share
+    nothing with the first."""
+    info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+    info.external_attr = 0o600 << 16
+    return info
+
+
 def epub_ncx(docs, *, language=None, title="Synthetic", author=None):
     """docs = [(filename, label, heading, body)]; returns EPUB bytes."""
     items, spine, navpoints = [], [], []
@@ -29,12 +39,12 @@ def epub_ncx(docs, *, language=None, title="Synthetic", author=None):
            f'<navMap>{"".join(navpoints)}</navMap></ncx>')
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
-        z.writestr("mimetype", "application/epub+zip")
-        z.writestr("META-INF/container.xml", _CONTAINER)
-        z.writestr("content.opf", opf)
-        z.writestr("toc.ncx", ncx)
+        z.writestr(member("mimetype"), "application/epub+zip")
+        z.writestr(member("META-INF/container.xml"), _CONTAINER)
+        z.writestr(member("content.opf"), opf)
+        z.writestr(member("toc.ncx"), ncx)
         for fn, _label, heading, body in docs:
-            z.writestr(fn, f'<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">'
+            z.writestr(member(fn), f'<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">'
                            f'<body><h1>{heading}</h1><p>{body}</p></body></html>')
     return buf.getvalue()
 
