@@ -255,9 +255,16 @@ def test_a_reader_past_a_chapter_guard_waits_whole_for_tomorrow_and_others_build
             "pending", 0, tomorrow(database))
         assert {row["chapter_ordinal"] for row in notes_spend(database)[1]} == {1}
         assert spend_of(database, a.owner) == ([], [])
-        # What the reader's screens say: the job waits for tomorrow, as any capped one did.
+        # What the reader's screens say (ADR 0044 step 5): nothing while the held chapter is the
+        # one ahead of them (they are owed nothing; a later reader's run would have nothing to
+        # build there either), and that it waits for tomorrow once they have finished it.
+        progress = a.call("GET", f"/api/books/{book}/ingest")
+        assert progress.status_code == 200 and progress.json()["status"] == "idle"
+        a.mark(book, [1, 2])
+        assert [row["state"] for row in book_jobs(database, a.owner, book)][-1] == "pending"
         progress = a.call("GET", f"/api/books/{book}/ingest")
         assert progress.status_code == 200 and progress.json()["status"] == "waiting"
+        a.mark(book, [2], read=False)
 
         # B reads the same file and builds parts 2 and 3: B's runs, not A's.
         b, book_b = opened(shelf, readers, "b")

@@ -1,12 +1,13 @@
 """The story memory screens in hosted mode (ADR 0042 part 4), against real PostgreSQL.
 
 The cast (``/graph``), a person's card (``/character/{id}``), the story so far (``/notes``) and
-progress (``/ingest``), served from a reader's own memory rows. Nothing extracts in hosted mode
-yet (ADR 0042 parts 2 and 3), so the rows are seeded here the way the parity suite seeds them.
-Two readers through the hosted HTTP app on the RLS-enforced tenant role, and again through a
-superuser connection where only the code's own predicates keep them apart; the reader's place
-decided by the read map even when a device has pushed the chapter counter ahead; and the
-"waiting" and "no memory" answers the panels show.
+progress (``/ingest``), served from the edition of the reader's file through the door (ADR 0044:
+a reader owns no story memory row; until ADR 0044 step 5 these tests seeded a reader's own rows,
+which the web process no longer reads). The rows are seeded here the way the parity suite seeds
+them, into the edition. Two readers of one file through the hosted HTTP app on the RLS-enforced
+tenant role, and again through a superuser connection where only the code's own predicates keep
+them apart; the reader's place decided by the read map even when a device has pushed the chapter
+counter ahead; and the "running", "waiting" and empty answers the panels show.
 """
 
 from __future__ import annotations
@@ -165,8 +166,40 @@ def seed_story_memory(dsn: str, owner: uuid.UUID, book: str, keys: dict[int, str
     return ids
 
 
+def edition_for(dsn: str, owner: uuid.UUID, book: str) -> tuple[uuid.UUID, str]:
+    """(notes account, edition id) of the live edition of a reader's book's file, made as a
+    reader's first run makes it (``PostgresWorkerRepository.edition_of``) if there is none yet:
+    a bare book of the notes account with the same two fingerprints, marked as the edition."""
+    with psycopg.connect(dsn) as conn, conn.transaction():
+        mine = conn.execute("SELECT file_hash,split_hash,content_language,book_type FROM books"
+                            " WHERE owner_id=%s AND id=%s", (owner, book)).fetchone()
+        [(account,)] = conn.execute("SELECT account_id FROM notes_account").fetchall()
+        found = conn.execute("SELECT id FROM books WHERE owner_id=%s AND file_hash=%s"
+                             " AND split_hash=%s AND edition_of IS NOT NULL"
+                             " AND deleted_at IS NULL", (account, mine[0], mine[1])).fetchone()
+        if found is None:
+            found = conn.execute(
+                "INSERT INTO books (owner_id,title,schema_version,file_hash,split_hash,"
+                "content_language,book_type,edition_of) VALUES (%s,%s,1,%s,%s,%s,%s,%s)"
+                " RETURNING id", (account, f"edition {mine[0][:12]}", *mine, account)).fetchone()
+    return account, str(found[0])
+
+
+def seed_edition(dsn: str, owner: uuid.UUID, book: str, keys: dict[int, str],
+                 **rows) -> dict[str, str]:
+    """``seed_story_memory`` into the edition of the reader's book's file (ADR 0044: a reader
+    owns no story memory row; the door hands them the edition's, up to their place), keyed as a
+    run publishes them (``<edition id>:<file part>``, which the door hands back as the reader's
+    own chapter keys). ``{key: id}``."""
+    account, edition = edition_for(dsn, owner, book)
+    return seed_story_memory(dsn, account, edition,
+                             {ordinal: f"{edition}:{key.split(':', 1)[1]}"
+                              for ordinal, key in keys.items()}, **rows)
+
+
 def complete_chapter(dsn: str, owner: uuid.UUID, book: str, ordinal: int) -> None:
-    """Chapter ``ordinal``'s memory becomes complete: its receipt is live again."""
+    """Chapter ``ordinal``'s memory becomes complete: its receipt is live again. ``owner`` and
+    ``book`` are where the rows are: an edition's (``edition_for``)."""
     with psycopg.connect(dsn) as conn:
         conn.execute(
             "UPDATE ingested_chapters AS receipt SET retracted_at=NULL FROM chapters AS chapter "
@@ -222,19 +255,15 @@ def _cast(answer) -> list[str]:
 
 
 def _readers_shelf(shelf: Shelf, database: str, readers: dict):
-    """A's book with A's memory, read through chapter 4; B's own copy of the same file with a
-    memory of B's own; and a book id of nobody's."""
+    """A's book, read through chapter 4; B's own copy of the same file, read through chapter 3;
+    the edition of that file, seeded."""
     book_a = upload(shelf.client, shelf.tokens, "a", alice_shaped_epub())
-    ids_a = seed_story_memory(database, readers["a"], book_a,
-                              book_keys(shelf.app, readers["a"], book_a))
+    ids = seed_edition(database, readers["a"], book_a,
+                       book_keys(shelf.app, readers["a"], book_a))
     shelf.read("a", book_a, [3, 4])
     book_b = upload(shelf.client, shelf.tokens, "b", alice_shaped_epub())
-    ids_b = seed_story_memory(database, readers["b"], book_b,
-                              book_keys(shelf.app, readers["b"], book_b),
-                              people=[("zina", "Zinaida", "character", 3, None, False)],
-                              aliases=[], ties=[], events=[], states=[])
-    shelf.read("b", book_b, [3, 4])
-    return book_a, ids_a, book_b, ids_b
+    shelf.read("b", book_b, [3])
+    return book_a, book_b, ids
 
 
 @pytest.mark.parametrize("role", ["tenant", "superuser"])
@@ -242,9 +271,12 @@ def test_second_reader_gets_first_readers_story_memory_as_missing_on_every_route
     role, tenant_dsn: str, database: str, tmp_path
 ) -> None:
     """The break it catches: any of the four routes that tells reader B that A's book exists (a
-    status or body other than a random id's), shows B any of A's people, ties, notes or progress,
-    or mixes A's rows into B's own copy of the same file. Run on the RLS-enforced tenant role and
-    on a superuser connection, where only the routes' own owner predicates stand between them."""
+    status or body other than a random id's) or shows B anything through A's book; or B's own
+    copy of the same file handed the shared notes past B's own place (A's place, or the
+    edition's end): a person, tie, note or progress of chapter 4 that only A has finished. Run
+    on the RLS-enforced tenant role and on a superuser connection, where only the routes' own
+    predicates and the door stand between them. (Until ADR 0044 step 5 B's copy held B's own
+    rows; a reader owns none now, and the edition is shared, each reader to their place.)"""
     readers = {"a": uuid.uuid4(), "b": uuid.uuid4()}
     with psycopg.connect(database) as conn:
         for label, owner in readers.items():
@@ -252,28 +284,33 @@ def test_second_reader_gets_first_readers_story_memory_as_missing_on_every_route
                           (owner, f"Reader {label.upper()}"))
     dsn = tenant_dsn if role == "tenant" else database
     with Shelf(dsn, readers, tmp_path, superuser=role == "superuser") as shelf:
-        book_a, ids_a, book_b, ids_b = _readers_shelf(shelf, database, readers)
-        seen_by_a = [shelf.get("a", book_a, route, ids_a["mara"]).json() for route in ROUTES]
+        book_a, book_b, ids = _readers_shelf(shelf, database, readers)
+        seen_by_a = [shelf.get("a", book_a, route, ids["mara"]).json() for route in ROUTES]
         assert _cast(shelf.get("a", book_a, "/graph")) == ["Mara", "Corvus"]
         missing = str(uuid.uuid4())
         for route in ROUTES:
-            for person in (ids_a["mara"], ids_a["corvus"], missing):
+            for person in (ids["mara"], ids["corvus"], missing):
                 hidden = shelf.get("b", book_a, route, person)
                 absent = shelf.get("b", missing, route, person)
                 assert (hidden.status_code, hidden.json()) == (absent.status_code, absent.json())
                 assert (hidden.status_code, hidden.json()) == (404, {"detail": "unknown book"})
                 assert hidden.headers["cache-control"] == "private, no-store"
-        # B's own copy of the same file holds B's rows only, and A's people are no one there.
-        assert _cast(shelf.get("b", book_b, "/graph")) == ["Zinaida"]
-        notes = shelf.get("b", book_b, "/notes").json()
-        assert [person["name"] for person in notes["cast"]] == ["Zinaida"]
-        assert shelf.get("b", book_b, "/ingest").json()["ingest_progress"] == 4
-        assert shelf.get("b", book_b, "/character/{person}", ids_b["zina"]).status_code == 200
-        for person in (ids_a["mara"], ids_a["vex"]):
+        # B's own copy of the same file: the edition up to B's place (chapter 3), not A's.
+        assert _cast(shelf.get("b", book_b, "/graph", bookmark=99)) == ["Mara", "Old Wick"]
+        notes = shelf.get("b", book_b, "/notes", bookmark=99).json()
+        assert [person["name"] for person in notes["cast"]] == ["Mara", "Mar", "Old Wick"]
+        assert [chapter["revealed_at"] for chapter in notes["chapters"]] == [3]
+        assert shelf.get("b", book_b, "/ingest").json()["ingest_progress"] == 3
+        assert shelf.get("b", book_b, "/character/{person}", ids["mara"]).status_code == 200
+        for person in (ids["corvus"], ids["father"], ids["vex"], missing):
             card = shelf.get("b", book_b, "/character/{person}", person)
             assert (card.status_code, card.json()) == (404, {"detail": "unknown character"})
-        # And nothing of B's reached A.
-        assert [shelf.get("a", book_a, route, ids_a["mara"]).json() for route in ROUTES] \
+        shown_to_b = "".join(shelf.get("b", book_b, route, ids["mara"], bookmark=99).text
+                             for route in ROUTES)
+        for later in ("Corvus", "Pool of Oil", "pool", "walks with", "Vex", "Lamplighter"):
+            assert later not in shown_to_b, later
+        # And B's reading changed nothing A is shown.
+        assert [shelf.get("a", book_a, route, ids["mara"]).json() for route in ROUTES] \
             == seen_by_a
 
 
@@ -289,9 +326,8 @@ def test_the_place_is_the_read_map_even_when_a_device_pushes_the_counter_ahead(
             conn.execute("INSERT INTO users (id,display_name) VALUES (%s,'Reader')", (owner,))
     with Shelf(tenant_dsn, readers, tmp_path, superuser=False) as shelf:
         book = upload(shelf.client, shelf.tokens, "a", alice_shaped_epub())
-        ids = seed_story_memory(database, readers["a"], book, book_keys(shelf.app, readers["a"],
-                                                                         book),
-                                receipts=(1, 2, 3, 4, 5))
+        ids = seed_edition(database, readers["a"], book, book_keys(shelf.app, readers["a"], book),
+                           receipts=(1, 2, 3, 4, 5))
         shelf.read("a", book, [3])
         with psycopg.connect(database) as conn:
             conn.execute("UPDATE reading_state SET bookmark=5 WHERE owner_id=%s AND book_id=%s",
@@ -319,13 +355,16 @@ def _memory_job(database: str, owner: uuid.UUID, book: str, *, state: str, run_a
             (owner, book, incarnation, state, f"story-memory:{uuid.uuid4()}"))
 
 
-def test_progress_says_running_waiting_or_nothing_and_a_book_with_no_memory_is_absent(
+def test_progress_says_running_waiting_or_nothing_and_a_book_with_no_memory_is_empty(
     tenant_dsn: str, database: str, tmp_path
 ) -> None:
-    """The break it catches: a book with no story memory answered as an empty one (the panels
-    would say "no one yet" where they should say Mothli keeps no list), a memory waiting for the
-    reader's next day reported as running (the app would poll all night) or as idle (the panels
-    could not say Mothli will catch up tomorrow), and another reader's job seen in B's progress."""
+    """The break it catches: a book with no story memory answered otherwise than with the empty
+    cast every book shows before its notes reach the reader (ADR 0044 step 5: until then it was a
+    404 "no story memory for this book", which a book with an edition never answered); notes the
+    reader is owed that wait for the next day reported as running (the app would poll all night)
+    or as idle (the panels could not say Mothli will catch up tomorrow); and another reader's job
+    seen in B's progress. (``test_story_memory_same_screens_postgres.py`` proves that nothing of a
+    job is told while the reader is owed nothing.)"""
     readers = {"a": uuid.uuid4(), "b": uuid.uuid4()}
     with psycopg.connect(database) as conn:
         for owner in readers.values():
@@ -333,10 +372,16 @@ def test_progress_says_running_waiting_or_nothing_and_a_book_with_no_memory_is_a
     with Shelf(tenant_dsn, readers, tmp_path, superuser=False) as shelf:
         book = upload(shelf.client, shelf.tokens, "a", alice_shaped_epub())
         shelf.read("a", book, [3])
+        with psycopg.connect(database) as conn:
+            conn.execute("DELETE FROM jobs WHERE owner_id=%s", (readers["a"],))
+        empty = {"/graph": (200, {"as_of_chapter": 0, "characters": [], "relationships": []}),
+                 "/character/{person}": (404, {"detail": "unknown character"}),
+                 "/notes": (200, {"as_of_chapter": 0, "cast": [], "chapters": []}),
+                 "/ingest": (200, {"ingest_progress": 0, "status": "idle", "flags": [],
+                                   "error": None})}
         for route in ROUTES:
             answer = shelf.get("a", book, route, str(uuid.uuid4()))
-            assert (answer.status_code, answer.json()) == (
-                404, {"detail": "no story memory for this book"}), route
+            assert (answer.status_code, answer.json()) == empty[route], route
         # Being built, nothing published yet: an empty cast, and progress the app polls.
         _memory_job(database, readers["a"], book, state="running", run_after="now()")
         assert shelf.get("a", book, "/graph").json() == {
@@ -346,20 +391,21 @@ def test_progress_says_running_waiting_or_nothing_and_a_book_with_no_memory_is_a
         _memory_job(database, readers["a"], book, state="pending",
                     run_after="now() + interval '15 seconds'")
         assert shelf.get("a", book, "/ingest").json()["status"] == "running"
-        # Capped: the claim moved it to the next UTC midnight.
+        # Held for the next UTC midnight (a chapter guard or the notes ceiling), with chapter 3
+        # still to come.
         _memory_job(database, readers["a"], book, state="pending",
                     run_after="(date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') "
                               "AT TIME ZONE 'UTC'")
-        seed_story_memory(database, readers["a"], book, book_keys(shelf.app, readers["a"], book),
-                          receipts=(1, 2, 3))
+        seed_edition(database, readers["a"], book, book_keys(shelf.app, readers["a"], book),
+                     receipts=(1, 2))
         assert shelf.get("a", book, "/ingest").json() == {
-            "ingest_progress": 3, "status": "waiting", "flags": [], "error": None}
-        # B's own book of the same file: no memory and none of A's job.
+            "ingest_progress": 2, "status": "waiting", "flags": [], "error": None}
+        # B's own book of the same file: nothing read, the empty answers, none of A's job.
         book_b = upload(shelf.client, shelf.tokens, "b", alice_shaped_epub())
-        answer = shelf.get("b", book_b, "/ingest")
-        assert (answer.status_code, answer.json()) == (
-            404, {"detail": "no story memory for this book"})
-        # A finished job is no job: the memory is simply there.
+        for route in ROUTES:
+            answer = shelf.get("b", book_b, route, str(uuid.uuid4()))
+            assert (answer.status_code, answer.json()) == empty[route], route
+        # A finished job is no job: what is built is simply there.
         with psycopg.connect(database) as conn:
             conn.execute("UPDATE jobs SET state='succeeded',completed_at=now() WHERE owner_id=%s",
                          (readers["a"],))
@@ -379,7 +425,7 @@ def test_the_story_memory_screens_refuse_a_memory_built_from_another_split_of_th
     with Shelf(tenant_dsn, readers, tmp_path, superuser=False) as shelf:
         book = upload(shelf.client, shelf.tokens, "a", alice_shaped_epub())
         keys = book_keys(shelf.app, readers["a"], book)
-        seed_story_memory(database, readers["a"], book, {**keys, 4: keys[5], 5: keys[4]})
+        seed_edition(database, readers["a"], book, {**keys, 4: keys[5], 5: keys[4]})
         shelf.read("a", book, [3, 4])
         for route in ROUTES:
             answer = shelf.get("a", book, route, str(uuid.uuid4()))

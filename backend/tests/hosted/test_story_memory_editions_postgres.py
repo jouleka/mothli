@@ -847,6 +847,6 @@ def test_a_readers_own_rows_from_before_are_left_and_the_edition_is_built_beside
     assert built_in(database, edition) == [(1, "body"), (2, "body"), (3, "body")]
     assert "Oldname" not in json.dumps(book_memory(database, edition))
     with HostedBookStore(tenant_dsn, OwnerId(a.owner)).book(book) as mem:
-        assert mem.shared
+        assert mem.has_rows()
         assert sorted(row["canonical_name"] for row in mem._audit_all("entities")) == [
             "Corvus", "Mara"]

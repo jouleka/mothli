@@ -852,9 +852,9 @@ describe("the server's conversation", () => {
   });
 });
 
-// Hosted mode has no story memory yet (no extraction) and no reader-key routes: the server answers
-// 404 for the cast, the chapter notes, the closeout, the names and passage help. The reader is
-// told something true, and "Tell me" still gets an answer from the chat.
+// Hosted mode has no reader-key routes: the server answers 404 for the closeout, the names and
+// passage help (the cast and the story it answers for every book). The reader is told something
+// true, and "Tell me" still gets an answer from the chat.
 describe("a server without story memory (hosted mode)", () => {
   const missing = () => new ApiError("Not Found", 404);
 
@@ -872,14 +872,17 @@ describe("a server without story memory (hosted mode)", () => {
     expect(screen.queryByText("I couldn’t gather my thoughts on that chapter. Try again?")).toBeNull();
   });
 
-  test("the cast and the story say there is no memory instead of “try again”", async () => {
-    mocks.graph.mockRejectedValue(missing());
-    mocks.notes.mockRejectedValue(missing());
+  test("the cast and the story of a book not yet started are the empty ones every book shows", async () => {
+    // ADR 0044 step 5: hosted mode answers every book's cast and story; before the first finished
+    // chapter they are empty, whether or not anyone else has the same file.
+    mocks.graph.mockResolvedValue({ as_of_chapter: 0, characters: [], relationships: [] });
+    mocks.notes.mockResolvedValue({ as_of_chapter: 0, cast: [], chapters: [] });
     render(<AskTheBook {...props} />);
     fireEvent.click(screen.getByRole("button", { name: "Cast" }));
-    await screen.findByText(/I don’t keep a list of who’s who for this book yet/);
+    await screen.findByText("No one yet. Keep reading and I’ll keep track of who’s who.");
     fireEvent.click(screen.getByRole("button", { name: "Story so far" }));
-    await screen.findByText(/I don’t keep chapter-by-chapter notes for this book yet/);
+    await screen.findByText("Finish your first chapter and I’ll start keeping notes for you here.");
+    expect(screen.queryByText(/for this book yet/)).toBeNull();
     expect(screen.queryByText(/Try again in a moment/)).toBeNull();
   });
 
