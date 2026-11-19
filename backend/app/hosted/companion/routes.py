@@ -299,7 +299,7 @@ _BOOKMARK = Query(default=None, ge=0, description="explicit bookmark; clamped to
 def _place(state) -> int:
     """The last chapter the views may show of this reader's book: the read map's
     ``finished_through``, and never past the chapter counter, which is ``memory_through``
-    (ADR 0042 part 5): only the map writes it, and the library door reads it as the place."""
+    (ADR 0042 part 5): only the map writes it, and the door reads it as the place."""
     return min(state["bookmark"], state["finished_through"])
 
 

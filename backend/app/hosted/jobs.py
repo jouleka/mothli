@@ -765,15 +765,6 @@ class PostgresWorkerRepository:
                 (owner_id,),
             ).fetchone()
 
-    def is_library_account(self, owner_id: uuid.UUID) -> bool:
-        """Whether this owner is the library account, whose editions are built whole by the
-        operator's command rather than up to a reader's read map (ADR 0042 part 5)."""
-        with self._connect() as conn:
-            return conn.execute(
-                "SELECT EXISTS (SELECT 1 FROM public.notes_account WHERE account_id=%s) AS found",
-                (owner_id,),
-            ).fetchone()["found"]
-
     def unremembered_before(self, edition: Edition, ordinal: int) -> int:
         """How many chapters in a row, ending just before ``ordinal``, the edition keeps as
         unremembered (``chapters.kind``), counted up to ``UNREMEMBERED_IN_A_ROW``. Reads only the
@@ -940,11 +931,8 @@ class PostgresWorkerRepository:
         if not isinstance(chapter.get("key"), str) or not chapter["key"].startswith(mine):
             raise JobIdempotencyError("chapter memory does not match the claimed book")
         chapter = {**chapter, "key": f"{edition.book_id}:{chapter['key'][len(mine):]}"}
-        # (Only the library account's own copy is its edition, until ADR 0044 step 6; no reader's
-        # book ever is, so for a reader all three are refused.)
         published_text = json.dumps([chapter, receipt, rows], default=str)
-        reader = {claim.owner_id, claim.book_id, claim.book_incarnation} - {
-            edition.owner_id, edition.book_id, edition.incarnation}
+        reader = (claim.owner_id, claim.book_id, claim.book_incarnation)
         if any(str(name) in published_text for name in reader):
             raise JobIdempotencyError("chapter memory names the reader")
         scope = (edition.owner_id, edition.book_id, edition.incarnation)

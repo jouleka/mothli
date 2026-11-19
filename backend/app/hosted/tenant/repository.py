@@ -1566,7 +1566,7 @@ class PostgresTenantRepository:
         local library refuses it, under the same owner lock as the limits.
 
         ``split_hash`` is how the file was split into chapters (``split_hash_of``, ADR 0044
-        section 1); with ``file_hash`` it is what the door matches a library edition on."""
+        section 1); with ``file_hash`` it is what the door matches an edition on."""
         async with self._transaction(owner_id) as conn:
             await conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s::text,47))",

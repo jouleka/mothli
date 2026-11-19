@@ -33,7 +33,6 @@ from psycopg import conninfo, sql
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.hosted.tenant.grants import (  # noqa: E402
-    LIBRARY_TABLE_PRIVILEGES,
     PURGE_OTHER_TABLE_PRIVILEGES,
     TENANT_FUNCTION_PRIVILEGES,
     TENANT_TABLE_PRIVILEGES,
@@ -93,11 +92,12 @@ RUNTIME_ROLES: tuple[Role, ...] = (
     # Never in web or worker.
     Role("purge", "MOTHLI_DB_PURGE_PASSWORD", True, PURGE_OTHER_TABLE_PRIVILEGES, {},
          owner_tables=True),
-    # ADR 0042 part 5: makes the library account and reads it (python -m
-    # app.hosted.library_memory), with row security on. Never in web or worker.
-    Role("library", "MOTHLI_DB_LIBRARY_PASSWORD", False, LIBRARY_TABLE_PRIVILEGES, {}),
 )
 ALL_ROLES: tuple[Role, ...] = (OWNER, *RUNTIME_ROLES)
+# Roles of tools that are gone, dropped with every privilege they hold where an earlier
+# deployment made them: the free library's build command (ADR 0044 step 6; every book's notes
+# are now built as readers reach its chapters).
+RETIRED_ROLE_KEYS: tuple[str, ...] = ("library",)
 EXTENSIONS = ("pgcrypto", "vector")
 SCHEMA_MARKER_SETTING = "mothli.schema_version"
 
@@ -195,6 +195,12 @@ def prepare(admin_dsn: str, env: dict[str, str], prefix: str) -> None:
                    WHERE member.rolname = %s""", (role_name(prefix, role),)).fetchall()
             for (parent,) in memberships:
                 conn.execute(sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(parent), name))
+        for key in RETIRED_ROLE_KEYS:
+            retired = f"{prefix}_{key}"
+            if conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (retired,)).fetchone():
+                # It owns nothing; DROP OWNED takes away its privileges here and on the database.
+                conn.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(retired)))
+                conn.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(retired)))
         for extension in EXTENSIONS:
             conn.execute(sql.SQL("CREATE EXTENSION IF NOT EXISTS {}").format(
                 sql.Identifier(extension)))
@@ -242,7 +248,6 @@ def verify(admin_dsn: str, env: dict[str, str], prefix: str) -> None:
     """Run the app's own startup checks against the roles just granted."""
     from app.hosted.auth.repository import PostgresAuthRepository
     from app.hosted.jobs import PostgresWorkerRepository
-    from app.hosted.library_memory import PostgresLibraryAccount
     from app.hosted.purge import PostgresAccountPurge
     from app.hosted.tenant.repository import PostgresTenantRepository
 
@@ -252,7 +257,6 @@ def verify(admin_dsn: str, env: dict[str, str], prefix: str) -> None:
         PostgresTenantRepository(role_dsn(env, prefix, roles["tenant"])).check_runtime_role())
     PostgresWorkerRepository(role_dsn(env, prefix, roles["worker"])).check_runtime_role()
     PostgresAccountPurge(role_dsn(env, prefix, roles["purge"])).check_runtime_role()
-    PostgresLibraryAccount(role_dsn(env, prefix, roles["library"])).check_runtime_role()
     # The tenant startup check reads tables only: the functions are checked here, both ways.
     tenant = role_name(prefix, roles["tenant"])
     with psycopg.connect(admin_dsn, autocommit=True) as conn:

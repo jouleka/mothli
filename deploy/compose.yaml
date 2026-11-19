@@ -64,7 +64,6 @@ services:
       MOTHLI_DB_AUDIT_PASSWORD: ${MOTHLI_DB_AUDIT_PASSWORD:?set MOTHLI_DB_AUDIT_PASSWORD in deploy/.env}
       MOTHLI_DB_OPERATOR_PASSWORD: ${MOTHLI_DB_OPERATOR_PASSWORD:?set MOTHLI_DB_OPERATOR_PASSWORD in deploy/.env}
       MOTHLI_DB_PURGE_PASSWORD: ${MOTHLI_DB_PURGE_PASSWORD:?set MOTHLI_DB_PURGE_PASSWORD in deploy/.env}
-      MOTHLI_DB_LIBRARY_PASSWORD: ${MOTHLI_DB_LIBRARY_PASSWORD:?set MOTHLI_DB_LIBRARY_PASSWORD in deploy/.env}
     networks: [data]
     depends_on:
       db: {condition: service_healthy}
@@ -105,9 +104,10 @@ services:
       resources:
         limits: {cpus: "2", memory: 1536m}
 
-  # The durable job worker: writes chapter notes (ADR 0041 part 6) and, with HOSTED_STORY_MEMORY,
-  # story memory (ADR 0042) with the companion dispatcher (HOSTED_JOB_HANDLER in app.env). Off by
-  # default; turn on with COMPOSE_PROFILES=worker in deploy/.env once chapter notes are on. A
+  # The durable job worker: writes chapter notes (ADR 0041 part 6) and story memory for every
+  # book (ADR 0044; HOSTED_STORY_MEMORY, on in app.env) with the companion dispatcher
+  # (HOSTED_JOB_HANDLER in app.env). Off by default; turn on with COMPOSE_PROFILES=worker in
+  # deploy/.env once the chat's AI keys are filled in. A
   # chapter of story memory takes minutes; one worker runs one job at a time, so with story memory
   # on, notes wait behind it (`--scale worker=2` runs two). It claims jobs as the worker role and
   # does every reader's work as the tenant role. It signs no one in: the auth address it is given names no
@@ -178,35 +178,6 @@ services:
     volumes:
       - books:/var/lib/mothli/books
     networks: [data]
-    depends_on:
-      db: {condition: service_healthy}
-
-  # Story memory of free-library books, built once by the operator for every reader (ADR 0042
-  # part 5; runbook step 4b): `docker compose run --rm library python -m app.hosted.library_memory
-  # build <entry ids>`, or with no command the report.
-  # It makes the library account, adds each book to it as a reader's add does (so it reaches the
-  # free library's source) and queues the build, which the worker runs. Its own role only makes
-  # and reads the library account; the rest is the tenant role, bound to that account.
-  library:
-    <<: *backend
-    profiles: [tools]
-    restart: "no"
-    command: ["python", "-m", "app.hosted.library_memory", "report"]
-    env_file:
-      - path: ${MOTHLI_APP_ENV_FILE:-app.env}
-        required: true
-    environment:
-      DEPLOYMENT_MODE: hosted
-      TRUSTED_HOSTS: ${MOTHLI_DOMAIN:?set MOTHLI_DOMAIN in deploy/.env}
-      OIDC_REDIRECT_URI: https://${MOTHLI_DOMAIN}/api/auth/callback
-      HOSTED_AUTH_DSN: postgresql://unused.invalid/the-library-signs-no-one-in
-      HOSTED_TENANT_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_tenant:${MOTHLI_DB_TENANT_PASSWORD:?set MOTHLI_DB_TENANT_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
-      HOSTED_LIBRARY_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_library:${MOTHLI_DB_LIBRARY_PASSWORD:?set MOTHLI_DB_LIBRARY_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
-      HOSTED_STORAGE_BACKEND: filesystem
-      HOSTED_STORAGE_FILESYSTEM_ROOT: /var/lib/mothli/books
-    volumes:
-      - books:/var/lib/mothli/books
-    networks: [data, egress]
     depends_on:
       db: {condition: service_healthy}
 
