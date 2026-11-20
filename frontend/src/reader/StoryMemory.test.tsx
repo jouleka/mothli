@@ -7,12 +7,11 @@ vi.mock("../api", async (importOriginal) => ({
   api: mocks,
 }));
 import { ApiError, type EntityId } from "../api";
-import { PeoplePanel, StoryPanel, toneFor } from "./StoryMemory";
+import { CATCHING_UP, PeoplePanel, StoryPanel, toneFor } from "./StoryMemory";
 
 // Hosted ids are UUIDs (ADR 0042 part 4); local ids are numbers.
 const MARA = "6f1c2a7e-0b7d-4c55-9e3b-1d2f3a4b5c6d";
 const CORVUS = "0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d";
-const WAITING = "I’m a little behind you. I’ll catch up on the rest tomorrow.";
 
 const person = (entity_id: EntityId, canonical_name: string, revealed_at: number) =>
   ({ entity_id, canonical_name, type: "character", revealed_at, aliases: [] });
@@ -103,12 +102,12 @@ describe("a book before its first finished chapter", () => {
   test("the cast and the story show the same empty lines every book shows", async () => {
     mocks.graph.mockResolvedValue(graph(0, []));
     mocks.notes.mockResolvedValue({ as_of_chapter: 0, cast: [], chapters: [] });
-    render(<PeoplePanel bookId="b" bookmark={0} onAsk={() => {}} />);
+    render(<PeoplePanel bookId="b" bookmark={0} place={0} onAsk={() => {}} />);
     await screen.findByText(NO_ONE_YET);
-    render(<StoryPanel bookId="b" bookmark={0} onOpenPerson={() => {}} onAskChapter={() => {}} />);
+    render(<StoryPanel bookId="b" bookmark={0} place={0} onOpenPerson={() => {}} onAskChapter={() => {}} />);
     await screen.findByText(FIRST_CHAPTER);
     expect(screen.queryByText(/Try again/)).toBeNull();
-    expect(screen.queryByText(WAITING)).toBeNull();
+    expect(screen.queryByText(CATCHING_UP)).toBeNull();
     // Nothing is behind the reader, so nobody asks whether more is on its way.
     expect(mocks.ingest).not.toHaveBeenCalled();
   });
@@ -116,50 +115,78 @@ describe("a book before its first finished chapter", () => {
   test("no line says this book has no notes, not even on a refusal", async () => {
     mocks.graph.mockRejectedValue(missing());
     mocks.notes.mockRejectedValue(missing());
-    render(<PeoplePanel bookId="b" bookmark={3} onAsk={() => {}} />);
+    render(<PeoplePanel bookId="b" bookmark={3} place={3} onAsk={() => {}} />);
     await screen.findByText("I couldn’t gather the cast right now. Try again in a moment.");
-    render(<StoryPanel bookId="b" bookmark={3} onOpenPerson={() => {}} onAskChapter={() => {}} />);
+    render(<StoryPanel bookId="b" bookmark={3} place={3} onOpenPerson={() => {}} onAskChapter={() => {}} />);
     await screen.findByText("I couldn’t open my notes right now. Try again in a moment.");
     expect(screen.queryByText(/for this book yet/)).toBeNull();
-    expect(screen.queryByText(WAITING)).toBeNull();
+    expect(screen.queryByText(CATCHING_UP)).toBeNull();
   });
 });
 
-describe("a memory that waits for tomorrow", () => {
-  test("the cast and the story say once that Mothli will catch up tomorrow", async () => {
-    mocks.ingest.mockResolvedValue(progress("waiting"));
+// 2026-11-20: a reader who says they have read 30 chapters waits a while for the notes to
+// catch up. Whatever the reason the notes are behind, the screens show what there is and one
+// line, the same every time, worked out only from what is shown: how far the notes reach and how
+// far the reader is. Nothing is asked of the server for it, so it can say nothing more.
+describe("notes still catching up with the reader", () => {
+  test("the cast and the story show what there is, and say once that Mothli is catching up", async () => {
     mocks.graph.mockResolvedValue(graph(3, [person(MARA, "Mara", 3)]));
     mocks.notes.mockResolvedValue({ as_of_chapter: 3, cast: [], chapters: [
       { chapter_key: "k3", revealed_at: 3, title: "Three", summary: "Mara falls.", new_characters: [], events: [] }] });
-    render(<PeoplePanel bookId="b" bookmark={5} onAsk={() => {}} />);
-    await screen.findByText(WAITING);
+    render(<PeoplePanel bookId="b" bookmark={5} place={5} onAsk={() => {}} />);
+    await screen.findByText(CATCHING_UP);
     expect(screen.getByText("Mara")).toBeTruthy();
-    render(<StoryPanel bookId="b" bookmark={5} onOpenPerson={() => {}} onAskChapter={() => {}} />);
-    await waitFor(() => expect(screen.getAllByText(WAITING)).toHaveLength(2));
-    expect(mocks.ingest).toHaveBeenCalledWith("b");
+    render(<StoryPanel bookId="b" bookmark={5} place={5} onOpenPerson={() => {}} onAskChapter={() => {}} />);
+    await waitFor(() => expect(screen.getAllByText(CATCHING_UP)).toHaveLength(2));
+    expect(screen.getByText("Mara falls.")).toBeTruthy();
+    expect(mocks.ingest).not.toHaveBeenCalled();
   });
 
-  test("with nothing built yet, the line takes the place of “no one yet”", async () => {
-    mocks.ingest.mockResolvedValue(progress("waiting"));
+  test("with nothing built yet, the same line takes the place of the empty lines", async () => {
     mocks.graph.mockResolvedValue(graph(0, []));
-    render(<PeoplePanel bookId="b" bookmark={2} onAsk={() => {}} />);
-    await screen.findByText(WAITING);
+    mocks.notes.mockResolvedValue({ as_of_chapter: 0, cast: [], chapters: [] });
+    render(<PeoplePanel bookId="b" bookmark={30} place={30} onAsk={() => {}} />);
+    await screen.findByText(CATCHING_UP);
     expect(screen.queryByText(/No one yet/)).toBeNull();
+    render(<StoryPanel bookId="b" bookmark={30} place={30} onOpenPerson={() => {}} onAskChapter={() => {}} />);
+    await waitFor(() => expect(screen.getAllByText(CATCHING_UP)).toHaveLength(2));
+    expect(screen.queryByText(/Finish your first chapter/)).toBeNull();
+  });
+
+  test("the line is the same whatever the server says about building", async () => {
+    for (const status of ["running", "waiting", "idle", "error"]) {
+      mocks.ingest.mockResolvedValue(progress(status));
+      mocks.graph.mockResolvedValue(graph(2, [person(MARA, "Mara", 1)]));
+      const { container, unmount } = render(<PeoplePanel bookId="b" bookmark={4} place={4} onAsk={() => {}} />);
+      await screen.findByText(CATCHING_UP);
+      expect(container.querySelector("[role=status]")?.textContent).toBe(CATCHING_UP);
+      unmount();
+    }
+  });
+
+  test("no line about limits, costs, tomorrow or anyone else, ever", () => {
+    expect(CATCHING_UP).not.toMatch(/tomorrow|limit|pay|cost|plan|quota|other|someone|anyone|reader/i);
+  });
+
+  test("notes that reach the reader's place say nothing more, even mid-chapter", async () => {
+    // The reader is partway into chapter 5 (the views are asked as of 5) but has finished 4.
+    mocks.graph.mockResolvedValue(graph(4, [person(MARA, "Mara", 2)]));
+    render(<PeoplePanel bookId="b" bookmark={5} place={4} onAsk={() => {}} />);
+    await screen.findByText("Mara");
+    expect(screen.queryByText(CATCHING_UP)).toBeNull();
   });
 });
 
 describe("local mode is as it was", () => {
-  test("numbers sort by chapter then id, and no local status ever shows the waiting line", async () => {
+  test("numbers sort by chapter then id, and the panel alone never shows the catching-up line", async () => {
     for (const status of ["idle", "running", "error"]) {
       mocks.ingest.mockResolvedValue(progress(status));
       mocks.graph.mockResolvedValue(graph(2, [person(7, "Zed", 2), person(3, "Ann", 2), person(9, "Bo", 1)]));
       const { unmount } = render(<PeoplePanel bookId="b" bookmark={4} onAsk={() => {}} />);
       const names = (await screen.findAllByRole("button", { name: /Chapter/ })).map((item) => item.textContent);
       expect(names).toEqual(["BBoChapter 1", "AAnnChapter 2", "ZZedChapter 2"]);
-      await waitFor(() => expect(mocks.ingest).toHaveBeenCalled());
-      expect(screen.queryByText(WAITING)).toBeNull();
+      expect(screen.queryByText(CATCHING_UP)).toBeNull();
       unmount();
-      mocks.ingest.mockClear();
     }
   });
 
