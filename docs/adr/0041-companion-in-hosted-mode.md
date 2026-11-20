@@ -587,6 +587,47 @@ nor loses money nobody can account for. Check 5 is unchanged for a reply's first
 background calls; a later call of an admitted reply is added to the platform's reserved total
 without the test. No migration: the two platform functions are used as they are.
 
+**Changed on 20 November 2026: a reader's allowance counts only their conversation.** The owner's rule
+(18 November): "users should have their own quota for speaking with mothli thats it behind all that we
+take care". Measured with real models that day: a new reader imported a book, marked chapters 1 to 30
+read and asked two questions; the chapter notes those marks started in the background used $0.076 of
+the reader's $0.10 day (about 0.7 cents a chapter), the chat $0.024, and the chat then said "We've
+talked a lot today". The reader never asked for the notes and cannot see them, so the line was false.
+
+- **What counts against a reader** (checks 1 to 4 above): the calls of their own conversation only, a
+  reply's writer, second looks and Jev checks, and the chat's other calls (a reply's intent and name
+  checks, the home conversation). Story memory already did not count (ADR 0044 section 5).
+- **What is Mothli's background work**: the worker's `chapter_notes` and `recollect` jobs. Recollections
+  are included: they distil the reader's messages, but the reader never asks for them, never sees them
+  being made, and each batch is a paid writer call with up to four Jev checks that the reader cannot
+  stop. The worker's catalog marks every call of these jobs `background` (migration 0036, on
+  `cost_reservations` and carried into `cost_ledger`; rows recorded before it were marked by their
+  names, `notes-*` and `recollect-*`). They stay in the reader's ledger and count on the platform's day
+  (check 5) like every call.
+- **What holds background work instead**, in the style of story memory's guards: a guard per reader,
+  $1.00 a UTC day and $5.00 a UTC month of their background spend (`HOSTED_READER_BACKGROUND_USD_PER_DAY`,
+  `..._PER_MONTH`), and one budget for every reader's background work together, $3.00 a UTC day
+  (`HOSTED_BACKGROUND_USD_PER_DAY`), checked by `companion_background_open`, which like the platform's
+  functions answers yes or no and serializes the last cent. As with the reader's caps, a call is refused
+  once the spend has reached the number, not when its own worst case would pass it. A real reader does
+  not meet the guard: 60 chapters marked read on the first day cost about $0.42 at the measured price;
+  the guard's day is about 140 chapters, its month about 700.
+- **Past a guard or the budget** the work waits for the next UTC day without a word to the reader: the
+  claim moves a guarded reader's jobs there, as it moved a capped reader's; a notes job refused at a call
+  ends without a failure and asks for its next run at the start of the next day; a recollection is asked
+  for again by the next reply. The chat is never refused for it and never shows "talked a lot today"
+  for it.
+- **Calls in flight** (check 4) are counted on each side apart against the same number, so background
+  work never makes the chat wait and the chat never holds back background work.
+- **The lifetime cap** (check 3), which an operator may set, counts the conversation only, for the same
+  reason: its line ("We've used up the conversations this account has") is shown to the reader.
+- **What Mothli pays for one reader at worst**: $1.00 a day and $5.00 a month of background work, and
+  never more than $3.00 a day for all readers together. A reply that began under the cap still finishes
+  (PR #93, unchanged).
+- **The platform's day** stays the owner's $15. Story memory's ceiling ($10) and this budget ($3) leave
+  the chat at least $2 on a day when both are used up; the platform's day should rise with the number of
+  readers.
+
 **Why a separate in-flight limit.** The existing `max_provider_concurrency` of 2 (`0011:11-12`) counts
 open reservations (`tenant/repository.py:650-663`). One streamed reply has the writer plus up to four
 checks in flight at once (`stream_conversation.py:482-484`), so counting companion calls against 2
@@ -598,7 +639,8 @@ the one shared-code change adds `"code": "allowance_reached"` when the cause is 
 platform's allowance, and the frontend shows one plain line, for example: "We've talked a lot today —
 let's pick this up tomorrow. Your book and your place are right here." Reading, position sync,
 highlights and search take no AI and keep working; the read map keeps recording (it calls no model).
-Background notes and recollections for a capped reader wait for the next day (section 5).
+Background notes and recollections for a capped reader wait for the next day (section 5). (Changed on
+20 November 2026: background work is not held by the reader's allowance; see above.)
 
 **How the limits combine against one reader draining the platform.** In order: the request limit per
 reader (600 a minute, `0011:8-10`, consumed by `_owner` on every request including each stream); the
