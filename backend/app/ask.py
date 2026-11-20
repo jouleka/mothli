@@ -19,7 +19,7 @@ from app.eval.spoiler_gate.grounding import STOPWORDS, content_words, ground_rec
 from app.eval.spoiler_gate.judge import JudgeUnavailable, JudgeVerdict
 from app.ingest.extraction.resolve import ROLE_NOUNS
 from app.llm.client import ProviderUnavailable
-from app.retrieval_passages import PASSAGE_CHARS, passage_windows
+from app.retrieval_passages import PASSAGE_CHARS, is_passage, passage_windows
 from app.read_frontier import ReadBoundary
 from app.unicode_text import fold_accents, normalize_text, proper_words, word_tokens, words
 
@@ -399,6 +399,9 @@ def retrieve_ask_sources(
     normalized_chapters = {}
     chapter_keys_by_ordinal = {}
     serial = 0
+    # The recent text is the latest read chapter with a real passage: the bookmark's chapter,
+    # or, when only its heading is read, the chapter just finished. Never one beyond bookmark.
+    recent_ordinal = 0
 
     def candidate(text, chapter_key, ordinal, *, start=0):
         nonlocal serial
@@ -425,7 +428,7 @@ def retrieve_ask_sources(
         item = candidate(text, chapter_key, ordinal, start=start)
         if item is None or not item[0][1]:
             return
-        if ordinal == bookmark:
+        if ordinal == recent_ordinal:
             if len(recent_candidates) < 4:
                 heapq.heappush(recent_candidates, item)
             elif item[:2] > recent_candidates[0][:2]:
@@ -463,6 +466,9 @@ def retrieve_ask_sources(
         if scanned_chars > MAX_ASK_SCAN_CHARS:
             raise AskRetrievalLimit("completed text exceeds the search budget")
         normalized = " ".join(raw.split())
+        if is_passage(normalized) and ordinal > recent_ordinal:
+            recent_ordinal = ordinal
+            recent_candidates.clear()
         if candidate_pool:
             # The existing raw scan ceilings also bound this normalized cache. Context construction
             # below never rereads a chapter or opens a future chapter merely to find a neighbor.
