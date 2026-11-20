@@ -241,6 +241,11 @@ story as `ingest_progress` grows (`frontend/src/reader/memoryCatchUp.ts:9-38`,
 allowance answers `status: "waiting"`, and the panels say once, in Mothli's voice, that Mothli will
 catch up on the rest tomorrow. The chat never waits for memory.
 
+**Amended 20 November 2026 (ADR 0044 section 3, amendment of that date).** The panels no longer ask
+for `status: "waiting"` or say "tomorrow": whenever what they show stops short of the reader's
+finished chapters they say "I'm still catching up on what you've read. It'll fill in here as I go.",
+whatever the reason.
+
 ### 3. Library books: built once, handed out only up to each reader's place (decided)
 
 **Amended by ADR 0044 (18 November 2026).** The door stays, but it now serves every book, uploads

@@ -132,7 +132,40 @@ describe("JumpNote with the read map", () => {
     expect(dialog.textContent).not.toMatch(/marks earlier chapters as read/i);
     fireEvent.click(screen.getByRole("button", { name: "go there" }));
     expect(onFollow).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "I’ve read up to here" }));
+    fireEvent.click(screen.getByRole("button", { name: "I’ve read chapters 1 to 14" }));
     expect(onFollowRead).toHaveBeenCalledTimes(1);
+  });
+
+  // 2026-11-20: a reader who had finished chapter 30 tapped chapter 30 and said "I've read up to
+  // here", which counted chapters 1 to 29. The button now names the chapters it counts, and the
+  // chapter being opened is said to stay unread.
+  test("names exactly the chapters it will count as read", () => {
+    render(<JumpNote chapter={30} readThrough={29} onFollow={() => {}} onFollowRead={() => {}} onStay={() => {}} />);
+    const dialog = screen.getByRole("alertdialog");
+    expect(screen.getByRole("button", { name: "I’ve read chapters 1 to 29" })).toBeTruthy();
+    expect(dialog.textContent).toMatch(/Chapter 30 itself stays unread until you read it/);
+    expect(screen.queryByRole("button", { name: /up to here/ })).toBeNull();
+  });
+
+  test("counts the book's own chapters, not the pieces before them", () => {
+    // Chapter 3 is the fifth piece of a book with a cover and a contents page.
+    render(<JumpNote chapter={3} readThrough={2} onFollow={() => {}} onFollowRead={() => {}} onStay={() => {}} />);
+    expect(screen.getByRole("button", { name: "I’ve read chapters 1 and 2" })).toBeTruthy();
+  });
+
+  test("one chapter before is named alone, and none offers nothing to count", () => {
+    const { unmount } = render(<JumpNote chapter={2} readThrough={1} onFollow={() => {}} onFollowRead={() => {}} onStay={() => {}} />);
+    expect(screen.getByRole("button", { name: "I’ve read chapter 1" })).toBeTruthy();
+    unmount();
+    render(<JumpNote chapter={1} readThrough={0} onFollow={() => {}} onFollowRead={() => {}} onStay={() => {}} />);
+    expect(screen.queryByRole("button", { name: /I’ve read/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "go there" })).toBeTruthy();
+  });
+
+  test("has no axe violations", async () => {
+    const { container } = render(
+      <JumpNote chapter={31} readThrough={30} onFollow={() => {}} onFollowRead={() => {}} onStay={() => {}} />,
+    );
+    expect(await axeAA(container)).toHaveNoViolations();
   });
 });

@@ -842,6 +842,83 @@ describe("the note after a chapter", () => {
   });
 });
 
+// 2026-11-20 walk-through: a reader imports a book they are halfway through. Nothing asked where
+// they were, and once they found "I've read up to here" a pop-up cheered "a quarter of the way
+// through" at 49%.
+describe("a book opened here for the first time", () => {
+  const extra = mocks as Record<string, unknown>;
+  let readChapters: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    readChapters = vi.fn().mockResolvedValue({});
+    extra.readChapters = readChapters;
+    extra.readMap = vi.fn().mockResolvedValue({ chapters: [] });
+    mocks.position.mockResolvedValue({ bookmark: 0, cfi: "0:start", position_epoch: 0 });
+  });
+  afterEach(() => {
+    delete extra.readChapters;
+    delete extra.readMap;
+  });
+
+  test("asks once where the reader is, counts the chapters before it by the read map, and does not cheer", async () => {
+    const { unmount } = render(<ReaderPage bookId="b" onBack={() => {}} />);
+    const question = await screen.findByRole("dialog", { name: "Already partway through?" });
+    fireEvent.change(within(question).getByLabelText("I’m on"), { target: { value: "2" } });
+    expect(question.textContent).toMatch(/Chapters 1 and 2 will count as read\. We’ll pick up at the start of chapter 3\./);
+    // The server's counter after the reader's word: two chapters finished.
+    mocks.position.mockResolvedValue({ bookmark: 2, cfi: "0:start", position_epoch: 0 });
+    fireEvent.click(within(question).getByRole("button", { name: "take me to chapter 3" }));
+    await waitFor(() => expect(readChapters).toHaveBeenCalledWith("b", [1, 2], true, "told"));
+    await waitFor(() => expect(mocks.goTo).toHaveBeenCalledWith("c3.html"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Already partway through?" })).toBeNull());
+    await waitFor(() => expect(mocks.position.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    // Counted, not celebrated: no "done!", no milestone.
+    expect(document.body.textContent).not.toMatch(/done!|of the way through|Halfway/);
+    unmount();
+    // Never asked again for this book.
+    render(<ReaderPage bookId="b" onBack={() => {}} />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalledTimes(2));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(screen.queryByRole("dialog", { name: "Already partway through?" })).toBeNull();
+  });
+
+  test("“I’m just starting” counts nothing and is not asked again", async () => {
+    const { unmount } = render(<ReaderPage bookId="b" onBack={() => {}} />);
+    const question = await screen.findByRole("dialog", { name: "Already partway through?" });
+    fireEvent.click(within(question).getByRole("button", { name: "I’m just starting" }));
+    expect(screen.queryByRole("dialog", { name: "Already partway through?" })).toBeNull();
+    expect(readChapters).not.toHaveBeenCalled();
+    unmount();
+    render(<ReaderPage bookId="b" onBack={() => {}} />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalledTimes(2));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(screen.queryByRole("dialog", { name: "Already partway through?" })).toBeNull();
+  });
+
+  test("a book with anything read in it is not asked about", async () => {
+    extra.readMap = vi.fn().mockResolvedValue({ chapters: [{ atom: 1, read: 0.4 }] });
+    render(<ReaderPage bookId="b" onBack={() => {}} />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+    await waitFor(() => expect(extra.readMap).toHaveBeenCalled());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(screen.queryByRole("dialog", { name: "Already partway through?" })).toBeNull();
+  });
+
+  test("a chapter finished by reading is still celebrated", async () => {
+    localStorage.setItem("rc:starting-place-asked:b", "yes");
+    mocks.position.mockResolvedValue({ bookmark: 1, cfi: "0:resume", position_epoch: 0 });
+    mocks.putPosition.mockResolvedValue({ bookmark: 2, cfi: "1:end", position_epoch: 0,
+      current_chapter: 3, chapter_progress: 0 });
+    render(<ReaderPage bookId="b" onBack={() => {}} />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+    const view = document.querySelector("foliate-view") as TestFoliateView;
+    act(() => view.dispatchEvent(new CustomEvent("relocate", {
+      detail: { cfi: "2:start", section: { current: 2 } },
+    })));
+    expect(await screen.findByText(/That’s Chapter 2 done!/)).toBeTruthy();
+  });
+});
+
 const hostedPoint = { id: "a".repeat(64), atom: 2, offset: 0, position_epoch: 0, available_chapter: 2 };
 
 describe("a server without Mothli's chat", () => {

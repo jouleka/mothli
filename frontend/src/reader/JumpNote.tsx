@@ -36,13 +36,24 @@ export function isolateReaderDialog(root: HTMLElement): () => void {
   };
 }
 
+/** "chapters 1 to 30", "chapters 1 and 2", "chapter 1": the chapters the reader's word would
+ * count as read. */
+export function chaptersUpTo(count: number, unit = "chapter"): string {
+  if (count === 1) return `${unit} 1`;
+  return count === 2 ? `${unit}s 1 and 2` : `${unit}s 1 to ${count}`;
+}
+
 export function JumpNote({
   chapter,
+  readThrough,
   onFollow,
   onFollowRead,
   onStay,
 }: {
   chapter: number;
+  /** How many of the book's chapters come before this one: what "I've read up to here" counts
+   * as read, named on the button so nobody has to guess whether this chapter is among them. */
+  readThrough?: number;
   onFollow: () => void;
   /** With the read map: go there and tell Mothli everything before it has been read. */
   onFollowRead?: () => void;
@@ -57,6 +68,8 @@ export function JumpNote({
   onStayRef.current = onStay;
   const titleId = useId();
   const descriptionId = useId();
+  const before = readThrough ?? chapter - 1;
+  const canSayRead = onFollowRead && before > 0;
 
   useEffect(() => {
     const restoreBackground = rootRef.current
@@ -105,7 +118,8 @@ export function JumpNote({
         {onFollowRead ? (
           <p id={descriptionId}>
             Mothli only knows the pages you’ve read, so it won’t know what you
-            skip. If you’ve already read everything before this chapter, say so.
+            skip.{canSayRead && <> Already read {chaptersUpTo(before)}? Say so and they’ll count as read.
+            Chapter {chapter} itself stays unread until you read it.</>}
           </p>
         ) : (
           <p id={descriptionId}>
@@ -122,8 +136,8 @@ export function JumpNote({
         <Button variant="primary" onClick={onFollow}>
           {onFollowRead ? "go there" : "follow"}
         </Button>
-        {onFollowRead && (
-          <Button onClick={onFollowRead}>I’ve read up to here</Button>
+        {canSayRead && (
+          <Button onClick={onFollowRead}>I’ve read {chaptersUpTo(before)}</Button>
         )}
       </div>
     </div>

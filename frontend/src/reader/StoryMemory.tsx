@@ -59,41 +59,36 @@ function MemoryState({ mood, children }: { mood: "thinking" | "sleepy" | "curiou
   );
 }
 
-const WAITING = "I’m a little behind you. I’ll catch up on the rest tomorrow.";
+/** Said whenever the reader has finished chapters the notes do not reach yet, whatever the
+ * reason (still being written, waiting for the next day, a chapter that keeps failing): one line,
+ * the same every time. It says nothing the screen does not already show (how far the notes go
+ * against how far the reader is), so it tells no reader anything about another (ADR 0044
+ * section 4), and it names no limit, cost or wait. */
+export const CATCHING_UP = "I’m still catching up on what you’ve read. It’ll fill in here as I go.";
 /** A chapter Mothli could not make notes on (hosted story memory keeps it and reads on). */
 const UNREMEMBERED ="This chapter slipped past me, so I couldn’t make notes on it. You can still ask me about it in the chat.";
 
-/** Whether the rest of this book's memory waits for tomorrow (the server answers
- * `status: "waiting"` only while the reader has finished chapters whose notes wait for the next
- * day). Asked only when what came back is behind the reader; a server that never waits never
- * shows the line. (Every book answers the cast and the story, empty before the first finished
- * chapter, so a refusal of either is a failure like any other.) */
-function useWaiting(bookId: string, behind: boolean) {
-  const [waiting, setWaiting] = useState(false);
-  useEffect(() => {
-    setWaiting(false);
-    if (!behind) return;
-    let live = true;
-    Promise.resolve()
-      .then(() => api.ingest(bookId))
-      .then((state) => live && setWaiting(state.status === "waiting"))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [bookId, behind]);
-  return waiting;
+/** Whether the notes shown stop short of the chapters the reader has finished. ``place`` is the
+ * reader's chapter counter (the read map's finished chapters, past which the server never shows
+ * anything); ``asOf`` is how far the notes it sent reach. Unknown either way: not behind. (Every
+ * book answers the cast and the story, empty before the first finished chapter, so a refusal of
+ * either is a failure like any other.) */
+function isBehind(asOf: number | null, place: number | undefined) {
+  return asOf != null && place != null && asOf < place;
 }
 
 export function PeoplePanel({
   bookId,
   bookmark,
+  place,
   refresh = 0,
   focusId,
   onAsk,
 }: {
   bookId: string;
   bookmark: number;
+  /** The reader's chapter counter: how many chapters they have finished. */
+  place?: number;
   /** Changes when more of the book has been extracted: fetch again, keeping what is shown. */
   refresh?: number;
   focusId?: EntityId | null;
@@ -106,7 +101,7 @@ export function PeoplePanel({
   const [selected, setSelected] = useState<EntityId | null>(focusId ?? null);
   const [detail, setDetail] = useState<Character | null>(null);
   const [detailFailed, setDetailFailed] = useState(false);
-  const waiting = useWaiting(bookId, asOf != null && asOf < bookmark);
+  const behind = isBehind(asOf, place);
 
   useEffect(() => setSelected(focusId ?? null), [focusId]);
   const shownFor = useRef("");
@@ -226,10 +221,10 @@ export function PeoplePanel({
       ) : people == null ? (
         <MemoryState mood="thinking">Gathering everyone you’ve met…</MemoryState>
       ) : people.length === 0 ? (
-        <MemoryState mood="curious">{waiting ? WAITING : "No one yet. Keep reading and I’ll keep track of who’s who."}</MemoryState>
+        <MemoryState mood="curious">{behind ? CATCHING_UP : "No one yet. Keep reading and I’ll keep track of who’s who."}</MemoryState>
       ) : (
         <>
-          {waiting && <p className="memory-intro" role="status">{WAITING}</p>}
+          {behind && <p className="memory-intro" role="status">{CATCHING_UP}</p>}
           <p className="memory-collection-count">
             <strong>{people.length}</strong> {people.length === 1 ? "person" : "people"} in your cast
           </p>
@@ -255,12 +250,15 @@ export function PeoplePanel({
 export function StoryPanel({
   bookId,
   bookmark,
+  place,
   refresh = 0,
   onOpenPerson,
   onAskChapter,
 }: {
   bookId: string;
   bookmark: number;
+  /** The reader's chapter counter: how many chapters they have finished. */
+  place?: number;
   /** Changes when more of the book has been extracted: fetch again, keeping what is shown. */
   refresh?: number;
   onOpenPerson: (id: EntityId) => void;
@@ -270,7 +268,7 @@ export function StoryPanel({
   const [asOf, setAsOf] = useState<number | null>(null);
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
-  const waiting = useWaiting(bookId, asOf != null && asOf < bookmark);
+  const behind = isBehind(asOf, place);
 
   const shownFor = useRef("");
   useEffect(() => {
@@ -295,12 +293,12 @@ export function StoryPanel({
   if (failed) return <MemoryState mood="sleepy">I couldn’t open my notes right now. Try again in a moment.</MemoryState>;
   if (!chapters) return <MemoryState mood="thinking">Flipping back through my notes…</MemoryState>;
   if (!chapters.length)
-    return <MemoryState mood="curious">{waiting ? WAITING : "Finish your first chapter and I’ll start keeping notes for you here."}</MemoryState>;
+    return <MemoryState mood="curious">{behind ? CATCHING_UP : "Finish your first chapter and I’ll start keeping notes for you here."}</MemoryState>;
 
   return (
     <div className="memory-pane">
       <p className="memory-intro">What happened, chapter by chapter. Your latest chapter is first.</p>
-      {waiting && <p className="memory-intro" role="status">{WAITING}</p>}
+      {behind && <p className="memory-intro" role="status">{CATCHING_UP}</p>}
       <ol className="memory-timeline" aria-label="The story so far">
         {chapters.map((chapter, index) => {
           const expanded = open === chapter.chapter_key;

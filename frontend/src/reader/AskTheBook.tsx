@@ -295,6 +295,7 @@ export function AskTheBook({
   prepareReadContext,
   onChaptersRead,
   memoryRefresh = 0,
+  finishedChapters,
   readVersion = 0,
   throughCurrentPage = false,
   seed = null,
@@ -324,6 +325,9 @@ export function AskTheBook({
   onChaptersRead?: () => void;
   /** Changes as more of the book is extracted, so the cast and story so far fetch again. */
   memoryRefresh?: number;
+  /** The reader's chapter counter, for the cast and story so far to tell whether their notes are
+   * still catching up with it. */
+  finishedChapters?: number;
   /** Changes whenever the reader changes what counts as read other than by turning pages (a
    * chapter marked read or not read, an "I've read…" offer): the conversation is asked for again. */
   readVersion?: number;
@@ -880,6 +884,7 @@ export function AskTheBook({
           <PeoplePanel
             bookId={bookId}
             bookmark={bookmark}
+            place={finishedChapters}
             refresh={memoryRefresh}
             focusId={focusPerson}
             onAsk={(name) => askAbout(`Remind me who ${name} is.`)}
@@ -890,6 +895,7 @@ export function AskTheBook({
           <StoryPanel
             bookId={bookId}
             bookmark={bookmark}
+            place={finishedChapters}
             refresh={memoryRefresh}
             onOpenPerson={(id) => {
               setFocusPerson(id);

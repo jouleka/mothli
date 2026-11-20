@@ -28,6 +28,9 @@ What that fixes, wherever the sections below say otherwise:
   Reading is never held back by notes. Where notes are not ready the screens show what there is; the
   one existing line in Mothli's voice ("I'm a little behind you. I'll catch up on the rest tomorrow.")
   may stay, and no new line about limits is written. Every step that touches a screen checks this.
+  *Amended 20 November 2026: that line was replaced by one catching-up line that names no wait or
+  limit; see the amendment at the end of section 3, "What a reader sees while a chapter is not
+  ready".*
 - Questions 2 to 5 are answered as recommended: notes go 30 days after the last holder of a file is
   gone; one chapter ahead; no reader corrects notes; the timing hint is accepted.
 
@@ -260,6 +263,17 @@ yet" (`routes.py:318-319`, `StoryMemory.tsx:53-57`). Every book now has notes in
 answer must become the same empty cast for every book a reader has not finished a chapter of, whether
 or not an edition exists (section 4, "what must answer identically").
 
+**Amended 20 November 2026 (PR #135, after the first-session walk-through).** The "tomorrow" line
+above is gone. Whenever the notes shown stop short of the chapters the reader has finished, the cast
+and Story so far show what there is and one line: "I'm still catching up on what you've read. It'll
+fill in here as I go." It is the same line whatever the reason (a chapter still being written, a run
+waiting for the next day, a chapter that keeps failing), so no screen says "tomorrow" or hints at a
+limit or a wait. The app works it out only from what the screen already shows (how far the notes it
+was sent reach, against the reader's finished chapters), and asks the server nothing for it, so it
+tells a reader nothing the screen does not already show and stays within section 4's honest limit.
+Before the first finished chapter nothing is behind the reader, so the empty answers that must be
+identical (section 4) are unchanged.
+
 ### 4. The door stays the only way in
 
 **Every path goes through it.** The chat (`stream_read_prefix` with a `HostedBookStore`,
@@ -405,6 +419,8 @@ to reach, so that one person cannot make Mothli spend a lot.
   Reading chapters someone else already built never counts. Past the guard, the run waits for the next
   UTC day as a capped reader's job does today (`hosted/jobs.py:296-356`), and that reader sees "I'm a
   little behind you. I'll catch up on the rest tomorrow."
+  *Amended 20 November 2026: the reader now sees the same catching-up line as for any other reason
+  the notes are behind, with no "tomorrow" (amendment at the end of section 3).*
 - **Per reader, new files:** at most 5 new editions a month (a reader is the first to chapter 1 of a
   file). Importing costs nothing (chapter 1 waits for a read page, section 3), and the upload limits
   already bound how many books a reader keeps (`tenant/repository.py:1453-1460`).
