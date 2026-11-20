@@ -65,7 +65,9 @@ def test_mothli_calls_chapter_one_of_alice_chapter_1_of_12():
     numbers = content_numbers({"atoms": ALICE_ATOMS})
     assert numbers == {ordinal: ordinal - 2 for ordinal in range(3, 15)}
     item = {"book": {"title": "Alice's Adventures in Wonderland", "author": "Lewis Carroll"},
-            "chapters": [{"ordinal": 3, "whole": False}], "numbers": numbers, "point": {"atom": 3}}
+            "chapters": [{"ordinal": 3, "whole": False, "text": "Alice was beginning to get very tired."
+                          " of sitting by her sister on the bank."}],
+            "numbers": numbers, "point": {"atom": 3}}
     assert "the reader is in chapter 1 of 12 now" in place_line(item)
 
 
