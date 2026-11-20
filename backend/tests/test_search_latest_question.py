@@ -34,7 +34,8 @@ BOOK = {
        "romantic and asked only a comfortable home, and Wren could not answer her.",
     6: "CHAPTER VI.",
 }
-UNREAD_REST_OF_6 = " Juno wrote that the parsonage was cold and that Ansel was often away."
+READ_TEXT = "\n".join(BOOK.values())
+UNREAD_REST_OF_6 =" Juno wrote that the parsonage was cold and that Ansel was often away."
 
 
 def chapters(book=BOOK):
@@ -53,75 +54,86 @@ def search(question, history, read=None):
     read = read or chapters()
     reach = max(ch["ordinal"] for ch in read)
     texts = {ch["key"]: ch["text"] for ch in read}
-    query = conversation_retrieval_question(question, history, reach,
-                                            read_text="\n".join(ch["text"] for ch in read))
+    query = conversation_retrieval_question(question, history, reach)
     latest, recent_text = recent_reading(read)
     hits = [(1.0, text, latest["ordinal"], latest["key"])
             for _, _, text in reversed(deque(passage_windows(recent_text), maxlen=4))]
     atoms = {ch["key"]: {"href": "", "title": ""} for ch in read}
     pool = compact_candidates(retrieve_ask_sources(
         query, bookmark=reach, chapters=read, read_chapter=texts.get, semantic_hits=hits,
-        atoms=atoms, candidate_pool=True, prefer_recent=True))
+        atoms=atoms, candidate_pool=True, prefer_recent=True,
+        lead_names=book_names_in(question, "\n".join(texts.values()))))
     core = complete_ask_context(query, pool[:6], pool, allow_named_fallback=True) if pool else []
     chosen = {s["id"] for s in core}
     return core + [s for s in pool if s["id"] not in chosen][:MAX_PASSAGES - len(core)]
 
 
-def lexical_order(query, read=None):
-    """Plain ranking of the read passages for a search text, no recent-text slots."""
-    read = read or chapters()
-    texts = {ch["key"]: ch["text"] for ch in read}
+def ranked(question, history, *, lead=True):
+    """Plain ranking of the read passages, no recent-text slots: ordinals, best first.
+
+    ``lead=False`` ranks the way it was before this fix: every name in the search text alike.
+    """
+    texts = {ch["key"]: ch["text"] for ch in chapters()}
+    lead_names = book_names_in(question, READ_TEXT) if lead else ()
     return [s["ordinal"] for s in retrieve_ask_sources(
-        query, bookmark=max(texts and [ch["ordinal"] for ch in read]), chapters=read,
-        read_chapter=texts.get, semantic_hits=[], atoms={}, limit=6)]
+        conversation_retrieval_question(question, history, 6), bookmark=6, chapters=chapters(),
+        read_chapter=texts.get, semantic_hits=[], atoms={}, limit=6, lead_names=lead_names)]
 
 
-QUARREL = [
-    ConversationMessage(role="user", content="what's going on with Mara and Corvus?", as_of_chapter=6),
-    ConversationMessage(role="assistant", as_of_chapter=6, content=(
-        "Mara and Corvus quarrelled at the harbour, and again at the market, with Ilse taking "
-        "Mara's side. Mara thinks Corvus lied about the boats.")),
-]
+def turns(asked, replied):
+    return [ConversationMessage(role="user", content=asked, as_of_chapter=6),
+            ConversationMessage(role="assistant", content=replied, as_of_chapter=6)]
+
+
+QUARREL = turns("what's going on with Mara and Corvus?", (
+    "Mara and Corvus quarrelled at the harbour, and again at the market, with Ilse taking "
+    "Mara's side. Mara thinks Corvus lied about the boats."))
+STORY = turns("should I trust Vex's story about Corvus?",
+              "Vex told Wren that Corvus cheated him of the mill his father meant him to have.")
 
 
 def test_the_names_in_the_last_reply_no_longer_outrank_the_one_asked_about():
     question = "should I trust Vex's story about Corvus?"
-    # The pattern, as it was: question plus last reply, ranked by names, puts the quarrel first.
-    old_query = conversation_retrieval_question(question, QUARREL, 6)
-    assert sorted(lexical_order(old_query)[:2]) == [1, 2]
-    # Now the question names someone the book knows, so it is searched on alone.
-    assert conversation_retrieval_question(question, QUARREL, 6,
-                                           read_text="\n".join(BOOK.values())) == question
-    assert lexical_order(question)[0] == 3
+    # The pattern, as it was: every name in question plus last reply alike puts the quarrel first.
+    assert sorted(ranked(question, QUARREL, lead=False)[:2]) == [1, 2]
+    # Now the names the question asks about lead; the reply's names only break ties.
+    assert ranked(question, QUARREL)[0] == 3
     assert 3 in [s["ordinal"] for s in search(question, QUARREL)[:6]]
 
 
+def test_a_named_follow_up_finds_what_the_turn_before_was_about():
+    # "why did Corvus do that?" names Corvus, who is in chapters 1, 2 and 3 alike: the turn
+    # before decides which. The same question after two different replies finds two places.
+    question = "why did Corvus do that?"
+    assert ranked(question, QUARREL)[:2] in ([1, 2], [2, 1])
+    assert ranked(question, STORY)[0] == 3
+    # In the chat's own search, past the recent-text slots (chapter 5, just finished).
+    def first_earlier(history):
+        return next(s["ordinal"] for s in search(question, history) if s["ordinal"] != 5)
+    assert first_earlier(QUARREL) in {1, 2}
+    assert first_earlier(STORY) == 3
+    # A passage without the name asked about never outranks one with it, however many of the
+    # reply's words it shares: Juno's chapters never lead a question about Corvus.
+    juno = turns("what about Juno?", "Juno walked with Wren in the orchard and talked of dancing, "
+                 "of ribbons and of the officers, and then accepted Ansel.")
+    assert ranked(question, juno)[0] in {1, 2, 3}
+
+
 def test_a_follow_up_with_no_name_of_its_own_still_finds_the_turn_before():
-    story = [
-        ConversationMessage(role="user", content="should I trust Vex's story about Corvus?", as_of_chapter=6),
-        ConversationMessage(role="assistant", as_of_chapter=6, content=(
-            "Vex told Wren that Corvus cheated him of the mill his father meant him to have.")),
-    ]
     for question in ("what about him?", "and then?", "Interesting, why would he say that?"):
-        query = conversation_retrieval_question(question, story, 6, read_text="\n".join(BOOK.values()))
-        assert query != question                        # the earlier turns are searched on
-        assert lexical_order(query)[0] == 3
-        assert 3 in [s["ordinal"] for s in search(question, story)[:6]]
-    # The other direction: the same follow-up after the quarrel finds the quarrel, not Vex.
-    assert lexical_order(conversation_retrieval_question(
-        "what about him?", QUARREL, 6, read_text="\n".join(BOOK.values())))[0] in {1, 2}
+        assert ranked(question, STORY)[0] == 3
+        assert 3 in [s["ordinal"] for s in search(question, STORY)[:6]]
+        # The other direction: the same follow-up after the quarrel finds the quarrel, not Vex.
+        assert ranked(question, QUARREL)[0] in {1, 2}
 
 
 def test_a_name_counts_only_if_the_read_text_has_it_as_a_name():
-    read_text = "\n".join(BOOK.values())
-    assert book_names_in("should I trust Vex's story about Corvus?", read_text) == ["vex", "corvus"]
-    assert book_names_in("Ok so what did Juno do?", read_text) == ["juno"]
+    assert book_names_in("should I trust Vex's story about Corvus?", READ_TEXT) == ["vex", "corvus"]
+    assert book_names_in("Ok so what did Juno do?", READ_TEXT) == ["juno"]
     # Ordinary words at the start of a message are not names, and neither is a name the
-    # reader has not met in what is read (it is only in the unread rest of a chapter).
-    assert book_names_in("Interesting, and then?", read_text) == []
-    assert book_names_in("what about Zed?", read_text) == []
-    # Without the read text the search words are as before: question and last two messages.
-    assert conversation_retrieval_question("what about Vex?", QUARREL, 6).startswith("what about Vex?\n")
+    # reader has not met in what is read.
+    assert book_names_in("Interesting, and then?", READ_TEXT) == []
+    assert book_names_in("what about Zed?", READ_TEXT) == []
 
 
 def test_just_happened_means_the_chapter_just_finished_when_only_a_heading_is_read():
