@@ -2079,6 +2079,31 @@ main:focus,
   gap: 8px;
   justify-content: flex-end;
 }
+/* The first-open question: which chapter the reader is on. */
+.starting-place-pick {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+  font-weight: 600;
+}
+.starting-place-pick select {
+  min-height: 40px;
+  min-width: 11em;
+  padding: 6px 10px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 400;
+}
+.starting-place-line {
+  min-height: 1.5em;
+  margin-top: 8px;
+  color: var(--ink-soft);
+}
 /* Story memory. Chapter index and person workspace share one stable cursor. */
 .codex-scrim {
   padding: 20px;

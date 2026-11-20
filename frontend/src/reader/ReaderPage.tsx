@@ -65,6 +65,7 @@ import { PositionReporter, type PendingPosition, type PositionSyncState } from "
 import { atomAtRange, pageAnchor, ReadFrontierReporter } from "./readFrontier";
 import { chapterCount, chapterLine, chapterNumber, chaptersFinished, finishedNoteFor } from "./chapterPlace";
 import { StartOverNote } from "./StartOverNote";
+import { StartingPlace, type StartingChapter } from "./StartingPlace";
 import { useWelcomeBack } from "./welcomeBack";
 import { useCompactReaderShell } from "./mobileShell";
 import { NameCard } from "./NameCard";
@@ -156,6 +157,19 @@ type FoliateView = HTMLElement & {
 export const BOOK_GONE_TITLE = "I can’t find this book on your shelf.";
 export const BOOK_GONE_LINE =
   "It may have been removed, here or on another device. Your other books are waiting for you.";
+
+/** Where this device remembers that the first-open question was answered for a book. */
+const startingPlaceKey = (bookId: string) => `rc:starting-place-asked:${bookId}`;
+
+/** The contents entry that opens exactly the piece at ``atom`` (0-based), if there is one. */
+function findTocHref(items: ReaderTocItem[], atom: number): string | null {
+  for (const item of items) {
+    if (item.atom === atom && item.href) return item.href;
+    const child = findTocHref(item.children, atom);
+    if (child) return child;
+  }
+  return null;
+}
 
 /** The name a saved book file gets: its title, as a file name every system accepts. */
 export function bookFileName(title: string): string {
@@ -351,6 +365,14 @@ export function ReaderPage({
   const mappedRef = useRef(false); // the same, for the page-turn handler
   const [readShare, setReadShare] = useState<Record<number, number>>({}); // by 0-based chapter index
   const [readOffer, setReadOffer] = useState<ReadOffer | null>(null);
+  // A book with nothing read in it, opened here for the first time: ask once where the reader is.
+  const [askStart, setAskStart] = useState(false);
+  // The chapter counter as far as the reader's own word moved it ("I've read up to here", the
+  // first-open question, the contents list). Chapters counted that way are not celebrated: the
+  // "That's ... done!" and milestone notes are for reading. Infinity while such a word is on
+  // its way, so a page report that lands first is quiet too.
+  const toldThroughRef = useRef(-1);
+  const lastSeenBookmark = useRef<number | null>(null);
   // The Notebook shows a kept reply only while what it was written from still counts as read,
   // as the chat panel does: "I haven't read this" or "read it fresh" keeps it back (not deleted)
   // until those pages are read again, in this reading pass or a later one. Without the read map
@@ -381,6 +403,7 @@ export function ReaderPage({
       // counter now, and refresh the cast and recap as those chapters are extracted.
       const fresh = await api.position(bookId);
       if (fresh.position_epoch === positionEpochRef.current) {
+        toldThroughRef.current = fresh.bookmark;
         setPos((current) => (current ? { ...current, bookmark: fresh.bookmark,
                                           ingest_progress: fresh.ingest_progress } : current));
         stopMemoryWatch.current?.();
@@ -388,6 +411,19 @@ export function ReaderPage({
       }
     } catch {
       /* The views catch up at the next page turn. */
+    } finally {
+      // Never left waiting: whatever the counter says now came from the reader's word.
+      if (toldThroughRef.current === Infinity) toldThroughRef.current = lastSeenBookmark.current ?? -1;
+    }
+  }, [bookId]);
+  /** Say chapters were read, by the read map's own route. The counter it moves is not celebrated. */
+  const tellRead = useCallback(async (atoms: number[], source: "told" | "import" = "told") => {
+    toldThroughRef.current = Infinity;
+    try {
+      await api.readChapters?.(bookId, atoms, true, source);
+    } catch (error) {
+      toldThroughRef.current = lastSeenBookmark.current ?? -1;
+      throw error;
     }
   }, [bookId]);
   const markRead = useCallback(async (atom: number, read: boolean) => {
@@ -397,18 +433,19 @@ export function ReaderPage({
     // Kept replies about this chapter leave the Notebook now too, not once the map is back.
     if (!read) setReadShare((shares) => (atom in shares ? { ...shares, [atom]: 0 } : shares));
     try {
-      await api.readChapters?.(bookId, [atom + 1], read);
+      if (read) await tellRead([atom + 1]);
+      else await api.readChapters?.(bookId, [atom + 1], read);
     } finally {
       await refreshReadShare();
     }
-  }, [bookId, refreshReadShare]);
+  }, [bookId, refreshReadShare, tellRead]);
   const answerOffer = useCallback(async (accept: boolean) => {
     const offer = readOffer;
     setReadOffer(null);
     if (!offer) return;
     try {
       // Declining is remembered on this device; the offer also ends once anything is read here.
-      if (accept) await api.readChapters?.(bookId, offer.atoms, true, offer.kind === "skipped" ? "told" : "import");
+      if (accept) await tellRead(offer.atoms, offer.kind === "skipped" ? "told" : "import");
       else if (offer.kind === "skipped") {
         // "I skipped them" is remembered for these chapters, so Mothli does not ask again.
         const key = `rc:skipped-declined:${bookId}`;
@@ -419,7 +456,7 @@ export function ReaderPage({
       /* Storage or the network failed; the reader can still use "I've read this" in contents. */
     }
     if (accept) await refreshReadShare();
-  }, [bookId, readOffer, refreshReadShare]);
+  }, [bookId, readOffer, refreshReadShare, tellRead]);
   const readAnchorRef = useRef<((edge: "start" | "end") => ReturnType<typeof pageAnchor>) | null>(null);
 
   const prepareReadContext = useCallback(async () => {
@@ -562,6 +599,7 @@ export function ReaderPage({
     setMapped(false);
     mappedRef.current = false;
     setReadOffer(null);
+    setAskStart(false);
     // Known before the book opens: with the map, landing where the reader left off is not a leap.
     const mapProbe = api.readMap?.(bookId)?.then(async (map) => {
       if (dead) return;
@@ -569,10 +607,24 @@ export function ReaderPage({
       setMapped(true);
       setReadShare(Object.fromEntries(map.chapters.map((chapter) => [chapter.atom - 1, chapter.read])));
       let declined = false;
-      try { declined = localStorage.getItem(`rc:read-offer-declined:${bookId}`) === "yes"; } catch { /* no storage */ }
-      if (declined || !api.readOffer) return;
-      const { offer } = await api.readOffer(bookId);
-      if (!dead && offer) setReadOffer(offer);
+      let asked = false;
+      try {
+        declined = localStorage.getItem(`rc:read-offer-declined:${bookId}`) === "yes";
+        asked = localStorage.getItem(startingPlaceKey(bookId)) === "yes";
+      } catch { /* no storage */ }
+      let offer: ReadOffer | null = null;
+      if (!declined && api.readOffer) {
+        try {
+          offer = (await api.readOffer(bookId)).offer;
+        } catch {
+          /* No reading history here (the hosted server keeps none). */
+        }
+      }
+      if (dead) return;
+      if (offer) setReadOffer(offer);
+      // Nothing read here yet and never asked: has the reader started this book elsewhere? Once
+      // anything is read the map says so, on every device, and the question is not asked.
+      else if (!asked && map.chapters.every((chapter) => !(chapter.read > 0))) setAskStart(true);
     }).catch(() => {});
     let disposeHistory = () => {};
     let disposeMotion = () => {};
@@ -1220,6 +1272,7 @@ export function ReaderPage({
       manifestBmRef.current = 0;
       allowJumpRef.current = false;
       setPendingJump(null);
+      toldThroughRef.current = -1;
       forget();
       forgetLastPassage(activeOfflineOwner(), bookId);
       setPos({
@@ -1256,11 +1309,48 @@ export function ReaderPage({
     if (!pendingJump) return;
     const before = Array.from({ length: pendingJump.chapter - 1 }, (_, index) => index + 1);
     try {
-      if (before.length) await api.readChapters?.(bookId, before, true);
+      if (before.length) await tellRead(before);
     } catch {
       /* The jump still happens; Mothli simply does not learn the earlier chapters. */
     }
     await followJump();
+    if (before.length) void refreshReadShare();
+  };
+
+  // The first-open question's chapters: every piece that is one of the book's own chapters.
+  const startingChapters: StartingChapter[] = manifest
+    ? manifest.atoms.flatMap((_, index) => {
+        const number = chapterNumber(manifest.atoms, index);
+        return number == null ? [] : [{ index, number, before: chaptersFinished(manifest.atoms, index) }];
+      })
+    : [];
+  const closeStartingPlace = () => {
+    setAskStart(false);
+    try {
+      localStorage.setItem(startingPlaceKey(bookId), "yes");
+    } catch {
+      /* No storage: the question goes once anything is read. */
+    }
+  };
+  const chooseStartingPlace = async (choice: StartingChapter) => {
+    // The same word as "I've read up to here": every piece before the chosen chapter is read.
+    const before = Array.from({ length: choice.index }, (_, index) => index + 1);
+    if (before.length) await tellRead(before);
+    closeStartingPlace();
+    const view = viewRef.current;
+    const tocHref = findTocHref(toc, choice.index);
+    const section = sectionAtomRef.current.indexOf(choice.index);
+    const target = tocHref ?? (section >= 0 ? section : null);
+    if (view && target != null) {
+      allowJumpRef.current = true;
+      try {
+        await view.goTo(target);
+      } catch {
+        /* The chapters are counted; the reader can open the chapter from the contents. */
+      } finally {
+        allowJumpRef.current = false;
+      }
+    }
     if (before.length) void refreshReadShare();
   };
 
@@ -1502,12 +1592,14 @@ export function ReaderPage({
     setCornerNotes((current) => current.filter((item) => item.id !== id));
   }, []);
 
-  const lastSeenBookmark = useRef<number | null>(null);
   useEffect(() => {
     const bookmark = pos?.bookmark;
     if (bookmark == null || !manifest) return;
     const previous = lastSeenBookmark.current;
     lastSeenBookmark.current = bookmark;
+    // Chapters the reader said they had read are counted, not celebrated: a reader who has just
+    // told Mothli they are halfway gets no "a quarter of the way through" (2026-11-20).
+    if (bookmark <= toldThroughRef.current) return;
     // Only for a chapter: never for a cover or Project Gutenberg's own page (finishedNoteFor).
     const finished = finishedNoteFor(manifest.atoms, previous, bookmark, unit);
     // No chat on this server: no "Want to hear what I noticed?" that nothing could answer.
@@ -1860,7 +1952,18 @@ export function ReaderPage({
         {readOffer && !pendingJump && !startOverOpen && (
           <ImportOffer offer={readOffer} onAccept={() => void answerOffer(true)} onDecline={() => void answerOffer(false)} />
         )}
-        {pendingJump && <JumpNote chapter={pendingJump.chapter} onFollow={followJump} onFollowRead={mapped ? followJumpRead : undefined} onStay={() => setPendingJump(null)} />}
+        {askStart && readerReady && !readOffer && !pendingJump && !startOverOpen && startingChapters.length > 1 && (
+          <StartingPlace chapters={startingChapters} unit={unit} onChoose={chooseStartingPlace} onStart={closeStartingPlace} />
+        )}
+        {pendingJump && (
+          <JumpNote
+            chapter={(manifest && chapterNumber(manifest.atoms, pendingJump.chapter - 1)) ?? pendingJump.chapter}
+            readThrough={manifest ? chaptersFinished(manifest.atoms, pendingJump.chapter - 1) : undefined}
+            onFollow={followJump}
+            onFollowRead={mapped ? followJumpRead : undefined}
+            onStay={() => setPendingJump(null)}
+          />
+        )}
         {startOverOpen && (
           <StartOverNote
             busy={startOverBusy}
@@ -1974,6 +2077,7 @@ export function ReaderPage({
           prepareReadContext={prepareReadContext}
           onChaptersRead={() => void refreshReadShare()}
           memoryRefresh={memoryRefresh}
+          finishedChapters={pos?.bookmark}
           readVersion={readVersion}
           throughCurrentPage={readFrontier !== null}
           readingPass={readingPass}
