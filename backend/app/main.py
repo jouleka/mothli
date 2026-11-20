@@ -412,6 +412,10 @@ def create_app(
                     reader_usd_per_month=settings.hosted_reader_usd_per_month,
                     platform_usd_per_day=settings.hosted_platform_usd_per_day,
                     notes_usd_per_day=settings.hosted_story_memory_usd_per_day,
+                    background_usd_per_day=settings.hosted_background_usd_per_day,
+                    reader_background_usd_per_day=settings.hosted_reader_background_usd_per_day,
+                    reader_background_usd_per_month=(
+                        settings.hosted_reader_background_usd_per_month),
                 )
                 if _platform_ai_configured(settings):
                     platform = build_platform_clients(settings)

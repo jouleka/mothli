@@ -150,6 +150,18 @@ class Settings(BaseSettings):
     hosted_reader_usd_per_day: float = Field(default=0.10, ge=0, le=1000, allow_inf_nan=False)
     hosted_reader_usd_per_month: float = Field(default=2.00, ge=0, le=10000, allow_inf_nan=False)
     hosted_platform_usd_per_day: float = Field(default=15.00, ge=0, le=100000, allow_inf_nan=False)
+    # ADR 0041 section 6, amended 20 November 2026: a reader's allowance counts only their
+    # conversation. Mothli's background work for a reader (their chapter notes, what it remembers
+    # of them) is Mothli's cost: the budget of all readers' background work together per UTC day,
+    # and the guards against abuse per reader per UTC day and month, which a reader who is really
+    # reading never meets (60 chapters marked read on day one use about $0.42 of the $1.00 day).
+    # Past either the work waits for the next UTC day without a word to the reader.
+    hosted_background_usd_per_day: float = Field(default=3.00, ge=0, le=100000,
+                                                 allow_inf_nan=False)
+    hosted_reader_background_usd_per_day: float = Field(default=1.00, ge=0, le=1000,
+                                                        allow_inf_nan=False)
+    hosted_reader_background_usd_per_month: float = Field(default=5.00, ge=0, le=10000,
+                                                          allow_inf_nan=False)
     # ADR 0042 sections 3 and 6, ADR 0044: story memory in hosted mode, built by the worker's
     # story_memory jobs for every reader's book, one chapter ahead of their reading, once per book
     # file. HOSTED_STORY_MEMORY turns the feature on at all.
