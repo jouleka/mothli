@@ -72,17 +72,12 @@ def book_names_in(question: str, read_text: str) -> list[str]:
     return names
 
 
-def conversation_retrieval_question(question: str, history: list[ConversationMessage], frontier: int,
-                                    read_text: str | None = None) -> str:
-    """The words passages are searched by: the latest question, then the last two messages.
+def conversation_retrieval_question(question: str, history: list[ConversationMessage], frontier: int) -> str:
+    """Prioritize the latest question; only a small recent reference window aids retrieval.
 
-    Passages are ranked first by the names they share with these words, so a name in the last
-    reply would outrank the one asked about. Given the read text, a question naming someone
-    the book knows is searched on alone; the earlier messages only help a question with no name
-    of its own ("what about him?", "and then?").
+    The latest question is the first line (it is a single line); retrieve_ask_sources ranks
+    its words ahead of the earlier messages' when the question names someone.
     """
-    if read_text is not None and book_names_in(question, read_text):
-        return question
     recent = [message.content for message in history if message.as_of_chapter <= frontier][-2:]
     return question + ("\n" + " ".join(recent)[:1200] if recent else "")
 
@@ -370,8 +365,15 @@ def retrieve_ask_sources(
     candidate_pool: bool = False,
     prefer_recent: bool = True,
     known_names: Iterable[str] = (),
+    lead_names: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
     """Fuse full completed-text lexical windows with independently ranked semantic hits.
+
+    Passages rank first by the names they share, then by the words. ``lead_names`` are the names
+    the latest question asks about (see ``book_names_in``). Given, only they count as names, and
+    the latest question's own words rank next, so the names and words of earlier messages folded
+    into ``question`` only break the ties left: they can never outrank the name asked about.
+    Without them (a question with no name of its own), the earlier messages lead as before.
 
     Call with chapters/raw_text from the SAME bookmark-bounded view. The redundant ordinal check
     occurs before any text load, keeping future chapters out even if a caller supplies extra metadata.
@@ -383,7 +385,13 @@ def retrieve_ask_sources(
     # Words are matched with the accents off their Latin letters: a reader types "Adelaida" for
     # the book's "Adelaïda". Only the comparison folds; every passage keeps its exact text.
     query_words = content_words(fold_accents(question)) - _QUESTION_WORDS
-    query_names = content_words(fold_accents(" ".join(word.text for word in proper_words(question)))) & query_words
+    lead_names = " ".join(lead_names)
+    query_names = content_words(fold_accents(
+        lead_names or " ".join(word.text for word in proper_words(question)))) & query_words
+    # With lead names, the latest question's own words come next (its first line: see
+    # conversation_retrieval_question); the earlier messages' words only break the ties left.
+    latest_words = (content_words(fold_accents(question.split("\n", 1)[0])) - _QUESTION_WORDS
+                    if lead_names else frozenset())
     visible_name_parts = set(word_tokens(" ".join(known_names), min_length=2))
     query_name_parts = (set(word_tokens(question)) & visible_name_parts) or {
         normalize_text(word.text) for word in proper_words(question)
@@ -438,7 +446,8 @@ def retrieve_ask_sources(
         shared = len(query_words & terms)
         # Preserve the named subject before generic wording such as 'the text read so far'. The
         # independent semantic ranking below still retrieves paraphrases with no shared words.
-        quality = (len(query_names & terms), shared, shared / max(len(terms), 1))
+        quality = (len(query_names & terms), len(latest_words & terms), shared,
+                   shared / max(len(terms), 1))
         atom = atoms.get(chapter_key, {})
         source = {
             "ordinal": int(ordinal), "chapter_key": chapter_key,
@@ -452,7 +461,7 @@ def retrieve_ask_sources(
 
     def offer(text, chapter_key, ordinal, *, start=0):
         item = candidate(text, chapter_key, ordinal, start=start)
-        if item is None or not item[0][1]:
+        if item is None or not item[0][2]:
             return
         if ordinal == recent_ordinal:
             if len(recent_candidates) < 4:

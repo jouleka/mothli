@@ -22,7 +22,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from app.ask import (AskRetrievalLimit, ConversationMessage, ask_prompt, conversation_question,
+from app.ask import (AskRetrievalLimit, ConversationMessage, ask_prompt, book_names_in, conversation_question,
                      conversation_retrieval_question, retrieve_ask_sources, source_facts)
 from app.ask_context import complete_ask_context
 from app.ask_evidence import AskEvidenceError
@@ -522,8 +522,7 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
     history = [ConversationMessage(role=turn["role"], content=turn["content"][:2000], as_of_chapter=eff)
                for turn in earlier[-HISTORY_TURNS:]]
     question = conversation_question(body.question, history, eff)
-    query = conversation_retrieval_question(body.question, history, eff,
-                                            read_text="\n".join(ch["text"] for ch in chapters))
+    query = conversation_retrieval_question(body.question, history, eff)
     timings, calls, lock = {}, [], Lock()
     writer = conversation_writer(client, settings)
 
@@ -639,7 +638,8 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
             texts = {ch["key"]: ch["text"] for ch in chapters}
             pool_sources = compact_candidates(retrieve_ask_sources(
                 query, bookmark=reach, chapters=chapters, read_chapter=texts.get, semantic_hits=hits,
-                atoms=atoms, candidate_pool=True, prefer_recent=not asks_who, known_names=known_names))
+                atoms=atoms, candidate_pool=True, prefer_recent=not asks_who, known_names=known_names,
+                lead_names=book_names_in(body.question, permitted_text)))
             # Retrieval already ordered the pool by priority: its first six bodies, plus the
             # exact neighbouring context the existing completion step adds within that limit.
             # No model chooses among them here, so the next few in retrieval order are kept

@@ -12,7 +12,8 @@ from time import perf_counter
 from fastapi import HTTPException
 
 from app.ask import (AskDraft, AskRetrievalLimit, AskSafetyError, ask_prompt,
-    conversation_question, conversation_retrieval_question, retrieve_ask_sources, source_facts)
+    book_names_in, conversation_question, conversation_retrieval_question, retrieve_ask_sources,
+    source_facts)
 from app.ask_context import complete_ask_context
 from app.ask_evidence import AskEvidenceError
 from app.ask_selection import SOURCE_SELECTION_SYSTEM, SourceSelection, select_sources_bounded
@@ -87,8 +88,7 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
     if prose:
         draft_system = PROSE_DRAFT_SYSTEM
     question = conversation_question(reader_message, body.history, eff)
-    query = conversation_retrieval_question(reader_message, body.history, eff,
-                                            read_text="\n".join(ch["text"] for ch in chapters))
+    query = conversation_retrieval_question(reader_message, body.history, eff)
     calls = []
     reviewer = copy(client)
     reviewer.conversation_review_effort = settings.reader_conversation_review_effort
@@ -259,7 +259,8 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         else:
             candidates = retrieve_ask_sources(query, bookmark=eff, chapters=chapters,
                 read_chapter=texts.get, semantic_hits=scene_hits, atoms=atoms, candidate_pool=True,
-                prefer_recent=route != "identity", known_names=known_names)
+                prefer_recent=route != "identity", known_names=known_names,
+                lead_names=book_names_in(reader_message, permitted_text))
         candidates = compact_candidates(candidates)
         timings["retrieval"] = round((perf_counter() - retrieval_started) * 1000, 2)
         if not candidates:
