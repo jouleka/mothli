@@ -66,7 +66,8 @@ WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "job_attempts": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "chapters": frozenset({"SELECT", "INSERT"}),
     "chapter_summaries": frozenset({"INSERT"}),
-    # Read only: the claim skips a reader at a cap (``spend.reader_cap_reached``). Every living
+    # Read only: the claim holds back a reader past their background guard
+    # (``spend.background_guard_reached``). Every living
     # job's money is reserved, noted and settled through the tenant role (``companion/spend.py``,
     # ADR 0041 section 5); the worker's own writes went with the book job (ADR 0043).
     "cost_ledger": frozenset({"SELECT"}),
@@ -112,6 +113,8 @@ WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
 TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
     "companion_platform_reserve(numeric,numeric)": frozenset({"EXECUTE"}),
     "companion_platform_adjust(date,numeric,numeric)": frozenset({"EXECUTE"}),
+    # Migration 0036: whether all readers' background work today is under its budget, yes or no.
+    "companion_background_open(numeric)": frozenset({"EXECUTE"}),
     "story_memory_door(uuid)": frozenset({"EXECUTE"}),
     "story_memory_later_names(uuid,integer,text[],text[],text[],text[],text[],text[])":
         frozenset({"EXECUTE"}),

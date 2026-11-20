@@ -10,6 +10,7 @@ while a model answers. Stand-in writer and Jev only: no model is called and noth
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import threading
@@ -66,10 +67,7 @@ def restore_caps():
     """The app's lifespan sets this process's caps from its settings; put them back after."""
     before = spend_limits()
     yield
-    set_spend_limits(reader_usd_per_day=before.reader_usd_per_day,
-                     reader_usd_per_month=before.reader_usd_per_month,
-                     platform_usd_per_day=before.platform_usd_per_day,
-                     notes_usd_per_day=before.notes_usd_per_day)
+    set_spend_limits(**dataclasses.asdict(before))
 
 
 @pytest.fixture()

@@ -329,15 +329,13 @@ class PostgresWorkerRepository:
 
     @staticmethod
     def _companion_capped(conn: psycopg.Connection, owner_id: uuid.UUID) -> bool:
-        """Whether the companion's ``reserve_cost`` would refuse this owner's next call for their
-        day or month cap: the same SQL and the same comparison (``reader_cap_reached``), read
+        """Whether the companion's ``reserve_cost`` would refuse this owner's next background call
+        for their background guard (Mothli's cost, never their own allowance: ADR 0041 section
+        6, amended): the same SQL and the same comparison (``background_guard_reached``), read
         under the owner's spend lock, so the claim and the first paid call cannot disagree."""
-        from app.hosted.companion.spend import reader_cap_reached
+        from app.hosted.companion.spend import background_guard_reached
 
-        try:
-            return reader_cap_reached(conn, owner_id) is not None
-        except LookupError as exc:
-            raise WorkerConfigurationError("owner limit policy is unavailable") from exc
+        return background_guard_reached(conn, owner_id) is not None
 
     def claim_next(
         self,
@@ -349,11 +347,12 @@ class PostgresWorkerRepository:
         """Lease the next job, of ``kinds`` only when given (the kinds this worker can run).
 
         A companion job is skipped while another of the same owner, kind and book is leased or
-        running, while any platform provider pause is in force, and while its owner is at a
-        companion cap; a capped owner's job is moved to the start of the next UTC day. A
-        ``story_memory`` job is never held for its owner's cap: its spend is the notes
-        account's, not the reader's (ADR 0044 section 5); the run itself applies the chapter
-        guards and the notes ceiling, and waits for the next UTC day past either.
+        running, while any platform provider pause is in force, and while its owner is past
+        their background guard; such an owner's job is moved to the start of the next UTC day.
+        No companion job is held for its owner's own allowance, which counts only their
+        conversation (ADR 0041 section 6, amended). A ``story_memory`` job is never held here:
+        its spend is the notes account's (ADR 0044 section 5); the run itself applies the
+        chapter guards and the notes ceiling, and waits for the next UTC day past either.
         """
         self._validate_worker_id(worker_id)
         lease_seconds = _seconds(lease_for)
@@ -401,7 +400,8 @@ class PostgresWorkerRepository:
                 if row["kind"] in COMPANION_KINDS - {"story_memory"} and self._companion_capped(
                     conn, row["owner_id"]
                 ):
-                    # Nothing of theirs could be paid for before the next UTC day.
+                    # No background work of theirs is paid for before the next UTC day; their
+                    # chat is not affected.
                     conn.execute(
                         """
                         UPDATE public.jobs

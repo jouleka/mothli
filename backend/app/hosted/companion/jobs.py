@@ -226,9 +226,14 @@ class _Lease:
 
 
 class _LeasedCatalog(HostedCompanionCatalog):
-    """The claimed owner's catalog, which holds the job's lease before it spends or stores."""
+    """The claimed owner's catalog, which holds the job's lease before it spends or stores.
+
+    What it spends is Mothli's background work for the reader (ADR 0041 section 6, amended): marked
+    so in the ledger, held by the reader's background guards and the background budget, never
+    counted against the reader's own allowance (``spend.py``)."""
 
     __slots__ = ("_lease",)
+    _BACKGROUND = True
 
     def __init__(self, dsn: str, owner_id: OwnerId, lease: _Lease) -> None:
         super().__init__(dsn, owner_id)
@@ -336,9 +341,10 @@ def _guarded(repository: PostgresWorkerRepository, owner_id, ordinal: int, setti
 
 
 def _until_tomorrow(exc: BaseException) -> bool:
-    """Whether a run's failure is its first call refused for a day or month cap (the notes
-    ceiling, or the platform's day): nothing was spent, and only the next UTC day can admit it.
-    Not the calls in flight (retried soon) nor a per-call ceiling (the chapter's own size)."""
+    """Whether a run's failure is a call refused for a day or month cap (the notes ceiling, a
+    reader's background guard, the background budget, or the platform's day): nothing was spent
+    on that call, and only the next UTC day can admit it. Not the calls in flight (retried soon)
+    nor a per-call ceiling (the chapter's own size)."""
     cause = exc.__cause__
     return (isinstance(exc, CostCeilingExceeded) and isinstance(cause, AllowanceReached)
             and cause.limit != "calls_in_flight")
@@ -390,7 +396,12 @@ class CompanionJobs:
         set_spend_limits(reader_usd_per_day=settings.hosted_reader_usd_per_day,
                          reader_usd_per_month=settings.hosted_reader_usd_per_month,
                          platform_usd_per_day=settings.hosted_platform_usd_per_day,
-                         notes_usd_per_day=settings.hosted_story_memory_usd_per_day)
+                         notes_usd_per_day=settings.hosted_story_memory_usd_per_day,
+                         background_usd_per_day=settings.hosted_background_usd_per_day,
+                         reader_background_usd_per_day=(
+                             settings.hosted_reader_background_usd_per_day),
+                         reader_background_usd_per_month=(
+                             settings.hosted_reader_background_usd_per_month))
         return cls(tenant_dsn=tenant_dsn, settings=settings,
                    client=build_platform_clients(settings),
                    storage=build_object_storage(settings),
@@ -432,10 +443,17 @@ class CompanionJobs:
                     SanitizedFailure("provider_rejected", retryable=True)) from None
             raise HandledJobFailure(
                 SanitizedFailure("provider_unavailable", retryable=True)) from None
-        except CostCeilingExceeded:
+        except CostCeilingExceeded as exc:
             if lease.stopped():
                 return
-            # A cap: the next claim moves a capped reader's jobs to the next UTC day.
+            if _until_tomorrow(exc):
+                # The reader's background guard, the background budget or the platform's day:
+                # the work waits for the next UTC day, silently, and the reader's chat goes on.
+                # Notes kept so far stay; a recollection is asked for again by the next reply.
+                if claim.kind == "chapter_notes":
+                    ChapterNotesQueue(self._dsn, OwnerId(claim.owner_id)).ensure(
+                        str(claim.book_id), tomorrow=True)
+                return
             raise HandledJobFailure(SanitizedFailure("budget_exceeded", retryable=True)) from None
         except Exception:
             if lease.stopped():

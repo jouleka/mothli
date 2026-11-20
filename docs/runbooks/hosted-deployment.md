@@ -210,6 +210,17 @@ first to have at most 30 new chapters made a day, 300 a month, and 5 new book fi
 count. All five settings are in the caps section of `deploy/app.env`, commented out at their
 defaults; raise one if a real reader ever reaches it.
 
+**Each reader's own background work.** Beside the shared story memory, the worker writes each
+reader's own chapter notes and what Mothli remembers of them. That is Mothli's cost too, never the
+reader's allowance: a reader's day and month count only their conversation (ADR 0041 section 6,
+amended 20 November 2026). It is still in the reader's ledger and counts toward the platform's
+daily cap. It is held by a day budget for all readers together, `HOSTED_BACKGROUND_USD_PER_DAY`
+($3), and by guards against abuse per reader, `HOSTED_READER_BACKGROUND_USD_PER_DAY` ($1) and
+`HOSTED_READER_BACKGROUND_USD_PER_MONTH` ($5); a reader who marks 60 chapters read on their first
+day uses about $0.42. Past any of them the work waits for the next day and the reader is told
+nothing; their chat goes on. Note that the platform's day ($15) must leave room for the chat
+beside story memory ($10) and this budget ($3).
+
 ## 5. Restoring
 
 Only into an empty Mothli (a new server, or after removing everything). You need the backup

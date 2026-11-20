@@ -19,7 +19,16 @@ with allowance left. A reply a reader is waiting on is admitted once, by its fir
 calls (the sentence checks and second looks) are then never refused for a dollar cap, so a reply
 that began under the cap is finished and not cut off mid-way (``ReplyCatalog`` in ``store.py``).
 A reader can therefore end a day past the cap by at most the replies under way when it was
-reached; background work is checked call by call and has no such allowance.
+reached.
+
+A reader's allowance counts only their conversation (ADR 0041 section 6, amended 20 November
+2026). Mothli's background work for them, their chapter notes and recollections, is paid through
+a store marked ``_BACKGROUND`` (the worker's catalog): its rows carry ``background`` (migration
+0036), the reader's day, month and lifetime never count them, and they are held instead by the
+reader's background guards (``HOSTED_READER_BACKGROUND_USD_PER_DAY`` and ``..._PER_MONTH``) and by
+the budget of every reader's background work for the day (``HOSTED_BACKGROUND_USD_PER_DAY``),
+checked call by call. The platform's day counts them as it counts every call. Calls in flight are
+counted on each side apart.
 
 Story memory is never a reader's spend (ADR 0044 section 5): a chapter's calls are reserved by a
 store bound to the notes account (``NotesCatalog`` in ``store.py``) against the edition being
@@ -60,23 +69,27 @@ _IN_FLIGHT_SINCE = f"(now() - interval '{IN_FLIGHT_MINUTES} minutes')"
 
 # The reader's companion day and month as they count against the caps: the ledger's companion
 # rows since the start of the UTC day (month), plus companion reservations still open after
-# IN_FLIGHT_MINUTES that were made in it. One definition, read by ``reserve_cost`` and by the
-# worker's claim (``app.hosted.jobs``), which skips a reader whose allowance is used up. Built
-# when it is used, from the module's current bounds.
-def _reader_spent() -> str:
+# IN_FLIGHT_MINUTES that were made in it. Of one side only: the reader's own conversation
+# (``background`` false), which their allowance counts, or Mothli's background work for them
+# (``background`` true), which only their guards count (migration 0036). One definition, read by
+# ``reserve_cost`` and, for the background side, by the worker's claim (``app.hosted.jobs``),
+# which moves a guarded reader's background job to the next UTC day. Built when it is used, from
+# the module's current bounds.
+def _spent(background: bool) -> str:
+    side = "background" if background else "NOT background"
     return f"""
     COALESCE((SELECT sum(usd) FROM public.cost_ledger
-      WHERE owner_id=%(o)s AND purpose IS NOT NULL
+      WHERE owner_id=%(o)s AND purpose IS NOT NULL AND {side}
         AND recorded_at >= {_DAY_START}),0)
     + COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
-      WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL
+      WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL AND {side}
         AND created_at <= {_IN_FLIGHT_SINCE}
         AND created_at >= {_DAY_START}),0) AS day,
     COALESCE((SELECT sum(usd) FROM public.cost_ledger
-      WHERE owner_id=%(o)s AND purpose IS NOT NULL
+      WHERE owner_id=%(o)s AND purpose IS NOT NULL AND {side}
         AND recorded_at >= {_MONTH_START}),0)
     + COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
-      WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL
+      WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL AND {side}
         AND created_at <= {_IN_FLIGHT_SINCE}
         AND created_at >= {_MONTH_START}),0) AS month"""
 
@@ -84,14 +97,21 @@ def _reader_spent() -> str:
 @dataclass(frozen=True)
 class SpendLimits:
     """The caps from the environment (``HOSTED_READER_USD_PER_DAY``, ``..._PER_MONTH``,
-    ``HOSTED_PLATFORM_USD_PER_DAY``, ``HOSTED_STORY_MEMORY_USD_PER_DAY``). The reader's two are
-    defaults for a reader whose ``owner_limits`` row leaves its own cap NULL; the last is the
-    notes account's day ceiling where its row leaves its own NULL (ADR 0044 section 5)."""
+    ``HOSTED_PLATFORM_USD_PER_DAY``, ``HOSTED_STORY_MEMORY_USD_PER_DAY``,
+    ``HOSTED_BACKGROUND_USD_PER_DAY``, ``HOSTED_READER_BACKGROUND_USD_PER_DAY`` and
+    ``..._PER_MONTH``). The reader's two are defaults for a reader whose ``owner_limits`` row
+    leaves its own cap NULL; the notes ceiling is the notes account's day cap where its row leaves
+    its own NULL (ADR 0044 section 5). The last three hold Mothli's background work for readers
+    (ADR 0041 section 6, amended): all readers' together in a UTC day, and one reader's in a UTC
+    day and month. No reader ever sees them."""
 
     reader_usd_per_day: Decimal = Decimal("0.10")
     reader_usd_per_month: Decimal = Decimal("2.00")
     platform_usd_per_day: Decimal = Decimal("15.00")
     notes_usd_per_day: Decimal = Decimal("10.00")
+    background_usd_per_day: Decimal = Decimal("3.00")
+    reader_background_usd_per_day: Decimal = Decimal("1.00")
+    reader_background_usd_per_month: Decimal = Decimal("5.00")
 
 
 _limits_guard = threading.Lock()
@@ -105,11 +125,16 @@ def _money(value) -> Decimal:
 
 
 def set_spend_limits(*, reader_usd_per_day, reader_usd_per_month, platform_usd_per_day,
-                     notes_usd_per_day=SpendLimits.notes_usd_per_day) -> None:
+                     notes_usd_per_day=SpendLimits.notes_usd_per_day,
+                     background_usd_per_day=SpendLimits.background_usd_per_day,
+                     reader_background_usd_per_day=SpendLimits.reader_background_usd_per_day,
+                     reader_background_usd_per_month=SpendLimits.reader_background_usd_per_month,
+                     ) -> None:
     """Set this process's caps from settings (startup only, like the connection limit)."""
     global _limits
-    values = [_money(value) for value in (reader_usd_per_day, reader_usd_per_month,
-                                          platform_usd_per_day, notes_usd_per_day)]
+    values = [_money(value) for value in (
+        reader_usd_per_day, reader_usd_per_month, platform_usd_per_day, notes_usd_per_day,
+        background_usd_per_day, reader_background_usd_per_day, reader_background_usd_per_month)]
     if any(not value.is_finite() or value < 0 for value in values):
         raise ValueError("spend caps must be finite and non-negative")
     with _limits_guard:
@@ -138,18 +163,24 @@ def _reader_cap_reached(used, policy, limits, *, notes: bool = False) -> str | N
     return None
 
 
-def reader_cap_reached(conn, owner_id) -> str | None:
-    """"day" or "month" when ``reserve_cost`` would refuse this owner's next call for that cap
-    (a reply already under way aside), else None. Read on the caller's connection, which must
-    return rows as dicts: the worker's claim calls it under the owner's spend lock. Raises
-    ``LookupError`` when the owner has no limit policy."""
-    row = conn.execute(
-        f"""SELECT policy.max_spend_usd_per_day,policy.max_spend_usd_per_month,{_reader_spent()}
-            FROM public.owner_limits AS policy WHERE policy.owner_id=%(o)s""",
-        {"o": owner_id}).fetchone()
-    if row is None:
-        raise LookupError("owner limit policy is unavailable")
-    return _reader_cap_reached(row, row, _limits)
+def _background_guard_reached(used, limits) -> str | None:
+    """"background_day" or "background_month" when this reader's background work (Mothli's cost)
+    has used up their guard, else None. Set far above what reading uses (ADR 0041 section 6,
+    amended): it is there for someone who would make Mothli spend without bound."""
+    if used["day"] >= limits.reader_background_usd_per_day:
+        return "background_day"
+    if used["month"] >= limits.reader_background_usd_per_month:
+        return "background_month"
+    return None
+
+
+def background_guard_reached(conn, owner_id) -> str | None:
+    """"background_day" or "background_month" when ``reserve_cost`` would refuse this owner's
+    next background call for that guard, else None. Read on the caller's connection, which must
+    return rows as dicts: the worker's claim calls it under the owner's spend lock. The reader's
+    own allowance (their conversation) is never read here."""
+    row = conn.execute(f"SELECT {_spent(True)}", {"o": owner_id}).fetchone()
+    return _background_guard_reached(row, _limits)
 
 
 class AllowanceReached(RuntimeError):
@@ -171,6 +202,12 @@ class PlatformAllowanceReached(AllowanceReached):
     """The platform's own day: every reader waits until the next UTC day."""
 
 
+class BackgroundAllowanceReached(AllowanceReached):
+    """Mothli's background work for a reader held: their guard for the day or month, or the
+    budget of every reader's background work for the day. Never shown to a reader: the work
+    waits for the next UTC day and the chat goes on."""
+
+
 # Said by Mothli itself, as it speaks in the chat: the first person, and no amount or setting.
 _DAY = ("We’ve talked a lot today, so I’m resting until tomorrow. "
         "Your book and your place are right here.")
@@ -181,6 +218,8 @@ _LIFETIME = ("We’ve used up the conversations this account has. "
 _BUSY = "Give me a moment, I’m still on your last question. Then ask again."
 _PLATFORM = ("I’m resting for the rest of today and I’ll be back tomorrow. "
              "Your book and your place are right here.")
+# For the logs only: background work is never mentioned to a reader.
+_BACKGROUND = "background work waits for the next UTC day"
 
 
 def _check_tokens(value, what):
@@ -214,6 +253,10 @@ class SpendStore(OwnerBoundAdapter):
     # Whether this store pays for story memory as the notes account (``NotesCatalog``), whose
     # default caps are the notes ceiling's rather than a reader's.
     _NOTES = False
+    # Whether this store pays for Mothli's background work for its reader (the worker's catalog
+    # for chapter notes and recollections, ``app.hosted.companion.jobs``): marked so, held by the
+    # background guards and budget, and never counted against the reader's own allowance.
+    _BACKGROUND = False
 
     # ---- which spend a book id names --------------------------------------------------------
     def _spend_book(self, conn, book_id):
@@ -246,7 +289,7 @@ class SpendStore(OwnerBoundAdapter):
         row = conn.execute(
             f"""SELECT id,book_id,book_incarnation,chapter_ordinal,phase,model,purpose,
                        reserved_input_tokens,reserved_output_tokens,reserved_usd,idempotency_key,
-                       (created_at AT TIME ZONE 'UTC')::date AS spend_day
+                       background,(created_at AT TIME ZONE 'UTC')::date AS spend_day
                 FROM public.cost_reservations
                 WHERE owner_id=%s AND id=%s AND {book_clause}
                   AND state='reserved' AND purpose IS NOT NULL
@@ -266,6 +309,11 @@ class SpendStore(OwnerBoundAdapter):
         ``PlatformAllowanceReached`` (both ``RuntimeError``) at a cap, ``ValueError`` for an
         unknown book or a malformed value; nothing is reserved then. A later call of a reply
         already admitted (module docstring) is refused only for the calls in flight.
+
+        A background store's call (``_BACKGROUND``) is Mothli's: the reader's day, month and
+        lifetime allowance are not read, and its own guards and the budget of all readers'
+        background work refuse it instead, with ``BackgroundAllowanceReached``. The calls in
+        flight are counted on each side apart, so background work never makes the chat wait.
         """
         for value, what in ((input_tokens, "input_tokens"), (output_tokens, "output_tokens"),
                             (max_input_tokens, "max_input_tokens"),
@@ -289,6 +337,8 @@ class SpendStore(OwnerBoundAdapter):
         limits = _limits
         admitted = getattr(self, "_admitted", None)       # set on a ReplyCatalog only
         under_way = admitted is not None and admitted.is_set()
+        background = self._BACKGROUND
+        side = "background" if background else "NOT background"
         reservation = uuid.uuid4()
         owner = self._owner.value
         with self._transaction() as conn:
@@ -304,17 +354,24 @@ class SpendStore(OwnerBoundAdapter):
                 f"""SELECT
                       (SELECT count(*) FROM public.cost_reservations
                         WHERE owner_id=%(o)s AND state='reserved' AND purpose IS NOT NULL
-                          AND created_at > {_IN_FLIGHT_SINCE}) AS in_flight,
+                          AND {side} AND created_at > {_IN_FLIGHT_SINCE}) AS in_flight,
                       COALESCE((SELECT sum(reserved_usd) FROM public.cost_reservations
-                        WHERE owner_id=%(o)s AND state='reserved'),0) AS held_all,
-                      {_reader_spent()},
+                        WHERE owner_id=%(o)s AND state='reserved' AND NOT background),0)
+                        AS held_all,
+                      {_spent(background)},
                       COALESCE((SELECT sum(usd) FROM public.cost_ledger
-                        WHERE owner_id=%(o)s),0) AS lifetime""",
+                        WHERE owner_id=%(o)s AND NOT background),0) AS lifetime""",
                 {"o": owner}).fetchone()
-            reached = _reader_cap_reached(used, policy, limits, notes=self._NOTES)
             lifetime_cap = policy["max_spend_usd"]
-            if under_way:
-                pass                                   # admitted with its first call: it finishes
+            if background:
+                guard = _background_guard_reached(used, limits)
+                if guard is not None:
+                    raise BackgroundAllowanceReached(guard, _BACKGROUND)
+                reached = None
+            else:
+                reached = _reader_cap_reached(used, policy, limits, notes=self._NOTES)
+            if under_way or background:
+                pass            # admitted with its first call: it finishes; or not the reader's
             elif reached == "day":
                 raise ReaderAllowanceReached("day", _DAY)
             elif reached == "month":
@@ -324,6 +381,10 @@ class SpendStore(OwnerBoundAdapter):
                 raise ReaderAllowanceReached("lifetime", _LIFETIME)
             if used["in_flight"] >= policy["max_companion_calls_in_flight"]:
                 raise ReaderAllowanceReached("calls_in_flight", _BUSY, code="companion_busy")
+            if background and not conn.execute(
+                    "SELECT public.companion_background_open(%s) AS open",
+                    (limits.background_usd_per_day,)).fetchone()["open"]:
+                raise BackgroundAllowanceReached("background_budget", _BACKGROUND)
             if under_way:
                 # Recorded against the platform's day like any call, but not refused by it.
                 conn.execute(
@@ -338,10 +399,11 @@ class SpendStore(OwnerBoundAdapter):
                 """INSERT INTO public.cost_reservations
                      (owner_id,id,book_id,book_incarnation,chapter_ordinal,phase,model,
                       reserved_input_tokens,reserved_output_tokens,reserved_usd,idempotency_key,
-                      purpose)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                      purpose,background)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (owner, reservation, book, incarnation, chapter_ordinal, kind, model,
-                 input_tokens, output_tokens, amount, f"companion:{reservation.hex}", phase))
+                 input_tokens, output_tokens, amount, f"companion:{reservation.hex}", phase,
+                 background))
         if admitted is not None:
             admitted.set()
         return reservation.hex
@@ -377,13 +439,13 @@ class SpendStore(OwnerBoundAdapter):
             conn.execute(
                 """INSERT INTO public.cost_ledger
                      (owner_id,book_id,book_incarnation,chapter_ordinal,phase,model,input_tokens,
-                      output_tokens,usd,idempotency_key,purpose)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                      output_tokens,usd,idempotency_key,purpose,background)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (self._owner.value, row["book_id"], row["book_incarnation"],
                  row["chapter_ordinal"], row["phase"], row["model"],
                  row["reserved_input_tokens"], row["reserved_output_tokens"],
                  row["reserved_usd"], row["idempotency_key"],
-                 _settled_purpose(phase, row["purpose"])))
+                 _settled_purpose(phase, row["purpose"]), row["background"]))
             conn.execute(
                 """UPDATE public.cost_reservations SET state='settled',settled_at=now()
                    WHERE owner_id=%s AND id=%s AND state='reserved'""",
