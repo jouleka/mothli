@@ -20,7 +20,7 @@ import {
 } from "../api";
 import { AskTheBook, type AskSession, type CompanionSeed, type CompanionTab } from "./AskTheBook";
 import { MothCorner, WelcomeBackCard, type CornerNote } from "./MothMoments";
-import { crossedMilestone, milestoneLine, recordReadingDay, unlockCast } from "../journey/journey";
+import { crossedMilestone, milestoneLine, readingStreak, recordReadingDay, unlockCast } from "../journey/journey";
 import { Moth } from "../ui/Moth";
 import "./reader.css";
 import "./panels.css";
@@ -565,6 +565,9 @@ export function ReaderPage({
     readReporterRef.current = readReporter;
     let mapOff = false;
     const pagesRead = new PagesRead(async (start, end, skimmed) => {
+      // A page stayed on long enough to read is a reading day. Opening a book, turning pages
+      // quickly, or saying chapters were read elsewhere is not.
+      if (!dead && !skimmed) setStreak(recordReadingDay());
       if (dead || mapOff || !api.readPage || start.position_epoch !== positionEpochRef.current) return;
       try {
         const point = await api.readPage(bookId, start, end, skimmed);
@@ -1597,9 +1600,10 @@ export function ReaderPage({
     `${unit} ${(manifest && chapterNumber(manifest.atoms, chapter - 1)) ?? chapter}`;
   const throughLabel = pos && pos.bookmark > 0 ? completedTitle(pos.bookmark) : "";
 
-  // Journey: the streak on open, and Mothli's moments when a chapter is finished.
+  // Journey: the streak so far on open (a day counts once a page is read, not for opening a
+  // book), and Mothli's moments when a chapter is finished.
   useEffect(() => {
-    if (readerReady) setStreak(recordReadingDay());
+    if (readerReady) setStreak(readingStreak());
   }, [readerReady]);
   const pushNote = useCallback((note: CornerNote) => {
     setCornerNotes((current) => [note, ...current.filter((item) => item.id !== note.id)].slice(0, 3));

@@ -965,6 +965,37 @@ describe("a book opened here for the first time", () => {
   });
 });
 
+// 2026-11-20 recheck: the streak said "1" as soon as the book opened, before anything was read.
+describe("the reading streak", () => {
+  test("opening a book is not a reading day; a page read is", async () => {
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      render(<ReaderPage bookId="b" onBack={() => {}} />);
+      await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+      expect(screen.queryByText("Reading streak:")).toBeNull();
+      const doc = document.implementation.createHTMLDocument("chapter");
+      doc.body.innerHTML = "<p>Some words of chapter two to read.</p><p>And the next page.</p>";
+      const page = (index: number) => {
+        const range = doc.createRange();
+        range.selectNodeContents(doc.querySelectorAll("p")[index]);
+        return range;
+      };
+      const view = document.querySelector("foliate-view") as TestFoliateView;
+      act(() => view.dispatchEvent(new CustomEvent("relocate", {
+        detail: { cfi: "epubcfi(/6/4!/4/2/1:0)", section: { current: 1 }, range: page(0) } })));
+      expect(screen.queryByText("Reading streak:")).toBeNull();
+      now += 60_000;      // a minute on that page, then the next one
+      act(() => view.dispatchEvent(new CustomEvent("relocate", {
+        detail: { cfi: "epubcfi(/6/4!/4/4/1:0)", section: { current: 1 }, range: page(1) } })));
+      await waitFor(() => expect(screen.getByText("Reading streak:").parentElement?.textContent).toMatch(/1$/));
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
+
 const hostedPoint = { id: "a".repeat(64), atom: 2, offset: 0, position_epoch: 0, available_chapter: 2 };
 
 describe("a server without Mothli's chat", () => {
