@@ -707,7 +707,12 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
                                         read_through,
                                         mem.completion_frontier(manifest["atoms"])))
 
-            prompt = ask_prompt(question, sources, frontier=reach).removesuffix(PROMPT_END)
+            # The writer is told the last chapter read to its end: one only begun, or only turned
+            # to (its heading read), is not completed. Never more than ``reach``, which stays the
+            # search's bound.
+            completed = (max((ch["ordinal"] for ch in chapters if ch.get("whole")), default=0)
+                         if settings.reader_read_map else min(eff, state["bookmark"]))
+            prompt = ask_prompt(question, sources, frontier=completed).removesuffix(PROMPT_END)
             if not sources:
                 prompt += "(none found for this message)"
             if notes:

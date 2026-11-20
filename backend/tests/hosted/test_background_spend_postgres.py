@@ -107,7 +107,7 @@ def test_a_reader_who_marks_thirty_chapters_read_keeps_their_whole_allowance(
     _client, _tokens, app = notes_app
     platform = platform_settled(database)
     a, book, models = thirty_read(notes_app, readers, monkeypatch)
-    assert drain(worker(app, worker_dsn)) == 1
+    assert drain(worker(app, worker_dsn)) == 3             # ten chapters a run, in turn
     assert models.notes == CHAPTERS
     assert [n["atom"] for n in notes_of(database, a.owner)] == list(range(1, CHAPTERS + 1))
 

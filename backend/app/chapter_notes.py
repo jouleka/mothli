@@ -180,8 +180,12 @@ class NotesBuilder:
         self._pool.shutdown(wait=False, cancel_futures=True)
 
 
-def build_missing(book_id, catalog, store, settings, client, worker):
-    """Write and check notes for every fully read chapter that has none. Returns what was done."""
+def build_missing(book_id, catalog, store, settings, client, worker, *, most=None):
+    """Write and check notes for every fully read chapter that has none. Returns what was done.
+
+    With ``most``, stops after that many chapters, with ``more`` True in what it returns when a
+    chapter is left: in hosted mode one worker runs every reader's background work, and a run of
+    thirty chapters kept the story memory waiting for minutes."""
     from app.stream_conversation import (MAX_PASSAGES, conversation_writer, gate_sentences,
                                          jev_runner, sentence_checks)
     state, book, manifest, full = source_state(book_id, catalog, settings, worker)
@@ -211,6 +215,8 @@ def build_missing(book_id, catalog, store, settings, client, worker):
         if existing and existing["source_hash"] == digest and existing["version"] == VERSION:
             earlier_notes += existing["sentences"]
             continue
+        if most is not None and totals["chapters"] >= most:
+            return {**totals, "more": True}
         windows = [text for _, _, text in passage_windows(chapter["text"])]
         kept, dropped = [], 0
         ceiling = settings.cost_max_input_tokens_per_call - completion_input_overhead(writer)

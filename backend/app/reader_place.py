@@ -6,6 +6,7 @@ given: told "0 of 61 chapters finished" it says that to a reader who is in chapt
 import re
 
 from app.content_scope import is_content
+from app.retrieval_passages import is_passage
 
 # What the reader can do here. Mothli may tell them, and the checker holds it to these words.
 APP_HELP = (
@@ -252,14 +253,19 @@ def place_line(item):
     total = max(numbers.values(), default=0)
     if not item["chapters"]:
         return f"{name}: not started. You know nothing of what is in it."
-    whole = [numbers[ch["ordinal"]] for ch in item["chapters"] if ch["whole"] and ch["ordinal"] in numbers]
-    part = [numbers[ch["ordinal"]] for ch in item["chapters"] if not ch["whole"] and ch["ordinal"] in numbers]
+    # A chapter of which only its heading is read ("CHAPTER XXXI.") has been turned to, not read.
+    chapters = [ch for ch in item["chapters"] if ch["whole"] or is_passage(ch["text"])]
+    whole = [numbers[ch["ordinal"]] for ch in chapters if ch["whole"] and ch["ordinal"] in numbers]
+    part = [numbers[ch["ordinal"]] for ch in chapters if not ch["whole"] and ch["ordinal"] in numbers]
     here = numbers.get(item["point"]["atom"])
     if total and len(whole) == total:
         return f"{name}: read all {total} chapters with you."
-    line = f"{name}: " + (f"the reader is in chapter {here} of {total} now. " if here else f"{total} chapters. ")
+    if not chapters and not here:
+        return f"{name}: not started. You know nothing of what is in it."
+    line = f"{name}: " + (f"the reader is in chapter {here} of {total} now." if here else f"{total} chapters.")
     read = ([spans(whole) + " in full"] if whole else []) + (["part of " + spans(part)] if part else [])
-    line += "Read with you: " + ", and ".join(read) + "."
+    if read:
+        line += " Read with you: " + ", and ".join(read) + "."
     seen = set(whole) | set(part)
     upcoming = next((n for n in range(1, total + 1) if n not in seen), None)
     if not here and upcoming:

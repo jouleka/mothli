@@ -457,3 +457,26 @@ def test_saying_chapters_were_read_starts_their_extraction_at_once(map_env, monk
     settings.reader_memory_ingest = False
     api.put(f"/api/books/{bid}/read-chapters", json={"atoms": [2], "read": True}).raise_for_status()
     assert queued == [(bid, 2)]
+
+
+def test_mothli_is_told_the_last_chapter_finished_and_a_heading_alone_is_not_part_read(map_env, monkeypatch):
+    """2026-11-20 recheck: chapters 1 to 30 counted as read and only "CHAPTER XXXI." of chapter 31
+    read; the writer was told "Latest completed chapter: 31" and "part of chapter 31"."""
+    api, bid, app, _ = map_env
+    seen = models(app, monkeypatch, reply="Corvus moved lamp 60 in part 2.")
+    assert api.put(f"/api/books/{bid}/read-chapters", json={"atoms": [1, 2], "read": True}).status_code == 200
+    heading = {"atom": 3, "quote": "Part 3", "cfi": "epubcfi(/6/2)", "position_epoch": 0}
+    response = api.put(f"/api/books/{bid}/read-page", json={
+        "start": {**heading, "prefix": ""}, "end": {**heading, "prefix": "Part 3"}})
+    assert response.status_code == 200, response.text
+    ask(api, bid)
+    prompt = seen["reply"][-1]
+    assert "Latest completed chapter: 2." in prompt and "Latest completed chapter: 3" not in prompt
+    where = prompt.split("WHERE THE READER IS:\n")[1].split("\n\nHOW THIS APP WORKS")[0]
+    assert "Read with you: chapters 1 and 2 in full." in where and "part of" not in where
+    # A passage of chapter 3 read: part read, and still not completed.
+    read_page(api, bid, 3, 1, 4)
+    ask(api, bid)
+    prompt = seen["reply"][-1]
+    assert "Latest completed chapter: 2." in prompt
+    assert "Read with you: chapters 1 and 2 in full, and part of chapter 3." in prompt

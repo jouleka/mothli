@@ -145,7 +145,9 @@ def as_on_main(got, question, place, notes):
     chosen = {s["id"] for s in core}
     sources = core + [s for s in got["compact_candidates"] if s["id"] not in chosen][:10 - len(core)]
     remembered = got.get("recall") or []
-    prompt = ask_prompt(question, sources, frontier=1).removesuffix(PROMPT_END)
+    # Chapter 1 is only part read: no chapter is completed yet (2026-11-20, the writer was told
+    # the chapter the reader is in was completed).
+    prompt = ask_prompt(question, sources, frontier=0).removesuffix(PROMPT_END)
     if notes:
         prompt += "\n\n" + notes_block(notes)
     prompt += "\n\nWHERE THE READER IS:\n" + place + "\n\nHOW THIS APP WORKS:\n" + APP_HELP

@@ -882,6 +882,52 @@ describe("a book opened here for the first time", () => {
     expect(screen.queryByRole("dialog", { name: "Already partway through?" })).toBeNull();
   });
 
+  // 2026-11-20 recheck: chapters 30 and 31 share a file and 31 begins partway down a page. "take
+  // me to chapter 31" showed that page and said "Chapter 30": its first lines end chapter 30.
+  test("lands in the picked chapter when it begins partway down a page, and stays there when laid out again", async () => {
+    const atoms = ["one", "two", "three"].map((id, index) => ({
+      ordinal: index + 1, href: `c1.html#${id}`, title: `Chapter ${index + 1}`, char_len: 100 }));
+    mocks.manifest.mockResolvedValue({ book_id: "b", mode: "anchor-driven", book_type: "novel", atoms });
+    mocks.makeBook.mockResolvedValue({ sections: [{ id: "c1.html" }],
+      toc: atoms.map((atom) => ({ href: atom.href })), destroy: mocks.destroyBook });
+    const doc = document.implementation.createHTMLDocument("chapters");
+    doc.body.innerHTML = "<h2 id='one'>One</h2><p>First.</p><h2 id='two'>Two</h2><p>The end of two.</p>"
+      + "<h2 id='three'>Three</h2><p>Three begins.</p>";
+    // The page that shows the last lines of chapter 2 and the heading of chapter 3.
+    const page = doc.createRange();
+    page.setStart(doc.querySelectorAll("p")[1].firstChild!, 0);
+    page.setEnd(doc.getElementById("three")!.firstChild!, 5);
+    const view = () => document.querySelector("foliate-view") as TestFoliateView;
+    const show = (range: Range) => act(() => view().dispatchEvent(new CustomEvent("relocate", {
+      detail: { cfi: "epubcfi(/6/2!/4/4/1:0)", section: { current: 0 }, range } })));
+    mocks.goTo.mockImplementation(async (target: unknown) => {
+      if (target === "c1.html#three") show(page);
+    });
+    const { unmount } = render(<ReaderPage bookId="b" onBack={() => {}} />);
+    const question = await screen.findByRole("dialog", { name: "Already partway through?" });
+    fireEvent.change(within(question).getByLabelText("I’m on"), { target: { value: "2" } });
+    mocks.position.mockResolvedValue({ bookmark: 2, cfi: "epubcfi(/6/2!/4/4/1:0)", position_epoch: 0 });
+    fireEvent.click(within(question).getByRole("button", { name: "take me to chapter 3" }));
+    await waitFor(() => expect(mocks.goTo).toHaveBeenCalledWith("c1.html#three"));
+    await waitFor(() => expect(document.body.textContent).toMatch(/Chapter 3 of 3/));
+    // A resize lays the same page out again: still chapter 3.
+    show(page.cloneRange());
+    expect(document.body.textContent).toMatch(/Chapter 3 of 3/);
+    // Turning back to a page of chapter 2 alone is chapter 2 again.
+    const back = doc.createRange();
+    back.selectNodeContents(doc.querySelectorAll("p")[1]);
+    show(back);
+    expect(document.body.textContent).toMatch(/Chapter 2 of 3/);
+    expect(document.body.textContent).not.toMatch(/Chapter 3 of 3/);
+    // The book closed on that page and opened again: still chapter 3.
+    show(page.cloneRange());
+    unmount();
+    render(<ReaderPage bookId="b" onBack={() => {}} />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalledTimes(2));
+    show(page.cloneRange());
+    expect(document.body.textContent).toMatch(/Chapter 3 of 3/);
+  });
+
   test("“I’m just starting” counts nothing and is not asked again", async () => {
     const { unmount } = render(<ReaderPage bookId="b" onBack={() => {}} />);
     const question = await screen.findByRole("dialog", { name: "Already partway through?" });
@@ -916,6 +962,37 @@ describe("a book opened here for the first time", () => {
       detail: { cfi: "2:start", section: { current: 2 } },
     })));
     expect(await screen.findByText(/That’s Chapter 2 done!/)).toBeTruthy();
+  });
+});
+
+// 2026-11-20 recheck: the streak said "1" as soon as the book opened, before anything was read.
+describe("the reading streak", () => {
+  test("opening a book is not a reading day; a page read is", async () => {
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      render(<ReaderPage bookId="b" onBack={() => {}} />);
+      await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+      expect(screen.queryByText("Reading streak:")).toBeNull();
+      const doc = document.implementation.createHTMLDocument("chapter");
+      doc.body.innerHTML = "<p>Some words of chapter two to read.</p><p>And the next page.</p>";
+      const page = (index: number) => {
+        const range = doc.createRange();
+        range.selectNodeContents(doc.querySelectorAll("p")[index]);
+        return range;
+      };
+      const view = document.querySelector("foliate-view") as TestFoliateView;
+      act(() => view.dispatchEvent(new CustomEvent("relocate", {
+        detail: { cfi: "epubcfi(/6/4!/4/2/1:0)", section: { current: 1 }, range: page(0) } })));
+      expect(screen.queryByText("Reading streak:")).toBeNull();
+      now += 60_000;      // a minute on that page, then the next one
+      act(() => view.dispatchEvent(new CustomEvent("relocate", {
+        detail: { cfi: "epubcfi(/6/4!/4/4/1:0)", section: { current: 1 }, range: page(1) } })));
+      await waitFor(() => expect(screen.getByText("Reading streak:").parentElement?.textContent).toMatch(/1$/));
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
 

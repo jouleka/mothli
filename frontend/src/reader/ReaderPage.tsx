@@ -20,7 +20,7 @@ import {
 } from "../api";
 import { AskTheBook, type AskSession, type CompanionSeed, type CompanionTab } from "./AskTheBook";
 import { MothCorner, WelcomeBackCard, type CornerNote } from "./MothMoments";
-import { crossedMilestone, milestoneLine, recordReadingDay, unlockCast } from "../journey/journey";
+import { crossedMilestone, milestoneLine, readingStreak, recordReadingDay, unlockCast } from "../journey/journey";
 import { Moth } from "../ui/Moth";
 import "./reader.css";
 import "./panels.css";
@@ -353,6 +353,9 @@ export function ReaderPage({
   const lastAtomRef = useRef(0); // atom of the last accepted report (follows the reader backward)
   const maxAtomRef = useRef(0); // furthest atom ever accepted (returning there is never a jump)
   const allowJumpRef = useRef(false); // set by an explicit confirmation, spent by one relocation
+  // The chapter counter as the server last said it: how many pieces of the book are finished,
+  // so also the 0-based index of the first one that is not.
+  const finishedRef = useRef(0);
   const manifestBmRef = useRef(0); // bookmark the current manifest labels were clamped at
   const positionEpochRef = useRef(0); // invalidates delayed reports from an earlier reading pass
   const positionVersionRef = useRef(0); // optimistic clock returned by the hosted merge protocol
@@ -562,6 +565,9 @@ export function ReaderPage({
     readReporterRef.current = readReporter;
     let mapOff = false;
     const pagesRead = new PagesRead(async (start, end, skimmed) => {
+      // A page stayed on long enough to read is a reading day. Opening a book, turning pages
+      // quickly, or saying chapters were read elsewhere is not.
+      if (!dead && !skimmed) setStreak(recordReadingDay());
       if (dead || mapOff || !api.readPage || start.position_epoch !== positionEpochRef.current) return;
       try {
         const point = await api.readPage(bookId, start, end, skimmed);
@@ -915,6 +921,7 @@ export function ReaderPage({
         });
         lastAtomRef.current = saved.bookmark;
         maxAtomRef.current = saved.bookmark;
+        finishedRef.current = saved.bookmark;
         setCurrentAtom(saved.bookmark);
 
         const book = await makeBook(file);
@@ -1032,8 +1039,18 @@ export function ReaderPage({
           };
           const idx = d.section?.current;
           if (d.cfi == null || idx == null) return;
-          const atom = d.range ? atomAtRange(m.atoms, bookSections[idx]?.id ?? "", d.range, "start")
+          let atom = d.range ? atomAtRange(m.atoms, bookSections[idx]?.id ?? "", d.range, "start")
             ?? sectionAtom[idx] ?? -1 : sectionAtom[idx] ?? -1;
+          // A chapter that begins partway down a page shares that page with the last lines of the
+          // one before. When that one is already finished, the page is where the next chapter
+          // starts, however often it is laid out again or the book reopened (2026-11-20: "take
+          // me to chapter 31" said "Chapter 30, about 11 minutes left"). It claims nothing new:
+          // the chapters before it are finished already.
+          const finished = finishedRef.current;
+          if (d.range && atom >= 0 && atom < finished) {
+            const end = atomAtRange(m.atoms, bookSections[idx]?.id ?? "", d.range, "end");
+            if (end != null && end >= finished) atom = finished;
+          }
           // Front/back matter, in a file of its own or ahead of chapter one in that chapter's file:
           // report nothing, never guess. It is not a place in the book, so the reader's place,
           // the page the book reopens on and "where you stopped" stay with the last chapter page.
@@ -1336,6 +1353,8 @@ export function ReaderPage({
     // The same word as "I've read up to here": every piece before the chosen chapter is read.
     const before = Array.from({ length: choice.index }, (_, index) => index + 1);
     if (before.length) await tellRead(before);
+    // Every chapter before the chosen one is finished now: known before the page lands.
+    finishedRef.current = Math.max(finishedRef.current, choice.index);
     closeStartingPlace();
     const view = viewRef.current;
     const tocHref = findTocHref(toc, choice.index);
@@ -1581,9 +1600,10 @@ export function ReaderPage({
     `${unit} ${(manifest && chapterNumber(manifest.atoms, chapter - 1)) ?? chapter}`;
   const throughLabel = pos && pos.bookmark > 0 ? completedTitle(pos.bookmark) : "";
 
-  // Journey: the streak on open, and Mothli's moments when a chapter is finished.
+  // Journey: the streak so far on open (a day counts once a page is read, not for opening a
+  // book), and Mothli's moments when a chapter is finished.
   useEffect(() => {
-    if (readerReady) setStreak(recordReadingDay());
+    if (readerReady) setStreak(readingStreak());
   }, [readerReady]);
   const pushNote = useCallback((note: CornerNote) => {
     setCornerNotes((current) => [note, ...current.filter((item) => item.id !== note.id)].slice(0, 3));
@@ -1592,6 +1612,9 @@ export function ReaderPage({
     setCornerNotes((current) => current.filter((item) => item.id !== id));
   }, []);
 
+  useEffect(() => {
+    if (pos) finishedRef.current = pos.bookmark;
+  }, [pos]);
   useEffect(() => {
     const bookmark = pos?.bookmark;
     if (bookmark == null || !manifest) return;

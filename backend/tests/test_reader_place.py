@@ -2,8 +2,13 @@
 from app.reader_place import APP_HELP, place_line, spans
 
 
-def item(*, here, whole=(), part=(), total=61, skimmed=(), asked=()):
-    chapters = [{"ordinal": n, "whole": True} for n in whole] + [{"ordinal": n, "whole": False} for n in part]
+PASSAGE = "It is a truth universally acknowledged, that a single man in possession of a good fortune."
+
+
+def item(*, here, whole=(), part=(), total=61, skimmed=(), asked=(), heading=()):
+    chapters = ([{"ordinal": n, "whole": True, "text": PASSAGE} for n in whole]
+                + [{"ordinal": n, "whole": False, "text": PASSAGE} for n in part]
+                + [{"ordinal": n, "whole": False, "text": f"CHAPTER {n}."} for n in heading])
     return {"book": {"title": "Pride and Prejudice", "author": "Jane Austen"},
             "chapters": sorted(chapters, key=lambda c: c["ordinal"]),
             "numbers": {n: n for n in range(1, total + 1)}, "point": {"atom": here},
@@ -31,6 +36,20 @@ def test_reading_in_order_names_no_gap_and_an_unopened_book_says_only_that():
     assert place_line(item(here=0)) == (
         "“Pride and Prejudice” by Jane Austen: not started. You know nothing of what is in it.")
     assert place_line(item(here=5, whole=range(1, 6), total=5)).endswith("read all 5 chapters with you.")
+
+
+def test_a_chapter_of_which_only_the_heading_is_read_is_not_part_read():
+    # 2026-11-20 recheck: chapters 1 to 30 counted as read and only "CHAPTER XXXI." of chapter
+    # 31 on screen; Mothli was told "and part of chapter 31".
+    line = place_line(item(here=31, whole=range(1, 31), heading=[31]))
+    assert "the reader is in chapter 31 of 61 now" in line
+    assert "Read with you: chapters 1 to 30 in full." in line and "part of" not in line
+    assert "Not read with you" not in line
+    # Once a passage of it is read, it is part read, as before.
+    assert "and part of chapter 31." in place_line(item(here=31, whole=range(1, 31), part=[31]))
+    # Only the first heading read in the whole book: in chapter 1, nothing read together yet.
+    assert place_line(item(here=1, heading=[1])) == (
+        "“Pride and Prejudice” by Jane Austen: the reader is in chapter 1 of 61 now.")
 
 
 def test_chapters_are_counted_plainly_whatever_they_are_called():
