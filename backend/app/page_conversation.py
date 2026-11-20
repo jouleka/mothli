@@ -87,7 +87,8 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
     if prose:
         draft_system = PROSE_DRAFT_SYSTEM
     question = conversation_question(reader_message, body.history, eff)
-    query = conversation_retrieval_question(reader_message, body.history, eff)
+    query = conversation_retrieval_question(reader_message, body.history, eff,
+                                            read_text="\n".join(ch["text"] for ch in chapters))
     calls = []
     reviewer = copy(client)
     reviewer.conversation_review_effort = settings.reader_conversation_review_effort

@@ -55,8 +55,34 @@ def conversation_question(question: str, history: list[ConversationMessage], fro
     )
 
 
-def conversation_retrieval_question(question: str, history: list[ConversationMessage], frontier: int) -> str:
-    """Prioritize the latest question; only a small recent reference window aids retrieval."""
+def book_names_in(question: str, read_text: str) -> list[str]:
+    """The question's words that are names in the read text: written there, never in lowercase.
+
+    "Wickham" counts; "Interesting" or "Ok" at the start of a message does not, nor a name the
+    reader has not met yet. Only ``read_text`` is consulted, so only what is read decides.
+    """
+    names = []
+    for word in proper_words(question):
+        token = normalize_text(word.text)
+        if len(token) < 2 or token in STOPWORDS or token in names:
+            continue
+        pattern = r"(?<!\w)" + re.escape(token) + r"(?!\w)"
+        if re.search(pattern, read_text, re.IGNORECASE) and not re.search(pattern, read_text):
+            names.append(token)
+    return names
+
+
+def conversation_retrieval_question(question: str, history: list[ConversationMessage], frontier: int,
+                                    read_text: str | None = None) -> str:
+    """The words passages are searched by: the latest question, then the last two messages.
+
+    Passages are ranked first by the names they share with these words, so a name in the last
+    reply would outrank the one asked about. Given the read text, a question naming someone
+    the book knows is searched on alone; the earlier messages only help a question with no name
+    of its own ("what about him?", "and then?").
+    """
+    if read_text is not None and book_names_in(question, read_text):
+        return question
     recent = [message.content for message in history if message.as_of_chapter <= frontier][-2:]
     return question + ("\n" + " ".join(recent)[:1200] if recent else "")
 

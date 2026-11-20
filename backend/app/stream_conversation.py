@@ -522,7 +522,8 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
     history = [ConversationMessage(role=turn["role"], content=turn["content"][:2000], as_of_chapter=eff)
                for turn in earlier[-HISTORY_TURNS:]]
     question = conversation_question(body.question, history, eff)
-    query = conversation_retrieval_question(body.question, history, eff)
+    query = conversation_retrieval_question(body.question, history, eff,
+                                            read_text="\n".join(ch["text"] for ch in chapters))
     timings, calls, lock = {}, [], Lock()
     writer = conversation_writer(client, settings)
 
