@@ -250,6 +250,28 @@ def test_background_budget_and_guards_start_far_above_real_reading_and_reach_the
         set_spend_limits(**dataclasses.asdict(before))
 
 
+def test_the_free_weeks_start_at_the_owners_numbers_and_reach_the_process(tmp_path) -> None:
+    """ADR 0045 sections 3 and 11 step 1: two free weeks and a ceiling of $2.10 of the reader's
+    own chat spend. The break it catches: a default that differs from the record, a free weeks of
+    no days or an amount that is not money, or a process whose caps do not carry the settings."""
+    defaults = Settings.model_fields
+    assert (defaults["hosted_free_days"].default, defaults["hosted_free_usd"].default) == (
+        14, 2.10)
+    assert (SpendLimits().free_days, SpendLimits().free_usd) == (14, Decimal("2.10"))
+    for wrong in ({"hosted_free_days": 0}, {"hosted_free_days": 1.5},
+                  {"hosted_free_usd": -1}, {"hosted_free_usd": float("inf")}):
+        with pytest.raises(ValueError):
+            hosted_settings(tmp_path, **CHAT, **wrong)
+    before = spend_limits()
+    try:
+        with TestClient(hosted_app(hosted_settings(tmp_path, **CHAT, hosted_free_days=21,
+                                                   hosted_free_usd=3.5)),
+                        base_url="https://reader.example"):
+            assert (spend_limits().free_days, spend_limits().free_usd) == (21, Decimal("3.5"))
+    finally:
+        set_spend_limits(**dataclasses.asdict(before))
+
+
 # ---- whether this server has a chat at all, and the one mixed state that pays without replying ----
 
 SWITCHES = {"reader_conversation_jev": True, "jev_enabled": True,

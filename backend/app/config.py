@@ -150,6 +150,11 @@ class Settings(BaseSettings):
     hosted_reader_usd_per_day: float = Field(default=0.10, ge=0, le=1000, allow_inf_nan=False)
     hosted_reader_usd_per_month: float = Field(default=2.00, ge=0, le=10000, allow_inf_nan=False)
     hosted_platform_usd_per_day: float = Field(default=15.00, ge=0, le=100000, allow_inf_nan=False)
+    # ADR 0045 step 1: a reader's two free weeks with Mothli, from their first question. While
+    # they last the reader's day and month above are not applied; one ceiling in dollars of their
+    # own chat spend since the start is (about 100 replies at 2.1 cents). Never shown to a reader.
+    hosted_free_days: int = Field(default=14, ge=1, le=365)
+    hosted_free_usd: float = Field(default=2.10, ge=0, le=10000, allow_inf_nan=False)
     # ADR 0041 section 6, amended 20 November 2026: a reader's allowance counts only their
     # conversation. Mothli's background work for a reader (their chapter notes, what it remembers
     # of them) is Mothli's cost: the budget of all readers' background work together per UTC day,

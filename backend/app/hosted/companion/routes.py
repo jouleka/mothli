@@ -236,6 +236,9 @@ def ask_the_book_stream(book_id: uuid.UUID, body: AskRequest, request: Request,
     # One story memory per request: every sentence's check of this reply reads the same snapshot.
     store = HostedBookStore(request.app.state.companion_dsn, owner_id)
     try:
+        # A question starts the reader's two free weeks, once (ADR 0045 step 1), before anything
+        # is read or reserved. Nothing else here changes with them.
+        catalog.start_free_weeks()
         events = stream_read_prefix(str(book_id), body, catalog, store, settings,
                                     request.app.state.platform_client, source,
                                     notes_builder=_notes_queue(request, owner_id),
@@ -429,6 +432,7 @@ def ask_home(body: HomeAsk, request: Request, owner_id: OwnerId = Depends(_csrf_
     catalog, source, settings = _home(request, owner_id, ReplyCatalog)
     store = HostedBookStore(request.app.state.companion_dsn, owner_id)
     try:
+        catalog.start_free_weeks()          # as in a book: a question starts the free weeks
         events = stream_home(body, catalog, store, settings, request.app.state.platform_client,
                              source, [], recollector=_recollector(request, owner_id))
     except CompanionDatabaseBusy as exc:

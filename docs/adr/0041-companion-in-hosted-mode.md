@@ -538,6 +538,15 @@ uploads. `GET /api/jobs` keeps showing `ingest_book` jobs only. (ADR 0043 step 7
 
 ### 6. Money: platform keys, one ledger per reader, caps per day and month
 
+**Amended by ADR 0045 (step 1, 20 November 2026) for readers in their two free weeks.** From a
+reader's first question, for `HOSTED_FREE_DAYS` (14), checks 1 and 2 below are not made for them;
+one ceiling is instead, `HOSTED_FREE_USD` ($2.10) of their own conversation since the start,
+counted as checks 1 and 2 count (never background work), in the same transaction under the same
+lock (`reader_plan_state`, migration 0037). A reply admitted under it is finished. Checks 3, 4 and
+5 are unchanged. A reader whose `owner_limits` row sets their own day or month cap is held by
+checks 1 and 2 as below, free weeks or not. Everything below holds as written for every other
+reader, and for every reader from day 15.
+
 **Where settings come from.** The same environment settings local mode reads, built into clients the
 same way: writer `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `LLM_LARGE_MODEL`,
 `LLM_CHEAP_MODEL` (`config.py:24-33`, `deps.py:21`); Jev `JEV_ENABLED`, `TYPESAFE_API_KEY`,
