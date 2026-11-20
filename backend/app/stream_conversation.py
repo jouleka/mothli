@@ -22,7 +22,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from app.ask import (AskRetrievalLimit, ConversationMessage, ask_prompt, conversation_question,
+from app.ask import (AskRetrievalLimit, ConversationMessage, ask_prompt, book_names_in, conversation_question,
                      conversation_retrieval_question, retrieve_ask_sources, source_facts)
 from app.ask_context import complete_ask_context
 from app.ask_evidence import AskEvidenceError
@@ -43,7 +43,7 @@ from app.read_map import book_record, prefix_map, read_snapshot, skimmed_chapter
 from app.reader_place import (APP_HELP, FRIEND_VOICE, SPEAK_AS_A_FRIEND, content_numbers, note_asked,
                               offers_for, place_line)
 from app.recollections import RECOLLECTION_RULE, recall, recollection_block, recollection_passage
-from app.retrieval_passages import passage_windows
+from app.retrieval_passages import passage_windows, recent_reading
 from app.unicode_text import fold_accents, normalize_text, proper_words, word_tokens
 
 VERSION = "stream-conversation-v1"
@@ -589,9 +589,9 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
                     identities = same_person_names(mem, durable, set(word_tokens(permitted_text)),
                                                    set(word_tokens(query, min_length=2)))
             # What the reader has just read: the stretch that ends where they are now.
-            latest = next((ch for ch in chapters if ch.get("recent")), chapters[-1])
+            latest, recent_text = recent_reading(chapters)
             hits = [(1.0, text, latest["ordinal"], latest["key"])
-                    for _, _, text in reversed(deque(passage_windows(latest.get("recent") or latest["text"]), maxlen=4))]
+                    for _, _, text in reversed(deque(passage_windows(recent_text), maxlen=4))]
             asks_who = bool(_IDENTITY_CUE.search(body.question))
             if asks_who:
                 names = {normalize_text(w.text) for w in proper_words(body.question)} - STOPWORDS - {
@@ -638,7 +638,8 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
             texts = {ch["key"]: ch["text"] for ch in chapters}
             pool_sources = compact_candidates(retrieve_ask_sources(
                 query, bookmark=reach, chapters=chapters, read_chapter=texts.get, semantic_hits=hits,
-                atoms=atoms, candidate_pool=True, prefer_recent=not asks_who, known_names=known_names))
+                atoms=atoms, candidate_pool=True, prefer_recent=not asks_who, known_names=known_names,
+                lead_names=book_names_in(body.question, permitted_text)))
             # Retrieval already ordered the pool by priority: its first six bodies, plus the
             # exact neighbouring context the existing completion step adds within that limit.
             # No model chooses among them here, so the next few in retrieval order are kept

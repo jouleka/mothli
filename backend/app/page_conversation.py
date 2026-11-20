@@ -12,7 +12,8 @@ from time import perf_counter
 from fastapi import HTTPException
 
 from app.ask import (AskDraft, AskRetrievalLimit, AskSafetyError, ask_prompt,
-    conversation_question, conversation_retrieval_question, retrieve_ask_sources, source_facts)
+    book_names_in, conversation_question, conversation_retrieval_question, retrieve_ask_sources,
+    source_facts)
 from app.ask_context import complete_ask_context
 from app.ask_evidence import AskEvidenceError
 from app.ask_selection import SOURCE_SELECTION_SYSTEM, SourceSelection, select_sources_bounded
@@ -24,7 +25,7 @@ from app.eval.spoiler_gate import score_recap, unread_future_names
 from app.eval.spoiler_gate.synthesis import _read_visibility
 from app.eval.spoiler_gate.binding import unsupported_event_bindings
 from app.read_frontier import requested_snapshot
-from app.retrieval_passages import passage_windows, recent_scene_windows
+from app.retrieval_passages import passage_windows, recent_reading, recent_scene_windows
 from app.unicode_text import word_tokens, proper_words, normalize_text
 from app.eval.spoiler_gate.grounding import STOPWORDS
 from app.conversation_jev import (review_with_jev, prepare_context, JevNeedsReasoning,
@@ -203,8 +204,8 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
         atoms = {a["key"]: a for a in manifest["atoms"]}
         texts = {ch["key"]: ch["text"] for ch in chapters}
         # Scene anchors are exact windows from the READ tail, not embedding calls or memory facts.
-        latest = chapters[-1]
-        tail = deque(passage_windows(latest["text"]), maxlen=4)
+        latest, recent_text = recent_reading(chapters)
+        tail = deque(passage_windows(recent_text), maxlen=4)
         scene_hits = [(1.0, text, latest["ordinal"], latest["key"]) for _, _, text in reversed(tail)]
         if route == "identity":
             # Introduction windows are exact source text, not stored/generated character facts.
@@ -254,11 +255,12 @@ def answer_read_prefix(book_id, body, catalog, store, settings, client, worker):
             atom = atoms[latest["key"]]
             candidates = [{"id":i, "ordinal":latest["ordinal"], "chapter_key":latest["key"],
                 "href":atom.get("href", ""), "title":atom.get("title", ""), "source_offset":offset,
-                "text":text} for i, (offset, _, text) in enumerate(recent_scene_windows(latest["text"]), 1)]
+                "text":text} for i, (offset, _, text) in enumerate(recent_scene_windows(recent_text), 1)]
         else:
             candidates = retrieve_ask_sources(query, bookmark=eff, chapters=chapters,
                 read_chapter=texts.get, semantic_hits=scene_hits, atoms=atoms, candidate_pool=True,
-                prefer_recent=route != "identity", known_names=known_names)
+                prefer_recent=route != "identity", known_names=known_names,
+                lead_names=book_names_in(reader_message, permitted_text))
         candidates = compact_candidates(candidates)
         timings["retrieval"] = round((perf_counter() - retrieval_started) * 1000, 2)
         if not candidates:

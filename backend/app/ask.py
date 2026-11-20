@@ -19,7 +19,7 @@ from app.eval.spoiler_gate.grounding import STOPWORDS, content_words, ground_rec
 from app.eval.spoiler_gate.judge import JudgeUnavailable, JudgeVerdict
 from app.ingest.extraction.resolve import ROLE_NOUNS
 from app.llm.client import ProviderUnavailable
-from app.retrieval_passages import PASSAGE_CHARS, passage_windows
+from app.retrieval_passages import PASSAGE_CHARS, is_passage, passage_windows
 from app.read_frontier import ReadBoundary
 from app.unicode_text import fold_accents, normalize_text, proper_words, word_tokens, words
 
@@ -55,8 +55,29 @@ def conversation_question(question: str, history: list[ConversationMessage], fro
     )
 
 
+def book_names_in(question: str, read_text: str) -> list[str]:
+    """The question's words that are names in the read text: written there, never in lowercase.
+
+    "Wickham" counts; "Interesting" or "Ok" at the start of a message does not, nor a name the
+    reader has not met yet. Only ``read_text`` is consulted, so only what is read decides.
+    """
+    names = []
+    for word in proper_words(question):
+        token = normalize_text(word.text)
+        if len(token) < 2 or token in STOPWORDS or token in names:
+            continue
+        pattern = r"(?<!\w)" + re.escape(token) + r"(?!\w)"
+        if re.search(pattern, read_text, re.IGNORECASE) and not re.search(pattern, read_text):
+            names.append(token)
+    return names
+
+
 def conversation_retrieval_question(question: str, history: list[ConversationMessage], frontier: int) -> str:
-    """Prioritize the latest question; only a small recent reference window aids retrieval."""
+    """Prioritize the latest question; only a small recent reference window aids retrieval.
+
+    The latest question is the first line (it is a single line); retrieve_ask_sources ranks
+    its words ahead of the earlier messages' when the question names someone.
+    """
     recent = [message.content for message in history if message.as_of_chapter <= frontier][-2:]
     return question + ("\n" + " ".join(recent)[:1200] if recent else "")
 
@@ -344,8 +365,15 @@ def retrieve_ask_sources(
     candidate_pool: bool = False,
     prefer_recent: bool = True,
     known_names: Iterable[str] = (),
+    lead_names: Iterable[str] = (),
 ) -> list[dict[str, Any]]:
     """Fuse full completed-text lexical windows with independently ranked semantic hits.
+
+    Passages rank first by the names they share, then by the words. ``lead_names`` are the names
+    the latest question asks about (see ``book_names_in``). Given, only they count as names, and
+    the latest question's own words rank next, so the names and words of earlier messages folded
+    into ``question`` only break the ties left: they can never outrank the name asked about.
+    Without them (a question with no name of its own), the earlier messages lead as before.
 
     Call with chapters/raw_text from the SAME bookmark-bounded view. The redundant ordinal check
     occurs before any text load, keeping future chapters out even if a caller supplies extra metadata.
@@ -357,7 +385,13 @@ def retrieve_ask_sources(
     # Words are matched with the accents off their Latin letters: a reader types "Adelaida" for
     # the book's "Adelaïda". Only the comparison folds; every passage keeps its exact text.
     query_words = content_words(fold_accents(question)) - _QUESTION_WORDS
-    query_names = content_words(fold_accents(" ".join(word.text for word in proper_words(question)))) & query_words
+    lead_names = " ".join(lead_names)
+    query_names = content_words(fold_accents(
+        lead_names or " ".join(word.text for word in proper_words(question)))) & query_words
+    # With lead names, the latest question's own words come next (its first line: see
+    # conversation_retrieval_question); the earlier messages' words only break the ties left.
+    latest_words = (content_words(fold_accents(question.split("\n", 1)[0])) - _QUESTION_WORDS
+                    if lead_names else frozenset())
     visible_name_parts = set(word_tokens(" ".join(known_names), min_length=2))
     query_name_parts = (set(word_tokens(question)) & visible_name_parts) or {
         normalize_text(word.text) for word in proper_words(question)
@@ -399,6 +433,9 @@ def retrieve_ask_sources(
     normalized_chapters = {}
     chapter_keys_by_ordinal = {}
     serial = 0
+    # The recent text is the latest read chapter with a real passage: the bookmark's chapter,
+    # or, when only its heading is read, the chapter just finished. Never one beyond bookmark.
+    recent_ordinal = 0
 
     def candidate(text, chapter_key, ordinal, *, start=0):
         nonlocal serial
@@ -409,7 +446,8 @@ def retrieve_ask_sources(
         shared = len(query_words & terms)
         # Preserve the named subject before generic wording such as 'the text read so far'. The
         # independent semantic ranking below still retrieves paraphrases with no shared words.
-        quality = (len(query_names & terms), shared, shared / max(len(terms), 1))
+        quality = (len(query_names & terms), len(latest_words & terms), shared,
+                   shared / max(len(terms), 1))
         atom = atoms.get(chapter_key, {})
         source = {
             "ordinal": int(ordinal), "chapter_key": chapter_key,
@@ -423,9 +461,9 @@ def retrieve_ask_sources(
 
     def offer(text, chapter_key, ordinal, *, start=0):
         item = candidate(text, chapter_key, ordinal, start=start)
-        if item is None or not item[0][1]:
+        if item is None or not item[0][2]:
             return
-        if ordinal == bookmark:
+        if ordinal == recent_ordinal:
             if len(recent_candidates) < 4:
                 heapq.heappush(recent_candidates, item)
             elif item[:2] > recent_candidates[0][:2]:
@@ -463,6 +501,9 @@ def retrieve_ask_sources(
         if scanned_chars > MAX_ASK_SCAN_CHARS:
             raise AskRetrievalLimit("completed text exceeds the search budget")
         normalized = " ".join(raw.split())
+        if is_passage(normalized) and ordinal > recent_ordinal:
+            recent_ordinal = ordinal
+            recent_candidates.clear()
         if candidate_pool:
             # The existing raw scan ceilings also bound this normalized cache. Context construction
             # below never rereads a chapter or opens a future chapter merely to find a neighbor.

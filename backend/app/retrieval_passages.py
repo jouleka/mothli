@@ -39,6 +39,33 @@ def passage_windows(text: str):
         start = boundary + 1 if boundary >= 0 else next_start
 
 
+# Shorter than this is a heading or a scrap ("CHAPTER XXXI."), not a passage to answer from. It
+# counts characters, not words: a book in a script written without spaces has few "words".
+MIN_PASSAGE_CHARS = 50
+
+
+def is_passage(text: str) -> bool:
+    return len(normalize_source(text)) >= MIN_PASSAGE_CHARS
+
+
+def recent_reading(chapters):
+    """The chapter the reader has just been reading and its read text, as ``(chapter, text)``.
+
+    That is the stretch ending where the reader is now. A reader who has only turned to a new
+    chapter has read its heading and nothing else: then it is the last earlier chapter with a
+    real passage, the one just finished. Only text in ``chapters`` (what is read) is used.
+    """
+    latest = next((ch for ch in chapters if ch.get("recent")), chapters[-1])
+    for text in (latest.get("recent"), latest["text"]):
+        if is_passage(text):
+            return latest, text
+    finished = [ch for ch in chapters if ch["ordinal"] < latest["ordinal"] and is_passage(ch["text"])]
+    if finished:
+        chapter = max(finished, key=lambda ch: ch["ordinal"])
+        return chapter, chapter["text"]
+    return latest, latest.get("recent") or latest["text"]
+
+
 SCENE_WINDOWS_VERSION = "sentence-tail-v1"
 _SENTENCE_START = re.compile(r'''[.!?。！？]["'”’」』）)]*\s+''')
 
