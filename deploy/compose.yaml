@@ -108,8 +108,8 @@ services:
   # book (ADR 0044; HOSTED_STORY_MEMORY, on in app.env) with the companion dispatcher
   # (HOSTED_JOB_HANDLER in app.env). Off by default; turn on with COMPOSE_PROFILES=worker in
   # deploy/.env once the chat's AI keys are filled in. A
-  # chapter of story memory takes minutes; one worker runs one job at a time, so with story memory
-  # on, notes wait behind it (`--scale worker=2` runs two). It claims jobs as the worker role and
+  # chapter of story memory takes minutes; one worker runs one job at a time, so story memory and
+  # notes take turns, a chapter or a few at a time (`--scale worker=2` runs two). It claims jobs as the worker role and
   # does every reader's work as the tenant role. It signs no one in: the auth address it is given names no
   # database and is never used, so the worker never holds the sign-in role's password.
   worker:

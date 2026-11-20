@@ -302,7 +302,7 @@ def test_a_finished_chapter_makes_one_waiting_job_and_each_run_builds_one_chapte
     a.read(book, 1, 1, 60)              # part 1 to its end, from after its heading: not whole
     [job] = jobs_of(database, a.owner)                    # the first page read asks
     assert (job["state"], str(job["book_id"]), job["payload_metadata"],
-            job["priority"]) == ("pending", book, {}, 5)
+            job["priority"]) == ("pending", book, {}, 10)
     a.read(book, 2, 1, 30)              # half of part 2: asks for nothing
     with psycopg.connect(database) as conn:
         conn.execute("DELETE FROM jobs WHERE owner_id=%s", (a.owner,))
@@ -313,7 +313,7 @@ def test_a_finished_chapter_makes_one_waiting_job_and_each_run_builds_one_chapte
     assert finishing.status_code == 200, finishing.text   # part 2 read from its heading on
     [job] = jobs_of(database, a.owner)
     assert (job["state"], str(job["book_id"]), job["payload_metadata"],
-            job["priority"]) == ("pending", book, {}, 5)
+            job["priority"]) == ("pending", book, {}, 10)
     queue = StoryMemoryQueue(app.state.companion_dsn, OwnerId(a.owner))
     assert queue.ensure(book) is False
     a.mark(book, [2])                                     # asks again: nothing more waits
@@ -907,6 +907,47 @@ def test_two_readers_story_memory_jobs_memory_and_spend_never_touch(
                             VALUES (%s,%s,%s,'story_memory','story-memory:planted',5)""",
                          (a.owner, book_a, incarnation))
     assert (book_memory(database, a_edition), jobs_of(database, a.owner)) == (a_rows, a_jobs)
+
+
+# ---- 7b: notes and story memory take turns on one worker -----------------------------------------
+
+def test_notes_and_story_memory_take_turns_so_neither_waits_for_all_of_the_other(
+        tenant_dsn, readers, database, worker_dsn, tmp_path, monkeypatch):
+    """The break it catches (2026-11-20 recheck): thirty chapters told as read gave one notes run
+    of five minutes, claimed ahead of story memory, so the cast stayed empty for seven minutes
+    against three before. Story memory and notes are now claimed oldest first, and a notes run
+    writes a few chapters at most (one here) and asks for the rest behind what already waits.
+    Still one chapter of story memory per run, in order."""
+    from app.hosted.companion import jobs as companion_jobs
+    from tests.hosted.test_companion_notes_postgres import NotesModels, notes_of
+
+    monkeypatch.setattr(companion_jobs, "NOTES_CHAPTERS_PER_RUN", 1, raising=False)
+    client, tokens, app = memory_app_for(tenant_dsn, readers, tmp_path,
+                                         **{**MEMORY, "reader_story_notes": True})
+    with client:
+        extraction = extraction_client()
+        Lamps(extraction, monkeypatch)
+        NotesModels(app.state.platform_client, monkeypatch, reply=line(1, 2))
+        a = Reader(client, tokens, "a", readers["a"])
+        book = upload(client, tokens, "a", lamps())
+        a.read(book, 1, 1, 2)               # the first page read asks for story memory
+        a.mark(book, [1, 2, 3])             # three chapters on the reader's word ask for notes
+        handler = CompanionJobs(tenant_dsn=app.state.companion_dsn, settings=app.state.settings,
+                                client=app.state.platform_client,
+                                storage=app.state.object_storage,
+                                sources=app.state.companion_sources,
+                                kinds=frozenset({"chapter_notes", "recollect", "story_memory"}),
+                                extraction_client=extraction, lease_for=timedelta(seconds=60))
+        work = DurableWorker(PostgresWorkerRepository(worker_dsn), handler, "companion",
+                             lease_for=timedelta(seconds=60), retry_after=timedelta(0))
+        progress = []
+        while work.run_once():
+            progress.append((len(built_for(database, a.owner, book)),
+                             len(notes_of(database, a.owner))))
+            assert len(progress) < 10
+        # (story-memory chapters, chapters with notes) after each run: turn and turn about.
+        assert progress == [(1, 0), (1, 1), (2, 1), (2, 2), (3, 2), (3, 3)]
+        assert built_for(database, a.owner, book) == [(1, "body"), (2, "body"), (3, "body")]
 
 
 # ---- 8: erasure, removal and a copy, with these jobs present ---------------------------------------

@@ -69,9 +69,12 @@ from app.recollections import BATCH_AFTER, RUN_MOST, STORE_CAP, distil, pending
 
 # Companion jobs are short next to extraction, so they are claimed first (ADR 0041 section 5).
 COMPANION_PRIORITY = 10
-# A chapter of story memory takes minutes: below notes and recollections, above the old
-# reader-key extraction (ADR 0042 section 6).
-STORY_MEMORY_PRIORITY = 5
+# Story memory is claimed beside notes and recollections, oldest first, so neither kind waits
+# for all of the other: a story-memory run is one chapter, and a notes run at most
+# ``NOTES_CHAPTERS_PER_RUN`` chapters. Below it, notes for thirty chapters told as read ran as one
+# job of five minutes while the cast waited (2026-11-20).
+STORY_MEMORY_PRIORITY = COMPANION_PRIORITY
+NOTES_CHAPTERS_PER_RUN = 3
 # The provider the checks are paid at: a refusal of the platform's account there pauses every
 # reader's companion jobs for the local pause's five minutes.
 CHECKER_PROVIDER = "typesafe"
@@ -468,8 +471,12 @@ class CompanionJobs:
         book = catalog.get_book(book_id)
         if book is None or book["incarnation"] != str(claim.book_incarnation):
             return              # deleted, or uploaded again since: nothing of this job is left
-        build_missing(book_id, catalog, HostedBookStore(self._dsn, owner), self._settings,
-                      self._client, HostedBookSource(self._storage, catalog, self._sources))
+        done = build_missing(book_id, catalog, HostedBookStore(self._dsn, owner), self._settings,
+                             self._client, HostedBookSource(self._storage, catalog, self._sources),
+                             most=NOTES_CHAPTERS_PER_RUN)
+        if done.get("more"):
+            # The rest waits its turn behind the work already waiting, story memory's included.
+            ChapterNotesQueue(self._dsn, owner).ensure(book_id)
 
     def _story_memory(self, claim: ClaimedJob, lease: _Lease,
                       repository: PostgresWorkerRepository) -> None:
