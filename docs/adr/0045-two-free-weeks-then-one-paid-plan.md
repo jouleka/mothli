@@ -1,7 +1,34 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
-**Status:** Proposed (2026-11-20). Nothing in it is built. The owner's decisions in "What the owner
-decided" are settled; the numbers and the choices in "Open points for the owner" are his to make.
+**Status:** Proposed (2026-11-20). Step 1 is built (see below); nothing else is. The owner's
+decisions in "What the owner decided" are settled; the numbers and the choices in "Open points for
+the owner" are his to make.
+
+**Step 1 built (2026-11-20).** Migration `0037_reader_plans.sql`: `reader_plans` (`owner_id`,
+`free_started_at`, `updated_at`; row-level security forced; the tenant role holds `SELECT` only),
+`start_free_weeks()` (no argument, a security definer, stamps the transaction's reader once from
+the database clock) and `reader_plan_state(reader, free_days, free_usd)`, which runs as its caller
+and answers `new`, `free` or `ended` with `time` or `ceiling`. Settings `HOSTED_FREE_DAYS` (14) and
+`HOSTED_FREE_USD` (2.10). The two ask routes call `start_free_weeks()` once the request is valid,
+before anything is read or reserved; no other route starts the clock. `reserve_cost` applies the
+free ceiling in place of the reader's day and month while the free weeks last; at the ceiling the
+reader sees section 6's ceiling line without its last sentence and without a button. Two choices
+made in building it:
+
+- **An operator's own caps win.** A reader whose `owner_limits` row sets their own day or month cap
+  is held by those caps exactly as before, in the free weeks or not, and the free ceiling is not
+  applied to them. The free weeks replace only the defaults. So a reader an operator has slowed
+  stays slowed, and the owner and testers keep the caps he raised for them until gifts (step 2).
+- **The clock starts once the question is one the server will try to answer**: the chat is on
+  and the request names a read position. A question about a book that is not the reader's still
+  starts it (it is answered 404 afterwards).
+
+Left for later steps: the gift and Paddle columns and states, the `billing` role, the session's
+`mothli`, the `402 mothli_plan` gate and its invitations (step 5; until then a reader past the
+ceiling can still open the cast and "Story so far"), the start call from the cast and "Story so
+far" (step 5), background work by state (step 6), "your plan.json" in the copy of one's data (step
+7; `reader_plans` is listed as left out of the copy until then), and open point 4 (the platform's
+day in the free weeks).
 
 File and line references are to `main` at 2475b6f (PR #136). Nothing in this record was run against a
 database, a server, a model or Paddle. Every claim about the code comes from reading the lines cited
