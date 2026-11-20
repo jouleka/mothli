@@ -72,9 +72,11 @@ COMPANION_PRIORITY = 10
 # Story memory is claimed beside notes and recollections, oldest first, so neither kind waits
 # for all of the other: a story-memory run is one chapter, and a notes run at most
 # ``NOTES_CHAPTERS_PER_RUN`` chapters. Below it, notes for thirty chapters told as read ran as one
-# job of five minutes while the cast waited (2026-11-20).
+# job of about four minutes while the cast waited (2026-11-20). Ten chapters (about 85 s) keeps the
+# chat's notes coming: thirty chapters' notes in about 10 to 13 minutes, the cast's first chapter
+# within about 4.5.
 STORY_MEMORY_PRIORITY = COMPANION_PRIORITY
-NOTES_CHAPTERS_PER_RUN = 3
+NOTES_CHAPTERS_PER_RUN = 10
 # The provider the checks are paid at: a refusal of the platform's account there pauses every
 # reader's companion jobs for the local pause's five minutes.
 CHECKER_PROVIDER = "typesafe"

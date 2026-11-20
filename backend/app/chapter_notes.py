@@ -217,7 +217,7 @@ def build_missing(book_id, catalog, store, settings, client, worker, *, most=Non
             continue
         if most is not None and totals["chapters"] >= most:
             return {**totals, "more": True}
-        windows =[text for _, _, text in passage_windows(chapter["text"])]
+        windows = [text for _, _, text in passage_windows(chapter["text"])]
         kept, dropped = [], 0
         ceiling = settings.cost_max_input_tokens_per_call - completion_input_overhead(writer)
         for part in chapter_parts(chapter, ceiling):

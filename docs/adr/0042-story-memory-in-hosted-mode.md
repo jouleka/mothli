@@ -521,7 +521,7 @@ per owner and book (`jobs.py:362-370`), and the claim skips paused providers and
 chapter per run lets the claim's order (`priority`, then `run_after`, `:371`) take turns between
 readers on one worker. Priority 5: below chapter notes and recollections (10,
 `hosted/companion/jobs.py:51`), above the old `ingest_book` (0). Amended 2026-11-20: priority 10, the
-same as notes, which now write at most `NOTES_CHAPTERS_PER_RUN` (3) chapters a run and ask for the
+same as notes, which now write at most `NOTES_CHAPTERS_PER_RUN` (10) chapters a run and ask for the
 rest behind what already waits. Below notes, thirty chapters told as read made one notes run of five
 minutes ahead of the cast's first chapter; now the two take turns. The owner's `max_provider_concurrency`
 (2) counts it beside notes (`jobs.py:403-417`).
