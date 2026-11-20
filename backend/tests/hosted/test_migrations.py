@@ -359,6 +359,11 @@ def test_tenant_foreign_keys_and_indexes_carry_owner_scope(database: str) -> Non
         # it cannot be per owner. Only the worker reads or writes it (the claim and the run's
         # own job); a reader's session sees only their own jobs (forced RLS).
         "ux_jobs_one_build_per_chapter",
+        # Migration 0036: the budget of every reader's background work together is one sum per
+        # UTC day across owners, read only by its security-definer function, which answers yes
+        # or no; a reader's own background spend is read through the owner-first indexes.
+        "ix_cost_ledger_background_time",
+        "ix_cost_reservations_background_open",
     }
     with psycopg.connect(database) as conn:
         foreign_keys = conn.execute(
@@ -700,7 +705,9 @@ def _kept_rows(conn) -> dict:
     return {"users": conn.execute(
         f"SELECT * FROM users WHERE id NOT IN (SELECT account_id FROM {account}) "
         "ORDER BY 1, 2").fetchall(),
-        "cost_ledger": conn.execute("SELECT * FROM cost_ledger ORDER BY 1, 2").fetchall()} | {
+        # (0036's background mark is checked by its own test.)
+        "cost_ledger": conn.execute("SELECT to_jsonb(entry) - 'background' FROM cost_ledger"
+                                    " AS entry ORDER BY owner_id, id").fetchall()} | {
         "books": conn.execute("SELECT to_jsonb(book) - 'split_hash' - 'edition_of' "
                               "- 'no_holder_since' "
                               "FROM books AS book ORDER BY owner_id, id").fetchall()} | {
@@ -988,8 +995,8 @@ def test_a_new_database_has_one_notes_account_that_never_signs_in(database: str)
                             (account,)).fetchone()[0] == 1
         assert conn.execute("SELECT count(*) FROM books WHERE owner_id = %s",
                             (account,)).fetchone()[0] == 0
-        # 0035 adds the later-name check (its own test below).
-        assert _definers(conn) == _DEFINERS | {_LATER_NAMES}
+        # 0035 adds the later-name check, 0036 the background budget (their own tests below).
+        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN}
     apply_migrations(database)
     with psycopg.connect(database) as conn:
         assert conn.execute("SELECT account_id FROM notes_account").fetchall() == [(account,)]
@@ -1058,7 +1065,7 @@ def test_one_build_per_chapter_marks_the_editions_keeps_one_a_file_and_adds_one_
             "SELECT proowner::regrole::text, proacl::text, prosecdef, provolatile, proconfig, "
             "pg_get_function_identity_arguments(oid), pg_get_function_result(oid) "
             "FROM pg_proc WHERE oid = %s::regprocedure", (_NEW_DOOR,)).fetchone() == record
-        assert _definers(conn) == _DEFINERS | {_LATER_NAMES}
+        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN}
         before, after = _EDITION_MARK
         assert body.count(before) == 1
         assert conn.execute("SELECT prosrc FROM pg_proc WHERE oid = %s::regprocedure",
@@ -1209,7 +1216,65 @@ def test_the_later_name_words_start_empty_change_nothing_else_and_only_the_owner
             "read_any text[], read_proper text[], read_also text[], read_not text[]")
         assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
                                 (_LATER_NAMES,)).fetchone()[0]
-        assert _definers(conn) == _DEFINERS | {_LATER_NAMES}
+        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN}
+
+
+# ---- 0036: background work is Mothli's, not the reader's allowance (ADR 0041 section 6) ---------
+
+BACKGROUND_SPEND = 36
+_BACKGROUND_OPEN = "companion_background_open(numeric)"
+
+
+def test_background_spend_is_marked_by_its_names_and_nothing_else_changes(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0036 with a reader's replies, chapter
+    notes and recollections in the ledger and open: background rows left unmarked (the reader
+    would wait out the month on notes they never asked for), a reply or a row of the older paths
+    marked, any other value changed; or the new budget check callable by PUBLIC, not a security
+    definer, with another search path, or answering anything but yes or no."""
+    _apply_before(database, BACKGROUND_SPEND, monkeypatch)
+    reader = uuid.uuid4()
+    purposes = ("stream-reply", "stream-sentence-check", "home-reply", "notes-write",
+                "notes-sentence-check", "notes-write-failed-reserved", "recollect-write",
+                "recollect-check", None)
+    with psycopg.connect(database) as conn:
+        conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (reader,))
+        for purpose in purposes:
+            key = f"companion:{uuid.uuid4().hex}"
+            conn.execute("INSERT INTO cost_ledger (owner_id, phase, model, usd, idempotency_key,"
+                         " purpose) VALUES (%s, 'synthesis', 'm', 0.01, %s, %s)",
+                         (reader, key, purpose))
+            conn.execute("INSERT INTO cost_reservations (owner_id, id, phase, model,"
+                         " reserved_input_tokens, reserved_output_tokens, reserved_usd,"
+                         " idempotency_key, purpose) VALUES (%s, %s, 'synthesis', 'm', 1, 1,"
+                         " 0.01, %s, %s)", (reader, uuid.uuid4(), key, purpose))
+        ledger = conn.execute("SELECT to_jsonb(row) FROM cost_ledger AS row ORDER BY id"
+                              ).fetchall()
+        held = conn.execute("SELECT to_jsonb(row) FROM cost_reservations AS row ORDER BY id"
+                            ).fetchall()
+    apply_migrations(database)
+
+    background = {"notes-write", "notes-sentence-check", "notes-write-failed-reserved",
+                  "recollect-write", "recollect-check"}
+    with psycopg.connect(database) as conn:
+        for table, before in (("cost_ledger", ledger), ("cost_reservations", held)):
+            assert conn.execute(f"SELECT to_jsonb(row) - 'background' FROM {table} AS row"
+                                " ORDER BY id").fetchall() == before
+            marked = dict(conn.execute(f"SELECT COALESCE(purpose, ''), background FROM {table}"
+                                       ).fetchall())
+            assert marked == {purpose or "": purpose in background for purpose in purposes}
+        assert conn.execute(
+            "SELECT prosecdef, proconfig, pg_get_function_identity_arguments(oid),"
+            " pg_get_function_result(oid) FROM pg_proc WHERE oid = %s::regprocedure",
+            (_BACKGROUND_OPEN,)).fetchone() == (
+            True, ["search_path=pg_catalog, public, pg_temp"], "day_cap numeric", "boolean")
+        assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
+                                (_BACKGROUND_OPEN,)).fetchone()[0]
+        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN}
+        # Today's background spend is $0.05 in the ledger and $0.05 still open.
+        assert conn.execute("SELECT companion_background_open(0.11)").fetchone()[0] is True
+        assert conn.execute("SELECT companion_background_open(0.10)").fetchone()[0] is False
 
 
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:

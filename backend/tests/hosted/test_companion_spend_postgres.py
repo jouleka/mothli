@@ -9,6 +9,7 @@ each barrier away in turn. No real model is called and nothing is paid.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import threading
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -56,9 +57,7 @@ def caps():
     before = spend_limits()
     set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=5, platform_usd_per_day=100)
     yield
-    set_spend_limits(reader_usd_per_day=before.reader_usd_per_day,
-                     reader_usd_per_month=before.reader_usd_per_month,
-                     platform_usd_per_day=before.platform_usd_per_day)
+    set_spend_limits(**dataclasses.asdict(before))
 
 
 def shelve(dsn: str, owner: uuid.UUID) -> str:
@@ -428,6 +427,150 @@ def test_a_reply_under_way_is_finished_and_the_next_one_waits(
     with pytest.raises(ReaderAllowanceReached) as raised:
         reserve(reply_b, book_b, 0.001)
     assert raised.value.limit == "calls_in_flight"
+
+
+# ---- Mothli's background work for a reader (ADR 0041 section 6, amended 20 November 2026) -------
+
+class Background(HostedCompanionCatalog):
+    """The worker's catalog for chapter notes and recollections (``_LeasedCatalog``), without a
+    job's lease: what it spends is Mothli's background work for its reader."""
+
+    __slots__ = ()
+    _BACKGROUND = True
+
+
+def background(dsn: str, owner: uuid.UUID) -> Background:
+    return Background(dsn, OwnerId(owner))
+
+
+def spent_by_side(dsn: str, owner: uuid.UUID) -> dict[bool, Decimal]:
+    with psycopg.connect(dsn) as conn:
+        return dict(conn.execute("SELECT background,sum(usd) FROM cost_ledger WHERE owner_id=%s"
+                                 " GROUP BY background", (owner,)).fetchall())
+
+
+def test_background_work_never_counts_against_the_readers_allowance(
+    tenant_dsn: str, database: str, readers: dict
+) -> None:
+    """The break it catches (measured 20 November 2026): a new reader's chapter notes, started in
+    the background when chapters were marked read, used up the one allowance the reader can see,
+    and after two questions the chat said "We've talked a lot today". Background calls must not
+    count against the reader's day, month or lifetime, nor take their calls in flight; they are
+    still in the reader's ledger, marked, and on the platform's day; and the reader's own line
+    comes only from their own conversation."""
+    from app.hosted.companion.spend import _DAY
+
+    a = readers["a"]
+    book = shelve(database, a)
+    chat, work = catalog(tenant_dsn, a), background(tenant_dsn, a)
+    cap(database, a, max_spend_usd_per_day=Decimal("0.10"),
+        max_spend_usd_per_month=Decimal("0.20"), max_spend_usd=Decimal("0.30"))
+    settled, _held = platform_today(database)
+    spend(work, book, 0.40, phase="notes-write")           # four times the reader's day
+    spend(work, book, 0.40, phase="recollect-write")
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT purpose,background FROM cost_ledger WHERE owner_id=%s"
+                            " ORDER BY recorded_at,id", (a,)).fetchall() == [
+            ("notes-write", True), ("recollect-write", True)]
+    assert platform_today(database)[0] == settled + Decimal("0.80")
+    write(chat, book, Writer())                            # the reader's whole allowance is left
+    check(chat, book, jev()[0])
+
+    # The calls in flight are counted on each side apart: background work never makes the chat
+    # wait, and the chat never holds back background work.
+    cap(database, a, max_companion_calls_in_flight=2)
+    held = [reserve(work, book, 0.001, phase="notes-sentence-check") for _ in range(2)]
+    write(chat, book, Writer())
+    with pytest.raises(ReaderAllowanceReached) as raised:
+        reserve(work, book, 0.001, phase="notes-sentence-check")
+    assert raised.value.limit == "calls_in_flight"
+    for one in held:
+        work.discard_cost_reservation(book, one)
+    held = [reserve(chat, book, 0.001) for _ in range(2)]
+    spend(work, book, 0.001, phase="notes-sentence-check")
+    for one in held:
+        chat.discard_cost_reservation(book, one)
+
+    # The reader's line: only once their own conversation has used their day.
+    sides = spent_by_side(database, a)
+    assert sides[True] > Decimal("0.80") and Decimal(0) < sides[False] < Decimal("0.10")
+    cap(database, a, max_spend_usd_per_day=sides[False])
+    writer = Writer()
+    with pytest.raises(CostCeilingExceeded) as raised:
+        write(chat, book, writer)
+    assert (refusal(raised).limit, refusal(raised).reader_message) == ("day", _DAY)
+    assert writer.calls == 0
+    spend(work, book, 0.001, phase="notes-write")          # background work goes on meanwhile
+
+
+def test_the_background_budget_and_guards_hold_background_work_and_never_the_chat(
+    tenant_dsn: str, database: str, readers: dict
+) -> None:
+    """The break it catches: one reader, or many together, making Mothli spend without bound in
+    the background; two readers' background calls at once both passing the budget's last cent;
+    or the budget or a guard, once reached, refusing a reader's chat. Every refusal comes before
+    anything is reserved and is never a line the reader is shown."""
+    from app.hosted.companion.spend import _DAY, _MONTH, _PLATFORM, BackgroundAllowanceReached
+
+    a, b = readers["a"], readers["b"]
+    book_a, book_b = shelve(database, a), shelve(database, b)
+
+    def refused(adapter, book, limit):
+        before = reservations(database, adapter._owner.value)
+        with pytest.raises(BackgroundAllowanceReached) as raised:
+            reserve(adapter, book, 0.001, phase="notes-write")
+        assert raised.value.limit == limit
+        assert raised.value.reader_message not in (_DAY, _MONTH, _PLATFORM)
+        assert reservations(database, adapter._owner.value) == before
+
+    def guard(day: str, month: str) -> None:
+        set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=5, platform_usd_per_day=100,
+                         reader_background_usd_per_day=Decimal(day),
+                         reader_background_usd_per_month=Decimal(month))
+
+    # One reader's guard, a day and a month: the other reader and the chat go on.
+    guard("0.05", "0.08")
+    spend(background(tenant_dsn, a), book_a, 0.05, phase="notes-write")
+    refused(background(tenant_dsn, a), book_a, "background_day")
+    spend(background(tenant_dsn, b), book_b, 0.001, phase="notes-write")
+    write(catalog(tenant_dsn, a), book_a, Writer())
+    guard("1", "0.08")
+    spend(background(tenant_dsn, a), book_a, 0.03, phase="notes-write")
+    refused(background(tenant_dsn, a), book_a, "background_month")
+    write(catalog(tenant_dsn, a), book_a, Writer())
+
+    # Every reader's background work together: $0.01 left of the day's budget, four calls of
+    # $0.02 from two readers at once. The budget's lock admits exactly one.
+    set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=5, platform_usd_per_day=100)
+    with psycopg.connect(database) as conn:
+        today = conn.execute(
+            "SELECT COALESCE(sum(usd),0) FROM cost_ledger WHERE background"
+            " AND recorded_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'"
+        ).fetchone()[0]
+    set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=5, platform_usd_per_day=100,
+                     background_usd_per_day=today + Decimal("0.01"))
+    start, results = threading.Barrier(4), []
+
+    def attempt(owner, book):
+        start.wait()
+        try:
+            results.append(reserve(background(tenant_dsn, owner), book, 0.02, phase="notes-write"))
+        except BackgroundAllowanceReached as exc:
+            results.append(exc)
+
+    threads = [threading.Thread(target=attempt, args=item)
+               for item in ((a, book_a), (b, book_b)) * 2]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    won = [r for r in results if isinstance(r, str)]
+    lost = [r for r in results if not isinstance(r, str)]
+    assert len(won) == 1 and len(lost) == 3
+    assert {exc.limit for exc in lost} == {"background_budget"}
+    for owner, book in ((a, book_a), (b, book_b)):
+        refused(background(tenant_dsn, owner), book, "background_budget")
+        write(catalog(tenant_dsn, owner), book, Writer())  # the chat goes on
 
 
 def test_one_readers_spend_is_hidden_from_another_by_row_level_security_alone(

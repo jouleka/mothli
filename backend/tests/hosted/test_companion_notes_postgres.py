@@ -4,8 +4,10 @@ A finished chapter (a page, "I've read this", a reply) adds one waiting ``chapte
 through the RLS-enforced tenant role; the worker claims it with its own BYPASSRLS role and the
 dispatcher runs the unchanged ``build_missing`` through the tenant role, bound to the claimed
 owner. Proven here: notes end to end and their use in a reply; one waiting job however often it
-is asked for; a refused provider account pauses every reader's notes, recorded once; a capped
-reader waits for the next UTC day while others go on; a lease lost mid-run stores nothing twice;
+is asked for; a refused provider account pauses every reader's notes, recorded once; notes are
+Mothli's background work, never held by the reader's own allowance, and a reader past their
+background guard waits for the next UTC day while others go on; a lease lost mid-run stores
+nothing twice;
 a restarted worker resumes from rows alone; two readers; the roles' exact grants; and the
 reader's job routes and upload quota left to extraction. Stand-in writer and Jev only.
 """
@@ -18,6 +20,7 @@ import threading
 import uuid
 from datetime import timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 import psycopg
 import pytest
@@ -322,55 +325,91 @@ def test_a_refused_provider_pauses_every_readers_notes_and_is_recorded_once(
         assert all(row["book_id"] == uuid.UUID(book) for row in spend_of(database, owner)[1])
 
 
-def test_a_capped_reader_waits_for_the_next_day_and_others_go_on(notes_app, readers, database,
-                                                                  worker_dsn, monkeypatch):
-    """The break it catches: a reader at their day's allowance whose notes are claimed again and
-    again (each claim a refused call or a retry burnt), or who holds up another reader's notes."""
+def tomorrow_of(database: str):
+    return rows(database, "SELECT (date_trunc('day', now() AT TIME ZONE 'UTC') + interval "
+                          "'1 day') AT TIME ZONE 'UTC' AS at")[0]["at"]
+
+
+def test_a_reader_whose_allowance_is_used_up_still_gets_their_notes(
+        notes_app, readers, database, worker_dsn, monkeypatch):
+    """The break it catches (20 November 2026, ADR 0041 section 6 amended): background work held
+    back by the reader's own allowance, which counts only their conversation. A reader who has
+    talked their day away still has their notes written, paid by Mothli, marked as background."""
     _client, _tokens, app = notes_app
     a, book_a = opened(notes_app, readers, "a")
-    b, book_b = opened(notes_app, readers, "b")
     update_limits(database, a.owner, {"max_spend_usd_per_day": Decimal("0.05")})
     catalog = HostedCompanionCatalog(database, OwnerId(a.owner))
     held = catalog.reserve_cost(book_a, phase="stream-reply", model="gpt-6.1-terra",
                                 input_tokens=10, output_tokens=10, usd=0.05, max_input_tokens=1,
                                 max_output_tokens=1, max_usd=0.0)
-    catalog.settle_cost(book_a, held)                      # exactly at the cap
+    catalog.settle_cost(book_a, held)                      # their chat exactly at the cap
+    NotesModels(app.state.platform_client, monkeypatch)
+    assert drain(worker(app, worker_dsn)) == 1
+    assert [row["state"] for row in jobs_of(database, a.owner)] == ["succeeded"]
+    assert [n["sentences"] for n in notes_of(database, a.owner)] == [kept(1)]
+    _reservations, ledger = spend_of(database, a.owner)
+    assert [(row["purpose"], row["background"]) for row in ledger][0] == ("stream-reply", False)
+    assert ledger[1:] and all(row["background"] and row["purpose"].startswith("notes-")
+                              for row in ledger[1:])
+
+
+def test_a_reader_past_their_background_guard_waits_for_the_next_day_and_others_go_on(
+        notes_app, readers, database, worker_dsn, monkeypatch):
+    """The break it catches: a reader past their background guard whose notes are claimed again
+    and again (each claim a refused call or a retry burnt), or who holds up another reader's
+    notes."""
+    _client, _tokens, app = notes_app
+    a, book_a = opened(notes_app, readers, "a")
+    b, book_b = opened(notes_app, readers, "b")
+    spend_on_ledger(database, a.owner, book_a, "1")        # the $1 background day guard
     models = NotesModels(app.state.platform_client, monkeypatch)
     assert drain(worker(app, worker_dsn)) == 1
     [job_a] = jobs_of(database, a.owner)
-    tomorrow = rows(database, "SELECT (date_trunc('day', now() AT TIME ZONE 'UTC') + interval "
-                              "'1 day') AT TIME ZONE 'UTC' AS at")[0]["at"]
-    assert (job_a["state"], job_a["attempt_count"], job_a["run_after"]) == ("pending", 0, tomorrow)
+    assert (job_a["state"], job_a["attempt_count"], job_a["run_after"]) == (
+        "pending", 0, tomorrow_of(database))
     assert notes_of(database, a.owner) == [] and len(models.notes_prompts) == 1
     assert [row["state"] for row in jobs_of(database, b.owner)] == ["succeeded"]
     assert [n["sentences"] for n in notes_of(database, b.owner)] == [kept(1)]
 
 
-def spend_on_ledger(database: str, owner: uuid.UUID, book: str, usd: str) -> None:
-    """A companion call already settled today, written as ``settle_cost`` writes it."""
+def spend_on_ledger(database: str, owner: uuid.UUID, book: str, usd: str, *,
+                    background: bool = True) -> None:
+    """A companion call already settled today, written as ``settle_cost`` writes it: a call of
+    background work (chapter notes) unless ``background`` is false (a reply)."""
     with psycopg.connect(database) as conn:
         conn.execute(
             """INSERT INTO cost_ledger (owner_id,book_id,book_incarnation,phase,model,input_tokens,
-                                        output_tokens,usd,idempotency_key,purpose)
-               SELECT owner_id,id,incarnation,'synthesis','gpt-6.1-terra',10,10,%s,%s,'notes-write'
+                                        output_tokens,usd,idempotency_key,purpose,background)
+               SELECT owner_id,id,incarnation,'synthesis','gpt-6.1-terra',10,10,%s,%s,%s,%s
                FROM books WHERE owner_id=%s AND id=%s""",
-            (Decimal(usd), f"companion:{uuid.uuid4().hex}", owner, book))
+            (Decimal(usd), f"companion:{uuid.uuid4().hex}",
+             "notes-write" if background else "stream-reply", background, owner, book))
 
 
-def test_the_claim_and_reserve_cost_agree_on_who_is_capped(notes_app, readers, database,
-                                                           worker_dsn, monkeypatch) -> None:
-    """The break it catches: the claim's idea of a capped reader drifting from the cap rule in
-    ``spend.py``, so a job is claimed and refused at its first call, or a reader with allowance
-    left waits a day. Same owner, same ledger: the claim says capped exactly when
-    ``reserve_cost`` refuses for the day or the month.
+def test_the_claim_and_reserve_cost_agree_on_who_is_past_the_background_guard(
+        notes_app, readers, database, worker_dsn, monkeypatch) -> None:
+    """The break it catches: the claim's idea of a guarded reader drifting from the guard in
+    ``spend.py``, so a job is claimed and refused at its first call, or a reader under it waits
+    a day; and the reader's own conversation counted by either. Same owner, same ledger: the
+    claim says held exactly when a background ``reserve_cost`` refuses for the guard's day or
+    month, and no amount of chat spend makes either say so.
 
     A reservation is aged by moving the rule's own bound, not by writing one "20 minutes ago":
     in the first minutes of a UTC day that would be yesterday's and rightly not counted."""
     import app.hosted.companion.spend as spend_rules
-    from app.hosted.companion.spend import ReaderAllowanceReached
+    from app.hosted.companion.jobs import _LeasedCatalog
+    from app.hosted.companion.spend import BackgroundAllowanceReached, set_spend_limits
 
     a, book = opened(notes_app, readers)
-    catalog = HostedCompanionCatalog(database, OwnerId(a.owner))
+    catalog = _LeasedCatalog(database, OwnerId(a.owner), SimpleNamespace(hold=lambda: None))
+    limits = spend_rules.spend_limits()
+
+    def guard(day: str, month: str) -> None:
+        set_spend_limits(reader_usd_per_day=limits.reader_usd_per_day,
+                         reader_usd_per_month=limits.reader_usd_per_month,
+                         platform_usd_per_day=limits.platform_usd_per_day,
+                         reader_background_usd_per_day=Decimal(day),
+                         reader_background_usd_per_month=Decimal(month))
 
     def claim_says() -> bool:
         with psycopg.connect(worker_dsn, row_factory=psycopg.rows.dict_row) as conn:
@@ -381,8 +420,8 @@ def test_the_claim_and_reserve_cost_agree_on_who_is_capped(notes_app, readers, d
             held = catalog.reserve_cost(book, phase="notes-write", model="gpt-6.1-terra",
                                         input_tokens=10, output_tokens=10, usd=0.001,
                                         max_input_tokens=1, max_output_tokens=1, max_usd=0.0)
-        except ReaderAllowanceReached as exc:
-            assert exc.limit in {"day", "month"}
+        except BackgroundAllowanceReached as exc:
+            assert exc.limit in {"background_day", "background_month"}
             return True
         catalog.discard_cost_reservation(book, held)
         return False
@@ -392,9 +431,9 @@ def test_the_claim_and_reserve_cost_agree_on_who_is_capped(notes_app, readers, d
             conn.execute(
                 """INSERT INTO cost_reservations
                      (owner_id,id,book_id,book_incarnation,phase,model,reserved_input_tokens,
-                      reserved_output_tokens,reserved_usd,idempotency_key,purpose)
+                      reserved_output_tokens,reserved_usd,idempotency_key,purpose,background)
                    SELECT owner_id,%s,id,incarnation,'synthesis','gpt-6.1-terra',10,10,%s,%s,
-                          'notes-write'
+                          'notes-write',true
                    FROM books WHERE owner_id=%s AND id=%s""",
                 (uuid.uuid4(), Decimal(usd), f"companion:{uuid.uuid4().hex}", a.owner, book))
 
@@ -404,11 +443,13 @@ def test_the_claim_and_reserve_cost_agree_on_who_is_capped(notes_app, readers, d
         assert (claim_says(), reserve_says()) == (expected, expected)
         seen.append(expected)
 
-    update_limits(database, a.owner, {"max_spend_usd_per_day": Decimal("0.05"),
-                                      "max_spend_usd_per_month": Decimal("0.08")})
+    guard("0.05", "0.08")
     both(False)                                            # nothing spent
+    spend_on_ledger(database, a.owner, book, "5", background=False)
+    update_limits(database, a.owner, {"max_spend_usd_per_day": Decimal("0.01")})
+    both(False)                                            # the chat's spend is not counted
     spend_on_ledger(database, a.owner, book, "0.049")
-    both(False)                                            # just under the day cap
+    both(False)                                            # just under the day guard
     open_reservation("0.5")
     both(False)                                            # in flight: not counted in dollars
     in_flight_since = spend_rules._IN_FLIGHT_SINCE
@@ -416,47 +457,45 @@ def test_the_claim_and_reserve_cost_agree_on_who_is_capped(notes_app, readers, d
     both(True)                                             # left by a dead process: counted
     monkeypatch.setattr(spend_rules, "_IN_FLIGHT_SINCE", in_flight_since)
     both(False)                                            # in flight again
-    update_limits(database, a.owner, {"max_spend_usd_per_day": Decimal("1")})
+    guard("1", "0.08")
     both(False)
     spend_on_ledger(database, a.owner, book, "0.031")
     both(True)                                             # the month: 0.08 of 0.08
-    update_limits(database, a.owner, {"max_spend_usd_per_day": None,
-                                      "max_spend_usd_per_month": None})
+    guard("1", "5")
     both(False)                                            # the defaults: $1 a day, $5 a month
-    assert seen == [False, False, False, True, False, False, True, False]
+    assert seen == [False, False, False, False, True, False, False, True, False]
 
 
-def test_a_notes_job_stopped_by_the_cap_keeps_what_it_wrote_and_waits_for_tomorrow(
+def test_a_notes_job_stopped_by_the_guard_keeps_what_it_wrote_and_waits_for_tomorrow(
         notes_app, readers, database, worker_dsn, monkeypatch):
-    """The break it catches: notes already checked and stored thrown away when the reader's cap
-    is reached part-way through a book, or a job that keeps being claimed and refused that day."""
+    """The break it catches: notes already checked and stored thrown away when the reader's
+    background guard is reached part-way through a book; a job that keeps being claimed and
+    refused that day, or that fails with an error a reader could be shown; or the reader's chat
+    held by it."""
     _client, _tokens, app = notes_app
     a, book = opened(notes_app, readers)
     a.mark(book, [2])                                      # one job for chapters 1 and 2
-    update_limits(database, a.owner, {"max_spend_usd_per_day": Decimal("1")})
 
-    def reach_the_cap_while_chapter_two_is_written():
+    def reach_the_guard_while_chapter_two_is_written():
         if len(models.notes_prompts) == 2:
             spend_on_ledger(database, a.owner, book, "1")
 
-    models = NotesModels(app.state.platform_client, monkeypatch,
-                         notes_hook=reach_the_cap_while_chapter_two_is_written)
+    models = NotesModels(app.state.platform_client, monkeypatch, reply=line(1, 2),
+                         notes_hook=reach_the_guard_while_chapter_two_is_written)
     work = worker(app, worker_dsn)
     assert work.run_once()
     assert [(n["atom"], n["sentences"]) for n in notes_of(database, a.owner)] == [(1, kept(1))]
-    [job] = jobs_of(database, a.owner)
-    assert (job["state"], job["sanitized_error"]) == (
-        "pending", {"code": "budget_exceeded", "retryable": True})
-    with psycopg.connect(database) as conn:
-        conn.execute("UPDATE jobs SET run_after=now() WHERE kind='chapter_notes'")
-    assert work.run_once() is False                        # capped: moved to tomorrow
-    tomorrow = rows(database, "SELECT (date_trunc('day', now() AT TIME ZONE 'UTC') + interval "
-                              "'1 day') AT TIME ZONE 'UTC' AS at")[0]["at"]
-    [job] = jobs_of(database, a.owner)
-    assert (job["state"], job["run_after"]) == ("pending", tomorrow)
-    assert [(n["atom"], n["sentences"]) for n in notes_of(database, a.owner)] == [(1, kept(1))]
+    # The run ends without a failure; the rest is asked for at the start of the next UTC day.
+    jobs = jobs_of(database, a.owner)
+    assert [(job["state"], job["sanitized_error"]) for job in jobs] == [
+        ("succeeded", None), ("pending", None)]
+    assert jobs[1]["run_after"] == tomorrow_of(database)
+    assert work.run_once() is False
     assert len(models.notes_prompts) == 2
     assert not [row for row in spend_of(database, a.owner)[0] if row["state"] == "reserved"]
+    # The chat is the reader's own: it is not held by the guard.
+    events = a.ask(book)
+    assert sentences(events) == [line(1, 2)] and events[-1]["type"] == "done"
 
 
 # ---- a lost lease, a restart --------------------------------------------------------------------

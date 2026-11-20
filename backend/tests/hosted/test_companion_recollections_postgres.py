@@ -740,22 +740,55 @@ def test_clearing_a_conversation_deletes_it_and_no_later_job_brings_its_text_bac
     assert queue.ensure(book) is False and notes_of(database, a.owner) == []
 
 
-def test_a_capped_reader_waits_for_the_next_day_and_others_go_on(home_app, readers, database,
-                                                                  worker_dsn, monkeypatch):
-    """The break it catches: a reader at their day's allowance whose notes job is claimed again
-    and again, or who holds up another reader's."""
+def _two_waiting(home_app, readers):
     _client, _tokens, app = home_app
     a, lamps_a, _c, _u = shelf(home_app, readers, "a")
     b, lamps_b, _c, _u = shelf(home_app, readers, "b")
     for owner, book in ((a.owner, lamps_a), (b.owner, lamps_b)):
         said(app, owner, book, *chatter(5), NIGHT)
         assert RecollectQueue(app.state.companion_dsn, OwnerId(owner)).ensure(book)
+    return a, lamps_a, b
+
+
+def test_a_reader_whose_allowance_is_used_up_is_still_remembered(home_app, readers, database,
+                                                                 worker_dsn, monkeypatch):
+    """The break it catches (ADR 0041 section 6, amended 20 November 2026): recollections held
+    back by the reader's own allowance, which counts only their conversation. They are Mothli's
+    background work, paid by Mothli and marked so in the reader's ledger."""
+    _client, _tokens, app = home_app
+    a, lamps_a, b = _two_waiting(home_app, readers)
     update_limits(database, a.owner, {"max_spend_usd_per_day": Decimal("0.05")})
     catalog = HostedCompanionCatalog(database, OwnerId(a.owner))
     held = catalog.reserve_cost(lamps_a, phase="stream-reply", model="gpt-6.1-terra",
                                 input_tokens=10, output_tokens=10, usd=0.05, max_input_tokens=1,
                                 max_output_tokens=1, max_usd=0.0)
-    catalog.settle_cost(lamps_a, held)                      # exactly at the cap
+    catalog.settle_cost(lamps_a, held)                      # their chat exactly at the cap
+    HomeModels(app.state.platform_client, monkeypatch, changes=[change(AT_NIGHT, message=6)])
+    assert drain(worker(app, worker_dsn)) == 2
+    for owner in (a.owner, b.owner):
+        assert [row["state"] for row in jobs_of(database, owner)] == ["succeeded"]
+        assert [n["text"] for n in notes_of(database, owner)] == [AT_NIGHT]
+    marks = rows(database, "SELECT purpose,background FROM cost_ledger WHERE owner_id=%s"
+                           " ORDER BY recorded_at,id", a.owner)
+    assert marks[0] == {"purpose": "stream-reply", "background": False}
+    assert marks[1:] and all(row["background"] and row["purpose"].startswith("recollect-")
+                             for row in marks[1:])
+
+
+def test_a_reader_past_their_background_guard_waits_for_the_next_day_and_others_go_on(
+        home_app, readers, database, worker_dsn, monkeypatch):
+    """The break it catches: a reader past their background guard whose recollection job is
+    claimed again and again, or who holds up another reader's."""
+    _client, _tokens, app = home_app
+    a, lamps_a, b = _two_waiting(home_app, readers)
+    with psycopg.connect(database) as conn:                 # the $1 background day guard
+        conn.execute(
+            """INSERT INTO cost_ledger (owner_id,book_id,book_incarnation,phase,model,usd,
+                                        idempotency_key,purpose,background)
+               SELECT owner_id,id,incarnation,'synthesis','gpt-6.1-terra',1,%s,
+                      'recollect-write',true
+               FROM books WHERE owner_id=%s AND id=%s""",
+            (f"companion:{uuid.uuid4().hex}", a.owner, lamps_a))
     models = HomeModels(app.state.platform_client, monkeypatch,
                         changes=[change(AT_NIGHT, message=6)])
     assert drain(worker(app, worker_dsn)) == 1

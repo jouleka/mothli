@@ -8,6 +8,7 @@ be refused, in hosted mode; local mode's rules are unchanged. No database and no
 from __future__ import annotations
 
 import base64
+import dataclasses
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -218,6 +219,35 @@ def test_story_memory_guards_and_ceilings_start_at_the_owners_numbers(tmp_path) 
                          reader_usd_per_month=before.reader_usd_per_month,
                          platform_usd_per_day=before.platform_usd_per_day,
                          notes_usd_per_day=before.notes_usd_per_day)
+
+
+def test_background_budget_and_guards_start_far_above_real_reading_and_reach_the_process(
+        tmp_path) -> None:
+    """ADR 0041 section 6, amended 20 November 2026: Mothli's background work for readers has a
+    $3 day for everyone and guards of $1 a day and $5 a month per reader. The break it catches:
+    a guard a real reader meets (60 chapters marked read on day one, about $0.42 at the measured
+    0.7 cents a chapter, must fit in one day), a default that is not in code, or a process whose
+    caps do not carry the settings."""
+    defaults = Settings.model_fields
+    assert (defaults["hosted_background_usd_per_day"].default,
+            defaults["hosted_reader_background_usd_per_day"].default,
+            defaults["hosted_reader_background_usd_per_month"].default) == (3.00, 1.00, 5.00)
+    assert 60 * Decimal("0.007") < SpendLimits().reader_background_usd_per_day
+    assert (SpendLimits().background_usd_per_day, SpendLimits().reader_background_usd_per_day,
+            SpendLimits().reader_background_usd_per_month) == (
+        Decimal("3.00"), Decimal("1.00"), Decimal("5.00"))
+    before = spend_limits()
+    try:
+        with TestClient(hosted_app(hosted_settings(
+                tmp_path, **CHAT, hosted_background_usd_per_day=4.5,
+                hosted_reader_background_usd_per_day=0.5,
+                hosted_reader_background_usd_per_month=7)), base_url="https://reader.example"):
+            limits = spend_limits()
+            assert (limits.background_usd_per_day, limits.reader_background_usd_per_day,
+                    limits.reader_background_usd_per_month) == (
+                Decimal("4.5"), Decimal("0.5"), Decimal("7"))
+    finally:
+        set_spend_limits(**dataclasses.asdict(before))
 
 
 # ---- whether this server has a chat at all, and the one mixed state that pays without replying ----
