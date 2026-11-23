@@ -3,7 +3,8 @@
 The database is provisioned as on the server (roles, migrations by the migration owner, grants,
 forced row-level security), two readers sign in and fill every corner their data lives in, story
 memory and chapter notes included. It is then dumped as deploy/backup.sh dumps it (pg_dump as the
-superuser, pg_restore's format), and restored as deploy/restore.sh restores it (roles first, then
+superuser, pg_restore's format), encrypted and decrypted again with the backup key's code, and
+restored as deploy/restore.sh restores it (roles first, then
 pg_restore in one transaction, then the deployment step). Made-up data only.
 
 pg_dump and pg_restore run from ``TEST_PG_TOOLS`` when set (for example
@@ -28,6 +29,7 @@ from fastapi.testclient import TestClient
 from psycopg import conninfo, sql
 
 from app.config import Settings
+from app.hosted import backups
 from app.hosted.backups import count_rows, format_counts
 from app.main import create_app
 from tests.hosted.test_account_deletion_postgres import World, _seed
@@ -224,6 +226,17 @@ def test_a_dump_restores_every_row_and_every_right_and_the_app_starts_on_it(serv
     assert dumped.returncode == 0, dumped.stderr.decode(errors="replace")
     dump = dumped.stdout
     assert dump.startswith(b"PGDMP")
+    # Encrypted on the server before upload and decrypted after download, with a key made for
+    # this run; only what comes back out of the decryption is restored below.
+    key = backups.key_from({backups.KEY_SETTING: backups.new_key()})
+    sealed = io.BytesIO()
+    backups.encrypt(key, io.BytesIO(dump), sealed)
+    assert sealed.getvalue().startswith(b"age-encryption.org/v1\n")
+    assert b"PGDMP" not in sealed.getvalue() and b"made-up" not in sealed.getvalue()
+    opened = io.BytesIO()
+    backups.decrypt(key, io.BytesIO(sealed.getvalue()), opened)
+    assert opened.getvalue() == dump
+    dump = opened.getvalue()
     # counts.txt, read back from the dump.
     text = _tool("pg_restore", "--data-only", "--file=-", stdin=dump)
     assert text.returncode == 0, text.stderr.decode(errors="replace")

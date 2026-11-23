@@ -8,8 +8,10 @@
 #                                       # `docker compose -f deploy/compose.yaml down --volumes`)
 #
 # Instead of `latest`: a backup's name from `docker compose -f deploy/compose.yaml run --rm backup`
-# (mothli-backup-...tar), a backup file already on this server, or a folder holding one unpacked.
-# deploy/.env and deploy/app.env must be the ones the backup was made with (the same
+# (mothli-backup-...tar.age), an encrypted backup file already on this server, or a folder holding
+# one already decrypted and unpacked by hand (runbook step 5.3). A plain, unencrypted tar file is
+# refused: no such backup is ever made. deploy/.env and deploy/app.env must be the ones the backup
+# was made with (the same MOTHLI_BACKUP_ENCRYPTION_KEY, or the backup cannot be opened, and the same
 # HOSTED_STORAGE_FILESYSTEM_KEY, or no book can be read). A full restore refuses to touch a database
 # or a book volume that already holds anything. Every line it prints starts with the UTC time; the
 # last one says "RESTORE OK" or "RESTORE FAILED", and a failure exits non-zero.
@@ -29,26 +31,33 @@ started=$(date +%s)
 umask 077
 mkdir -p "$DIR"
 
-# ---- 1. The backup, unpacked into deploy/backups/restore/, its checksums checked --------------
-step="getting the backup"
+# ---- 1. The backup, decrypted and unpacked into deploy/backups/restore/, checksums checked -----
 if [ -d "$which" ]; then
   src=$which
+  log "1/6 using the folder $which as it is (already decrypted and unpacked)"
 else
+  step="checking the backup key"
+  $COMPOSE run --rm --no-deps -T backup python -m app.hosted.backups check-key
+  step="getting the backup"
   src=$DIR/restore
   rm -rf "$src"
   mkdir -p "$src"
   if [ -f "$which" ]; then
     file=$which
   else
-    file=$DIR/restore-download.tar
+    file=$DIR/restore-download.tar.age
     log "1/6 downloading $which from R2"
     $COMPOSE run --rm --no-deps -T backup python -m app.hosted.backups download "$which" > "$file"
   fi
-  tar -C "$src" -xf "$file"
+  # Only after every chunk passed its check does this step succeed; a damaged file stops here, and
+  # whatever was unpacked before the damage is deleted.
+  step="decrypting the backup"
+  $COMPOSE run --rm --no-deps -T backup python -m app.hosted.backups decrypt < "$file" \
+    | tar -C "$src" -xf - || { rm -rf "$src"; false; }
 fi
 tidy() {  # the unpacked copy holds readers' data: keep it no longer than needed
   rm -f "$DIR/restore-counts.diff"
-  if [ "$src" = "$DIR/restore" ]; then rm -rf "$DIR/restore" "$DIR/restore-download.tar"; fi
+  if [ "$src" = "$DIR/restore" ]; then rm -rf "$DIR/restore" "$DIR/restore-download.tar.age"; fi
 }
 step="checking the backup's checksums"
 (cd "$src" && sha256sum -c --quiet SHA256SUMS)
