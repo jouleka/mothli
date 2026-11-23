@@ -300,6 +300,28 @@ export type BookmarkMark = ReaderMarkBase & {
 };
 export type ReaderMark = HighlightMark | AnnotationMark | BookmarkMark;
 export type ReaderMarks = { as_of_chapter: number; marks: ReaderMark[] };
+/** Hosted: what Paddle.js needs to show prices and open checkout (public by design), and the
+ * price sold for each plan (null for one not on offer). */
+export type PlanCheckout = {
+  environment: "sandbox" | "production";
+  client_token: string;
+  prices: { monthly: string | null; yearly: string | null };
+};
+/** Hosted: where the reader stands with their plan (ADR 0045 section 6). No amount, no count. */
+export type Plan = {
+  state: "new" | "free" | "ended" | "paying";
+  why: "time" | "ceiling" | "plan" | null;
+  plan: "monthly" | "yearly" | "gift" | null;
+  next_date: string | null;
+  /** A live Paddle plan of the reader's own, which they can cancel, keep or manage. */
+  subscribed: boolean;
+  cancel_scheduled: boolean;
+  payment_retrying: boolean;
+  /** Whether this server can cancel, keep and manage a plan at all. */
+  manage: boolean;
+  /** Null where this server opens no checkout. */
+  checkout: PlanCheckout | null;
+};
 /** What every hosted route answers while the reader's account waits to be erased. */
 export const PENDING_DELETION = "account_pending_deletion";
 
@@ -916,6 +938,24 @@ export const api = {
   /** Hosted: undo a pending deletion; an ordinary account again, everything as it was. */
   keepAccount: () =>
     fetch("/api/account/keep", { method: "POST", headers: csrfHeaders() }).then((r) => j<void>(r)),
+  /** Hosted: the reader's plan (ADR 0045). */
+  plan: () => fetch("/api/billing/plan", { cache: "no-store" }).then((r) => j<Plan>(r)),
+  /** Hosted: a checkout the server made for this reader, for Paddle.js to open by its id. */
+  startCheckout: (plan: "monthly" | "yearly") =>
+    fetch("/api/billing/checkout", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...csrfHeaders() },
+      body: JSON.stringify({ plan }),
+    }).then((r) => j<{ transaction_id: string }>(r)),
+  /** Hosted: cancel at the end of the period paid for; answers the plan. */
+  cancelPlan: () =>
+    fetch("/api/billing/cancel", { method: "POST", headers: csrfHeaders() }).then((r) => j<Plan>(r)),
+  /** Hosted: undo a scheduled cancel; answers the plan. */
+  keepPlan: () =>
+    fetch("/api/billing/keep", { method: "POST", headers: csrfHeaders() }).then((r) => j<Plan>(r)),
+  /** Hosted: a one-time link to Paddle's customer portal. Never kept. */
+  planPortal: () =>
+    fetch("/api/billing/portal", { method: "POST", headers: csrfHeaders() }).then((r) => j<{ url: string }>(r)),
   /** Hosted: the reader's copy of their data, one zip, with the name the server gives it. Open
    * to a reader waiting to be erased too. */
   exportAccount: async (): Promise<{ blob: Blob; name: string }> => {

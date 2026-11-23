@@ -22,7 +22,7 @@
 	# The same browser defences the backend sets on its own responses (app/main.py
 	# _SecurityHeaders), here for the static app too. A backend test keeps the two equal.
 	header {
-		Content-Security-Policy "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; frame-src 'self' blob:; form-action 'self'; script-src 'self'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:"
+		Content-Security-Policy "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; frame-src 'self' blob: https://buy.paddle.com https://sandbox-buy.paddle.com; form-action 'self'; script-src 'self' https://cdn.paddle.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline' https://cdn.paddle.com https://sandbox-cdn.paddle.com; img-src 'self' data: blob:; font-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' https://api.paddle.com https://sandbox-api.paddle.com; worker-src 'self' blob:"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
 		X-Frame-Options "DENY"

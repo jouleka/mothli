@@ -4,17 +4,21 @@
  * quietly at the end, deleting the account: a second step says plainly what happens and needs a
  * deliberate yes. A modal sheet like "What Mothli remembers" (fl-scrim / fl-sheet), with the same
  * focus handling. "Take a copy of my data" sits quietly after "What Mothli remembers", and is
- * offered again in the delete confirmation (TakeACopy.tsx). */
+ * offered again in the delete confirmation (TakeACopy.tsx). The reader's plan comes first, after
+ * their name (YourPlan.tsx), where the server has one to tell; "See the plan" opens the plan sheet
+ * over this one (PlanSheet.tsx), as "What Mothli remembers" does. */
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { api, ApiError } from "../api";
+import { api, ApiError, type Plan } from "../api";
 import { offersChat, type OfflineSession } from "../pwa/offline";
 import { keepTabFocusInside } from "../reader/focusTrap";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { MothliRemembers } from "./MothliRemembers";
+import { PlanSheet } from "./PlanSheet";
 import { TakeACopy } from "./TakeACopy";
 import { noteAccountDeleted } from "./SignIn";
+import { YourPlan } from "./YourPlan";
 import "../library/free-library.css";
 import "./home-chat.css";
 import "./account.css";
@@ -26,6 +30,9 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
   // null until the server answers; false where it keeps no recollections (404).
   const [remembers, setRemembers] = useState<boolean | null>(null);
   const [remembering, setRemembering] = useState(false);
+  // The reader's plan; null where the server has none to tell (404).
+  const [plan, setPlan] = useState<Plan | "loading" | "failed" | null>("loading");
+  const [seeingPlan, setSeeingPlan] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   // Deleting: the second step, the reader's "I understand", and the request on its way.
@@ -35,6 +42,8 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
   const rootRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const rememberRef = useRef<HTMLButtonElement>(null);
+  const seePlanRef = useRef<HTMLButtonElement>(null);
+  const returnToPlan = useRef(false);
   const deleteRef = useRef<HTMLButtonElement>(null);
   const confirmTitleRef = useRef<HTMLHeadingElement>(null);
   const returnToRemember = useRef(false);
@@ -71,10 +80,23 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
     return () => { stale = true; };
   }, []);
 
-  // A modal: the page behind is inert, Escape closes it, Tab stays inside. While "What Mothli
-  // remembers" is open on top, that sheet owns the keyboard instead.
+  const readPlan = (quietly = false) => {
+    if (!quietly) setPlan("loading");
+    return api.plan()
+      .then((found) => setPlan(found))
+      .catch((reason) => {
+        if (reason instanceof ApiError && reason.status === 404) setPlan(null);
+        else if (!quietly) setPlan("failed");
+      });
+  };
   useEffect(() => {
-    if (remembering) return;
+    void readPlan();
+  }, []);
+
+  // A modal: the page behind is inert, Escape closes it, Tab stays inside. While "What Mothli
+  // remembers" or the plan sheet is open on top, that sheet owns the keyboard instead.
+  useEffect(() => {
+    if (remembering || seeingPlan) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const siblings = Array.from(document.body.children)
@@ -84,7 +106,9 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
     if (returnToRemember.current) {
       returnToRemember.current = false;
       rememberRef.current?.focus();
-    } else closeRef.current?.focus();
+    } else if (returnToPlan.current && seePlanRef.current) seePlanRef.current.focus();
+    else closeRef.current?.focus();
+    returnToPlan.current = false;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -97,7 +121,7 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
       document.body.style.overflow = previousOverflow;
       for (const { element, inert } of siblings) element.inert = inert;
     };
-  }, [remembering]);
+  }, [remembering, seeingPlan]);
 
   const signOut = async () => {
     setSigningOut(true);
@@ -132,6 +156,20 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
     setUnderstood(false);
     setConfirming(false);
   };
+
+  if (seeingPlan)
+    return (
+      <PlanSheet
+        email={session.user.email}
+        plan={plan !== null && typeof plan === "object" ? plan : undefined}
+        onJoined={(joined) => setPlan(joined)}
+        onClose={() => {
+          returnToPlan.current = true;
+          setSeeingPlan(false);
+          void readPlan(true);
+        }}
+      />
+    );
 
   if (remembering)
     return (
@@ -196,6 +234,15 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
             <p className="ml-account-who">
               You’re signed in as <strong>{session.user.display_name}</strong>.
             </p>
+
+            {plan !== null && (
+              <YourPlan
+                plan={plan}
+                onPlan={setPlan}
+                onSeePlan={() => setSeeingPlan(true)}
+                seePlanRef={seePlanRef}
+              />
+            )}
 
             {remembers && (
               <div className="ml-account-part">

@@ -132,20 +132,23 @@ class _HostedReadiness:
         return True
 
 
+# Paddle's addresses (ADR 0045 step 4, the plan sheet): its script, the stylesheet it adds, its
+# checkout window and its price preview, live and sandbox, as read from Paddle.js 2.13.0; nothing
+# wider. deploy/Caddyfile and frontend/vite.config.ts carry the same; tests keep them equal.
 _CONTENT_SECURITY_POLICY = "; ".join((
     "default-src 'self'",
     "base-uri 'none'",
     "object-src 'none'",
     "frame-ancestors 'none'",
-    "frame-src 'self' blob:",
+    "frame-src 'self' blob: https://buy.paddle.com https://sandbox-buy.paddle.com",
     "form-action 'self'",
-    "script-src 'self'",
+    "script-src 'self' https://cdn.paddle.com",
     "script-src-attr 'none'",
-    "style-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://cdn.paddle.com https://sandbox-cdn.paddle.com",
     "img-src 'self' data: blob:",
     "font-src 'self' data: blob:",
     "media-src 'self' data: blob:",
-    "connect-src 'self'",
+    "connect-src 'self' https://api.paddle.com https://sandbox-api.paddle.com",
     "worker-src 'self' blob:",
 ))
 
