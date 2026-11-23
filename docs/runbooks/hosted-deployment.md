@@ -389,8 +389,9 @@ the regular check below. Make a key of its own for Mothli, first in the sandbox,
 1. In Paddle: **Developer tools > Authentication > API keys > New API key**. Name it "Mothli
    server". Give it exactly these permissions, nothing else: **Transactions: write** (a checkout
    is a transaction Mothli makes), **Subscriptions: write** (read, cancel, undo a cancel; write
-   includes read), **Customer portal sessions: write**. Mothli needs nothing on customers,
-   products, prices, notifications or anything else, and makes no customer of its own. Choose an
+   includes read), **Customer portal sessions: write**, **Prices: read** (the front page shows
+   the two prices as your catalog has them; step 4d). Mothli needs nothing on customers,
+   products, notifications or anything else, and makes no customer of its own. Choose an
    expiry (Paddle's default is 90 days, a year at most) and, if offered, make it rotatable.
 2. Copy the key (Paddle shows it once; a sandbox key starts `pdl_sdbx_apikey_`, a live one
    `pdl_live_apikey_`) and keep it like a password.
@@ -399,7 +400,8 @@ the regular check below. Make a key of its own for Mothli, first in the sandbox,
    `PADDLE_WEBHOOK_SECRET` set: a payment is only ever applied from Paddle's message. Remove the
    `#` from `PADDLE_CHECKOUT_URL` too and put Mothli's own front page there, `https://YOURDOMAIN/`
    with nothing after the slash (**One Paddle account, several products**, below, says why). The
-   server refuses to start with the key and without it. Then
+   server refuses to start with the key and without it, and without the three `OPERATOR_` lines
+   of step 4d (who runs Mothli, printed on its terms). Then
    `docker compose -f deploy/compose.yaml up -d --wait`.
 4. Put the key's expiry date in your calendar, a week early. An expired key cannot be renewed:
    make a new one the same way, paste it, `up -d --wait`, then revoke the old one in Paddle.
@@ -489,6 +491,54 @@ Mothli's front page with `?_ptxn=...`, and Mothli opens that checkout there, sig
   subscription event to every destination that asks for it) **and must ignore them.** Mothli does:
   it takes a message as its own only when every item is one of its price ids, and answers every
   other one "OK" without keeping it. MySigner's server must do the same with Mothli's.
+
+## 4d. The public pages: who runs Mothli, the terms, privacy, refunds and contact
+
+Anyone can read these without signing in, and Paddle's reviewers do before Paddle lets checkouts
+work on your domain (ADR 0045 step 8). Paddle asks for a clear description of what you sell, its
+prices, Terms and Conditions, a Refund Policy and a Privacy Policy reachable from the site's
+navigation, and your legal name in the terms
+([domain approval](https://www.paddle.com/help/start/account-verification/what-is-domain-approval)).
+Mothli has them at these addresses, with a footer linking all four on every signed-out page:
+
+- `https://YOURDOMAIN/` the front page: what Mothli is, what is free, the plan and its prices;
+- `https://YOURDOMAIN/terms`, `/privacy`, `/refunds` and `/contact`.
+
+**Your details.** The pages print who runs Mothli from three lines in `deploy/app.env`. Remove the
+`#` from each and fill them in:
+
+- `OPERATOR_LEGAL_NAME`: your legal name, or your company's, exactly as it should appear in the
+  terms (Paddle's account holds the same legal name for both your products);
+- `OPERATOR_COUNTRY`: the country you run Mothli from; the terms say its law applies;
+- `OPERATOR_CONTACT_EMAIL`: the address readers write to. It is printed on every page, so use
+  one you are happy to publish and that you read.
+
+Then `docker compose -f deploy/compose.yaml up -d --wait`. Until all three are set, each page
+says only that Mothli is not open for sign-ups here, and **the server refuses to start with
+`PADDLE_API_KEY`** (a server that can take payments must publish its terms): it stops with
+`PADDLE_API_KEY requires OPERATOR_LEGAL_NAME, OPERATOR_COUNTRY and OPERATOR_CONTACT_EMAIL`. A
+value with markup or on more than one line, or the template's placeholder, is refused by name.
+
+**The prices on the front page** come from your Paddle catalog, never from the app: the web
+server reads the two prices it sells (the first id in `PADDLE_PRICE_MONTHLY` and in
+`PADDLE_PRICE_YEARLY`) with the API key, which needs **Prices: read** (step 4c, the API key), and
+keeps them for ten minutes. It asks for those two ids and nothing else in the shared account.
+Where it cannot (no key, the key lacks that permission, Paddle unreachable, a price archived or
+not monthly and yearly, the two in different currencies) the page shows the plan without figures
+and asks again a minute later; nothing is logged but Paddle's usual one line. If you change a
+price's amount in Paddle, the front page shows it within ten minutes.
+
+**The words.** The terms, privacy notice and refunds page are in `frontend/src/public/legal.tsx`
+and are true to what the code does on the day they are dated. Before going live, have them read
+by someone who knows the law where you are: ADR 0045's "Step 8 built" lists each statement that is
+a legal choice (the law that applies, the limit on responsibility, the minimum age of 16, who is
+responsible for readers' data and on what basis, data handled outside the EU) and the ones you
+must check yourself: name your sign-in service, your AI writer (OpenAI or Anthropic) and the
+company you rent the server from, if you want them named; and check what each AI company keeps of
+what it is sent, under your account's terms with them.
+
+The proxy serves the app's page at those four addresses (`deploy/Caddyfile`, `@pages`); nothing
+else changes in it, and the browser's security policy is the same as before.
 
 ## 5. Restoring
 
@@ -702,6 +752,10 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
   secret key, the API key and its expiry date, in the sandbox first and then live (`PADDLE_*` in
   `deploy/app.env`), the regular check in the crontab, and the billing role's password
   (`MOTHLI_DB_BILLING_PASSWORD` in `deploy/.env`).
+- Who runs Mothli, for the public pages (step 4d): `OPERATOR_LEGAL_NAME`, `OPERATOR_COUNTRY` and
+  `OPERATOR_CONTACT_EMAIL` in `deploy/app.env`, and a lawyer's reading of the terms and the
+  privacy notice before going live.
 - How long backups are kept, and where the off-server copies go. That is also how long a deleted
-  account's data lives on in backups (step 4).
+  account's data lives on in backups (step 4), and the privacy page says two weeks: change both
+  together.
 - Where the offline copy of `deploy/.env` and `deploy/app.env` is kept.
