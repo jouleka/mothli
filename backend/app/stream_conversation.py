@@ -744,12 +744,13 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
         except CostCeilingExceeded as exc:
             failure = exc
             large = "per-call" in str(exc)
-            # Hosted mode: the reader's or the platform's allowance (ADR 0041 section 6).
+            # Hosted mode: the reader's or the platform's allowance (ADR 0041 section 6), or
+            # the gate (ADR 0045 step 5), whose event is a 402 with why.
             allowance = exc.__cause__ if getattr(exc.__cause__, "reader_message", None) else None
             yield {"type": "error", "status": 413 if large else 429,
                    "message": "request too large" if large else "book cost ceiling reached",
-                   **({"code": allowance.code, "message": allowance.reader_message}
-                      if allowance else {})}
+                   **({"code": allowance.code, "message": allowance.reader_message,
+                       **getattr(allowance, "extra", {})} if allowance else {})}
         except AskRetrievalLimit as exc:
             failure = exc
             yield {"type": "error", "status": 413, "message": "read text exceeds the bounded search budget"}

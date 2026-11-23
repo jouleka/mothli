@@ -10,7 +10,9 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+import psycopg
 from fastapi import APIRouter, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from app.hosted.auth.models import Principal
@@ -223,6 +225,21 @@ def pending_deletion_detail(erase_after: datetime) -> dict[str, str]:
     return {"code": PENDING_DELETION, "erase_after": erase_after.astimezone(UTC).isoformat()}
 
 
+def _mothli(request: Request, owner) -> dict | None:
+    """Where the reader stands with Mothli (ADR 0045 step 5, ``gate.standing``): ``state``,
+    ``why`` and ``ending_note``, or None where this server has no chat or the plan cannot be read
+    just now (the gate still answers every Mothli route itself)."""
+    if not request.app.state.settings.companion_chat():
+        return None
+    from app.hosted.companion import CompanionDatabaseBusy, gate
+    from app.hosted.tenant.models import OwnerId
+
+    try:
+        return gate.standing(request.app.state.companion_dsn, OwnerId(owner))
+    except (CompanionDatabaseBusy, psycopg.Error):
+        return None
+
+
 @router.get("/session")
 async def session(request: Request):
     authenticated = await authenticated_session(request)
@@ -238,6 +255,8 @@ async def session(request: Request):
         "expires_at": principal.expires_at.isoformat(),
         # Whether this server has Mothli's chat: the app shows no way into one where it has not.
         "chat": request.app.state.settings.companion_chat(),
+        # Where the reader stands with Mothli; the plan's kind and dates are /api/billing/plan's.
+        "mothli": await run_in_threadpool(_mothli, request, principal.owner_id),
     }
     if principal.erase_after is not None:
         payload["erase_after"] = principal.erase_after.astimezone(UTC).isoformat()

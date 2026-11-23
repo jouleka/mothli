@@ -15,6 +15,14 @@ the owner of Mothli and held to the reader's caps by the catalog's spend methods
 Where the local routes start chapter notes (a finished chapter, a reply) or recollections (a
 reply), these add a durable ``chapter_notes`` or ``recollect`` job for the worker instead (parts 6
 and 7); none of them waits for it.
+
+The gate (ADR 0045 step 5, ``app.hosted.companion.gate``): every route that serves what Mothli
+wrote or knows (the two chats, the two stored conversations, the cast, a person's card, "Story so
+far" and its progress) takes its reader through ``_mothli`` or ``_csrf_mothli``, which answer an
+ended reader ``402 mothli_plan`` before the route's body runs. Reading is never gated: the read
+map, page reports (taken in every state, so the place is right when Mothli is used again), "I've
+read this", clearing a conversation, the profile and what Mothli remembers (the reader's own data,
+to read and to forget).
 """
 
 from __future__ import annotations
@@ -25,12 +33,13 @@ import uuid
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ConfigDict
 
 from app.api.profile import reader_profile
 from app.api.reading import ReadChapters, ReadPage
 from app.ask import AskRequest
 from app.home_conversation import HomeAsk, home_turns, read_maps, shelf_books, stream_home
-from app.hosted.companion import CompanionDatabaseBusy
+from app.hosted.companion import CompanionDatabaseBusy, gate
 from app.hosted.companion.jobs import ChapterNotesQueue, RecollectQueue, StoryMemoryQueue
 from app.hosted.companion.memory import ContentSnapshot, HostedBookStore, StoryMemoryUnavailable
 from app.hosted.companion.source import HostedBookSource
@@ -84,9 +93,38 @@ def _going(catalog) -> bool:
     for nothing, as a queue that cannot be reached adds nothing: the next page or question asks
     again. Nothing here is told to the reader."""
     try:
-        return catalog.plan_state() != "ended"
+        return catalog.plan()["state"] != "ended"
     except (psycopg.Error, CompanionDatabaseBusy):
         return False
+
+
+def _standing(request: Request, owner_id: OwnerId) -> dict:
+    """Where the reader stands (``gate.standing``); a database that cannot be reached is the
+    busy answer, so nothing is served without the gate's yes."""
+    try:
+        return gate.standing(request.app.state.companion_dsn, owner_id)
+    except (CompanionDatabaseBusy, psycopg.OperationalError) as exc:
+        raise HTTPException(503, "the reading service is busy; try again shortly") from exc
+
+
+def _gate(request: Request, owner_id: OwnerId) -> OwnerId:
+    """The gate (ADR 0045 step 5): an ended reader is answered ``402 mothli_plan`` with why;
+    anyone else goes on exactly as before. It reads the reader's plan alone."""
+    standing = _standing(request, owner_id)
+    if standing["state"] == "ended":
+        raise gate.refusal(standing["why"])
+    return owner_id
+
+
+def _mothli(request: Request, owner_id: OwnerId = Depends(_owner)) -> OwnerId:
+    """The signed-in reader of a route that serves Mothli, through the gate. As a dependency it
+    runs before the route's body, so nothing of the reader's is opened for an ended reader."""
+    return _gate(request, owner_id)
+
+
+def _csrf_mothli(request: Request, owner_id: OwnerId = Depends(_csrf_owner)) -> OwnerId:
+    """As ``_mothli``, for a route that writes (the CSRF token checked first)."""
+    return _gate(request, owner_id)
 
 
 def _story_memory(request: Request, owner_id: OwnerId, book: str) -> None:
@@ -233,13 +271,13 @@ def put_read_frontier(book_id: uuid.UUID, body: ReadAnchor, request: Request,
 
 @router.post("/ask/stream")
 def ask_the_book_stream(book_id: uuid.UUID, body: AskRequest, request: Request,
-                        owner_id: OwnerId = Depends(_csrf_owner)):
+                        owner_id: OwnerId = Depends(_csrf_mothli)):
     """Server-sent events: one ``sentence`` per checked sentence, then ``done`` or ``error``.
 
     The local route's body over the hosted adapters: the unchanged ``stream_read_prefix`` with this
     reader's catalog, story memory and source, and the platform's clients. A book that is not this
     reader's is refused with 404 while the read position is taken, before any model is called or
-    anything is reserved.
+    anything is reserved. Behind the gate.
     """
     settings = request.app.state.settings
     # The condition the session reports as ``chat`` (``Settings.companion_chat``).
@@ -255,18 +293,15 @@ def ask_the_book_stream(book_id: uuid.UUID, body: AskRequest, request: Request,
         # A question starts the reader's two free weeks, once (ADR 0045 step 1), before anything
         # is read or reserved. Nothing else here changes with them.
         catalog.start_free_weeks()
-        # ADR 0045 section 5: background work follows where the reader stands. Ended, the reply
-        # asks for none. Otherwise the question asks for the book's story memory, so a reader
-        # who has become paying again (or a new one, whose question just started the free
-        # weeks) has it built up to their place as the read map gives it; their chapter notes
-        # are asked for after the reply, as always.
-        going = _going(catalog)
-        if going:
-            _story_memory(request, owner_id, str(book_id))
+        # ADR 0045 section 5: past the gate the reader is not ended, so the question asks for
+        # the book's story memory, and a reader who has become paying again (or a new one, whose
+        # question just started the free weeks) has it built up to their place as the read map
+        # gives it; their chapter notes are asked for after the reply, as always.
+        _story_memory(request, owner_id, str(book_id))
         events = stream_read_prefix(str(book_id), body, catalog, store, settings,
                                     request.app.state.platform_client, source,
-                                    notes_builder=_notes_queue(request, owner_id) if going else None,
-                                    recollector=_recollector(request, owner_id) if going else None)
+                                    notes_builder=_notes_queue(request, owner_id),
+                                    recollector=_recollector(request, owner_id))
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc
     return StreamingResponse(
@@ -277,10 +312,13 @@ def ask_the_book_stream(book_id: uuid.UUID, body: AskRequest, request: Request,
 
 @router.get("/conversation")
 def stored_conversation(book_id: uuid.UUID, request: Request,
-                        owner_id: OwnerId = Depends(_owner)):
+                        owner_id: OwnerId = Depends(_mothli)):
     """What was said and shown in this book and may be shown again, oldest first: the local
     route's body over the hosted adapters, through the unchanged ``visible_turns`` (ADR 0041
-    part 2). A turn is shown only while everything it was written from is still read."""
+    part 2). A turn is shown only while everything it was written from is still read. Behind
+    the gate: an ended reader's chat panel holds the invitation in its place, and the turns are
+    kept and shown through the same filter when they return (ADR 0045 sections 6 and 9); the
+    copy of their data holds them meanwhile."""
     catalog, source, settings = _bound(request, owner_id)
     book = str(book_id)
     try:
@@ -319,6 +357,8 @@ def clear_conversation(book_id: uuid.UUID, request: Request,
 
 # ---- the story memory screens: the cast, a person's card, the story so far, progress (ADR 0042
 # part 4). The bodies are the local ones (``app.memory_views``), over this reader's story memory.
+# Each is behind the gate; none starts the free weeks (the app fetches the cast and the notes by
+# itself; the reader's own tap calls ``POST /api/reader/mothli/start``).
 
 _BOOKMARK = Query(default=None, ge=0, description="explicit bookmark; clamped to the reader's place")
 
@@ -364,7 +404,7 @@ def _remembered(request: Request, owner_id: OwnerId, book: str):
 
 @router.get("/graph")
 def story_graph(book_id: uuid.UUID, request: Request, bookmark: int | None = _BOOKMARK,
-                owner_id: OwnerId = Depends(_owner)):
+                owner_id: OwnerId = Depends(_mothli)):
     """The people met so far, and how they are tied: the local ``/graph``."""
     _state, memory, place, durable, _job = _remembered(request, owner_id, str(book_id))
     return graph_payload(memory, clamp(bookmark, place, durable))
@@ -372,7 +412,7 @@ def story_graph(book_id: uuid.UUID, request: Request, bookmark: int | None = _BO
 
 @router.get("/character/{entity_id}")
 def story_character(book_id: uuid.UUID, entity_id: str, request: Request,
-                    bookmark: int | None = _BOOKMARK, owner_id: OwnerId = Depends(_owner)):
+                    bookmark: int | None = _BOOKMARK, owner_id: OwnerId = Depends(_mothli)):
     """One person's card: the local ``/character/{id}``. A person not met yet, a malformed id
     and an id of no one are the same 404."""
     _state, memory, place, durable, _job = _remembered(request, owner_id, str(book_id))
@@ -388,7 +428,7 @@ def story_character(book_id: uuid.UUID, entity_id: str, request: Request,
 
 @router.get("/notes")
 def story_notes(book_id: uuid.UUID, request: Request, bookmark: int | None = _BOOKMARK,
-                owner_id: OwnerId = Depends(_owner)):
+                owner_id: OwnerId = Depends(_mothli)):
     """The story so far, chapter by chapter: the local ``/notes``. A chapter Mothli could not
     make notes on (ADR 0042 section 2) is marked ``unremembered``, so the panel says so in
     place of its empty summary; local mode never keeps such a chapter."""
@@ -403,7 +443,7 @@ def story_notes(book_id: uuid.UUID, request: Request, bookmark: int | None = _BO
 
 
 @router.get("/ingest")
-def story_progress(book_id: uuid.UUID, request: Request, owner_id: OwnerId = Depends(_owner)):
+def story_progress(book_id: uuid.UUID, request: Request, owner_id: OwnerId = Depends(_mothli)):
     """How many chapters' story memory is complete, and whether more is on its way (``running``)
     or waits for the next UTC day (``waiting``), told only while the reader has finished chapters
     whose notes they are not handed yet (``_remembered``): the local ``/ingest``."""
@@ -446,7 +486,7 @@ def _remembering(request: Request, owner_id: OwnerId) -> HostedCompanionCatalog:
 
 
 @reader_router.post("/ask/stream")
-def ask_home(body: HomeAsk, request: Request, owner_id: OwnerId = Depends(_csrf_owner)):
+def ask_home(body: HomeAsk, request: Request, owner_id: OwnerId = Depends(_csrf_mothli)):
     """Server-sent events, as for a book: one ``sentence`` per checked sentence, then ``done`` or
     ``error``. The local route's body over the hosted adapters: the unchanged ``stream_home`` with
     this reader's shelf, story memory and sources, and the platform's clients. A reply that names
@@ -457,10 +497,8 @@ def ask_home(body: HomeAsk, request: Request, owner_id: OwnerId = Depends(_csrf_
     store = HostedBookStore(request.app.state.companion_dsn, owner_id)
     try:
         catalog.start_free_weeks()          # as in a book: a question starts the free weeks
-        # Ended, the reply asks for no background work (ADR 0045 section 5).
-        recollector = _recollector(request, owner_id) if _going(catalog) else None
         events = stream_home(body, catalog, store, settings, request.app.state.platform_client,
-                             source, [], recollector=recollector)
+                             source, [], recollector=_recollector(request, owner_id))
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc
     return StreamingResponse(
@@ -470,8 +508,9 @@ def ask_home(body: HomeAsk, request: Request, owner_id: OwnerId = Depends(_csrf_
 
 
 @reader_router.get("/conversation")
-def home_conversation(request: Request, owner_id: OwnerId = Depends(_owner)):
-    """What was said on the home screen and may be shown again: see ``home_turns``."""
+def home_conversation(request: Request, owner_id: OwnerId = Depends(_mothli)):
+    """What was said on the home screen and may be shown again: see ``home_turns``. Behind the
+    gate, as a book's stored conversation is."""
     catalog, source, settings = _home(request, owner_id)
     try:
         turns = home_turns(catalog, read_maps(shelf_books(catalog, settings, source)), limit=80)
@@ -535,3 +574,34 @@ def forget_recollections(request: Request, owner_id: OwnerId = Depends(_csrf_own
         catalog.clear_recollections()
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc
+
+
+# ---- the start of the free weeks by the reader's own tap (ADR 0045 section 2, step 5) ----------
+
+class MothliStart(BaseModel):
+    """The book the reader is in, if any: its background work is asked for, as a question's is."""
+
+    model_config = ConfigDict(extra="forbid")
+    book_id: uuid.UUID | None = None
+
+
+@reader_router.post("/mothli/start")
+def start_mothli(body: MothliStart, request: Request, owner_id: OwnerId = Depends(_csrf_owner)):
+    """The reader opened the cast or "Story so far" themselves: their first use of Mothli, as a
+    question is. Unless they are ended, it starts their free weeks once (``start_free_weeks``,
+    exactly as a question does) and asks for the book's chapter notes and story memory, which
+    build what is missing up to their place (section 5). An ended reader is only told where they
+    stand: nothing is stamped or asked for. The answer is the session's ``mothli``. The app's own
+    fetches (the cast for names in the page, the notes after a chapter) never call it."""
+    if not request.app.state.settings.companion_chat():
+        raise HTTPException(404, "Mothli is not enabled")
+    standing = _standing(request, owner_id)
+    if standing["state"] != "ended":
+        try:
+            HostedCompanionCatalog(request.app.state.companion_dsn, owner_id).start_free_weeks()
+        except CompanionDatabaseBusy as exc:
+            raise _busy(exc) from exc
+        if body.book_id is not None:            # a book that is not this reader's adds nothing
+            _finished(request, owner_id, str(body.book_id))
+        standing = _standing(request, owner_id)
+    return standing
