@@ -4,7 +4,7 @@
  * back to the page they were on (`return_to`, a path inside this app only). Local mode has no
  * sign-in: the gate there renders the app untouched. */
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, ApiError, type PlanEnding } from "../api";
 import { PENDING_DELETION_EVENT, SIGNED_OUT_EVENT, type OfflineSession } from "../pwa/offline";
 import { Button } from "../ui/Button";
 import { Moth } from "../ui/Moth";
@@ -15,6 +15,7 @@ import { forgetPaymentLink, paymentLinkTransaction } from "./paddle";
 import { PaymentLink } from "./PaymentLink";
 import { PlanSheet } from "./PlanSheet";
 import { TakeACopy } from "./TakeACopy";
+import { ACCOUNT_PLAN_LINES, KEEP_PLAN_FAILED, planDay, waitingPlanLine } from "./YourPlan";
 import "./shelf-redesign.css";
 import "./account.css";
 
@@ -202,22 +203,57 @@ const KEEP_FAILED = "That didn’t work just now. Check your connection and try 
  * days. Nothing else of the app is open to them (the server refuses it too) until they choose,
  * except taking a copy of their data first. */
 export function PendingDeletion({ eraseAfter }: { eraseAfter: string }) {
-  const [working, setWorking] = useState<"keep" | "leave" | null>(null);
+  const [working, setWorking] = useState<"keep" | "plan" | "leave" | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  // A plan that won't renew (asking to delete cancelled it at the period's end), and its day.
+  // Nothing is said where the server manages no plans, or the read fails.
+  const [ending, setEnding] = useState<PlanEnding | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => headingRef.current?.focus(), []);
+  useEffect(() => {
+    let stale = false;
+    api.planEnding()
+      .then((found) => { if (!stale) setEnding(found); })
+      .catch(() => undefined);
+    return () => { stale = true; };
+  }, []);
 
+  const again = () => window.location.assign(`${window.location.pathname}${window.location.search}`);
   const keep = async () => {
     setWorking("keep");
     setProblem(null);
     try {
       await api.keepAccount();
       // The app again, from the start, with everything as it was.
-      window.location.assign(`${window.location.pathname}${window.location.search}`);
+      again();
     } catch {
       setProblem(KEEP_FAILED);
       setWorking(null);
     }
+  };
+  // The account first (an ordinary one may change its plan), then the plan, as the account
+  // sheet's "Keep my plan" does.
+  const keepPlan = async () => {
+    setWorking("plan");
+    setProblem(null);
+    try {
+      await api.keepAccount();
+    } catch {
+      setProblem(KEEP_FAILED);
+      setWorking(null);
+      return;
+    }
+    try {
+      await api.keepPlan();
+    } catch (reason) {
+      // A plan that ended meanwhile has nothing to keep.
+      if (!(reason instanceof ApiError && reason.code === "no_plan")) {
+        setProblem(KEEP_PLAN_FAILED);
+        setWorking(null);
+        return;
+      }
+    }
+    again();
   };
   const leave = async () => {
     setWorking("leave");
@@ -251,6 +287,9 @@ export function PendingDeletion({ eraseAfter }: { eraseAfter: string }) {
               your place in them, your conversations and what Mothli remembers. Keep your account
               and it all comes back, just as you left it.
             </p>
+            {ending?.wont_renew && (
+              <p className="ml-spread-lede">{waitingPlanLine(ending.ends ? planDay(ending.ends) : null)}</p>
+            )}
             <div className="ml-spread-foot">
               {problem && <p className="fl-error" role="alert">{problem}</p>}
               <div className="ml-pending-actions">
@@ -262,6 +301,16 @@ export function PendingDeletion({ eraseAfter }: { eraseAfter: string }) {
                 >
                   {working === "keep" ? "Keeping it…" : "Keep my account"}
                 </Button>
+                {ending?.wont_renew && (
+                  <Button
+                    variant="secondary"
+                    disabled={working !== null}
+                    aria-busy={working === "plan" || undefined}
+                    onClick={() => void keepPlan()}
+                  >
+                    {working === "plan" ? ACCOUNT_PLAN_LINES.keeping : ACCOUNT_PLAN_LINES.keep}
+                  </Button>
+                )}
                 <Button
                   variant="secondary"
                   disabled={working !== null}

@@ -118,7 +118,8 @@ def test_a_copy_holds_the_readers_own_data_and_nothing_the_app_would_hide(
     files = copy_of(a.call("GET", "/api/account/export"))
 
     assert sorted(files) == ["READ ME.txt", "books/01 The Lamp Book.json", "home chat.json",
-                             "shelf.json", "what Mothli remembers.json", "you.json"]
+                             "shelf.json", "what Mothli remembers.json", "you.json",
+                             "your plan.json"]
     assert 'press Notebook, and choose "Download the book"' in " ".join(
         files["READ ME.txt"].split())
     assert json.loads(files["you.json"]) == {"name": "Reader A", "email": None,

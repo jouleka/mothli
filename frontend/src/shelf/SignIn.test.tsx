@@ -5,12 +5,16 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { announcePendingDeletion, announceSignedOut, type OfflineSession } from "../pwa/offline";
 import { axeAA } from "../test-a11y";
 
-const mocks = vi.hoisted(() => ({ keepAccount: vi.fn(), logout: vi.fn(), exportAccount: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  keepAccount: vi.fn(), logout: vi.fn(), exportAccount: vi.fn(), planEnding: vi.fn(), keepPlan: vi.fn(),
+}));
 vi.mock("../api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api")>()),
   api: mocks,
 }));
+import { ApiError } from "../api";
 import { SignIn, SignInGate, erasureDay, noteAccountDeleted, signInHref } from "./SignIn";
+import { KEEP_PLAN_FAILED, planDay } from "./YourPlan";
 
 const signedIn: OfflineSession = {
   user: { id: "05dbebd1-e9e8-4be8-8172-eb65ca8d2a67", display_name: "Wren Example" },
@@ -109,6 +113,9 @@ describe("waiting to be erased", () => {
   beforeEach(() => {
     mocks.keepAccount.mockReset().mockResolvedValue(undefined);
     mocks.logout.mockReset().mockResolvedValue(undefined);
+    // No plan that won't renew, unless a test says so.
+    mocks.planEnding.mockReset().mockResolvedValue({ wont_renew: false, ends: null });
+    mocks.keepPlan.mockReset().mockResolvedValue({});
     assign.mockReset();
     Object.defineProperty(window, "location", {
       configurable: true, value: { ...realLocation, assign, pathname: "/", search: "?book=b1" },
@@ -214,6 +221,85 @@ describe("waiting to be erased", () => {
     fireEvent.click(screen.getByRole("link", { name: "Sign in to start reading" }));
     window.removeEventListener("click", stay);
     expect(sessionStorage.getItem("mothli.account-deleted")).toBeNull();
+  });
+
+  // ADR 0045 step 7. Catches: a reader who asked to delete while paying not told their plan
+  // won't renew and its day, told so with a counter, or offered no way to keep the plan;
+  // "Keep my plan" keeping the plan of an account still set to be erased (charged with no
+  // account), or not keeping the plan at all.
+  describe("with a plan that won't renew", () => {
+    const ENDS = "2099-12-03T10:00:00+00:00";
+    const line = () => `Your plan won’t renew. It’s paid for until ${planDay(ENDS)}.`;
+    beforeEach(() => mocks.planEnding.mockResolvedValue({ wont_renew: true, ends: ENDS }));
+
+    test("the waiting screen says so with its day, beside Keep my plan", async () => {
+      const { container } = render(<SignInGate session={pending}>{theApp()}</SignInGate>);
+      expect(await screen.findByText(line())).toBeTruthy();
+      expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(
+        ["Keep my account", "Keep my plan", "Sign out", "Take a copy of my data"]);
+      expect(container.textContent).not.toMatch(/unlimited|questions? left|countdown|hours/i);
+      expect(await axeAA(container)).toHaveNoViolations();
+    });
+
+    test("without a day, it still says the plan won't renew", async () => {
+      mocks.planEnding.mockResolvedValue({ wont_renew: true, ends: null });
+      render(<SignInGate session={pending}>{theApp()}</SignInGate>);
+      expect(await screen.findByText("Your plan won’t renew.")).toBeTruthy();
+    });
+
+    test("Keep my plan keeps the account first, then the plan, then opens the app", async () => {
+      const order: string[] = [];
+      mocks.keepAccount.mockImplementation(async () => { order.push("account"); });
+      mocks.keepPlan.mockImplementation(async () => { order.push("plan"); return {}; });
+      render(<SignInGate session={pending}>{theApp()}</SignInGate>);
+      fireEvent.click(await screen.findByRole("button", { name: "Keep my plan" }));
+      await waitFor(() => expect(assign).toHaveBeenCalledWith("/?book=b1"));
+      expect(order).toEqual(["account", "plan"]);
+    });
+
+    test("a plan that could not be kept says so, and trying again works", async () => {
+      mocks.keepPlan.mockRejectedValueOnce(new ApiError("busy", 409, "try_again_soon"));
+      render(<SignInGate session={pending}>{theApp()}</SignInGate>);
+      fireEvent.click(await screen.findByRole("button", { name: "Keep my plan" }));
+      expect((await screen.findByRole("alert")).textContent).toBe(KEEP_PLAN_FAILED);
+      expect(assign).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Keep my plan" }));
+      await waitFor(() => expect(assign).toHaveBeenCalledWith("/?book=b1"));
+      expect(mocks.keepAccount).toHaveBeenCalledTimes(2);
+      expect(mocks.keepPlan).toHaveBeenCalledTimes(2);
+    });
+
+    test("an account that could not be kept leaves the plan alone", async () => {
+      mocks.keepAccount.mockRejectedValueOnce(new TypeError("offline"));
+      render(<SignInGate session={pending}>{theApp()}</SignInGate>);
+      fireEvent.click(await screen.findByRole("button", { name: "Keep my plan" }));
+      expect((await screen.findByRole("alert")).textContent).toBe(
+        "That didn’t work just now. Check your connection and try again.");
+      expect(mocks.keepPlan).not.toHaveBeenCalled();
+      expect(assign).not.toHaveBeenCalled();
+    });
+
+    test("a plan that ended meanwhile has nothing to keep: the app opens", async () => {
+      mocks.keepPlan.mockRejectedValueOnce(new ApiError("no plan", 409, "no_plan"));
+      render(<SignInGate session={pending}>{theApp()}</SignInGate>);
+      fireEvent.click(await screen.findByRole("button", { name: "Keep my plan" }));
+      await waitFor(() => expect(assign).toHaveBeenCalledWith("/?book=b1"));
+    });
+  });
+
+  test("no plan line or Keep my plan where the plan renews, none is managed, or the read fails", async () => {
+    for (const answer of [() => mocks.planEnding.mockResolvedValue({ wont_renew: false, ends: null }),
+      () => mocks.planEnding.mockRejectedValue(new ApiError("Not Found", 404)),
+      () => mocks.planEnding.mockRejectedValue(new TypeError("offline"))]) {
+      answer();
+      render(<SignInGate session={pending}>{theApp()}</SignInGate>);
+      await waitFor(() => expect(mocks.planEnding).toHaveBeenCalled());
+      await act(() => new Promise((settled) => setTimeout(settled, 0)));
+      expect(screen.queryByText(/won’t renew/)).toBeNull();
+      expect(screen.queryByRole("button", { name: "Keep my plan" })).toBeNull();
+      cleanup();
+      mocks.planEnding.mockReset();
+    }
   });
 
   test("the day is read in UTC and carries the year only when it is not this year", () => {
