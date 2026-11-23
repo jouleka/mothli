@@ -2,7 +2,7 @@
  * chat inside a book, the cast, "Story so far" and the home chat. The plan sheet is a stand-in
  * here (its own tests are PlanSheet.test.tsx); Paddle is never reached. */
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { axeAA } from "../test-a11y";
 
 const mocks = vi.hoisted(() => ({
@@ -53,6 +53,7 @@ import { planOf } from "../shelf/plan-fakes";
 import {
   endingNote,
   endingWeekday,
+  endingWhen,
   forgetEndingDay,
   GOT_IT,
   INVITATIONS,
@@ -132,7 +133,11 @@ describe("the lines, word for word", () => {
     expect(SIGN_UP_LINE).toBe("Reading here is free, always. Talking with me is free for your first two weeks.");
     expect(MOTHLI_HELLO).toBe(
       "Hi, I’m Mothli! Your first two weeks with me are free, so ask me anything about the pages you’ve read. No spoilers, promise.");
-    expect(endingNote("Thursday")).toBe(
+    expect(endingNote("today")).toBe(
+      "Just so you know, our free weeks together end today. Your books stay yours either way. If you’d like to keep talking after that, here’s how.");
+    expect(endingNote("tomorrow")).toBe(
+      "Just so you know, our free weeks together end tomorrow. Your books stay yours either way. If you’d like to keep talking after that, here’s how.");
+    expect(endingNote("on Thursday")).toBe(
       "Just so you know, our free weeks together end on Thursday. Your books stay yours either way. If you’d like to keep talking after that, here’s how.");
     expect(INVITATIONS.time).toBe(
       "Our two free weeks are over. I loved reading along with you! Your books, your place and your highlights stay right here, free, always. Join me on the plan and we’ll pick up right where we left off.");
@@ -143,8 +148,30 @@ describe("the lines, word for word", () => {
     expect(KEEP_TALKING).toBe("Keep talking with Mothli");
     expect(SEE_THE_PLAN).toBe("See the plan");
     expect(GOT_IT).toBe("Got it");
-    for (const line of [SIGN_UP_LINE, MOTHLI_HELLO, endingNote("Thursday"), ...Object.values(INVITATIONS),
-      KEEP_TALKING, SEE_THE_PLAN, GOT_IT]) noCounter(line);
+    for (const line of [SIGN_UP_LINE, MOTHLI_HELLO, endingNote("today"), endingNote("tomorrow"),
+      endingNote("on Thursday"), ...Object.values(INVITATIONS), KEEP_TALKING, SEE_THE_PLAN, GOT_IT]) noCounter(line);
+  });
+
+  // Catches: the day said by the server's UTC calendar rather than the reader's own, or a bare
+  // weekday ("on Thursday" said on a Thursday) in the last two days, where it is ambiguous.
+  test("today, tomorrow or the weekday, by the reader's own calendar day, not UTC's", () => {
+    // Auckland is UTC+13 in December. The clock: 1 December 20:00 UTC, 2 December 09:00 there.
+    const now = new Date("2026-12-01T20:00:00Z");
+    const auckland = "Pacific/Auckland";
+    // 2 December 10:00 UTC is tomorrow in UTC but 23:00 today in Auckland.
+    expect(endingWhen("2026-12-02T10:00:00Z", now, auckland)).toBe("today");
+    expect(endingWhen("2026-12-02T10:00:00Z", now, "UTC")).toBe("tomorrow");
+    // 2 December 12:00 UTC is 3 December 01:00 in Auckland: tomorrow there.
+    expect(endingWhen("2026-12-02T12:00:00Z", now, auckland)).toBe("tomorrow");
+    // 3 December 12:00 UTC is Friday 4 December in Auckland, though Thursday in UTC.
+    expect(endingWhen("2026-12-03T12:00:00Z", now, auckland)).toBe("on Friday");
+    expect(endingWhen("2026-12-03T12:00:00Z", now, "UTC")).toBe("on Thursday");
+    // Los Angeles is UTC−8: at 2 December 03:00 UTC it is still 1 December there, so the end at
+    // 2 December 20:00 UTC is today in UTC and tomorrow in Los Angeles.
+    const evening = new Date("2026-12-02T03:00:00Z");
+    expect(endingWhen("2026-12-02T20:00:00Z", evening, "UTC")).toBe("today");
+    expect(endingWhen("2026-12-02T20:00:00Z", evening, "America/Los_Angeles")).toBe("tomorrow");
+    expect(endingWhen("not a date", now)).toBeNull();
   });
 
   test("the day the free weeks end is the weekday in the reader's own time zone", () => {
@@ -426,10 +453,18 @@ describe("not started: the start call and the hello", () => {
 });
 
 describe("the gentle note in the last two days", () => {
+  // A fixed clock exactly a day before the end: "tomorrow" in every time zone.
   const ends = "2026-12-03T12:00:00Z";
-  const day = () => endingWeekday(ends)!;
+  const day = () => "tomorrow";
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-12-02T12:00:00Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-  test("at the top of the chat, naming the day; “Got it” hides it on this device", async () => {
+  test("at the top of the chat, saying when; “Got it” hides it on this device", async () => {
     stand("free", null, true);
     mocks.plan.mockResolvedValue(planOf({ state: "free", next_date: ends }));
     const first = render(<AskTheBook {...book} />);

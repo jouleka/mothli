@@ -37,8 +37,9 @@ export const INVITATIONS: Record<"time" | "ceiling" | "plan", string> = {
 export const KEEP_TALKING = "Keep talking with Mothli";
 export const SEE_THE_PLAN = "See the plan";
 export const GOT_IT = "Got it";
-export const endingNote = (day: string) =>
-  `Just so you know, our free weeks together end on ${day}. Your books stay yours either way. If you’d like to keep talking after that, here’s how.`;
+/** `when` is "today", "tomorrow" or "on Thursday" (`endingWhen`). */
+export const endingNote = (when: string) =>
+  `Just so you know, our free weeks together end ${when}. Your books stay yours either way. If you’d like to keep talking after that, here’s how.`;
 
 /** The weekday a moment falls on in the reader's own time zone ("Thursday"); no hours. */
 export function endingWeekday(iso: string, timeZone?: string): string | null {
@@ -47,11 +48,31 @@ export function endingWeekday(iso: string, timeZone?: string): string | null {
   return when.toLocaleDateString("en-GB", { weekday: "long", timeZone });
 }
 
-// The day the free weeks end: asked of the plan once a page, only when the note is due.
+/** The reader's calendar day of a moment, in their own time zone, as a day number. */
+function dayNumber(moment: Date, timeZone?: string): number {
+  const parts = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "numeric", day: "numeric", timeZone })
+    .formatToParts(moment);
+  const part = (type: string) => Number(parts.find((item) => item.type === type)?.value);
+  return Date.UTC(part("year"), part("month") - 1, part("day")) / 86_400_000;
+}
+
+/** When the free weeks end, as a friend would say it in the reader's own time zone: "today",
+ * "tomorrow", or "on Thursday" (the note shows only in the last two days, so never further). */
+export function endingWhen(iso: string, now = new Date(), timeZone?: string): string | null {
+  const end = new Date(iso);
+  if (Number.isNaN(end.getTime())) return null;
+  const days = dayNumber(end, timeZone) - dayNumber(now, timeZone);
+  if (days <= 0) return "today";
+  if (days === 1) return "tomorrow";
+  return `on ${endingWeekday(iso, timeZone)}`;
+}
+
+// When the free weeks end: asked of the plan once a page, only when the note is due. The moment
+// is kept; how it is said ("today", "tomorrow") is worked out when the note is shown.
 let dayAsked: Promise<string | null> | null = null;
 function endingDay(): Promise<string | null> {
   dayAsked ??= api.plan()
-    .then((plan) => (plan.state === "free" && plan.next_date ? endingWeekday(plan.next_date) : null))
+    .then((plan) => (plan.state === "free" && plan.next_date && endingWhen(plan.next_date) ? plan.next_date : null))
     .catch(() => {
       dayAsked = null;
       return null;
@@ -191,7 +212,8 @@ export function MothliEndingNote({ home = false, after }: { home?: boolean; afte
   }, [seeing]);
 
   // Without the day the note cannot be said as written, so it is not said.
-  if (!due || !day) return null;
+  const when = day ? endingWhen(day) : null;
+  if (!due || !when) return null;
   const gotIt = () => {
     after?.current?.focus();
     dismissEndingNote();
@@ -212,7 +234,7 @@ export function MothliEndingNote({ home = false, after }: { home?: boolean; afte
   if (home)
     return (
       <div className="ml-hc-confirm mothli-ending">
-        <span>{endingNote(day)}</span>
+        <span>{endingNote(when)}</span>
         <button ref={seeRef} type="button" className="ml-hc-link" aria-haspopup="dialog" onClick={() => setSeeing(true)}>
           {SEE_THE_PLAN}
         </button>
@@ -224,7 +246,7 @@ export function MothliEndingNote({ home = false, after }: { home?: boolean; afte
     );
   return (
     <div className="mothli-clear lp-clear mothli-ending">
-      <span>{endingNote(day)}</span>
+      <span>{endingNote(when)}</span>
       <Button ref={seeRef} variant="ghost" aria-haspopup="dialog" onClick={() => setSeeing(true)}>
         {SEE_THE_PLAN}
       </Button>

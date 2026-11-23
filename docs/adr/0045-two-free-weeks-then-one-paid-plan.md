@@ -1374,8 +1374,11 @@ yet.
   chat. It is made only for a reader the copy says is `new`, and once: the route's answer makes
   them `free`. The app's own cast and notes fetches on the reading page never call it.
 - **The gentle note**: at the top of both chats when the copy says `free` with `ending_note`. It
-  asks `GET /api/billing/plan` once a page for `next_date` and names its weekday in the reader's
-  own time zone ("end on Thursday"). It is not said at all if the plan cannot be read. "Got it" is
+  asks `GET /api/billing/plan` once a page for `next_date` and says when, by the reader's own
+  calendar day in their own time zone, as a friend would: "…our free weeks together end today.",
+  "…end tomorrow." or "…end on Thursday." (the note shows only in the last two days, where a bare
+  weekday said on that very day would be ambiguous). The rest of section 6's line is unchanged; no
+  hours, no countdown, no number. It is not said at all if the plan cannot be read. "Got it" is
   remembered on the device (`mothli.ending-note-seen`), for both chats. "See the plan" opens the
   plan sheet.
 - **The sign-up line** sits under the welcome's lede. It is not shown on the welcome-back of a
@@ -1388,7 +1391,8 @@ Tests (frontend only): `frontend/src/ui/MothliPlan.test.tsx` (every line word fo
 a digit, "unlimited", "questions left", hours or a countdown; the invitation by each why on each of
 the four surfaces; a 402 in a reply, mid-stream and on a stored conversation; joining brings each
 panel back; the start call from each tap and never for `free`, `paying` or null; the hello until the
-first reply; the note, its day and "Got it"; null as before), and additions to `api.test.ts`,
+first reply; the note, "today", "tomorrow" or the weekday on a fixed clock in time zones whose day
+differs from UTC's, and "Got it"; null as before), and additions to `api.test.ts`,
 `ReaderPage.lifecycle.test.tsx` (the corner note for an ended reader; the automatic fetches never
 start the free weeks), `SignIn.test.tsx` and `PaymentLink.test.tsx`. Not seen in a browser: the
 invitation's and the note's look on a phone and in the dark theme, the focus moves with a real
