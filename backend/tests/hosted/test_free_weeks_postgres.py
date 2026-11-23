@@ -4,8 +4,11 @@ They start at the reader's first question, in a book or on the home screen, stam
 database's clock. While they last the reader's day and month allowance is not applied, so the
 $0.10 day no longer stops a new reader at about their sixth question; one ceiling in dollars of
 their own chat spend since the start is applied instead, and a reply that began under it is
-finished. After the two weeks, and for every reader not in them, the caps are exactly as before.
-The plan only admits or refuses a model call: what is read, searched and sent is the same.
+finished. Past the ceiling, or after the two weeks, a reader who does not pay is ended and meets
+the gate (ADR 0045 step 5: ``402 mothli_plan`` with why ``ceiling`` or ``time``), in a book and
+at home alike; the stopgap of step 1 (today's day and month after the two weeks, the ceiling's
+own line) is gone. The plan only admits or refuses a model call: what is read, searched and sent
+is the same.
 
 Through the hosted HTTP app on the RLS-enforced tenant role, and at the spend adapter. Stand-in
 writer and Jev only: no model is called and nothing is paid.
@@ -27,9 +30,8 @@ from app import stream_conversation
 from app.cost import CostCeilingExceeded
 from app.hosted.companion.spend import (
     _DAY,
-    _FREE,
     _LIFETIME,
-    _MONTH,
+    PlanNeeded,
     PlatformAllowanceReached,
     ReaderAllowanceReached,
     SpendStore,
@@ -40,6 +42,7 @@ from app.hosted.limits import update_limits
 from app.hosted.tenant.models import OwnerId
 from app.main import create_app
 from tests.hosted import test_companion_read_map_postgres as read_map_gate
+from tests.hosted.test_companion_recollections_postgres import HomeModels
 from tests.hosted.test_companion_spend_postgres import Background, Writer, reserve, spend, write
 from tests.hosted.test_companion_stream_postgres import (
     CHAT,
@@ -152,6 +155,19 @@ def refused(adapter, book, limit: str, message: str) -> None:
     assert (raised.value.limit, raised.value.reader_message) == (limit, message)
 
 
+def gated(adapter, book, why: str) -> None:
+    """The reader is ended: their next reply's first call is refused with the gate's answer."""
+    with pytest.raises(PlanNeeded) as raised:
+        reserve(adapter, book, 0.001)
+    assert (raised.value.limit, raised.value.code, raised.value.why) == ("plan", "mothli_plan", why)
+    assert raised.value.extra == {"status": 402, "why": why}
+
+
+def gate_of(why: str) -> dict:
+    """What a gated route answers an ended reader (ADR 0045 step 5)."""
+    return {"detail": {"code": "mothli_plan", "why": why}}
+
+
 def shelve(dsn: str, owner: uuid.UUID) -> str:
     book = uuid.uuid4()
     with psycopg.connect(dsn) as conn:
@@ -162,12 +178,12 @@ def shelve(dsn: str, owner: uuid.UUID) -> str:
 
 # ---- the sixth question ---------------------------------------------------------------------------
 
-def test_a_reader_in_the_free_weeks_is_not_stopped_by_the_day_and_day_15_is_today(
+def test_a_reader_in_the_free_weeks_is_not_stopped_by_the_day_and_day_15_is_gated(
         make_app, readers, database, monkeypatch):
     """The break it catches: the problem ADR 0045 removes. With today's $0.10 day a new reader is
     stopped at about their sixth question. In the free weeks they are answered well past it (ten
-    replies' worth of spend, then eight more questions); and the same reader, the same spend, on
-    day 15, sees today's line again."""
+    replies' worth of spend, then eight more questions); and the same reader, not paying, on day
+    15, meets the gate (step 5), never today's day line: it was step 1's stopgap."""
     a, book, app = opened(make_app, readers)
     models = StandIns(app.state.platform_client, monkeypatch, reply=line(1, 2))
     assert started(database, a.owner) is None             # uploading and reading start nothing
@@ -185,45 +201,49 @@ def test_a_reader_in_the_free_weeks_is_not_stopped_by_the_day_and_day_15_is_toda
     assert chat_today(database, a.owner) > 2 * Decimal("0.10")
     assert models.writes == 9 and started(database, a.owner) == first
 
-    # Day 15: the free weeks are over, and today's caps are back, with today's line.
+    # Day 15: the free weeks are over, and the reader who does not pay meets the gate.
     move_start(database, a.owner, "14 days 1 minute")
     assert state(database, a.owner) == ("ended", "time")
     writes = models.writes
-    assert a.ask(book) == [{"type": "error", "status": 429, "code": "allowance_reached",
-                            "message": _DAY}]
+    refused = a.stream(book)
+    assert (refused.status_code, refused.json()) == (402, gate_of("time"))
     assert models.writes == writes
     # A minute before the end of day 14 they were still in them.
     move_start(database, a.owner, "13 days 23 hours 59 minutes")
     assert sentences(a.ask(book)) == [line(1, 2)]
 
 
-def test_after_the_free_weeks_the_day_and_the_month_are_todays(tenant_dsn, database, readers):
-    """The break it catches: a reader past their free weeks kept free of the day or the month
-    (the free weeks would never end), or held by the free ceiling instead of today's caps."""
+def test_after_the_free_weeks_a_reader_who_does_not_pay_is_gated_at_the_adapter_too(
+        tenant_dsn, database, readers):
+    """ADR 0045 step 5, at the spend adapter (where a reader who ends between the route's gate
+    and the reply's first call is met). The break it catches: a reader past their free weeks
+    kept free (the free weeks would never end), or held by the paying readers' day and month
+    in place of the gate (step 1's stopgap), with or without allowance left, with or without an
+    operator's own caps."""
     a = readers["a"]
     book = shelve(database, a)
     set_spend_limits(reader_usd_per_day=Decimal("0.10"), reader_usd_per_month=Decimal("0.20"),
                      platform_usd_per_day=100, free_usd=Decimal("0.05"))
     stamp(tenant_dsn, a)
-    move_start(database, a, "15 days")
     chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
+    spend(chat, book, 0.01)                                # in the free weeks: admitted
+    move_start(database, a, "15 days")
+    gated(chat, book, "time")                              # nothing spent today: still gated
     chat_spent(database, a, Decimal("0.10"))
-    refused(chat, book, "day", _DAY)
-    set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=Decimal("0.10"),
-                     platform_usd_per_day=100, free_usd=Decimal("0.05"))
-    refused(chat, book, "month", _MONTH)
-    set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=5,
-                     platform_usd_per_day=100, free_usd=Decimal("0.05"))
-    spend(chat, book, 0.01)                                # past the free ceiling: not applied
+    gated(chat, book, "time")                              # past the day: the gate, not the day
+    update_limits(database, a, {"max_spend_usd_per_day": Decimal("5"),
+                                "max_spend_usd_per_month": Decimal("50")})
+    gated(chat, book, "time")
 
 
 # ---- the free ceiling -----------------------------------------------------------------------------
 
-def test_the_free_ceiling_finishes_the_reply_under_way_and_stops_the_next(
+def test_the_free_ceiling_finishes_the_reply_under_way_and_gates_the_next(
         make_app, readers, database, monkeypatch):
     """The break it catches: a reply cut off part-way because the ceiling was met while it was
-    being written; the next reply let through past the ceiling; or the reader shown a number, a
-    count, a countdown or "unlimited", or anything but the one line of ADR 0045 section 6."""
+    being written; the next reply let through past the ceiling; or the reader then answered
+    anything but the gate's one answer (ADR 0045 step 5: why ``ceiling``), in a book and at home
+    alike, and ``time`` once the two weeks are over: never two answers for one state."""
     a, book, app = opened(make_app, readers, hosted_free_usd=0.30)
     StandIns(app.state.platform_client, monkeypatch, reply=line(1, 2))
     assert a.ask(book)[-1]["type"] == "done"                 # the first question starts them
@@ -250,23 +270,18 @@ def test_the_free_ceiling_finishes_the_reply_under_way_and_stops_the_next(
     assert state(database, a.owner, usd="0.30") == ("ended", "ceiling")
 
     writes, judged = models.writes, models.judged
-    events = a.ask(book)
-    assert events == [{"type": "error", "status": 429, "code": "allowance_reached",
-                       "message": _FREE}]
+    refused = a.stream(book)
+    assert (refused.status_code, refused.json()) == (402, gate_of("ceiling"))
     assert (models.writes, models.judged) == (writes, judged)
-    assert _FREE == ("We’ve talked so much these first days that your free start with me is all "
-                     "used up. That’s a good sign! Your books, your place and your highlights "
-                     "stay right here, free, always.")
-    assert not any(character.isdigit() for character in _FREE)
-    assert "unlimited" not in _FREE.casefold() and "question" not in _FREE.casefold()
     # Reading takes no AI and goes on.
     a.read(book, 2, 1, 5)
-    # Asking on the home screen meets the same ceiling, with the same line.
+    # Asking on the home screen meets the same gate, with the same answer.
     response = a.call("POST", "/api/reader/ask/stream", {"question": "Who is Mara?"})
-    assert events_of(response) == events
-    # Once the two weeks are over, today's caps apply (here the $0.10 day, long passed).
+    assert (response.status_code, response.json()) == (402, gate_of("ceiling"))
+    # Once the two weeks are over, the why is the time.
     move_start(database, a.owner, "15 days")
-    assert a.ask(book)[-1]["message"] == _DAY
+    refused = a.stream(book)
+    assert (refused.status_code, refused.json()) == (402, gate_of("time"))
 
 
 def test_background_work_never_counts_toward_the_free_ceiling_nor_is_stopped_by_it(
@@ -285,7 +300,7 @@ def test_background_work_never_counts_toward_the_free_ceiling_nor_is_stopped_by_
     spend(chat, book, 0.049)
     reserve(chat, book, 0.001)
     chat_spent(database, a, Decimal("0.001"))
-    refused(chat, book, "free", _FREE)
+    gated(chat, book, "ceiling")
     spend(work, book, 0.01, phase="notes-write")           # background work goes on meanwhile
 
 
@@ -369,7 +384,7 @@ def test_two_readers_free_weeks_never_touch(tenant_dsn, database, readers):
     chat_a = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
     chat_b = HostedCompanionCatalog(tenant_dsn, OwnerId(b))
     spend(chat_a, book_a, 0.05)
-    refused(chat_a, book_a, "free", _FREE)
+    gated(chat_a, book_a, "ceiling")
     assert started(database, b) is None
     spend(chat_b, book_b, 0.001)                           # A at the ceiling holds nobody else
     stamp(tenant_dsn, b)
@@ -383,14 +398,16 @@ def test_two_readers_free_weeks_never_touch(tenant_dsn, database, readers):
 
 # ---- an operator's own caps for a reader ----------------------------------------------------------
 
-def test_an_operators_own_caps_for_a_reader_win_over_the_free_weeks(tenant_dsn, database, readers):
-    """How an ``owner_limits`` override combines with the free weeks (ADR 0045 step 1): a reader
-    whose row sets their own day or month cap is held by those caps exactly as before, in the
-    free weeks or not, and the free ceiling is not applied to them. The free weeks replace only
-    the defaults. The break it catches: an operator who lowered one reader's day (a reader making
-    Mothli spend without bound) ignored for two weeks, or one who raised it for a tester or for
-    themselves stopped by the ceiling. The lifetime cap, the calls in flight and the platform's
-    day hold a reader in the free weeks as they hold everyone."""
+def test_an_operators_own_caps_hold_in_the_free_weeks_and_the_gate_holds_past_the_ceiling(
+        tenant_dsn, database, readers):
+    """How an ``owner_limits`` override combines with the free weeks (ADR 0045 steps 1 and 5): a
+    reader whose row sets their own day or month cap is held by those caps in the free weeks. The
+    free ceiling is ``reader_plan_state``'s, so a reader past it is ended and meets the gate,
+    own caps or not: one answer for one state (a tester the owner wants past it is given a gift,
+    step 2). The break it catches: an operator who lowered one reader's day (a reader making
+    Mothli spend without bound) ignored for two weeks, or a reader the state calls ended answered
+    because of their own caps. The lifetime cap, the calls in flight and the platform's day hold
+    a reader in the free weeks as they hold everyone."""
     a, b = readers["a"], readers["b"]
     book_a, book_b = shelve(database, a), shelve(database, b)
     set_spend_limits(reader_usd_per_day=Decimal("0.10"), reader_usd_per_month=2,
@@ -404,15 +421,15 @@ def test_an_operators_own_caps_for_a_reader_win_over_the_free_weeks(tenant_dsn, 
     update_limits(database, a, {"max_spend_usd_per_day": Decimal("0.05")})
     spend(chat_a, book_a, 0.05)
     refused(chat_a, book_a, "day", _DAY)
-    # Raised: B's own day and month are far above the ceiling, and B goes past it.
+    # Raised: B's own day and month are far above the ceiling; the call admitted under it passes
+    # it, and then B is ended and meets the gate, with their own caps and without them.
     update_limits(database, b, {"max_spend_usd_per_day": Decimal("5"),
                                 "max_spend_usd_per_month": Decimal("50")})
     spend(chat_b, book_b, 0.30)
-    spend(chat_b, book_b, 0.01)
     assert state(database, b, usd="0.20") == ("ended", "ceiling")
-    # With their own caps cleared, B is back under the free ceiling, which they passed.
+    gated(chat_b, book_b, "ceiling")
     update_limits(database, b, {"max_spend_usd_per_day": None, "max_spend_usd_per_month": None})
-    refused(chat_b, book_b, "free", _FREE)
+    gated(chat_b, book_b, "ceiling")
 
     # The rest holds in the free weeks too: lifetime, calls in flight, the platform's day.
     update_limits(database, a, {"max_spend_usd_per_day": None})
@@ -450,7 +467,8 @@ def test_a_reply_admitted_in_the_free_weeks_is_not_cut_off_by_the_ceiling_at_the
     writer = Writer()
     with pytest.raises(CostCeilingExceeded) as raised:
         write(ReplyCatalog(tenant_dsn, OwnerId(a)), book, writer)
-    assert raised.value.__cause__.limit == "free" and writer.calls == 0
+    assert (raised.value.__cause__.limit, raised.value.__cause__.why) == ("plan", "ceiling")
+    assert writer.calls == 0
 
 
 # ---- what is read, searched and sent ----------------------------------------------------------------
@@ -460,9 +478,11 @@ def test_the_free_weeks_change_nothing_a_reply_reads_searches_or_sends(
     """Spoiler safety (ADR 0045 section 9): the plan check only admits or refuses a model call.
     The break it catches: anything a reply reads, searches or sends that differs because the
     reader is in their free weeks, or gifted (ADR 0045 step 2), or paying through Paddle (step
-    3). The same reader, book, place and question, in the free weeks, on day 15, with a gift and
-    on a Paddle plan: the passages retrieved, the writer's prompt and system, and everything Jev
-    is given are identical."""
+    3); or anything the gate's routes serve differing behind it (step 5). The same reader, book,
+    place and question, in the free weeks, with a gift and on a Paddle plan: the passages
+    retrieved, the writers' prompts and systems in a book and at home, everything Jev is given,
+    and the cast and "Story so far" served, are identical. (Day 15 without paying is the gate's,
+    so nothing behind it runs: ``test_mothli_gate_postgres.py``.)"""
     a, book, app = opened(make_app, readers)
     a.read(book, 2, 1, 5)
     retrieved = []
@@ -477,18 +497,22 @@ def test_the_free_weeks_change_nothing_a_reply_reads_searches_or_sends(
 
     def asked():
         retrieved.clear()
-        models = StandIns(app.state.platform_client, monkeypatch, reply=line(1, 2))
+        models = HomeModels(app.state.platform_client, monkeypatch, reply=line(1, 2))
         events = a.ask(book, QUESTION)
         assert events[-1]["type"] == "done" and sentences(events) == [line(1, 2)]
+        home = a.call("POST", "/api/reader/ask/stream", {"question": QUESTION})
+        assert home.status_code == 200 and events_of(home)[-1]["type"] == "done"
+        served = [a.call("GET", f"/api/books/{book}/{path}").text
+                  for path in ("graph", "graph?bookmark=99", "notes?bookmark=99", "ingest")]
         assert a.call("DELETE", f"/api/books/{book}/conversation").status_code == 204
+        assert a.call("DELETE", "/api/reader/conversation").status_code == 204
         return (list(retrieved), models.systems, models.prompts,
-                [json.dumps(checked, sort_keys=True) for checked in models.checked])
+                [json.dumps(checked, sort_keys=True) for checked in models.checked], served)
 
     in_the_free_weeks = asked()
     assert state(database, a.owner) == ("free", None)
     move_start(database, a.owner, "15 days")
     assert state(database, a.owner) == ("ended", "time")
-    after_them = asked()
     with psycopg.connect(database) as conn:
         conn.execute("SELECT set_gift(%s, '9999-12-31'::date)", (a.owner,))
     assert state(database, a.owner) == ("paying", None)
@@ -504,7 +528,7 @@ def test_the_free_weeks_change_nothing_a_reply_reads_searches_or_sends(
                             (a.owner,)).fetchone() == ("paying", "paddle")
     paying = asked()
     assert in_the_free_weeks[0] and in_the_free_weeks[2] and in_the_free_weeks[3]
-    assert after_them == in_the_free_weeks
+    assert len(in_the_free_weeks[2]) >= 2                  # a book's writer and the home's
     assert gifted == in_the_free_weeks
     assert paying == in_the_free_weeks
     assert "Corvus moved lamp 6" not in "".join(in_the_free_weeks[2])

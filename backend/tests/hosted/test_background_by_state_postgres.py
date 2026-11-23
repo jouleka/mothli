@@ -325,8 +325,14 @@ def test_two_readers_of_one_file_one_ended_one_paying_each_get_only_what_their_o
     assert notes_of(database, a.owner) == []
     assert not [row for row in spend_of(database, a.owner)[1] if row["background"]]
 
-    # What each is served and shown comes from their own place alone.
+    # What each is served and shown comes from their own place alone. Ended, A meets the gate
+    # (ADR 0045 step 5), whose answer is A's own; once A pays too, A is served exactly what B is.
     assert handed(tenant_dsn, a.owner, book_a) == [1] == handed(tenant_dsn, b.owner, book_b)
+    for path in ("graph", "ingest"):
+        refused = a.call("GET", f"/api/books/{book_a}/{path}")
+        assert (refused.status_code, refused.json()) == (
+            402, {"detail": {"code": "mothli_plan", "why": "time"}}), path
+    pay(database, a.owner, "gift")
     for path in ("graph", "ingest"):
         seen = [someone.call("GET", f"/api/books/{book}/{path}") for someone, book in (
             (a, book_a), (b, book_b))]

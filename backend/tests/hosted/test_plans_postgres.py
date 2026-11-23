@@ -24,7 +24,7 @@ import pytest
 from psycopg import conninfo, sql
 
 from app.hosted import plans
-from app.hosted.companion.spend import _DAY, _FREE, _MONTH, set_spend_limits
+from app.hosted.companion.spend import _DAY, _MONTH, set_spend_limits
 from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.limits import update_limits
 from app.hosted.tenant.models import OwnerId
@@ -41,6 +41,8 @@ from tests.hosted.test_free_weeks_postgres import (
     QUESTION,
     chat_since_start,
     chat_spent,
+    gate_of,
+    gated,
     move_start,
     opened,
     refused,
@@ -242,10 +244,11 @@ def test_a_gifted_reader_is_not_stopped_by_the_free_ceiling_and_is_held_by_the_d
                                 "max_spend_usd_per_month": Decimal("50")})
     spend(chat, book, 0.30)
 
-    # The gift ended: the reader is back where they would be, here at the free ceiling.
+    # The gift ended: the reader is back where they would be, here past the free ceiling, so
+    # ended, and the gate answers (ADR 0045 step 5).
     update_limits(database, a, {"max_spend_usd_per_day": None, "max_spend_usd_per_month": None})
     gift(database, a, None)
-    refused(chat, book, "free", _FREE)
+    gated(chat, book, "ceiling")
 
 
 def test_a_gifted_reader_who_never_asked_is_paying_and_their_first_question_starts_the_free_weeks(
@@ -274,12 +277,14 @@ def test_a_gifted_reader_who_never_asked_is_paying_and_their_first_question_star
                             "message": _DAY}]
     assert models.writes == writes
 
-    # The gift lasted past the two weeks; when it ends, the free weeks are over, not begun again.
+    # The gift lasted past the two weeks; when it ends, the free weeks are over, not begun again:
+    # the reader's question meets the gate (ADR 0045 step 5).
     move_start(database, a.owner, "20 days")
     moved = started(database, a.owner)
     gift(database, a.owner, None)
     assert plan_of(database, a.owner)[:2] == ("ended", "time")
-    a.ask(book)
+    refused_now = a.stream(book)
+    assert (refused_now.status_code, refused_now.json()) == (402, gate_of("time"))
     assert started(database, a.owner) == moved
     assert plan_of(database, a.owner)[:2] == ("ended", "time")
 
@@ -302,7 +307,7 @@ def test_a_gift_that_has_passed_changes_nothing(tenant_dsn, database, readers):
         assert plan_of(database, owner, "0.05")[:2] == ("paying", None)
         gift_relative(database, owner, -1)                  # ended yesterday
     assert {owner: plan_of(database, owner, "0.05") for owner in (a, b)} == before
-    refused(chat, book, "free", _FREE)
+    gated(chat, book, "ceiling")
     with psycopg.connect(database) as conn:
         assert conn.execute("SELECT gift_until FROM reader_plan_state(%s, 14, 0.05)",
                             (a,)).fetchone()[0] is not None
