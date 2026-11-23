@@ -94,10 +94,10 @@ AS $$
   WITH found AS (
     SELECT kept.free_started_at, kept.gift_until, kept.paddle_status, kept.period_ends_at,
            kept.ends_at, kept.first_paid_at,
-           kept.gift_until >= (now() AT TIME ZONE 'UTC')::date AS gifted,
+           COALESCE(kept.gift_until >= (now() AT TIME ZONE 'UTC')::date, false) AS gifted,
            kept.paddle_subscription_id IS NOT NULL AS paddled,
-           kept.paddle_status IN ('active', 'trialing', 'past_due')
-             AND (kept.ends_at IS NULL OR now() < kept.ends_at) AS paddle_live
+           COALESCE(kept.paddle_status IN ('active', 'trialing', 'past_due')
+                    AND (kept.ends_at IS NULL OR now() < kept.ends_at), false) AS paddle_live
     FROM public.reader_plans AS kept
     WHERE kept.owner_id = reader_plan_state.reader
   ), plan AS (
