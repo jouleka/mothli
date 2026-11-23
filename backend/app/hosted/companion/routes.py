@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import uuid
 
+import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
@@ -74,6 +75,18 @@ def _notes_wanted(settings) -> bool:
 def _notes_queue(request: Request, owner_id: OwnerId) -> ChapterNotesQueue:
     """This reader's ``notes_builder``: ``ensure`` adds a durable ``chapter_notes`` job."""
     return ChapterNotesQueue(request.app.state.companion_dsn, owner_id)
+
+
+def _going(catalog) -> bool:
+    """Whether to ask for this reader's background work at all (ADR 0045 section 5): not once
+    their free weeks are over and they do not pay (``ended``). A new reader is asked for as
+    everyone is; the claim holds them to the warm-up. A database that cannot be reached asks
+    for nothing, as a queue that cannot be reached adds nothing: the next page or question asks
+    again. Nothing here is told to the reader."""
+    try:
+        return catalog.plan_state() != "ended"
+    except (psycopg.Error, CompanionDatabaseBusy):
+        return False
 
 
 def _story_memory(request: Request, owner_id: OwnerId, book: str) -> None:
@@ -154,10 +167,13 @@ def put_read_page(book_id: uuid.UUID, body: ReadPage, request: Request,
         raise HTTPException(409, "reading pass changed; reload before continuing") from exc
     except ValueError as exc:
         raise HTTPException(422, "page could not be verified against the source") from exc
-    if finished:
-        _finished(request, owner_id, book)
-    elif first:
-        _story_memory(request, owner_id, book)
+    # The page is recorded above in every state; only asking for Mothli's background work
+    # follows where the reader stands (ADR 0045 section 5).
+    if (finished or first) and _going(catalog):
+        if finished:
+            _finished(request, owner_id, book)
+        else:
+            _story_memory(request, owner_id, book)
     return point
 
 
@@ -177,7 +193,7 @@ def put_read_chapters(book_id: uuid.UUID, body: ReadChapters, request: Request,
         raise HTTPException(404, "unknown book") from exc
     except ValueError as exc:
         raise HTTPException(422, "chapters could not be verified against the source") from exc
-    if body.read:
+    if body.read and _going(catalog):
         _finished(request, owner_id, book)
     return point
 
@@ -239,10 +255,18 @@ def ask_the_book_stream(book_id: uuid.UUID, body: AskRequest, request: Request,
         # A question starts the reader's two free weeks, once (ADR 0045 step 1), before anything
         # is read or reserved. Nothing else here changes with them.
         catalog.start_free_weeks()
+        # ADR 0045 section 5: background work follows where the reader stands. Ended, the reply
+        # asks for none. Otherwise the question asks for the book's story memory, so a reader
+        # who has become paying again (or a new one, whose question just started the free
+        # weeks) has it built up to their place as the read map gives it; their chapter notes
+        # are asked for after the reply, as always.
+        going = _going(catalog)
+        if going:
+            _story_memory(request, owner_id, str(book_id))
         events = stream_read_prefix(str(book_id), body, catalog, store, settings,
                                     request.app.state.platform_client, source,
-                                    notes_builder=_notes_queue(request, owner_id),
-                                    recollector=_recollector(request, owner_id))
+                                    notes_builder=_notes_queue(request, owner_id) if going else None,
+                                    recollector=_recollector(request, owner_id) if going else None)
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc
     return StreamingResponse(
@@ -433,8 +457,10 @@ def ask_home(body: HomeAsk, request: Request, owner_id: OwnerId = Depends(_csrf_
     store = HostedBookStore(request.app.state.companion_dsn, owner_id)
     try:
         catalog.start_free_weeks()          # as in a book: a question starts the free weeks
+        # Ended, the reply asks for no background work (ADR 0045 section 5).
+        recollector = _recollector(request, owner_id) if _going(catalog) else None
         events = stream_home(body, catalog, store, settings, request.app.state.platform_client,
-                             source, [], recollector=_recollector(request, owner_id))
+                             source, [], recollector=recollector)
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc
     return StreamingResponse(

@@ -272,6 +272,76 @@ def test_the_free_weeks_start_at_the_owners_numbers_and_reach_the_process(tmp_pa
         set_spend_limits(**dataclasses.asdict(before))
 
 
+def test_the_warm_up_starts_at_the_records_numbers_and_reaches_the_process(tmp_path) -> None:
+    """ADR 0045 section 5 and step 6: a reader who has never asked gets background work within
+    30 days of sign-up, up to 25 chapters of story memory their reading is the first to build and
+    $0.50 of chapter notes. The break it catches: a default that differs from the record, a
+    negative or fractional bound or an amount that is not money accepted, or a process (web or
+    worker) whose caps do not carry the settings. At the measured costs (about 9 cents a chapter
+    of story memory at most) the warm-up costs at most about $2.75 a sign-up."""
+    defaults = Settings.model_fields
+    assert (defaults["hosted_warmup_days"].default, defaults["hosted_warmup_new_chapters"].default,
+            defaults["hosted_warmup_notes_usd"].default) == (30, 25, 0.50)
+    assert (SpendLimits().warmup_days, SpendLimits().warmup_new_chapters,
+            SpendLimits().warmup_notes_usd) == (30, 25, Decimal("0.50"))
+    assert SpendLimits().warmup_notes_usd + 25 * Decimal("0.09") == Decimal("2.75")
+    for wrong in ({"hosted_warmup_days": -1}, {"hosted_warmup_days": 1.5},
+                  {"hosted_warmup_new_chapters": -1}, {"hosted_warmup_notes_usd": -0.01},
+                  {"hosted_warmup_notes_usd": float("inf")}):
+        with pytest.raises(ValueError):
+            hosted_settings(tmp_path, **CHAT, **wrong)
+    for wrong in ({"warmup_days": -1}, {"warmup_new_chapters": True},
+                  {"warmup_notes_usd": Decimal("-1")}):
+        with pytest.raises(ValueError):
+            set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=4,
+                             platform_usd_per_day=15, **wrong)
+    before = spend_limits()
+    try:
+        with TestClient(hosted_app(hosted_settings(tmp_path, **CHAT, hosted_warmup_days=7,
+                                                   hosted_warmup_new_chapters=3,
+                                                   hosted_warmup_notes_usd=0.2)),
+                        base_url="https://reader.example"):
+            limits = spend_limits()
+            assert (limits.warmup_days, limits.warmup_new_chapters, limits.warmup_notes_usd) == (
+                7, 3, Decimal("0.2"))
+    finally:
+        set_spend_limits(**dataclasses.asdict(before))
+
+
+def test_the_worker_carries_the_free_weeks_and_the_warm_up_from_its_settings(
+        monkeypatch, tmp_path) -> None:
+    """ADR 0045 section 5: the worker reads where a reader stands with the web process's free
+    weeks and holds a new reader to the warm-up. The break it catches: a worker started with
+    other free weeks or warm-up than its settings say (the defaults in code), so the claim and
+    the web process disagree about who is ended or new."""
+    from app.hosted.companion import jobs as companion_jobs
+
+    passed = {}
+    monkeypatch.setattr("app.hosted.companion.spend.set_spend_limits",
+                        lambda **values: passed.update(values))
+    monkeypatch.setattr("app.config.Settings", lambda: hosted_settings(
+        tmp_path, **{**CHAT, "reader_story_notes": True}, hosted_free_days=21,
+        hosted_free_usd=3.5, hosted_warmup_days=9, hosted_warmup_new_chapters=4,
+        hosted_warmup_notes_usd=0.3))
+
+    class _Checked:
+        def __init__(self, dsn):
+            pass
+
+        async def check_runtime_role(self):
+            return None
+
+    monkeypatch.setattr("app.hosted.tenant.repository.PostgresTenantRepository", _Checked)
+    for name in ("build_platform_clients", "build_extraction_client"):
+        monkeypatch.setattr(f"app.llm.factory.{name}", lambda settings: object())
+    monkeypatch.setattr("app.hosted.storage.build_object_storage", lambda settings: object())
+    companion_jobs.CompanionJobs.from_environment()
+    assert {name: passed[name] for name in (
+        "free_days", "free_usd", "warmup_days", "warmup_new_chapters", "warmup_notes_usd")} == {
+        "free_days": 21, "free_usd": 3.5, "warmup_days": 9, "warmup_new_chapters": 4,
+        "warmup_notes_usd": 0.3}
+
+
 # ---- whether this server has a chat at all, and the one mixed state that pays without replying ----
 
 SWITCHES = {"reader_conversation_jev": True, "jev_enabled": True,

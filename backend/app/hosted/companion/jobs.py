@@ -406,7 +406,14 @@ class CompanionJobs:
                          reader_background_usd_per_day=(
                              settings.hosted_reader_background_usd_per_day),
                          reader_background_usd_per_month=(
-                             settings.hosted_reader_background_usd_per_month))
+                             settings.hosted_reader_background_usd_per_month),
+                         # Where a reader stands (ADR 0045 section 5): the claim reads it with
+                         # the web process's free weeks, and holds a new reader to the warm-up.
+                         free_usd=settings.hosted_free_usd,
+                         free_days=settings.hosted_free_days,
+                         warmup_days=settings.hosted_warmup_days,
+                         warmup_new_chapters=settings.hosted_warmup_new_chapters,
+                         warmup_notes_usd=settings.hosted_warmup_notes_usd)
         return cls(tenant_dsn=tenant_dsn, settings=settings,
                    client=build_platform_clients(settings),
                    storage=build_object_storage(settings),
@@ -549,6 +556,12 @@ class CompanionJobs:
             if edition is not None and repository.unremembered_before(
                     edition, ordinal) >= UNREMEMBERED_IN_A_ROW:
                 raise _Stopped()
+            if repository.held_back(claim.owner_id):
+                # ADR 0045 section 5: this run would be the first to build a chapter for a
+                # reader who has never asked Mothli anything and whose reading has been first
+                # to the warm-up's chapters (or who is ended since the claim). Nothing is spent
+                # or made, and no next run is asked: their first question asks again.
+                return
             if _guarded(repository, claim.owner_id, ordinal, self._settings):
                 # This reader's runs would be the first to build one chapter too many today or
                 # this month: nothing is spent or made; the work waits for the next UTC day.

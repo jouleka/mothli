@@ -23,7 +23,7 @@ import asyncio
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import psycopg
@@ -38,6 +38,8 @@ from app.hosted.tenant.grants import (  # noqa: E402
     PURGE_OTHER_TABLE_PRIVILEGES,
     TENANT_FUNCTION_PRIVILEGES,
     TENANT_TABLE_PRIVILEGES,
+    WORKER_COLUMN_PRIVILEGES,
+    WORKER_FUNCTION_PRIVILEGES,
     WORKER_TABLE_PRIVILEGES,
     purge_table_privileges,
 )
@@ -86,6 +88,9 @@ class Role:
     # The purge role (ADR 0041 part 8) also gets SELECT and DELETE on every table that has an
     # ``owner_id`` column, read from the database's catalogue when the grants are made.
     owner_tables: bool = False
+    # SELECT on some columns of a table and on no other column of it, {table: columns}: the
+    # worker reads when a reader signed up (ADR 0045 step 6) and nothing else of ``users``.
+    columns: dict[str, frozenset[str]] = field(default_factory=dict)
 
 
 # The migration owner owns every table and function and is a runtime role of nothing. It bypasses
@@ -96,7 +101,8 @@ RUNTIME_ROLES: tuple[Role, ...] = (
     Role("auth", "MOTHLI_DB_AUTH_PASSWORD", True, AUTH_TABLE_PRIVILEGES, {}),
     Role("tenant", "MOTHLI_DB_TENANT_PASSWORD", False, TENANT_TABLE_PRIVILEGES,
          TENANT_FUNCTION_PRIVILEGES),
-    Role("worker", "MOTHLI_DB_WORKER_PASSWORD", True, WORKER_TABLE_PRIVILEGES, {}),
+    Role("worker", "MOTHLI_DB_WORKER_PASSWORD", True, WORKER_TABLE_PRIVILEGES,
+         WORKER_FUNCTION_PRIVILEGES, columns=WORKER_COLUMN_PRIVILEGES),
     Role("audit", "MOTHLI_DB_AUDIT_PASSWORD", True, AUDIT_TABLE_PRIVILEGES, {}),
     Role("operator", "MOTHLI_DB_OPERATOR_PASSWORD", True, OPERATOR_TABLE_PRIVILEGES,
          OPERATOR_FUNCTION_PRIVILEGES),
@@ -145,6 +151,10 @@ def grant_statements(prefix: str, role: Role, owner_tables=()) -> list[sql.Compo
     for table, privileges in sorted(tables.items()):
         statements.append(sql.SQL("GRANT {} ON TABLE {} TO {}").format(
             sql.SQL(", ").join(sql.SQL(item) for item in sorted(privileges)),
+            sql.Identifier("public", table), name))
+    for table, columns in sorted(role.columns.items()):
+        statements.append(sql.SQL("GRANT SELECT ({}) ON TABLE {} TO {}").format(
+            sql.SQL(", ").join(sql.Identifier(column) for column in sorted(columns)),
             sql.Identifier("public", table), name))
     for function, privileges in sorted(role.functions.items()):
         statements.append(sql.SQL("GRANT {} ON FUNCTION {} TO {}").format(

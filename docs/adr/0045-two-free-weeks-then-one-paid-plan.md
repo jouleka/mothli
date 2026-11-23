@@ -1,6 +1,6 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
-**Status:** Proposed (2026-11-20). Steps 1, 2 and 3 are built (see below); nothing else is. The
+**Status:** Proposed (2026-11-20). Steps 1, 2, 3 and 6 are built (see below); nothing else is. The
 owner's decisions in "What the owner decided" are settled; the numbers and the choices in "Open
 points for the owner" are his to make, and point 7 is decided (23 November 2026).
 
@@ -180,6 +180,55 @@ Not verified without a Paddle sandbox: that a retried delivery carries a fresh `
 seconds as the SDKs' default it must, but no page says so; a stale `ts` on a retry would be refused
 and retried until it fails); the exact payload of a real message; that the simulator's sample is
 for a price that is not Mothli's (the runbook's step 4 assumes so).
+
+**Step 6 built (2026-11-23).** Background work follows where a reader stands (section 5). No
+migration. Settings `HOSTED_WARMUP_DAYS` (30), `HOSTED_WARMUP_NEW_CHAPTERS` (25) and
+`HOSTED_WARMUP_NOTES_USD` (0.50), carried with the other caps to the web process and the worker
+(which now also carries `HOSTED_FREE_DAYS` and `HOSTED_FREE_USD`, so both read the same state).
+The worker role gains `SELECT` on `reader_plans`, `EXECUTE` on `reader_plan_state`, and `SELECT`
+on two columns of `users`, `id` and `created_at`, and on no other column (`grants.py`,
+`hosted_roles.py`; its startup check verifies every column of `users` both ways and the function).
+
+- **At the claim** (`backend/app/hosted/jobs.py`, `background_held`): after the existing
+  background guard (a capped reader's notes still move to the next UTC day), a companion job of
+  any kind whose reader is `ended`, or `new` and past the warm-up, is finished without work and
+  without spending, as a cancelled job is (state `cancelled`, no attempt, the handler never
+  called, so nothing is read). `free` and `paying` readers are not looked at further. The new
+  reader's three bounds are read in the same statement as the state: sign-up within the days; the
+  reader's background ledger and open background reservations, of any age, against the notes
+  amount (before a first question that is their chapter notes alone, recollections coming only
+  from replies); and their story-memory jobs that published, ever, against the chapters. Past any
+  of the three, all of their background work stops, as for Ended.
+- **In the story-memory run**: just before a run would be the first to build a chapter (where the
+  ADR 0044 guards are applied, which still follow), it asks the same again and, if held, ends
+  without spending or asking for its next run.
+- **In the routes**: a finished chapter, "I've read this" and the first page read ask for no job
+  for an Ended reader (the page itself is recorded as before); a question from an Ended reader
+  passes no notes queue or recollection queue to the reply. A question from anyone else asks for
+  the book's story memory, and the reply asks for its chapter notes as before, so a reader who
+  pays again (or a new one, whose question just started the free weeks) has both built up to
+  their place: chapter notes for the chapters fully read, story memory to the target the read
+  map gives (one chapter past the last finished), served only through their place. The routes do
+  not look at a new reader's warm-up (the tenant role holds nothing on `users`): such a reader's
+  pages still ask, and the claim finishes those jobs.
+- **Work under way is finished.** The claim decides whether a run happens; a run it let start
+  finishes, whatever the reader's state becomes meanwhile, as a reply under way does. So a bound
+  can be passed by the runs under way when it is met: a notes run is at most ten chapters (about
+  $0.07), a story-memory run one chapter, and one reader has at most two jobs running at once by
+  default (`owner_limits.max_provider_concurrency`). **The warm-up's most per sign-up who never
+  asks**, at section 5's figures: $0.50 + 25 × $0.09 = $2.75, plus at most two runs under way when
+  a bound is met (about $0.16 more at worst), and only for a file nobody else has.
+- **"Could not verify" 9, settled**: job rows are never deleted except with the account (the
+  purge) and by migration 0028 (the retired `ingest_book` kind only); neither the tenant nor the
+  worker role holds `DELETE` on `jobs`, and removing a book keeps its jobs (cancelled). So a
+  reader's story-memory jobs that published are kept for the life of the account, and counting
+  them over all time is the count over the whole time a reader has been new (no other state comes
+  before `new`).
+- **Two existing tests changed, no assertion changed**: in the ADR 0044 chapter-guard test and the
+  abuse case (`test_story_memory_one_ahead_postgres.py`) the reader never asks, so is now New and
+  would meet the warm-up's 25 chapters before the guards' 30 and 300; both now start the reader's
+  free weeks first. The run's repository call is listed in that file's spoiler test (`REACH`) as
+  reading nothing of an edition. Nothing a reader is served changes in this step (that is step 5).
 
 File and line references are to `main` at 2475b6f (PR #136). Nothing in this record was run against a
 database, a server, a model or Paddle. Every claim about the code comes from reading the lines cited
@@ -950,6 +999,7 @@ Each is a question with choices; the recommendation is first.
 8. Whether Paddle's checkout records the EU buyer's consent to start using digital content at once, which
    decides the 14-day withdrawal right; legal advice before launch is worth it.
 9. That old `story_memory` job rows are kept long enough to count a New reader's first builds over 30 days
-   (`first_builds` reads them; their removal was not traced).
+   (`first_builds` reads them; their removal was not traced). Settled with step 6: they are kept for
+   the life of the account (see "Step 6 built").
 10. Every money figure: 2.1 cents a reply, 0.7 cents a chapter of notes and 7 to 9 cents a chapter of story
     memory come from earlier measurements and records, not from a run for this record.

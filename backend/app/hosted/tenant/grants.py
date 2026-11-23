@@ -102,6 +102,22 @@ WORKER_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     # being built. Nothing on source_objects: an edition never has a file, and a chapter's text
     # is read from the reader's own copy through the tenant role.
     "books": frozenset({"SELECT", "INSERT"}),
+    # ADR 0045 section 5, step 6: background work follows where a reader stands with their plan.
+    # The claim reads it with ``reader_plan_state`` (below), which runs as its caller and reads
+    # the reader's row here and their spend in the ledger and reservations above. Read only.
+    "reader_plans": frozenset({"SELECT"}),
+}
+
+# ADR 0045 step 6: and when the reader signed up, for a new reader's warm-up (within so many days
+# of sign-up). SELECT on these two columns of ``users`` only, never the table: the worker reads
+# no name, email or status. The startup check verifies every column of the table both ways.
+WORKER_COLUMN_PRIVILEGES: dict[str, frozenset[str]] = {
+    "users": frozenset({"id", "created_at"}),
+}
+# ADR 0045 step 6: where a reader stands, the one function the session, the spend check and the
+# worker all call, so they cannot disagree (ADR 0045 section 1).
+WORKER_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
+    "reader_plan_state(uuid,integer,numeric)": frozenset({"EXECUTE"}),
 }
 
 # ADR 0041 part 3 (migration 0020): the platform's day total is reached only through these two
