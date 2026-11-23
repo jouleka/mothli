@@ -1,6 +1,8 @@
 """A signed-in reader's plan through Paddle (ADR 0045 sections 6 and 7, step 4, the server half).
 
-``GET /api/billing/plan`` says where the reader stands, for the account sheet. Four routes act on
+``GET /api/billing/plan`` says where the reader stands, for the account sheet, with ``manage``
+(whether the four routes below exist here) and ``checkout`` (``checkout_setup``: what the plan
+sheet's Paddle.js needs, public by design, or null where no checkout can open). Four routes act on
 the reader's own plan, each signed in with the CSRF token, each only for the session's reader
 (no route takes an account, a subscription or a customer id from the browser), and each writing
 only through the billing role:
@@ -154,9 +156,28 @@ def read_plan(settings, owner: uuid.UUID) -> dict:
                         frozenset(_items(settings.paddle_price_yearly)))
 
 
+def checkout_setup(settings) -> dict | None:
+    """What Paddle.js in the reader's browser needs for the plan sheet, or None where this server
+    cannot open a checkout (no API key, so no checkout route, or no client token): Paddle's
+    environment, the public client token, and the price sold for each plan (the first id in its
+    setting; None for a plan not on offer). Never a secret."""
+    monthly = _items(settings.paddle_price_monthly)
+    yearly = _items(settings.paddle_price_yearly)
+    if settings.paddle_api_key is None or not settings.paddle_client_token \
+            or not (monthly or yearly):
+        return None
+    return {"environment": settings.paddle_environment,
+            "client_token": settings.paddle_client_token,
+            "prices": {"monthly": monthly[0] if monthly else None,
+                       "yearly": yearly[0] if yearly else None}}
+
+
 async def _plan_response(request: Request, owner: OwnerId) -> JSONResponse:
-    payload = await run_in_threadpool(read_plan, request.app.state.settings, owner.value)
-    return JSONResponse(payload, headers=_NO_STORE)
+    settings = request.app.state.settings
+    payload = await run_in_threadpool(read_plan, settings, owner.value)
+    # ``manage``: whether this server has the cancel, keep and portal routes at all.
+    return JSONResponse({**payload, "manage": settings.paddle_api_key is not None,
+                         "checkout": checkout_setup(settings)}, headers=_NO_STORE)
 
 
 @plan_router.get("/plan")

@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   addClassic: vi.fn(),
   recollections: vi.fn(),
   deleteBook: vi.fn(),
+  plan: vi.fn(),
 }));
 vi.mock("../api", () => ({
   api: {
@@ -28,6 +29,7 @@ vi.mock("../api", () => ({
     classics: mocks.classics,
     addClassic: mocks.addClassic,
     recollections: mocks.recollections,
+    plan: mocks.plan,
   },
   ApiError: class ApiError extends Error {
     status = 0;
@@ -44,6 +46,7 @@ beforeEach(() => {
   mocks.classics.mockReset().mockRejectedValue(new Error("no catalogue"));
   mocks.addClassic.mockReset();
   mocks.recollections.mockReset().mockRejectedValue(new Error("not kept"));
+  mocks.plan.mockReset().mockRejectedValue(new Error("no plan here"));
 });
 
 afterEach(() => {

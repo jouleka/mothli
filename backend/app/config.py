@@ -26,6 +26,10 @@ _PADDLE_SECRET = re.compile(r"pdl_ntfset_\S{16,500}")
 # (developer.paddle.com/api-reference/about/authentication); the rest is checked as loosely.
 _PADDLE_API_KEY = {"sandbox": re.compile(r"pdl_sdbx_apikey_\S{16,500}"),
                    "production": re.compile(r"pdl_live_apikey_\S{16,500}")}
+# A client-side token starts test_ (sandbox) or live_ (developer.paddle.com/paddle-js/about/
+# client-side-tokens); the rest is checked as loosely.
+_PADDLE_CLIENT_TOKEN = {"sandbox": re.compile(r"test_\S{16,200}"),
+                        "production": re.compile(r"live_\S{16,200}")}
 
 
 def _items(value: str) -> tuple[str, ...]:
@@ -234,6 +238,11 @@ class Settings(BaseSettings):
     # not exist. It needs Paddle's messages too: a payment no message reports would make no one
     # paying.
     paddle_api_key: SecretStr | None = None
+    # ADR 0045 step 4, the screens: Paddle's client-side token, which Paddle.js in the reader's
+    # browser uses to show prices and open checkout. Public by design ("safe to publish",
+    # developer.paddle.com/paddle-js/about/client-side-tokens), so not a secret, but still the
+    # owner's setting. With none, the plan sheet offers no checkout.
+    paddle_client_token: str = ""
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
@@ -336,6 +345,15 @@ class Settings(BaseSettings):
             if not _PADDLE_API_KEY[self.paddle_environment].fullmatch(
                     self.paddle_api_key.get_secret_value()):
                 raise ValueError("PADDLE_API_KEY must be an API key from Paddle's "
+                                 f"{self.paddle_environment} (PADDLE_ENVIRONMENT), as Paddle "
+                                 "shows it")
+        if self.paddle_client_token:
+            if self.paddle_api_key is None:
+                raise ValueError("PADDLE_CLIENT_TOKEN requires PADDLE_API_KEY (the server makes "
+                                 "every checkout)")
+            if not _PADDLE_CLIENT_TOKEN[self.paddle_environment].fullmatch(
+                    self.paddle_client_token):
+                raise ValueError("PADDLE_CLIENT_TOKEN must be a client-side token from Paddle's "
                                  f"{self.paddle_environment} (PADDLE_ENVIRONMENT), as Paddle "
                                  "shows it")
         if self.deployment_mode != "hosted":
