@@ -125,6 +125,8 @@ describe("signed out", () => {
     expect(screen.queryByText("The shelf")).toBeNull();
     expect(screen.getByRole("status").textContent).toBe(PAYMENT_LINK_LINES.opening);
     expect(location.search).toBe("");
+    // A reader joining is not told the free weeks are ahead of them (ADR 0045 step 5).
+    expect(screen.queryByText(/free for your first two weeks/)).toBeNull();
     const door = screen.getByRole("link", { name: "Sign in to start reading" });
     expect(door.getAttribute("href")).toBe(`/api/auth/login?return_to=%2F%3F_ptxn%3D${TRANSACTION}`);
     await waitFor(() => expect(paddleScripts()).toHaveLength(1));

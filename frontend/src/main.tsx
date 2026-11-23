@@ -20,6 +20,7 @@ import { SignInGate } from "./shelf/SignIn";
 import { Icon } from "./ui/Icon";
 import { Button } from "./ui/Button";
 import { AiRuntimeProvider } from "./ui/AiStatus";
+import { setMothliStanding } from "./ui/mothliStanding";
 import "./experience.css";
 import "./theme/mothli.css";
 import "./theme/bookish.css";
@@ -99,7 +100,10 @@ function Boot() {
     setInitialization({ ready: false, failed: false });
     void initializeOfflineSupport()
       .then((session) => {
-        if (active) setInitialization({ ready: true, session });
+        if (!active) return;
+        // Where the reader stands with Mothli; every chat, the cast and "Story so far" follow it.
+        setMothliStanding(session?.mothli ?? null, session?.user?.email ?? null);
+        setInitialization({ ready: true, session });
       })
       .catch(() => {
         if (active) setInitialization({ ready: false, failed: true });

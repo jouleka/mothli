@@ -57,6 +57,7 @@ import { ReaderPage } from "./ReaderPage";
 import { ApiError } from "../api";
 import { activeOfflineOwner, BOOK_GONE_EVENT, BOOK_REMOVED_KEY, pendingPosition } from "../pwa/offline";
 import { readSavedReplies, writeSavedReplies } from "./companionNotes";
+import { setMothliStanding } from "../ui/mothliStanding";
 
 class TestFoliateView extends HTMLElement {
   renderer = Object.assign(document.createElement("div"), {
@@ -839,6 +840,64 @@ describe("the note after a chapter", () => {
       delete extra.chapterCloseout;
       delete extra.askBookStream;
     }
+  });
+});
+
+// ADR 0045 step 5: the reading screen of a reader whose free weeks or plan are over, and of one
+// who has not started.
+describe("the reading screen and where the reader stands with Mothli", () => {
+  const extra = mocks as Record<string, unknown>;
+  const finishChapterTwo = async () => {
+    localStorage.setItem("rc:starting-place-asked:b", "yes");
+    mocks.putPosition.mockResolvedValue({ bookmark: 2, cfi: "1:end", position_epoch: 0,
+      current_chapter: 3, chapter_progress: 0 });
+    render(<ReaderPage bookId="b" onBack={() => {}} hosted />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+    const view = document.querySelector("foliate-view") as TestFoliateView;
+    act(() => view.dispatchEvent(new CustomEvent("relocate", {
+      detail: { cfi: "2:start", section: { current: 2 } },
+    })));
+  };
+  afterEach(() => {
+    for (const name of ["graph", "notes", "startMothli", "askBookStream", "bookConversation"]) delete extra[name];
+    setMothliStanding(null);
+  });
+
+  // Catches: the corner note offering an ended reader "Want to hear what I noticed?", names in the
+  // page looked up (and refused), or anything about the gate on the page itself.
+  test("ended: the note keeps its first part and drops the offer; no names are looked up", async () => {
+    const asked = { graph: vi.fn(), notes: vi.fn(), startMothli: vi.fn(), askBookStream: vi.fn(),
+      bookConversation: vi.fn() };
+    Object.assign(extra, asked);
+    setMothliStanding({ state: "ended", why: "time", ending_note: false });
+    await finishChapterTwo();
+    const note = await screen.findByText("That’s Chapter 2 done!");
+    expect(note.textContent).toBe("That’s Chapter 2 done!");
+    expect(screen.queryByRole("button", { name: "Tell me" })).toBeNull();
+    expect(document.body.textContent).not.toMatch(/Want to hear what I noticed|Keep talking with Mothli|free weeks/);
+    // Reading is untouched: the place is kept.
+    expect(mocks.putPosition).toHaveBeenCalled();
+    // Opening Mothli shows the invitation, and asks nothing.
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Mothli" }));
+    expect(await screen.findByRole("button", { name: "Keep talking with Mothli" })).toBeTruthy();
+    for (const [name, call] of Object.entries(asked)) expect(call, name).not.toHaveBeenCalled();
+  });
+
+  // Catches: the app's own fetches (the cast for names in the page, the notes after a chapter)
+  // starting a new reader's free weeks.
+  test("new: the automatic fetches happen as before and never call the start route", async () => {
+    const asked = {
+      graph: vi.fn().mockResolvedValue({ as_of_chapter: 2, characters: [], relationships: [] }),
+      notes: vi.fn().mockResolvedValue({ as_of_chapter: 2, cast: [], chapters: [] }),
+      startMothli: vi.fn(),
+    };
+    Object.assign(extra, asked);
+    setMothliStanding({ state: "new", why: null, ending_note: false });
+    await finishChapterTwo();
+    expect(await screen.findByRole("button", { name: "Tell me" })).toBeTruthy();
+    await waitFor(() => expect(asked.notes).toHaveBeenCalled());
+    expect(asked.graph).toHaveBeenCalled();
+    expect(asked.startMothli).not.toHaveBeenCalled();
   });
 });
 

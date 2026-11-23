@@ -8,6 +8,7 @@ import { api } from "../api";
 import { PENDING_DELETION_EVENT, SIGNED_OUT_EVENT, type OfflineSession } from "../pwa/offline";
 import { Button } from "../ui/Button";
 import { Moth } from "../ui/Moth";
+import { SIGN_UP_LINE } from "../ui/MothliPlan";
 import { MothliMark } from "../ui/MothliMark";
 import { forgetPaymentLink, paymentLinkTransaction } from "./paddle";
 import { PaymentLink } from "./PaymentLink";
@@ -136,6 +137,8 @@ export function SignIn({ ended = false, paymentLink = null }: { ended?: boolean;
                 ? "You’ve been signed out. Sign in again and I’ll take you straight back to where you were."
                 : "Bring a book you love. Mothli reads along with you and only knows it as far as you’ve read, so it can never spoil what happens next."}
             </p>
+            {/* Not beside a payment link's checkout: that reader has used Mothli and is joining. */}
+            {!ended && !paymentLink && <p className="ml-spread-lede">{SIGN_UP_LINE}</p>}
             <div className="ml-spread-foot">
               {deleted && (
                 <p className="ml-welcome-note" role="status">

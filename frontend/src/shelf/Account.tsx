@@ -14,6 +14,7 @@ import { offersChat, type OfflineSession } from "../pwa/offline";
 import { keepTabFocusInside } from "../reader/focusTrap";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
+import { noteMothliJoined } from "../ui/mothliStanding";
 import { MothliRemembers } from "./MothliRemembers";
 import { PlanSheet } from "./PlanSheet";
 import { TakeACopy } from "./TakeACopy";
@@ -162,7 +163,11 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
       <PlanSheet
         email={session.user.email}
         plan={plan !== null && typeof plan === "object" ? plan : undefined}
-        onJoined={(joined) => setPlan(joined)}
+        onJoined={(joined) => {
+          setPlan(joined);
+          // The chats, the cast and "Story so far" open again at once, without a reload.
+          noteMothliJoined();
+        }}
         onClose={() => {
           returnToPlan.current = true;
           setSeeingPlan(false);

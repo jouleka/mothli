@@ -19,6 +19,7 @@ import {
   queuePosition,
   trackPositionDelivery,
 } from "./pwa/offline";
+import { MOTHLI_PLAN, noteMothliPlan, type MothliStanding } from "./ui/mothliStanding";
 
 export type Book = { book_id: string; title: string; author: string | null };
 /** A public-domain book from the curated catalogue; `book_id` is set once it is on the shelf. */
@@ -364,6 +365,8 @@ async function j<T>(res: Response): Promise<T> {
         // Hosted mode: the account waits to be erased. The app shows the choice to keep it.
         if (res.status === 403 && code === PENDING_DELETION && typeof structured.erase_after === "string")
           announcePendingDeletion(structured.erase_after);
+        // Hosted mode: Mothli needs the plan. Every panel shows its invitation (ADR 0045).
+        if (res.status === 402 && code === MOTHLI_PLAN) noteMothliPlan((detail as { why?: unknown }).why);
       }
     } catch {
       if (text) msg = text;
@@ -372,6 +375,14 @@ async function j<T>(res: Response): Promise<T> {
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+/** A streamed reply's own error event. One refused because Mothli needs the plan (the reader ended
+ * between the gate and the reply's first call) is told to the panels, as a 402 answer is. */
+type StreamError = { type: "error"; status: number; message: string; code?: string; why?: unknown };
+function streamFailure(event: StreamError): ApiError {
+  if (event.status === 402 && event.code === MOTHLI_PLAN) noteMothliPlan(event.why);
+  return new ApiError(event.message, event.status, event.code ?? null);
 }
 
 function csrfHeaders(): Record<string, string> {
@@ -802,10 +813,10 @@ export const api = {
           const event = JSON.parse(line.slice(6)) as
             | { type: "sentence"; text: string }
             | { type: "done"; answer: AskAnswer }
-            | { type: "error"; status: number; message: string; code?: string };
+            | StreamError;
           if (event.type === "sentence") onSentence(event.text);
           else if (event.type === "done") return event.answer;
-          else throw new ApiError(event.message, event.status, event.code ?? null);
+          else throw streamFailure(event);
         }
       }
       throw new ApiError("The reply ended early.", 502);
@@ -860,10 +871,10 @@ export const api = {
           const event = JSON.parse(line.slice(6)) as
             | { type: "sentence"; text: string }
             | { type: "done"; answer: AskAnswer }
-            | { type: "error"; status: number; message: string; code?: string };
+            | StreamError;
           if (event.type === "sentence") onSentence(event.text);
           else if (event.type === "done") return event.answer;
-          else throw new ApiError(event.message, event.status, event.code ?? null);
+          else throw streamFailure(event);
         }
       }
       throw new ApiError("The reply ended early.", 502);
@@ -938,6 +949,15 @@ export const api = {
   /** Hosted: undo a pending deletion; an ordinary account again, everything as it was. */
   keepAccount: () =>
     fetch("/api/account/keep", { method: "POST", headers: csrfHeaders() }).then((r) => j<void>(r)),
+  /** Hosted: the reader opened the cast or "Story so far" themselves, their first use of Mothli:
+   * the server starts their free weeks once and answers where they stand. Never called by the
+   * app's own fetches. */
+  startMothli: (bookId?: string) =>
+    fetch("/api/reader/mothli/start", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...csrfHeaders() },
+      body: JSON.stringify(bookId ? { book_id: bookId } : {}),
+    }).then((r) => j<MothliStanding>(r)),
   /** Hosted: the reader's plan (ADR 0045). */
   plan: () => fetch("/api/billing/plan", { cache: "no-store" }).then((r) => j<Plan>(r)),
   /** Hosted, signed in or not: Paddle's environment and public client token, for the payment-link
