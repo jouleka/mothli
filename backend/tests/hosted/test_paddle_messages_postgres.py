@@ -843,12 +843,13 @@ def test_at_the_first_ceiling_mothli_names_the_day_it_is_back_and_is_back_that_d
     assert "question" not in line.casefold() and "$" not in line
     assert [word for word in line.split() if any(c.isdigit() for c in word)] == [str(named.day)]
 
-    # A minute before the 30 days end: still the same line.
+    # A minute before the 30 days end: still refused. (As if the clock stood then: the plan's
+    # start moved back instead, so the day named is the one the moved end gives.)
     with psycopg.connect(database) as conn:
         conn.execute("UPDATE reader_plans SET first_paid_at = first_paid_at"
                      " - (%s::timestamptz - now()) + interval '1 minute' WHERE owner_id=%s",
                      (ends, a))
-    refused(chat, book, "month", line)
+    refused(chat, book, "month", first_month_line(back_on(first_month_ends(database, a)[0])))
     # The named day, where it begins first (UTC+14): the 30 days are over, and Mothli answers.
     # (As if the clock stood at that moment: the plan's start moved back by as much.)
     begins = datetime.combine(named, datetime.min.time(), UTC) - timedelta(hours=14)

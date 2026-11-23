@@ -40,8 +40,11 @@ CREATE TABLE paddle_events (
 
 ALTER TABLE paddle_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paddle_events FORCE ROW LEVEL SECURITY;
+-- A message with no account is visible to whoever may read the table at all (the billing role,
+-- and the purge, which bypasses row security anyway): PostgreSQL holds a row inserted with
+-- ON CONFLICT to the read policy too, and such a row names no reader.
 CREATE POLICY paddle_events_owner_isolation ON paddle_events
-  USING (owner_id = app_current_owner_id())
+  USING (owner_id IS NULL OR owner_id = app_current_owner_id())
   WITH CHECK (owner_id IS NULL OR owner_id = app_current_owner_id());
 
 -- Which account a message is for, the one look across accounts the billing role makes: the

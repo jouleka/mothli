@@ -369,6 +369,13 @@ def test_tenant_foreign_keys_and_indexes_carry_owner_scope(database: str) -> Non
         # or no; a reader's own background spend is read through the owner-first indexes.
         "ix_cost_ledger_background_time",
         "ix_cost_reservations_background_open",
+        # Migration 0039 (ADR 0045 step 3): a Paddle message's id is Paddle's, one across every
+        # account, and is checked before the account is known (a repeat changes nothing); a
+        # subscription id belongs to one account, and paddle_reader, a security definer only the
+        # billing role runs, looks it up across accounts. Each read or write is otherwise set to
+        # one account (forced RLS).
+        "paddle_events_pkey",
+        "reader_plans_paddle_subscription_id_key",
     }
     with psycopg.connect(database) as conn:
         foreign_keys = conn.execute(
@@ -1371,8 +1378,11 @@ def test_gifts_start_empty_change_no_plan_and_only_set_gift_writes_them(
     apply_migrations(database)
 
     with psycopg.connect(database) as conn:
-        assert conn.execute("SELECT to_jsonb(plan) - 'gift_until' FROM reader_plans AS plan"
-                            ).fetchall() == plans
+        # (Less the columns later migrations add: 0039's Paddle part.)
+        assert conn.execute(
+            "SELECT to_jsonb(plan) - 'gift_until' - %s::text[] FROM reader_plans AS plan",
+            (["paddle_customer_id", "paddle_subscription_id", "paddle_status", "period_ends_at",
+              "ends_at", "paddle_occurred_at", "first_paid_at"],)).fetchall() == plans
         assert conn.execute("SELECT count(*) FROM reader_plans WHERE gift_until IS NOT NULL"
                             ).fetchone()[0] == 0
         assert [conn.execute("SELECT state, why, free_started_at, free_ends_at"
