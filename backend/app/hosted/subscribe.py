@@ -8,7 +8,8 @@ the reader's own plan, each signed in with the CSRF token, each only for the ses
 only through the billing role:
 
 - ``POST /api/billing/checkout`` ``{"plan": "monthly" | "yearly"}``: keeps the digest of a fresh
-  checkout token for the reader (``paddle_checkouts``, seven days), then creates the Paddle
+  checkout token for the reader (``paddle_checkouts``; it binds until used, however old), then
+  creates the Paddle
   transaction for the plan's current price (the first id in its setting) with custom data naming
   the reader and that token, and answers ``{"transaction_id": "txn_..."}`` for Paddle.js
   to open checkout with. Refused while the reader has a live Paddle plan. A gifted reader may
@@ -55,9 +56,9 @@ plan_router = APIRouter(prefix="/api/billing", tags=["hosted-billing"])
 
 _LIVE = ("active", "trialing", "past_due")
 _FOR_GOOD = date(9999, 12, 31)
-# How long a checkout the server made can bind a new subscription to its reader: past the time a
-# reader may take to pay in an open checkout and Paddle's retries of a first message (about two
-# days live: developer.paddle.com/webhooks/respond-to-webhooks).
+# Written to a checkout's ``expires_at`` as a record only. Nothing decides by it: an unused token
+# binds its reader however old it is (``billing._checkout_open``), so a payment made from Paddle's
+# late reminder email is never lost.
 CHECKOUT_DAYS = 7
 # Checkouts one reader may start in a day: each is a call to Paddle, whose limit is per address.
 CHECKOUTS_PER_DAY = 10
@@ -237,7 +238,7 @@ async def checkout(body: CheckoutIn, request: Request,
                         "Let’s take a little break from checkouts. Please try again later.")
     # The token is kept before Paddle hears of it: a checkout whose token Mothli never stored
     # could be paid for and bind to no one. If Paddle then fails, the row is never used and
-    # expires (it still counts toward the day's checkouts).
+    # binds nothing, since no transaction carries it (it still counts toward the day's checkouts).
     token = new_token()
     try:
         await run_in_threadpool(_record_checkout, dsn, owner.value, token)

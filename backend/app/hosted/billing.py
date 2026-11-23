@@ -23,7 +23,7 @@ the caller; the signature is the only thing that lets a message in. The route ex
    it from the transaction that made the subscription:
    developer.paddle.com/build/transactions/custom-data), and only when the same custom data
    carries ``mothli_checkout``, a checkout token the server made for that same reader when it
-   created the transaction (``app/hosted/subscribe.py``), unused and unexpired; the token is used
+   created the transaction (``app/hosted/subscribe.py``), unused, however old; the token is used
    up when the subscription is first applied (ADR 0045 step 4). Custom data alone proves nothing:
    anyone with the public client token can open a checkout naming any reader. A message naming an
    account with no such checkout, an unknown account or an erased one is recorded with no account
@@ -255,13 +255,15 @@ def _outcome(row, message: SubscriptionMessage) -> str:
 
 
 def _checkout_open(conn, reader: uuid.UUID, token: str | None) -> bool:
-    """Whether ``token`` is a checkout the server made for ``reader``, unused and unexpired (the
-    transaction is set to ``reader``, so row-level security shows only theirs)."""
+    """Whether ``token`` is a checkout the server made for ``reader`` and unused, however old (the
+    transaction is set to ``reader``, so row-level security shows only theirs). ``expires_at`` is
+    kept as a record and decides nothing: a payment made from Paddle's late reminder email must
+    still make its reader paying, and the token is unguessable, one reader's and used once."""
     if token is None:
         return False
     return conn.execute(
         "SELECT 1 FROM public.paddle_checkouts WHERE owner_id=%s AND token_digest=%s"
-        " AND used_at IS NULL AND now() < expires_at FOR UPDATE",
+        " AND used_at IS NULL FOR UPDATE",
         (reader, checkout_digest(token))).fetchone() is not None
 
 
