@@ -70,6 +70,11 @@ describe("the plan sheet", () => {
     expect(within(sheet).getByText("Join now and your plan starts today.")).toBeTruthy();
     expect(within(sheet).getByText("Cancel any time from Your account. Your books stay free either way.")).toBeTruthy();
     expect(within(sheet).getByText("Payments are handled by Paddle, who sells Mothli on our behalf.")).toBeTruthy();
+    // The public pages (ADR 0045 step 8), opened beside the sheet so it stays as it is.
+    expect(["our terms", "how refunds work", "your privacy"].map((name) => {
+      const link = within(sheet).getByRole("link", { name });
+      return [link.getAttribute("href"), link.getAttribute("target")];
+    })).toEqual([["/terms", "_blank"], ["/refunds", "_blank"], ["/privacy", "_blank"]]);
     expect(within(sheet).getByRole("status").textContent).toBe("");
     expect(paddle.calls).toEqual(["environment:sandbox", "initialize:test_clientstandin",
       "preview:pri_monthlystandin,pri_yearlystandin"]);

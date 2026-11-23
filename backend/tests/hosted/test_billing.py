@@ -216,6 +216,9 @@ LIVE_KEY = "_".join(("pdl", "live", "apikey", "teststandin" * 4))
 LIVE = {"paddle_environment": "production"}
 # Mothli's own page for Paddle's payment links, on the test app's host.
 CHECKOUT_URL = "https://reader.example/"
+# Who runs this stand-in Mothli (ADR 0045 step 8): required with the API key.
+OPERATOR = {"operator_legal_name": "Example Reading Ltd", "operator_country": "Ireland",
+            "operator_contact_email": "hello@reader.example"}
 
 
 class Recorder:
@@ -292,8 +295,8 @@ def test_the_paddle_client_cannot_list_search_or_name_anything_but_one_well_form
     put anything but one Paddle id of the expected kind in a path (``../``, a query, another
     kind of id, a list)."""
     public = {name for name in dir(PaddleApi) if not name.startswith("_")}
-    assert public == {"create_transaction", "subscription", "cancel", "remove_scheduled_change",
-                      "portal", "close"}
+    assert public == {"create_transaction", "price", "subscription", "cancel",
+                      "remove_scheduled_change", "portal", "close"}
     api, recorder = api_with(lambda request: httpx.Response(500))
     for call in (lambda: api.subscription("sub_x/../../customers"),
                  lambda: api.subscription(paddle_id("ctm_", "c")),
@@ -366,7 +369,7 @@ def test_the_api_key_is_checked_loosely_against_its_environment_and_needs_the_me
     names the setting, never the key."""
     good = dict(paddle_webhook_secret=SECRET, paddle_price_monthly=MONTHLY,
                 paddle_price_yearly=f"{YEARLY_NEW},{YEARLY}",
-                hosted_billing_dsn="postgresql://unused.invalid/b")
+                hosted_billing_dsn="postgresql://unused.invalid/b", **OPERATOR)
     assert paddle_settings(**good).paddle_api_key is None
     assert paddle_settings(**good, paddle_api_key="").paddle_api_key is None
     good["paddle_checkout_url"] = CHECKOUT_URL
@@ -397,7 +400,8 @@ def test_the_checkout_address_comes_with_the_key_and_is_this_apps_own_front_page
     would collide with, a port or user information; a placeholder accepted; the address set with
     no checkout to use it. A refusal names the setting, never the key."""
     keyed = dict(paddle_webhook_secret=SECRET, paddle_price_monthly=MONTHLY,
-                 hosted_billing_dsn="postgresql://unused.invalid/b", paddle_api_key=KEY)
+                 hosted_billing_dsn="postgresql://unused.invalid/b", paddle_api_key=KEY,
+                 **OPERATOR)
     with pytest.raises(ValidationError) as refused:
         paddle_settings(**keyed)
     assert "PADDLE_CHECKOUT_URL" in str(refused.value) and KEY not in str(refused.value)

@@ -21,7 +21,11 @@ export function noCounter(element: Element): void {
   expect(text).not.toMatch(/unlimited/i);
   expect(text).not.toMatch(/questions? left/i);
   expect(text).not.toMatch(/\d+\s*(questions?|replies|messages|chats?)\b/i);
-  expect(text).not.toMatch(/refund|money.back/i);
+  // Open point 8, decided: no refund promise of Mothli's own, Paddle's terms only. The one
+  // mention allowed is a link to the refunds page (ADR 0045 step 8), which says so.
+  const withoutLinks = element.cloneNode(true) as Element;
+  withoutLinks.querySelectorAll('a[href="/refunds"]').forEach((link) => link.remove());
+  expect(withoutLinks.textContent ?? "").not.toMatch(/refund|money.back|guarantee|\b14 days\b/i);
 }
 
 

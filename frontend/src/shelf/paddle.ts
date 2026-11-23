@@ -10,6 +10,7 @@
  * (a server-made transaction by its id, the email prefilled). No package: the script tag is one of
  * Paddle's two documented ways, and nothing else is needed. */
 import type { PlanCheckout } from "../api";
+import { perMonthOf, savingOf } from "../ui/planFigures";
 
 export const PADDLE_SCRIPT = "https://cdn.paddle.com/paddle/v2/paddle.js";
 // A script that has neither loaded nor failed by now is not coming (a stalled network).
@@ -136,14 +137,6 @@ export type PlanPrices = {
 
 const WHOLE = /^\d{1,15}$/;
 
-function formatter(currency: string): Intl.NumberFormat | null {
-  try {
-    return new Intl.NumberFormat("en", { style: "currency", currency });
-  } catch {
-    return null;
-  }
-}
-
 /** The two plans' prices, as Paddle gives them for this reader (their currency and tax), with
  * the yearly plan as a month and its saving against paying monthly worked out from those two
  * figures alone. A plan Paddle gave no price for is null; an answer with none at all fails. */
@@ -168,15 +161,8 @@ export async function planPrices(
   let perMonth: string | null = null;
   let saving: number | null = null;
   if (yearly) {
-    const format = formatter(answer.data?.currencyCode ?? "");
-    if (format) {
-      const digits = format.resolvedOptions().maximumFractionDigits ?? 2;
-      perMonth = format.format(Math.round(yearly.minor / 12) / 10 ** digits);
-    }
-    if (monthly && monthly.minor > 0) {
-      const percent = Math.floor(((monthly.minor * 12 - yearly.minor) * 100) / (monthly.minor * 12));
-      saving = percent >= 1 ? percent : null;
-    }
+    perMonth = perMonthOf(yearly.minor, answer.data?.currencyCode ?? "");
+    if (monthly) saving = savingOf(monthly.minor, yearly.minor);
   }
   return {
     monthly: monthly && { total: monthly.shown },

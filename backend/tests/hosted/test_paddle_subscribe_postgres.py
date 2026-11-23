@@ -40,6 +40,7 @@ from tests.hosted.test_paddle_messages_postgres import (
     stamp_of,
     sub_id,
 )
+from tests.hosted.test_billing import OPERATOR
 from tests.hosted.test_tenant_postgres import _become
 
 pytestmark = pytest.mark.postgres
@@ -139,7 +140,7 @@ def shop(make_app, billing_dsn, database):
     """The hosted app with Paddle's messages and API on, Paddle stood in: (client, tokens,
     stand-in). A message ``post`` sends naming a reader comes with that reader's checkout."""
     client, tokens, app = make_app(**PADDLE, paddle_api_key=KEY, paddle_checkout_url=CHECKOUT_URL,
-                                   hosted_billing_dsn=billing_dsn)
+                                   hosted_billing_dsn=billing_dsn, **OPERATOR)
     standin = StandInPaddle()
     app.state.paddle_api = PaddleApi(KEY, "sandbox", transport=httpx.MockTransport(standin))
     client.checkouts_dsn = database
@@ -326,7 +327,7 @@ def test_checkout_refusals_answer_and_write_nothing(shop, make_app, billing_dsn,
 
     other, other_tokens, app = make_app(**{**PADDLE, "paddle_price_yearly": ""},
                                         paddle_api_key=KEY, paddle_checkout_url=CHECKOUT_URL,
-                                        hosted_billing_dsn=billing_dsn)
+                                        hosted_billing_dsn=billing_dsn, **OPERATOR)
     lonely = StandInPaddle()
     app.state.paddle_api = PaddleApi(KEY, "sandbox", transport=httpx.MockTransport(lonely))
     response = ask(other, other_tokens, "b", "checkout", {"plan": "yearly"})

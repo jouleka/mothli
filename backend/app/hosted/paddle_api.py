@@ -11,6 +11,8 @@ settings:
   (developer.paddle.com/api-reference/transactions/
   create-transaction; the browser opens checkout with its id:
   developer.paddle.com/paddlejs/methods/paddle-checkout-open);
+- ``price``: ``GET /prices/{id}`` for one of Mothli's own prices, for the front page
+  (.../api-reference/prices/get-price);
 - ``subscription``: ``GET /subscriptions/{id}`` (.../api-reference/subscriptions/get-subscription);
 - ``cancel``: ``POST /subscriptions/{id}/cancel`` with ``effective_from: next_billing_period``
   (.../api-reference/subscriptions/cancel-subscription);
@@ -146,6 +148,12 @@ class PaddleApi:
             _LOG.warning("paddle call failed: unreadable")
             raise PaddleUnavailable("unreadable")
         return transaction
+
+    def price(self, price_id: str) -> dict:
+        """One price as Paddle's catalog has it (``GET /prices/{id}``, permission ``price.read``,
+        developer.paddle.com/api-reference/prices/get-price). Called only with Mothli's own price
+        ids from its settings (``app.hosted.site``), for the front page's figures."""
+        return self._call("GET", f"/prices/{_checked(price_id, _PRICE)}")
 
     def subscription(self, subscription_id: str) -> dict:
         return self._call("GET", f"/subscriptions/{_checked(subscription_id, _SUBSCRIPTION)}")

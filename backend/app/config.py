@@ -30,6 +30,13 @@ _PADDLE_API_KEY = {"sandbox": re.compile(r"pdl_sdbx_apikey_\S{16,500}"),
 # client-side-tokens); the rest is checked as loosely.
 _PADDLE_CLIENT_TOKEN = {"sandbox": re.compile(r"test_\S{16,200}"),
                         "production": re.compile(r"live_\S{16,200}")}
+# The operator's details are printed on the public pages as they are: one line of text with no
+# markup characters, and an address of the plain local@domain.tld shape. The deployment
+# template's placeholder is refused, so a copied template never publishes it as a name.
+_OPERATOR_TEXT = re.compile(r"[^\x00-\x1f\x7f<>{}\\]{2,}")
+_OPERATOR_EMAIL = re.compile(r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*"
+                             r"\.[A-Za-z]{2,63}")
+_PLACEHOLDER = "OWNER_MUST_FILL_IN"
 
 
 def _items(value: str) -> tuple[str, ...]:
@@ -250,6 +257,14 @@ class Settings(BaseSettings):
     # the app's front page (no path, query or fragment). Paddle refuses it until its domain is
     # approved under Website approval. Required with PADDLE_API_KEY.
     paddle_checkout_url: str = ""
+    # ADR 0045 step 8: who runs Mothli, for the public pages (the terms, privacy, refunds and
+    # contact pages a visitor and Paddle's reviewers read signed out). The legal name and country
+    # of the operator, and the address readers write to. Never written in the app: with any of
+    # the three missing, the pages say Mothli is not open for sign-ups here, and the server
+    # refuses PADDLE_API_KEY (a deployment that can take payments must publish its terms).
+    operator_legal_name: str = ""
+    operator_country: str = ""
+    operator_contact_email: str = ""
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
@@ -370,6 +385,26 @@ class Settings(BaseSettings):
             raise ValueError("PADDLE_API_KEY requires PADDLE_CHECKOUT_URL (Mothli's own page for "
                              "Paddle's payment links; without it they go to the account's "
                              "default page)")
+        # ADR 0045 step 8: the operator's details, as the public pages print them.
+        self.operator_legal_name = self.operator_legal_name.strip()
+        self.operator_country = self.operator_country.strip()
+        self.operator_contact_email = self.operator_contact_email.strip()
+        for label, value, longest in (("OPERATOR_LEGAL_NAME", self.operator_legal_name, 200),
+                                      ("OPERATOR_COUNTRY", self.operator_country, 100)):
+            if value and (len(value) > longest or not _OPERATOR_TEXT.fullmatch(value)
+                          or _PLACEHOLDER in value.upper()):
+                raise ValueError(f"{label} must be plain text of at most {longest} characters "
+                                 "on one line, as it should appear on Mothli's terms")
+        if self.operator_contact_email and (
+                len(self.operator_contact_email) > 254
+                or not _OPERATOR_EMAIL.fullmatch(self.operator_contact_email)
+                or _PLACEHOLDER in self.operator_contact_email.upper()):
+            raise ValueError("OPERATOR_CONTACT_EMAIL must be one email address that readers "
+                             "can write to")
+        if self.paddle_api_key is not None and not self.operator_published():
+            raise ValueError("PADDLE_API_KEY requires OPERATOR_LEGAL_NAME, OPERATOR_COUNTRY and "
+                             "OPERATOR_CONTACT_EMAIL (a server that can take payments must "
+                             "publish who runs it in its terms)")
         if self.deployment_mode != "hosted":
             return self
 
@@ -497,6 +532,12 @@ class Settings(BaseSettings):
         """Mothli's own Paddle price ids, monthly and yearly, old and current: a message about
         any other price is not Mothli's (ADR 0045 step 3)."""
         return frozenset(_items(self.paddle_price_monthly) + _items(self.paddle_price_yearly))
+
+    def operator_published(self) -> bool:
+        """Whether all three of the operator's details are set, so the public pages can be
+        published in full (ADR 0045 step 8)."""
+        return bool(self.operator_legal_name and self.operator_country
+                    and self.operator_contact_email)
 
     def oidc_signing_algorithm_values(self) -> tuple[str, ...]:
         return tuple(item.strip() for item in self.oidc_signing_algorithms.split(",") if item.strip())

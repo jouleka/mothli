@@ -1,11 +1,11 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
 **Status:** Proposed (2026-11-20). Steps 1, 2, 3, 4 (server and screens), 5 (server and
-screens), 6 and 7 (deleting an account while paying, and "your plan.json"), and Mothli's own
-payment link in the shared Paddle account ("One Paddle account, several products", at the end)
-are built (see below), short of the sandbox walk; nothing else is (step 8, the pages, is not). The
+screens), 6, 7 (deleting an account while paying, and "your plan.json") and 8 (the public
+pages), and Mothli's own payment link in the shared Paddle account ("One Paddle account, several
+products", at the end) are built (see below), short of the sandbox walk; nothing else is. The
 owner's decisions in "What the owner decided" are settled; the numbers and the choices in "Open
-points for the owner" are his to make, and point 7 is decided (23 November 2026).
+points for the owner" are his to make, and points 7 and 8 are decided (23 November 2026).
 
 **Step 1 built (2026-11-20).** Migration `0037_reader_plans.sql`: `reader_plans` (`owner_id`,
 `free_started_at`, `updated_at`; row-level security forced; the tenant role holds `SELECT` only),
@@ -1226,7 +1226,10 @@ Each is a question with choices; the recommendation is first.
    reader.)
 8. **Mothli's own refund policy** (Paddle needs a page). (a) "Ask within 14 days of a payment and we’ll
    refund it, no questions asked." (b) Paddle's buyer terms only (refunds where the law requires them).
-   Recommended: (a); simple, kind and cheap at these prices.
+   Recommended: (a); simple, kind and cheap at these prices. **Decided by the owner (23 November
+   2026): (b), Paddle's terms only**, in his words: "If we do 14 days, they will still use all the
+   credits. I will still lose money, and they can easily just cancel. Maybe you can just do paddle
+   terms." Built in step 8.
 9. **Subscribing during the free weeks.** (a) The plan starts that day; the account sheet says so before
    checkout. (b) Try to keep the remaining free days with a Paddle trial (needs checking in the sandbox).
    Recommended: (a).
@@ -1482,3 +1485,164 @@ row; "your plan.json"; the waiting screen's read), `test_migrations.py` (0041), 
 `SignIn.test.tsx`. Not verified: any of it against Paddle's sandbox (that a cancel's answer
 carries the scheduled change, the exact refusal inside the 30 minutes), the screens in a browser,
 and the purge and the check from their crontabs.
+
+**Step 8 built (2026-11-23): the public pages.** What a visitor and Paddle's reviewers read
+without signing in. Nobody has seen any of it in a browser yet, and nothing was run against
+Paddle: it is stood in for in every test. Open point 8 is decided: Paddle's terms only.
+
+- **The addresses.** The front page `/` (signed out: the welcome, unchanged above, then what
+  Mothli is, what is free, the plan and its prices), and `/terms`, `/privacy`, `/refunds`,
+  `/contact`. Each is the app's own page (`frontend/src/public/`), shown at its address signed in
+  or out, in hosted mode only; the proxy serves `index.html` at exactly those four paths
+  (`deploy/Caddyfile`, `@pages`; a test keeps its list equal to `frontend/src/public/pages.ts`).
+  A footer on the welcome, the welcome-back and every page links all four; the plan sheet links
+  the terms, refunds and privacy pages, and the account sheet all four, each opening beside the
+  sheet. The pending-deletion screen is step 7's and has no footer.
+- **Who runs Mothli** comes from three new settings, `OPERATOR_LEGAL_NAME`, `OPERATOR_COUNTRY`,
+  `OPERATOR_CONTACT_EMAIL` (plain text on one line with no markup characters, at most 200 and 100
+  characters; one address of the `local@domain.tld` shape; the template's placeholder refused;
+  each refusal names the setting, never the value), commented out in `deploy/app.env.example`.
+  With any missing, each page says only "Mothli isn’t open for sign-ups here yet…", the front
+  page's footer says the same, and **`PADDLE_API_KEY` is refused without all three**.
+- **Where the prices come from: chosen as the brief proposed.** `GET /api/site` (public, no
+  session, `no-store`) answers `operator` (the three, or null) and `plan` (`currency`, `monthly`,
+  `yearly` in the currency's smallest unit, or null). The server reads the two prices sold now
+  (the first id of each price setting, as the checkout uses) with a new client method,
+  `PaddleApi.price` (`GET /prices/{id}`, permission `price.read`,
+  [get a price](https://developer.paddle.com/api-reference/prices/get-price)), which takes one
+  well-formed price id; `app/hosted/site.py` passes it only those two ids. A good answer is kept
+  ten minutes, a failure one, and a read under way never makes another visitor wait (they get
+  what is kept, or no figures). Null, and so no figure, unless both prices are active, billed
+  once a month and once a year, in one currency, with whole positive amounts. The page formats
+  them with the plan sheet's arithmetic, now shared (`frontend/src/ui/planFigures.ts`): at $12.99
+  and $79.99, "$6.67 a month, billed yearly", "$79.99 a year, 48% less than paying monthly.",
+  "$12.99 a month", yearly first. Weighed against: Paddle.js's price preview on the front page
+  (rejected: Paddle's script must load only on the plan sheet and the payment-link page);
+  prices written in the app or in settings (rejected: they could drift from the checkout);
+  Paddle's pricing preview from the server (rejected: it prices for the server's own location
+  and tax, not the catalog's figures). What a visitor sees when Paddle is unreachable, unset or
+  refuses (a key without `price.read`): the plan with no figure at all, "After that, the plan is
+  paid monthly or yearly. You’ll see the prices when you choose." The catalog figure is the base
+  price; a buyer elsewhere may see another currency or tax at checkout (country overrides, tax
+  mode: open point 3), so with figures the page adds "Paddle’s checkout shows your exact price
+  where you live, with any tax." **The API key now needs `price.read`** (runbook 4c and 4d).
+- **No script from elsewhere, policy unchanged.** The pages load nothing from another site; a
+  test holds the policy string to the one before this step, and Paddle.js still loads only on the
+  plan sheet and the payment-link page.
+
+What Paddle's review asks for (read 23 November 2026:
+[domain approval](https://www.paddle.com/help/start/account-verification/what-is-domain-approval),
+[why a domain is rejected](https://www.paddle.com/help/start/account-verification/why-has-my-domain-been-rejected)),
+and how each is met:
+
+- *A clear description of the product, and its features or deliverables*: the front page's "A
+  reading friend who never spoils the ending" and "Free to read. Mothli is the plan."
+- *Pricing details or a pricing page*: the front page's two prices, from the catalog. When the
+  server cannot read them there are none on the page; Paddle accepts a screenshot of pricing
+  while a page is not live, and the plan sheet shows them after sign-in.
+- *Terms and Conditions, Refund Policy and Privacy Policy "clearly accessible via navigation"*:
+  the footer on every signed-out page.
+- *The company name, or a sole proprietor's legal name, in the terms*: "Mothli is run by
+  {OPERATOR_LEGAL_NAME}, based in {OPERATOR_COUNTRY}", from the settings.
+- *A live site over HTTPS*: Cloudflare (runbook step 1). Not something this step changes.
+- *Contact details* are not named on either page; the brief asked for them within two clicks:
+  "Contact" in the front page's footer is one click, and its page gives the address.
+- A reviewer may ask for a test account for parts behind a sign-in (same page); the owner can
+  give one with a gift (step 2).
+
+Paddle's [refund policy](https://www.paddle.com/legal/refund-policy) for buyers, read the same
+day: transactions are non-refundable unless the law says otherwise; Paddle may refund at its
+discretion if asked within its window; consumers in the EU, EEA, UK and some other countries have
+a statutory right to withdraw, lost for digital content once they have consented to start using
+it; a buyer asks through the receipt's link or paddle.net; a cancelled subscription stops at the
+end of the billing period. The refunds page promises nothing of Mothli's own and denies nothing:
+Paddle decides refunds under its refund policy and
+[buyer terms](https://www.paddle.com/legal/checkout-buyer-terms) (both linked), how to ask, the
+free weeks to try first, cancelling from Your account keeps Mothli to the end of what was paid,
+and where the law gives a right to cancel and be refunded (the EU and UK withdrawal right),
+Paddle's terms explain it. No window, no number of days, no guarantee.
+
+**Statements that are a legal choice for the owner or a lawyer** (each written as a plain
+default; none can be verified in code):
+
+1. Terms: "You must be at least 16 years old to use Mothli"; privacy: "Mothli is not for anyone
+   under 16". Nothing checks an age.
+2. Terms: the limit on responsibility ("not responsible for indirect losses", "limited to what
+   you paid for the plan in the 12 months before your claim"), and "we can’t promise it will
+   always be available or free of mistakes".
+3. Terms: "governed by the law of {OPERATOR_COUNTRY}", consumers keeping their own law and
+   local courts.
+4. Terms: "By using Mothli, you agree to them" (agreement by use; signing in asks for no click).
+5. Terms: "If someone tells us that a file breaks their rights, we may remove it" (no notice
+   process exists; the operator would act by hand), and "we may pause or close your account" /
+   "We may close an account that breaks these terms" (a `suspended` status exists in the
+   schema; no command sets it).
+6. Terms and privacy: changes are announced only by posting the new text with its start date;
+   no notice in the app exists.
+7. Privacy: that {OPERATOR_LEGAL_NAME} is "responsible for your data" (the GDPR controller); no
+   legal basis is stated for any use; rights are "may also have rights under the law where you
+   live".
+8. Privacy: "Some of these companies may handle your data outside your country, including in
+   the United States" (transfers outside the EU and their safeguards are not named).
+9. Terms: "fair-use limits for each day and each month" and "the free weeks can end sooner"
+   describe the hidden guards and the free ceiling without a number; the owner should confirm he
+   wants them said.
+
+**Statements that could not be verified against the code**:
+
+1. (Resolved in review.) Which AI company writes replies is now read from the server's own
+   settings by the rule that chooses the model client (`site.writer`: an Anthropic key wins, an
+   OpenAI key is OpenAI unless `OPENAI_BASE_URL` points elsewhere, then that address's host), and
+   `GET /api/site` gives the name alone as `writer`; the privacy page names it with TypeSafe, or,
+   where the chat is not open here, says "Mothli’s chat isn’t open on this server yet, so no AI
+   company receives anything from your reading here."
+2. What OpenAI, Anthropic and TypeSafe keep of what they are sent, and for how long: set by the
+   owner's agreements with them. The page does not say.
+3. The sign-in service and the company renting the server are not named (the code takes any
+   OpenID Connect issuer; the runbook mentions Auth0 as one choice).
+4. "Each nightly backup is kept for two weeks": the runbook's fourteen newest, nightly by its
+   crontab line; a server that runs backups otherwise changes it. Said as "two weeks", not "14
+   days", so the word check holds on every page.
+5. Cloudflare may set a cookie of its own for its security features: not mentioned, not checked.
+   Paddle's checkout's own cookies are mentioned as Paddle's.
+6. "Paddle … keeps its own records of your payments, even after we erase your account" (step 7's
+   note and section 7): Paddle's practice, not Mothli's code.
+7. That Paddle's checkout records an EU buyer's consent to start at once ("could not verify" 8):
+   the refunds page leaves it to Paddle's terms.
+
+Tests (written first): backend `tests/hosted/test_public_site.py` (14: the operator's details
+validated and named in refusals; required with the API key; in the template, commented out; the
+price read's request; no figures for every inconsistent or failed answer; only the prices sold
+now, only with the key; kept ten minutes, a failure one; no visitor waits on another's read;
+`GET /api/site` signed out with the operator and the catalog's prices and no secret, two visits
+one read; without Paddle or the operator, nothing called; Paddle unreachable or refusing, no
+figure and no second call; the policy unchanged; the proxy's four paths equal the app's; the
+answer's names equal the page's), the operator's details added where `test_billing.py`,
+`test_plan_sheet_setup.py` and `test_paddle_subscribe_postgres.py` set the key, the client's
+public methods gaining `price`, and `test_mothli_gate.py` listing `GET /api/site` as not gated.
+Frontend `frontend/src/public/PublicPages.test.tsx` (13: each address in hosted mode only; every
+page from the footer; contact one click from the front page; the operator named and each page
+passing the accessibility checks; no counter, "unlimited", "14 days", money-back, guarantee or
+countdown on any page or the front page; the refunds page's words; what the terms and privacy
+page must say; the operator missing; a failed read and its retry; the catalog's figures yearly
+first with the saving; another currency's; no figure without prices; nothing loaded from another
+site), additions to `PlanSheet.test.tsx` and `Account.test.tsx` (the links), `SignIn.test.tsx`
+(one way in, the rest the footer's), and the plan screens' word check allowing only a link to
+the refunds page.
+
+After review, with step 7 merged (same day): the terms no longer tell a paying reader to cancel
+before deleting; they say "If you’re on the plan, asking to delete your account stops it from
+renewing, so you won’t be charged again. You keep Mothli until the end of the month or year you
+have paid for, or until your account is erased, whichever comes first. If you come back within
+the 30 days, your plan still ends unless you choose “Keep my plan”." (`auth/account.py`, "Step
+7 built"). The privacy page's copy of one's data lists what `tenant/export.py` puts in it,
+"your plan.json" included, and how to download a book; its erasure part says deleting stops the
+plan renewing, that the plan's details are erased with the rest, and that Paddle keeps its own
+records and is not asked to delete them (step 7's sentence, with "two weeks" for the backups).
+The privacy page names the one AI company this server uses (could-not-verify 1, resolved).
+Tests: one more backend (OpenAI, Anthropic, another host and none) and one more frontend (each
+named alone, and none).
+
+Not seen: any page in a browser, on a phone or in the dark theme; the proxy's rewrite running in
+Caddy; the price read against Paddle's sandbox (the answer's real shape, and the permission's
+name in the dashboard).

@@ -17,6 +17,8 @@ import { api, ApiError, type Plan } from "../api";
 import { keepTabFocusInside } from "../reader/focusTrap";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
+import { monthlyTotal, yearlyMonth, yearlyTotal } from "../ui/planFigures";
+import { PAGE_PATHS } from "../public/pages";
 import { listenToPaddle, loadPaddle, planPrices, type PaddleLike, type PlanPrices } from "./paddle";
 import "../library/free-library.css";
 import "./home-chat.css";
@@ -58,10 +60,7 @@ export const CHECKOUT_REFUSED: Record<string, string> = {
 };
 export const CHECKOUT_FAILED = "I couldn’t start the checkout just now. Check your connection and try again.";
 
-export const yearlyMonth = (perMonth: string) => `${perMonth} a month, billed yearly`;
-export const yearlyTotal = (total: string, saving: number | null) =>
-  saving === null ? `${total} a year.` : `${total} a year, ${saving}% less than paying monthly.`;
-export const monthlyTotal = (total: string) => `${total} a month`;
+export { monthlyTotal, yearlyMonth, yearlyTotal };
 
 // After the checkout, how often and how long to ask the server whether the plan has arrived.
 // A payment Paddle has completed gets the longer wait; a checkout only closed, a short check in
@@ -354,9 +353,15 @@ export function PlanSheet({
               {problem && <p className="fl-error" role="alert">{problem}</p>}
               {startsToday && <p className="ml-mem-quiet">{PLAN_LINES.startsToday}</p>}
               <p className="ml-mem-quiet">{PLAN_LINES.cancelAnyTime}</p>
-              {/* A refund or money-back line goes here, once the owner has decided one (ADR 0045
-                  open point 8). Until then the sheet promises none. */}
               <p className="ml-mem-quiet">{PLAN_LINES.paddle}</p>
+              {/* Open point 8, decided: no refund promise of Mothli's own, Paddle's terms only.
+                  The pages say so; they open beside the sheet, so it stays as it is. */}
+              <p className="ml-mem-quiet">
+                Before you join:{" "}
+                <a href={PAGE_PATHS.terms} target="_blank" rel="noopener">our terms</a>,{" "}
+                <a href={PAGE_PATHS.refunds} target="_blank" rel="noopener">how refunds work</a> and{" "}
+                <a href={PAGE_PATHS.privacy} target="_blank" rel="noopener">your privacy</a>.
+              </p>
             </>
           )}
 

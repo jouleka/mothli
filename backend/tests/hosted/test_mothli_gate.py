@@ -76,6 +76,8 @@ NOT_GATED = {
     ("GET", "/api/classics/{classic_id}"), ("POST", "/api/classics/{classic_id}"),
     ("POST", "/api/account/delete"), ("POST", "/api/account/keep"), ("GET", "/api/account/export"),
     ("GET", "/api/billing/plan"),
+    # The public pages' read (ADR 0045 step 8): signed out, nothing of any reader's.
+    ("GET", "/api/site"),
     ("GET", "/api/auth/login"), ("GET", "/api/auth/callback"), ("GET", "/api/auth/session"),
     ("POST", "/api/auth/logout"),
 }
