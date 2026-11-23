@@ -27,7 +27,14 @@ import psycopg
 import pytest
 from psycopg import conninfo, sql
 
-from app.hosted.companion.spend import _DAY, _MONTH, set_spend_limits
+from app.hosted.companion.spend import (
+    _DAY,
+    _MONTH,
+    FIRST_PAID_MONTH,
+    back_on,
+    first_month_line,
+    set_spend_limits,
+)
 from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.limits import update_limits
 from app.hosted.tenant.models import OwnerId
@@ -369,14 +376,40 @@ def test_a_cancelled_subscription_then_a_new_one_for_the_same_reader(paddle, dat
     assert row_of(database, a)["paddle_subscription_id"] == sub_id("new")
     assert [event[3] for event in events(database)] == [
         "applied", "applied", "applied", "other_subscription", "older"]
-    # A new subscription made before the old one's cancel arrived: the live one stays.
+    # A plan cancelled to the end of what was paid, past that end, with Paddle's cancel message
+    # not yet arrived: a new subscription takes its place at once.
     b = readers["b"]
-    post(paddle, message(sub_id("b1"), reader=b, at=now))
+    post(paddle, message(sub_id("b1"), reader=b, at=now, scheduled={
+        "action": "cancel", "effective_at": stamp_of(now - timedelta(hours=1)),
+        "resume_at": None}))
+    assert plan_of(database, b) == ("ended", "plan", None)
     post(paddle, message(sub_id("b2"), reader=b, at=now + timedelta(seconds=2)))
-    post(paddle, message(sub_id("b1"), "canceled", reader=b, at=now + timedelta(seconds=1)))
     post(paddle, message(sub_id("b1"), "canceled", reader=b, at=now + timedelta(seconds=3)))
     assert row_of(database, b)["paddle_subscription_id"] == sub_id("b2")
     assert plan_of(database, b) == ("paying", None, "paddle")
+
+
+def test_another_subscription_naming_a_paying_reader_never_displaces_theirs(paddle, database,
+                                                                           readers):
+    """The break it catches: someone who knows a reader's account id subscribing in their name
+    (Paddle lets a checkout carry any custom data) and then cancelling, so that the reader's own
+    live plan is replaced and they show as ended until their own next renewal. While a reader's
+    own plan is live, any other subscription naming them, live or cancelled, is recorded as
+    ``other_subscription`` and changes nothing."""
+    a = readers["a"]
+    now = datetime.now(UTC)
+    post(paddle, message(sub_id("own"), reader=a, at=now))
+    own = row_of(database, a)
+    for step, status in enumerate(("active", "past_due", "canceled", "paused"), start=1):
+        post(paddle, message(sub_id("stranger"), status, reader=a,
+                             customer=paddle_id("ctm_", "stranger"),
+                             at=now + timedelta(seconds=step)))
+        assert row_of(database, a) == own, status
+        assert plan_of(database, a) == ("paying", None, "paddle")
+    assert [event[3] for event in events(database)] == ["applied"] + ["other_subscription"] * 4
+    # Their own plan's messages still apply.
+    post(paddle, message(sub_id("own"), "past_due", reader=a, at=now + timedelta(seconds=9)))
+    assert row_of(database, a)["paddle_status"] == "past_due"
 
 
 # ---- which account --------------------------------------------------------------------------
@@ -660,6 +693,24 @@ def move_first_paid(dsn: str, owner: uuid.UUID, when: str) -> None:
         conn.execute(f"UPDATE reader_plans SET first_paid_at = {when} WHERE owner_id=%s", (owner,))
 
 
+def first_month_ends(dsn: str, owner: uuid.UUID) -> tuple[datetime, datetime]:
+    """(when this reader's first paid month ends, the database's now), both in UTC."""
+    with psycopg.connect(dsn) as conn:
+        since, now = conn.execute("SELECT first_paid_at, now() FROM reader_plans"
+                                  " WHERE owner_id=%s", (owner,)).fetchone()
+    return (since + FIRST_PAID_MONTH).astimezone(UTC), now.astimezone(UTC)
+
+
+def at_the_first_ceiling(dsn: str, owner: uuid.UUID, *, past_the_month: bool) -> str:
+    """The line due at the first paid month's ceiling (see the two tests of it below): today's
+    month line when the 30 days end in this calendar month and this month's chat has already
+    reached the ordinary month (``past_the_month``), else the line naming the day."""
+    ends, now = first_month_ends(dsn, owner)
+    if (ends.year, ends.month) == (now.year, now.month) and past_the_month:
+        return _MONTH
+    return first_month_line(back_on(ends))
+
+
 def test_the_first_paid_month_holds_chat_since_the_plan_began_to_its_own_ceiling_once(
         paddle, tenant_dsn, database, readers):
     """The break it catches: a new subscriber held to the ordinary month in their first 30 days
@@ -679,7 +730,8 @@ def test_the_first_paid_month_holds_chat_since_the_plan_began_to_its_own_ceiling
     spend(chat, book, 0.19)
     assert first_month(database, a) == Decimal("0.49")
     spend(chat, book, 0.01)
-    refused(chat, book, "month", _MONTH)                      # $0.50 since the plan began
+    refused(chat, book, "month",                              # $0.50 since the plan began
+            at_the_first_ceiling(database, a, past_the_month=True))
     caps(day="0.10", first="5")
     refused(chat, book, "day", _DAY)                          # the day is the day
     caps(first="5")
@@ -748,7 +800,8 @@ def test_the_first_paid_month_across_two_calendar_months_is_bounded(paddle, tena
     chat_at(database, a, "0.50", f"{month_start} - interval '12 hours'")   # all of it last month
     chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
     assert first_month(database, a) == Decimal("0.50")
-    refused(chat, book, "month", _MONTH)                      # nothing this month, still held
+    refused(chat, book, "month",                              # nothing this month, still held
+            at_the_first_ceiling(database, a, past_the_month=False))
     # The 30 days over: this calendar month alone, from nothing, to the ordinary ceiling.
     move_first_paid(database, a, f"{month_start} - interval '31 days'")
     spend(chat, book, 0.19)
@@ -761,6 +814,73 @@ def test_the_first_paid_month_across_two_calendar_months_is_bounded(paddle, tena
     move_first_paid(database, b, f"{month_start} - interval '1 day'")
     chat_b = HostedCompanionCatalog(tenant_dsn, OwnerId(b))
     spend(chat_b, book_b, 0.50)
-    refused(chat_b, book_b, "month", _MONTH)
+    refused(chat_b, book_b, "month", at_the_first_ceiling(database, b, past_the_month=True))
     move_first_paid(database, b, f"{month_start} - interval '31 days'")
     refused(chat_b, book_b, "month", _MONTH)                  # $0.50 this month > $0.20
+
+
+def test_at_the_first_ceiling_mothli_names_the_day_it_is_back_and_is_back_that_day(
+        paddle, tenant_dsn, database, readers):
+    """The break it catches: the line at the first paid month's ceiling promising a return it
+    breaks. A reader who used their first month and whose 30 days end later than this month's
+    chat allows them is told today's month line ("back at the start of the next") and is still
+    stopped on the 1st. They are told the day instead: the first day that has begun nowhere on
+    Earth before the 30 days end; still stopped a minute before the 30 days end; answered on the
+    named day. The line names that day and nothing else: no amount, no count, no countdown."""
+    a = readers["a"]
+    book = shelve(database, a)
+    caps(month="5")                                           # the ordinary month is not reached
+    post(paddle, message(sub_id("a"), reader=a))
+    chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
+    spend(chat, book, 0.50)
+    ends, _now = first_month_ends(database, a)
+    named = back_on(ends)
+    line = first_month_line(named)
+    refused(chat, book, "month", line)
+    assert line == ("We’ve talked our way through your first month together already! I’ll be "
+                    f"back on {named.day} {named:%B}. Your book and your place are right here.")
+    assert named > ends.date() and "unlimited" not in line.casefold()
+    assert "question" not in line.casefold() and "$" not in line
+    assert [word for word in line.split() if any(c.isdigit() for c in word)] == [str(named.day)]
+
+    # A minute before the 30 days end: still the same line.
+    with psycopg.connect(database) as conn:
+        conn.execute("UPDATE reader_plans SET first_paid_at = first_paid_at"
+                     " - (%s::timestamptz - now()) + interval '1 minute' WHERE owner_id=%s",
+                     (ends, a))
+    refused(chat, book, "month", line)
+    # The named day, where it begins first (UTC+14): the 30 days are over, and Mothli answers.
+    # (As if the clock stood at that moment: the plan's start moved back by as much.)
+    begins = datetime.combine(named, datetime.min.time(), UTC) - timedelta(hours=14)
+    with psycopg.connect(database) as conn:
+        conn.execute("UPDATE reader_plans SET first_paid_at = %s::timestamptz"
+                     " - (%s::timestamptz - now()) WHERE owner_id=%s",
+                     (ends - FIRST_PAID_MONTH, begins, a))
+    assert begins >= ends
+    assert first_month(database, a) is None
+    spend(chat, book, 0.01)
+
+
+def test_at_the_first_ceiling_mothli_says_the_1st_when_the_1st_is_when_it_is_back(
+        paddle, tenant_dsn, database, readers):
+    """The other case: the 30 days end within this calendar month and this month's chat has
+    already reached the ordinary month, so the reader can talk again on the 1st, which today's
+    month line says; with the ordinary month not reached, the line names the day the 30 days end.
+    The break it catches: either line shown where the other is the true one."""
+    a = readers["a"]
+    book = shelve(database, a)
+    caps()                                                    # ordinary month $0.20, first $0.50
+    post(paddle, message(sub_id("a"), reader=a))
+    with psycopg.connect(database) as conn:
+        soon = conn.execute("SELECT date_trunc('month', (now() + interval '1 hour') AT TIME ZONE"
+                            " 'UTC') = date_trunc('month', now() AT TIME ZONE 'UTC')").fetchone()[0]
+    if not soon:
+        pytest.skip("the 30 days would end in the next calendar month within the hour")
+    move_first_paid(database, a, "now() - interval '30 days' + interval '1 hour'")
+    chat_at(database, a, "0.50")                              # this month, within the 30 days
+    chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
+    assert first_month(database, a) == Decimal("0.50")
+    refused(chat, book, "month", _MONTH)                      # $0.50 this month > $0.20
+    caps(month="5")
+    ends, _now = first_month_ends(database, a)
+    refused(chat, book, "month", first_month_line(back_on(ends)))

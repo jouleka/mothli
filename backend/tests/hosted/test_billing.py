@@ -130,6 +130,48 @@ def test_the_paddle_settings_are_checked_like_their_neighbours() -> None:
     assert paddle_id("pri_", "x") not in PRICES
 
 
+def test_a_real_looking_secret_key_with_base64_characters_is_accepted_and_checks() -> None:
+    """The break it catches: the owner pasting Paddle's real secret key and the server refusing
+    to start because the key holds a character a guessed pattern left out. Paddle's own SDK
+    example key holds a "+"; its second part is base64-like. Only the prefix, no whitespace and
+    a sane length are required. (Built in pieces: a stand-in, not a key.)"""
+    key = "pdl_ntfset_" + "01hs0t3tw21j988db1pam5xg8m" + "_" + "Gr/OW+LNef=" * 3
+    for extra in ("/", "+", "="):
+        assert extra in key
+    settings = paddle_settings(paddle_webhook_secret=key, paddle_price_monthly=MONTHLY,
+                               hosted_billing_dsn="postgresql://unused.invalid/b")
+    assert settings.paddle_webhook_secret.get_secret_value() == key
+    body = b'{"event_id": "evt_x"}'
+    assert verify_signature(signed(body, secret=key), body, key, NOW, 300)
+    for refused in ("pdl_ntfset_", "pdl_ntfset_short", key.replace("/", " "), key + "\n",
+                    "x" + key, "pdl_ntfset_" + "a" * 501):
+        with pytest.raises(ValidationError):
+            paddle_settings(paddle_webhook_secret=refused, paddle_price_monthly=MONTHLY,
+                            hosted_billing_dsn="postgresql://unused.invalid/b")
+
+
+def test_back_on_names_a_day_begun_nowhere_before_the_moment() -> None:
+    """The break it catches: Mothli naming a day it is back that has already begun somewhere on
+    Earth before it is (a reader in UTC+14 would ask and be stopped), or one later than needed
+    when the moment is a midnight there."""
+    from datetime import UTC, date, datetime, timedelta
+
+    from app.hosted.companion.spend import back_on, first_month_line
+
+    for moment, day in ((datetime(2026, 12, 20, 14, tzinfo=UTC), date(2026, 12, 22)),
+                        (datetime(2026, 12, 20, 9, tzinfo=UTC), date(2026, 12, 21)),
+                        (datetime(2026, 12, 20, 10, tzinfo=UTC), date(2026, 12, 21)),
+                        (datetime(2026, 12, 31, 12, tzinfo=UTC), date(2027, 1, 2))):
+        assert back_on(moment) == day, moment
+        begins_first = datetime.combine(day, datetime.min.time(), UTC) - timedelta(hours=14)
+        assert begins_first >= moment
+        assert begins_first - timedelta(days=1) < moment     # and no later than needed
+    line = first_month_line(date(2026, 12, 21))
+    assert line == ("We’ve talked our way through your first month together already! I’ll be "
+                    "back on 21 December. Your book and your place are right here.")
+    assert "unlimited" not in line.casefold() and "question" not in line.casefold()
+
+
 def test_the_first_paid_month_is_the_owners_number_and_reaches_the_spend_check() -> None:
     """The break it catches: the first paid month's ceiling not the owner's $6.30 (about 300
     replies at 2.1 cents), not passed to the spend check, or accepting a negative amount."""

@@ -196,14 +196,16 @@ def _outcome(row, message: SubscriptionMessage) -> str:
     """What to do with a message for an account whose plan row is ``row`` (or None)."""
     if row is None or row[0] is None:
         return "applied"
-    stored, status, applied_at = row
+    stored, _status, applied_at, stored_live = row
     if message.occurred_at <= applied_at:
         return "older"
     if stored == message.subscription_id:
         return "applied"
-    # Another subscription for the same reader: a new one after a cancel takes the place of the
-    # old; a late message about the old one never takes the place of a live one.
-    if message.status in _LIVE or status not in _LIVE:
+    # Another subscription naming the same reader takes the place of theirs only once theirs is
+    # no longer live (a new plan after a cancel, or after its scheduled end). While their own plan
+    # is live, any other subscription, live or not, is recorded and changes nothing: one made by
+    # someone else naming them cannot displace it, and cancelling that one cannot end theirs.
+    if not stored_live:
         return "applied"
     return "other_subscription"
 
@@ -220,7 +222,9 @@ def apply_message(dsn: str, message: SubscriptionMessage) -> str:
                 conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(reader),))
                 conn.execute(_PLAN_LOCK, (reader,))
                 row = conn.execute(
-                    "SELECT paddle_subscription_id, paddle_status, paddle_occurred_at"
+                    "SELECT paddle_subscription_id, paddle_status, paddle_occurred_at,"
+                    " paddle_status IN ('active', 'trialing', 'past_due')"
+                    " AND (ends_at IS NULL OR now() < ends_at)"
                     " FROM public.reader_plans WHERE owner_id=%s", (reader,)).fetchone()
                 outcome = _outcome(row, message)
                 if outcome == "applied":
