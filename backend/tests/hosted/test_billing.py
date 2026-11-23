@@ -6,13 +6,20 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
+import logging
+import re
 import uuid
+from pathlib import Path
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
 from app.config import Settings
-from app.hosted.billing import Malformed, read_message, verify_signature
+from app.hosted import paddle_api
+from app.hosted.billing import Malformed, read_message, read_subscription, verify_signature
+from app.hosted.paddle_api import PaddleApi, PaddleRefused, PaddleUnavailable
 from tests.hosted.test_paddle_messages_postgres import (
     MONTHLY,
     MYSIGNER,
@@ -199,3 +206,302 @@ def test_the_first_paid_month_is_the_owners_number_and_reaches_the_spend_check()
             "first_paid_month_usd")})
     with pytest.raises(ValidationError):
         paddle_settings(hosted_first_paid_month_usd=-0.01)
+
+
+# ---- step 4: Paddle's API, without a database ----------------------------------------------------
+
+# A stand-in in the shape of a sandbox API key, built in pieces: not a key.
+KEY = "_".join(("pdl", "sdbx", "apikey", "teststandin" * 4))
+LIVE_KEY = "_".join(("pdl", "live", "apikey", "teststandin" * 4))
+LIVE = {"paddle_environment": "production"}
+
+
+class Recorder:
+    """Paddle stood in: every request kept, each answered by ``answer``."""
+
+    def __init__(self, answer) -> None:
+        self.requests: list[httpx.Request] = []
+        self.answer = answer
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return self.answer(request)
+
+
+def api_with(answer, environment: str = "sandbox") -> tuple[PaddleApi, Recorder]:
+    recorder = Recorder(answer)
+    return PaddleApi(KEY, environment, transport=httpx.MockTransport(recorder)), recorder
+
+
+def subscription_entity(sub: str = sub_id("a"), **changes) -> dict:
+    data = message(sub)["data"]
+    data["updated_at"] = "2026-11-23T10:00:00.000000Z"
+    data.update(changes)
+    return data
+
+
+def test_each_paddle_call_is_sent_as_paddles_documentation_describes_it() -> None:
+    """The break it catches: a call sent to the wrong address, method or environment, without
+    the bearer key or Paddle's version, with a body other than the documented one, or a cancel
+    that is not at the end of the billing period."""
+    entity = subscription_entity()
+    portal = {"id": "cpls_x", "urls": {"general": {"overview": "https://p.example/o"},
+                                       "subscriptions": []}}
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/transactions":
+            return httpx.Response(201, json={"data": {"id": paddle_id("txn_", "t")}})
+        if request.url.path.endswith("/portal-sessions"):
+            return httpx.Response(201, json={"data": portal})
+        return httpx.Response(200, json={"data": entity})
+
+    api, recorder = api_with(answer)
+    custom = {"mothli_reader": str(uuid.uuid4()), "mothli_checkout": "t" * 43}
+    assert api.create_transaction(MONTHLY, custom) == paddle_id("txn_", "t")
+    assert api.subscription(sub_id("a")) == entity
+    assert api.cancel(sub_id("a")) == entity
+    assert api.remove_scheduled_change(sub_id("a")) == entity
+    assert api.portal(paddle_id("ctm_", "c"), sub_id("a")) == portal["urls"]
+    sent = [(r.method, str(r.url), json.loads(r.content) if r.content else None)
+            for r in recorder.requests]
+    base = "https://sandbox-api.paddle.com"
+    assert sent == [
+        ("POST", f"{base}/transactions",
+         {"items": [{"price_id": MONTHLY, "quantity": 1}], "custom_data": custom}),
+        ("GET", f"{base}/subscriptions/{sub_id('a')}", None),
+        ("POST", f"{base}/subscriptions/{sub_id('a')}/cancel",
+         {"effective_from": "next_billing_period"}),
+        ("PATCH", f"{base}/subscriptions/{sub_id('a')}", {"scheduled_change": None}),
+        ("POST", f"{base}/customers/{paddle_id('ctm_', 'c')}/portal-sessions",
+         {"subscription_ids": [sub_id("a")]}),
+    ]
+    for request in recorder.requests:
+        assert request.headers["authorization"] == f"Bearer {KEY}"
+        assert request.headers["paddle-version"] == "1"
+    live, recorder = api_with(answer, "production")
+    live.subscription(sub_id("a"))
+    assert str(recorder.requests[0].url).startswith("https://api.paddle.com/")
+
+
+def test_the_paddle_client_cannot_list_search_or_name_anything_but_one_well_formed_id() -> None:
+    """The shared Paddle account (it also sells MySigner). The break it catches: a client able
+    to list or search customers, subscriptions or transactions, make or look up a customer, or
+    put anything but one Paddle id of the expected kind in a path (``../``, a query, another
+    kind of id, a list)."""
+    public = {name for name in dir(PaddleApi) if not name.startswith("_")}
+    assert public == {"create_transaction", "subscription", "cancel", "remove_scheduled_change",
+                      "portal", "close"}
+    api, recorder = api_with(lambda request: httpx.Response(500))
+    for call in (lambda: api.subscription("sub_x/../../customers"),
+                 lambda: api.subscription(paddle_id("ctm_", "c")),
+                 lambda: api.subscription(sub_id("a") + "?status=active"),
+                 lambda: api.cancel(""),
+                 lambda: api.remove_scheduled_change(paddle_id("txn_", "t")),
+                 lambda: api.portal(sub_id("a"), sub_id("a")),
+                 lambda: api.portal(paddle_id("ctm_", "c"), "*"),
+                 lambda: api.create_transaction(MYSIGNER + "x", {}),
+                 lambda: api.create_transaction(sub_id("a"), {})):
+        with pytest.raises(ValueError):
+            call()
+    assert recorder.requests == []
+
+
+def test_paddle_failures_are_named_by_kind_sent_once_and_logged_without_anything_of_theirs(
+        caplog) -> None:
+    """The break it catches: a slow or unreachable Paddle hanging the request or retried (a
+    retried create or cancel could happen twice), an overloaded or failing Paddle read as a
+    refusal, a refusal losing Paddle's code (the 30-minute rule needs it), an answer that is not
+    Paddle's read as one; or the key, a body, an id or Paddle's words in a log line or an
+    error's text."""
+    caplog.set_level(logging.DEBUG)
+    cases = [
+        (lambda r: (_ for _ in ()).throw(httpx.ReadTimeout("stand-in slow", request=r)), "timeout"),
+        (lambda r: (_ for _ in ()).throw(httpx.ConnectError("stand-in unreachable", request=r)),
+         "unreachable"),
+        (lambda r: httpx.Response(429, json={"error": {"code": "too_many_requests"}}), "server"),
+        (lambda r: httpx.Response(502, text="bad gateway"), "server"),
+        (lambda r: httpx.Response(200, text="<html>"), "unreadable"),
+        (lambda r: httpx.Response(200, json={"data": []}), "unreadable"),
+        (lambda r: httpx.Response(302, headers={"location": "https://elsewhere.example"}),
+         "unreadable"),
+    ]
+    for answer, kind in cases:
+        api, recorder = api_with(answer)
+        with pytest.raises(PaddleUnavailable) as failed:
+            api.cancel(sub_id("a"))
+        assert failed.value.kind == kind and str(failed.value) == kind
+        assert len(recorder.requests) == 1
+    api, recorder = api_with(lambda r: httpx.Response(409, json={"error": {
+        "type": "request_error", "code": "subscription_locked_renewal",
+        "detail": "secret detail words", "documentation_url": "https://developer.paddle.com"}}))
+    with pytest.raises(PaddleRefused) as refused:
+        api.cancel(sub_id("a"))
+    assert (refused.value.status, refused.value.code) == (409, "subscription_locked_renewal")
+    assert len(recorder.requests) == 1
+    api, _recorder = api_with(lambda r: httpx.Response(400, json={"error": {"code": "Bad Code!"}}))
+    with pytest.raises(PaddleRefused) as refused:
+        api.subscription(sub_id("a"))
+    assert refused.value.code == "unknown"
+    # A created transaction whose id is not a transaction's is not trusted.
+    api, _recorder = api_with(lambda r: httpx.Response(201, json={"data": {"id": "sub_x"}}))
+    with pytest.raises(PaddleUnavailable):
+        api.create_transaction(MONTHLY, {})
+    for secret in (KEY, sub_id("a"), "secret detail words", "bad gateway", "stand-in",
+                   "elsewhere", "Bad Code"):
+        assert secret not in caplog.text, secret
+    assert "paddle call failed: timeout" in caplog.text
+    assert "paddle call refused" in caplog.text
+    assert paddle_api.TIMEOUT.connect <= 5 and paddle_api.TIMEOUT.read <= 15
+
+
+def test_the_api_key_is_checked_loosely_against_its_environment_and_needs_the_messages() -> None:
+    """The break it catches: the server refusing a real key over a character a guessed pattern
+    left out; a live key used against the sandbox address or the reverse; the key set without
+    Paddle's messages (a payment would make no one paying); a placeholder accepted. A refusal
+    names the setting, never the key."""
+    good = dict(paddle_webhook_secret=SECRET, paddle_price_monthly=MONTHLY,
+                paddle_price_yearly=f"{YEARLY_NEW},{YEARLY}",
+                hosted_billing_dsn="postgresql://unused.invalid/b")
+    assert paddle_settings(**good).paddle_api_key is None
+    assert paddle_settings(**good, paddle_api_key="").paddle_api_key is None
+    real_looking = KEY[:-8] + "+/=Ab09_"
+    assert paddle_settings(**good, paddle_api_key=real_looking) \
+        .paddle_api_key.get_secret_value() == real_looking
+    live = {**good, **LIVE}
+    live["paddle_api_key"] = LIVE_KEY
+    assert paddle_settings(**live).paddle_api_key.get_secret_value() == LIVE_KEY
+    for change in ({"paddle_api_key": LIVE_KEY},
+                   {**LIVE, "paddle_api_key": KEY},
+                   {"paddle_api_key": "OWNER_MUST_FILL_IN"},
+                   {"paddle_api_key": KEY.replace("teststandin", "test standin", 1)},
+                   {"paddle_api_key": KEY + "\n"},
+                   {"paddle_api_key": "pdl_sdbx_apikey_short"},
+                   {"paddle_api_key": KEY, "paddle_webhook_secret": None}):
+        with pytest.raises(ValidationError) as refused:
+            paddle_settings(**{**good, **change})
+        assert "PADDLE_API_KEY" in str(refused.value), change
+        assert KEY not in str(refused.value) and LIVE_KEY not in str(refused.value)
+
+
+def test_a_subscription_from_paddles_api_is_read_as_a_message_is() -> None:
+    """The break it catches: the regular check or a cancel's answer applying a subscription about
+    another product's price, read with another time than its own ``updated_at``, or a checkout
+    token taken from anything but its own custom data field in the shape the server makes."""
+    reader = uuid.uuid4()
+    token = "A" * 21 + "-_" + "z" * 20
+    entity = subscription_entity(custom_data={"mothli_reader": str(reader),
+                                              "mothli_checkout": token},
+                                 items=[{"price": {"id": YEARLY_NEW}}])
+    read = read_subscription(entity, PRICES)
+    assert (read.event_id, read.event_type, read.named_reader, read.checkout, read.price_id) == (
+        None, None, reader, token, YEARLY_NEW)
+    assert read.occurred_at.isoformat() == "2026-11-23T10:00:00+00:00"
+    assert read_subscription(subscription_entity(items=[{"price": {"id": MYSIGNER}}]),
+                             PRICES) is None
+    assert read_subscription(entity, frozenset()) is None
+    with pytest.raises(Malformed):
+        read_subscription(subscription_entity(updated_at=None), PRICES)
+    for wrong in (None, 7, "short", token + "x", token[:-1] + "!", ["list"]):
+        entity["custom_data"]["mothli_checkout"] = wrong
+        assert read_subscription(entity, PRICES).checkout is None, wrong
+    payload = message(sub_id("a"), reader=reader)
+    assert read_message(payload, PRICES).checkout == payload["data"]["custom_data"][
+        "mothli_checkout"]
+
+
+def plan_row(**values) -> dict:
+    row = dict(state="new", why=None, free_ends_at=None, paid_by=None, gift_until=None,
+               paddle_status=None, period_ends_at=None, plan_ends_at=None, paddle_price_id=None)
+    row.update(values)
+    return row
+
+
+def test_the_plan_the_account_sheet_reads() -> None:
+    """The break it catches: a gift shown with the renewal of a Paddle plan under it, a plan
+    shown as monthly when it is yearly (or an old yearly price not recognised), a cancel or a
+    retried payment not said, a plan past its scheduled end still offered to cancel, or an
+    amount, a count or a countdown in the answer."""
+    from datetime import UTC, date, datetime, timedelta
+
+    from app.hosted.subscribe import plan_payload
+
+    monthly, yearly = frozenset({MONTHLY}), frozenset({YEARLY_NEW, YEARLY})
+    later = datetime.now(UTC) + timedelta(days=20)
+    earlier = datetime.now(UTC) - timedelta(days=1)
+    cases = [
+        (plan_row(), (None, None, False, False, False)),
+        (plan_row(state="free", free_ends_at=later), (None, later, False, False, False)),
+        (plan_row(state="paying", paid_by="paddle", paddle_status="active",
+                  period_ends_at=later, paddle_price_id=YEARLY), ("yearly", later, True, False,
+                                                                  False)),
+        (plan_row(state="paying", paid_by="paddle", paddle_status="active", period_ends_at=later,
+                  plan_ends_at=later, paddle_price_id=MONTHLY),
+         ("monthly", later, True, True, False)),
+        (plan_row(state="paying", paid_by="paddle", paddle_status="past_due",
+                  period_ends_at=later, paddle_price_id=MONTHLY),
+         ("monthly", later, True, False, True)),
+        (plan_row(state="ended", why="plan", paddle_status="active", period_ends_at=later,
+                  plan_ends_at=earlier, paddle_price_id=MONTHLY),
+         (None, None, False, False, False)),
+        (plan_row(state="paying", paid_by="gift", gift_until=date(9999, 12, 31),
+                  paddle_status="active", period_ends_at=later, paddle_price_id=MONTHLY),
+         ("gift", None, True, False, False)),
+    ]
+    for row, (kind, when, subscribed, cancel, retrying) in cases:
+        seen = plan_payload(row, monthly, yearly)
+        assert (seen["plan"], seen["subscribed"], seen["cancel_scheduled"],
+                seen["payment_retrying"]) == (kind, subscribed, cancel, retrying), row
+        assert seen["next_date"] == (None if when is None else when.isoformat())
+        assert set(seen) == {"state", "why", "plan", "next_date", "subscribed",
+                             "cancel_scheduled", "payment_retrying"}
+    gift = plan_payload(plan_row(state="paying", paid_by="gift", gift_until=date(2027, 6, 30)),
+                        monthly, yearly)
+    assert gift["next_date"].startswith("2027-06-30T23:59:59")
+
+
+def test_nothing_a_reader_is_told_names_a_number_a_countdown_or_unlimited() -> None:
+    from app.hosted import subscribe
+
+    lines = [subscribe._UNAVAILABLE[1], subscribe._TRY_AGAIN_SOON[1]]
+    source = Path(subscribe.__file__).read_text(encoding="utf-8")
+    lines += re.findall(r'_refused\(\d+, "[a-z_]+",\s*"([^"]+)"', source)
+    lines += re.findall(r'"([^"]*’[^"]*)"', source)
+    assert len(lines) >= 6
+    for line in lines:
+        assert not any(character.isdigit() for character in line), line
+        for word in ("unlimited", "question", "left", "remaining", "$"):
+            assert word not in line.casefold(), line
+
+
+def test_the_regular_check_fetches_only_the_stored_ids_it_is_given_and_stops_when_paddle_is_down(
+        monkeypatch) -> None:
+    """The break it catches: the check fetching anything but the stored ids it is handed (one
+    at a time, a pause between), applying a subscription whose answer is about another id or
+    another product, or carrying on against a Paddle that is down."""
+    from app.hosted import paddle_check
+
+    stored = [(uuid.uuid4(), sub_id("one")), (uuid.uuid4(), sub_id("two")),
+              (uuid.uuid4(), sub_id("three"))]
+    monkeypatch.setattr(paddle_check, "plans_to_check", lambda dsn, size: stored[:size])
+    applied: list = []
+    monkeypatch.setattr(paddle_check, "apply_message",
+                        lambda dsn, message: applied.append(message.subscription_id) or "applied")
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        sub = request.url.path.rsplit("/", 1)[1]
+        if sub == sub_id("two"):
+            return httpx.Response(200, json={"data": subscription_entity(sub_id("other"))})
+        return httpx.Response(200, json={"data": subscription_entity(sub)})
+
+    api, recorder = api_with(answer)
+    pauses: list = []
+    assert paddle_check.check("dsn", api, PRICES, size=3, pause=2.0,
+                              sleep=pauses.append) == (3, 2, 1)
+    assert [r.url.path for r in recorder.requests] == [f"/subscriptions/{s}" for _o, s in stored]
+    assert all(r.method == "GET" for r in recorder.requests)
+    assert applied == [sub_id("one"), sub_id("three")] and pauses == [2.0, 2.0]
+
+    down, recorder = api_with(lambda r: httpx.Response(503))
+    assert paddle_check.check("dsn", down, PRICES, size=3, pause=0,
+                              sleep=lambda _s: None) == (0, 0, 1)
+    assert len(recorder.requests) == 1

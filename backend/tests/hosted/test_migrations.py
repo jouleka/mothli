@@ -124,6 +124,7 @@ def test_every_tenant_table_has_non_null_owner_and_rls(database: str) -> None:
         "name_words",
         "reader_plans",
         "paddle_events",
+        "paddle_checkouts",
     }
 
     with psycopg.connect(database) as conn:
@@ -1353,7 +1354,10 @@ _SET_GIFT = "set_gift(uuid,date)"
 # the background budget, 0037 the start of the free weeks, 0038 the gift, 0039 the look-up of
 # which account a Paddle message is for.
 _PADDLE_READER = "paddle_reader(text,uuid)"
-_LATER_DEFINERS = {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE, _SET_GIFT, _PADDLE_READER}
+# 0040 the list of stored subscriptions the regular check against Paddle fetches.
+_PLANS_TO_CHECK = "paddle_plans_to_check(integer)"
+_LATER_DEFINERS = {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE, _SET_GIFT, _PADDLE_READER,
+                   _PLANS_TO_CHECK}
 
 
 def test_gifts_start_empty_change_no_plan_and_only_set_gift_writes_them(
@@ -1378,11 +1382,12 @@ def test_gifts_start_empty_change_no_plan_and_only_set_gift_writes_them(
     apply_migrations(database)
 
     with psycopg.connect(database) as conn:
-        # (Less the columns later migrations add: 0039's Paddle part.)
+        # (Less the columns later migrations add: 0039's and 0040's Paddle part.)
         assert conn.execute(
             "SELECT to_jsonb(plan) - 'gift_until' - %s::text[] FROM reader_plans AS plan",
             (["paddle_customer_id", "paddle_subscription_id", "paddle_status", "period_ends_at",
-              "ends_at", "paddle_occurred_at", "first_paid_at"],)).fetchall() == plans
+              "ends_at", "paddle_occurred_at", "first_paid_at", "paddle_price_id"],)
+        ).fetchall() == plans
         assert conn.execute("SELECT count(*) FROM reader_plans WHERE gift_until IS NOT NULL"
                             ).fetchone()[0] == 0
         assert [conn.execute("SELECT state, why, free_started_at, free_ends_at"
@@ -1440,7 +1445,9 @@ def test_paddle_columns_start_empty_change_no_plan_and_only_the_billing_lookup_c
     apply_migrations(database)
 
     paddle = ("paddle_customer_id", "paddle_subscription_id", "paddle_status", "period_ends_at",
-              "ends_at", "paddle_occurred_at", "first_paid_at")
+              "ends_at", "paddle_occurred_at", "first_paid_at",
+              # (and 0040's, below)
+              "paddle_price_id")
     with psycopg.connect(database) as conn:
         assert conn.execute(
             "SELECT to_jsonb(plan) - %s::text[] FROM reader_plans AS plan ORDER BY owner_id",
@@ -1492,6 +1499,90 @@ def test_paddle_columns_start_empty_change_no_plan_and_only_the_billing_lookup_c
             conn.execute("UPDATE reader_plans SET paddle_status = 'active' WHERE owner_id = %s",
                          (started,))
         assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
+
+
+# ---- 0040: checkouts, and the regular check (ADR 0045 step 4) ---------------------------------------
+
+PADDLE_CHECKOUTS = 40
+
+
+def test_checkouts_start_empty_no_plan_changes_and_the_check_lists_only_stored_live_or_recent(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0040 with a reader paying through Paddle,
+    one whose plan ended long ago, an erased one and one who never subscribed: a plan or a state
+    changed by the migration; the checkouts table without forced row security, with a privilege
+    for PUBLIC, keeping the token itself, with an index not led by the account, or accepting a
+    checkout that expires before it is made; the check's list callable by PUBLIC, not a security
+    definer, with another search path, answering a plan long ended, an erased account's, one
+    never stored, or more than it is asked for."""
+    _apply_before(database, PADDLE_CHECKOUTS, monkeypatch)
+    paying, ended, erased, never = (uuid.uuid4() for _ in range(4))
+    subs = {owner: "sub_" + owner.hex[:26] for owner in (paying, ended, erased)}
+    with psycopg.connect(database) as conn:
+        for reader in (paying, ended, erased, never):
+            conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (reader,))
+        for owner, status, ago in ((paying, "active", "1 hour"), (ended, "canceled", "40 days"),
+                                   (erased, "active", "1 hour")):
+            conn.execute("INSERT INTO reader_plans (owner_id, paddle_subscription_id,"
+                         " paddle_status, paddle_occurred_at) VALUES (%s, %s, %s,"
+                         " now() - %s::interval)", (owner, subs[owner], status, ago))
+        conn.execute("UPDATE users SET status = 'deleted', deleted_at = now() WHERE id = %s",
+                     (erased,))
+        plans = conn.execute("SELECT to_jsonb(plan) FROM reader_plans AS plan ORDER BY owner_id"
+                             ).fetchall()
+        query = "SELECT * FROM reader_plan_state(%s, 14, 2.10)"
+        states = [conn.execute(query, (reader,)).fetchone() for reader in (paying, ended, never)]
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT to_jsonb(plan) - 'paddle_price_id' FROM reader_plans AS plan"
+                            " ORDER BY owner_id").fetchall() == plans
+        assert conn.execute("SELECT count(*) FROM reader_plans WHERE paddle_price_id IS NOT NULL"
+                            ).fetchone()[0] == 0
+        assert [conn.execute(query, (reader,)).fetchone()
+                for reader in (paying, ended, never)] == states
+        assert conn.execute("SELECT count(*) FROM paddle_checkouts").fetchone()[0] == 0
+        columns = [row[0] for row in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public'"
+            " AND table_name = 'paddle_checkouts' ORDER BY ordinal_position")]
+        assert columns == ["owner_id", "token_digest", "created_at", "expires_at", "used_at"]
+        assert conn.execute("SELECT relrowsecurity AND relforcerowsecurity FROM pg_class"
+                            " WHERE oid = 'public.paddle_checkouts'::regclass").fetchone()[0]
+        assert not any(conn.execute(
+            "SELECT has_table_privilege('public', 'public.paddle_checkouts', %s)", (privilege,)
+        ).fetchone()[0] for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"))
+        assert [row[0] for row in conn.execute(
+            "SELECT indexdef FROM pg_indexes WHERE tablename = 'paddle_checkouts'")] == [
+            "CREATE UNIQUE INDEX paddle_checkouts_pkey ON public.paddle_checkouts USING btree"
+            " (owner_id, token_digest)"]
+        for digest, expires in ((b"x" * 31, "now() + interval '1 day'"),
+                                (b"x" * 32, "now() - interval '1 day'")):
+            with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+                conn.execute("INSERT INTO paddle_checkouts (owner_id, token_digest, expires_at)"
+                             f" VALUES (%s, %s, {expires})", (paying, digest))
+        with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+            conn.execute("UPDATE reader_plans SET paddle_price_id = 'pri_short'"
+                         " WHERE owner_id = %s", (paying,))
+        assert conn.execute(
+            "SELECT prosecdef, provolatile, proconfig, pg_get_function_identity_arguments(oid),"
+            " pg_get_function_result(oid) FROM pg_proc WHERE oid = %s::regprocedure",
+            (_PLANS_TO_CHECK,)).fetchone() == (
+            True, "v", ["search_path=pg_catalog, public, pg_temp"], "size integer",
+            "TABLE(reader uuid, subscription text)")
+        assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
+                                (_PLANS_TO_CHECK,)).fetchone()[0]
+        listed = "SELECT reader, subscription FROM paddle_plans_to_check(%s)"
+        assert conn.execute(listed, (10,)).fetchall() == [(paying, subs[paying])]
+        assert conn.execute(listed, (0,)).fetchall() == []
+        # A plan cancelled lately is still checked; a page holds no more than it is asked.
+        conn.execute("UPDATE reader_plans SET paddle_occurred_at = now() - interval '2 days'"
+                     " WHERE owner_id = %s", (ended,))
+        assert sorted(conn.execute(listed, (10,)).fetchall()) == sorted(
+            [(paying, subs[paying]), (ended, subs[ended])])
+        assert len(conn.execute(listed, (1,)).fetchall()) == 1
+        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
+
 
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:
     apply_migrations(database)

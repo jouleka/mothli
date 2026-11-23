@@ -22,6 +22,10 @@ ENV_FILE = str(Path(__file__).resolve().parents[2] / ".env")
 # example holds a "+"), so any characters but whitespace, at a sane length.
 _PADDLE_PRICE = re.compile(r"pri_[a-z0-9]{26}")
 _PADDLE_SECRET = re.compile(r"pdl_ntfset_\S{16,500}")
+# An API key starts pdl_, then sdbx_ or live_ for its environment, then apikey_
+# (developer.paddle.com/api-reference/about/authentication); the rest is checked as loosely.
+_PADDLE_API_KEY = {"sandbox": re.compile(r"pdl_sdbx_apikey_\S{16,500}"),
+                   "production": re.compile(r"pdl_live_apikey_\S{16,500}")}
 
 
 def _items(value: str) -> tuple[str, ...]:
@@ -215,6 +219,11 @@ class Settings(BaseSettings):
     # allow five seconds; the repeat check by event id also stops a replay.
     paddle_webhook_tolerance_seconds: int = Field(default=300, ge=5, le=3600)
     hosted_billing_dsn: SecretStr | None = None
+    # ADR 0045 step 4: Paddle's API key, for subscribing, cancelling, keeping a plan, the
+    # customer portal and the regular check (app/hosted/subscribe.py). With none, those routes do
+    # not exist. It needs Paddle's messages too: a payment no message reports would make no one
+    # paying.
+    paddle_api_key: SecretStr | None = None
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
@@ -307,6 +316,18 @@ class Settings(BaseSettings):
                 if not value]
             if missing:
                 raise ValueError("Paddle's messages require " + ", ".join(missing))
+        # ADR 0045 step 4: Paddle's API. A line left empty is no key.
+        if self.paddle_api_key is not None and not self.paddle_api_key.get_secret_value():
+            self.paddle_api_key = None
+        if self.paddle_api_key is not None:
+            if self.paddle_webhook_secret is None:
+                raise ValueError("PADDLE_API_KEY requires PADDLE_WEBHOOK_SECRET (Paddle's "
+                                 "messages are what make a subscriber paying)")
+            if not _PADDLE_API_KEY[self.paddle_environment].fullmatch(
+                    self.paddle_api_key.get_secret_value()):
+                raise ValueError("PADDLE_API_KEY must be an API key from Paddle's "
+                                 f"{self.paddle_environment} (PADDLE_ENVIRONMENT), as Paddle "
+                                 "shows it")
         if self.deployment_mode != "hosted":
             return self
 

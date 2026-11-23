@@ -134,6 +134,13 @@ def test_one_grant_more_or_less_refuses_and_the_script_restores_exactly(provisio
          lambda: roles.verify(database, env, prefix), roles.ProvisioningError),
         ("REVOKE EXECUTE ON FUNCTION paddle_reader(text,uuid) FROM {}", billing,
          lambda: roles.verify(database, env, prefix), roles.ProvisioningError),
+        # Step 4: its checkouts, never deleted by it, and the regular check's list.
+        ("GRANT DELETE ON paddle_checkouts TO {}", billing,
+         lambda: roles.verify(database, env, prefix), roles.ProvisioningError),
+        ("REVOKE UPDATE ON paddle_checkouts FROM {}", billing,
+         lambda: roles.verify(database, env, prefix), roles.ProvisioningError),
+        ("REVOKE EXECUTE ON FUNCTION paddle_plans_to_check(integer) FROM {}", billing,
+         lambda: roles.verify(database, env, prefix), roles.ProvisioningError),
     ]
     for statement, role, check, refusal in cases:
         run(database, statement, role)

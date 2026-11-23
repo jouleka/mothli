@@ -27,6 +27,12 @@ APPROVED_SECURITY_LOG_MESSAGES = frozenset(
         # ADR 0045 step 3: a message to Paddle's route refused (app/hosted/billing.py).
         "paddle message refused: signature",
         "paddle message refused: malformed",
+        # ADR 0045 step 4: a call to Paddle's API that failed (app/hosted/paddle_api.py).
+        "paddle call failed: timeout",
+        "paddle call failed: unreachable",
+        "paddle call failed: server",
+        "paddle call failed: unreadable",
+        "paddle call refused",
     }
 )
 
