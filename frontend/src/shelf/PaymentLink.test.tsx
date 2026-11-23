@@ -18,6 +18,7 @@ import { PAYMENT_LINK_LINES } from "./PaymentLink";
 import { fakePaddle, noCounter, paddleScripts, planOf, settleScript } from "./plan-fakes";
 import { ASK_EVERY_MS, PLAN_LINES } from "./PlanSheet";
 import { SignInGate } from "./SignIn";
+import { mothliStanding, setMothliStanding, useMothliEnded } from "../ui/mothliStanding";
 
 const TRANSACTION = "txn_standin0000000000000000000";
 const signedIn: OfflineSession = {
@@ -93,6 +94,30 @@ describe("signed in", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(ASK_EVERY_MS); });
     expect(within(sheet).getByRole("status").textContent).toBe(PLAN_LINES.joined);
     noCounter(sheet);
+  });
+
+  // Catches: joining from the link leaving where the reader stands "ended", so the home chat and
+  // every panel keep the invitation until a reload (H1 of the plan walk, 23 November 2026).
+  test("joining from the link opens every panel at once, like every other way of joining", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    setMothliStanding({ state: "ended", why: "plan", ending_note: false });
+    const Panels = () => <p>{useMothliEnded() ? "The invitation" : "Mothli is here"}</p>;
+    history.replaceState(null, "", `/?_ptxn=${TRANSACTION}`);
+    render(<SignInGate session={signedIn}><Panels /></SignInGate>);
+    expect(screen.getByText("The invitation")).toBeTruthy();
+    await waitFor(() => expect(paddleScripts()).toHaveLength(1));
+    const paddle = fakePaddle();
+    settleScript(paddle);
+    await waitFor(() => expect(paddle.opened).toHaveLength(1));
+    mocks.plan.mockResolvedValue(planOf({ state: "paying", plan: "yearly", subscribed: true }));
+    act(() => paddle.emit("checkout.completed"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(ASK_EVERY_MS); });
+    expect(screen.getByRole("dialog").querySelector("[role=status]")?.textContent).toBe(PLAN_LINES.joined);
+    act(() => screen.getByRole("button", { name: "Done" }).click());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText("Mothli is here")).toBeTruthy();
+    expect(mothliStanding()?.state).toBe("paying");
+    setMothliStanding(null);
   });
 
   // Catches: a reader already on the plan charged again from an old email's link.

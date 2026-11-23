@@ -20,7 +20,7 @@ import {
 } from "../api";
 import { AskTheBook, type AskSession, type CompanionSeed, type CompanionTab } from "./AskTheBook";
 import { MothCorner, WelcomeBackCard, type CornerNote } from "./MothMoments";
-import { crossedMilestone, milestoneLine, readingStreak, recordReadingDay, unlockCast } from "../journey/journey";
+import { crossedMilestone, milestoneLine, readingStreak, recordReadingDay, streakName, unlockCast } from "../journey/journey";
 import { Moth } from "../ui/Moth";
 import { mothliStanding, useMothliEnded } from "../ui/mothliStanding";
 import "./reader.css";
@@ -633,11 +633,13 @@ export function ReaderPage({
         asked = localStorage.getItem(startingPlaceKey(bookId)) === "yes";
       } catch { /* no storage */ }
       let offer: ReadOffer | null = null;
-      if (!declined && api.readOffer) {
+      // The hosted server keeps no reading history from other apps and has no route for the
+      // offer: nothing is asked, so no 404 on every book opened (L7 of the plan walk).
+      if (!declined && !hosted && api.readOffer) {
         try {
           offer = (await api.readOffer(bookId)).offer;
         } catch {
-          /* No reading history here (the hosted server keeps none). */
+          /* No reading history here. */
         }
       }
       if (dead) return;
@@ -701,8 +703,10 @@ export function ReaderPage({
         "chapter_progress" in saved ? saved.chapter_progress : 0,
       position_epoch: saved.position_epoch,
     });
-    const reporter = new PositionReporter(
-      async (cfi, offset, completedChapter, requestEpoch) => {
+    type Delivered = "saved" | "kept" | "conflict" | "queued" | undefined;
+    const putReport = async (
+      cfi: string, offset: number, completedChapter: number, requestEpoch: number, again = true,
+    ): Promise<Delivered> => {
         if (activeOfflineOwner() !== owner || requestEpoch !== positionEpochRef.current)
           return "conflict";
         const baseVersion = positionVersionRef.current;
@@ -756,10 +760,13 @@ export function ReaderPage({
                 );
             }
           }
+          // Not applied: another device's newer progress was kept. It already covers this page
+          // (the server applies anything that advances), so the place is settled: asking about
+          // this page must not wait on it (M4 of the plan walk, 23 November 2026).
           return p.queued
             ? "queued"
             : p.applied === false
-              ? "conflict"
+              ? "kept"
               : "saved";
         } catch (error) {
           if (error instanceof ApiError && error.status === 409) {
@@ -775,12 +782,18 @@ export function ReaderPage({
               positionEpochRef.current = canonical.position_epoch;
               positionVersionRef.current = canonical.position_version ?? 0;
               setPos(normalizePosition(canonical));
+              // Same reading pass, the server's version taken: send this page again, once, by
+              // itself, so the reader is not left on a place only a reload would refresh.
+              if (again && canonical.position_epoch === requestEpoch)
+                return putReport(cfi, offset, completedChapter, requestEpoch, false);
             }
             return "conflict";
           }
           throw error;
         }
-      },
+    };
+    const reporter = new PositionReporter(
+      (cfi, offset, completedChapter, requestEpoch) => putReport(cfi, offset, completedChapter, requestEpoch),
       700,
       (state) => {
         if (!dead) setSyncState(state);
@@ -1822,12 +1835,13 @@ export function ReaderPage({
           </div>
           <div className="mr-tools reader-toolbar" role="group" aria-label="Reading tools">
             {streak > 0 && (
-              <span className="mr-streak" title={`${streak} days in a row`}>
+              // The same words as the shelf's ("3-day streak"); the number alone is what shows.
+              <span className="mr-streak" title={streakName(streak)}>
                 <svg width="13" height="15" viewBox="0 0 14 16" aria-hidden="true">
                   <path d="M7 1c1 3 5 4.5 5 9a5 5 0 0 1-10 0c0-2.4 1.4-3.4 2-5 .8 1.4 1.6 2 2.4 2C6.4 5 6.2 3 7 1Z" fill="currentColor" />
                 </svg>
-                <span className="sr-only">Reading streak:</span>
-                {streak}
+                <span className="sr-only">{streakName(streak)}</span>
+                <span aria-hidden="true">{streak}</span>
               </span>
             )}
             <ReaderNavigation

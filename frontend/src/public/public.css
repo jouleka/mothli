@@ -82,6 +82,7 @@
   color: var(--m-ink);
 }
 .pp-price p { margin: 0; font-size: 16px; color: var(--m-soft); }
+.pp-cta { margin: 4px 0 20px; }
 .pp-price .pp-price-main { font: 500 21px/1.35 var(--m-book); color: var(--m-ink); }
 .pp-tag {
   padding: 2px 8px;

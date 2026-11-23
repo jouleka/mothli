@@ -1646,3 +1646,71 @@ named alone, and none).
 Not seen: any page in a browser, on a phone or in the dark theme; the proxy's rewrite running in
 Caddy; the price read against Paddle's sandbox (the answer's real shape, and the permission's
 name in the dashboard).
+
+**The plan flow walked in a browser, and what changed (2026-11-24).** On 23 November the whole
+plan flow was walked on the real hosted app with stand-in models and a stand-in Paddle (nothing
+paid, Paddle never called; the walk's report and screenshots are kept out of git). It found 18
+things; all are fixed here, frontend unless said.
+
+- **Joining from a payment link while signed in** now updates where the reader stands at once,
+  as every other way of joining does (the link's sheet calls `noteMothliJoined`).
+- **A payment that reaches Mothli after the sheet's minute** is watched for quietly
+  (`frontend/src/ui/latePlan.ts`): `GET /api/billing/plan` every 15 seconds for 15 minutes after
+  the sheet gives up, then once each time the tab is shown again for a day more. The moment the
+  server says the reader is on the plan, an open sheet says so, otherwise every panel opens up
+  without a reload. After that nothing more is asked: a reload (the session) or the invitation's
+  own sheet shows the plan. The line at the end of the wait no longer sends the reader to Your
+  account: "Your payment may still be on its way to me. That can take a few minutes. There’s
+  nothing you need to do: as soon as it arrives, I’ll open up right here by myself."
+- **A completed checkout is never undone by a closed one**: Paddle's listener reads a phase set
+  together with the state, not one updated at the next render; both orders in one tick are tested.
+  A completed event after the calm line also starts the wait.
+- **"Keep my plan" on the waiting screen that keeps only the account** now leaves for the shelf,
+  which says once: "Your account is back! I couldn’t keep your plan just now, so it still ends on
+  24 November 2027. You can keep it from Your account in a little while." (or "…so it still won’t
+  renew." without a day).
+- **No chat is offered on the shelf to an ended reader**: the book card's "Ask me about a name or
+  a scene…", the empty shelf's "Ask me “wait, who was that?”…" and Meet Mothli's "Ask me" item
+  are not shown. On the reading page every other offer was already withheld (the panel's content,
+  the corner note's offer, names, the welcome-back card; passage help is local mode's); the moth
+  button still opens the panel, where the invitation stands.
+- **One way of writing a day** on every plan and deletion screen (`frontend/src/ui/readerDay.ts`):
+  the reader's own time zone, day then month ("21 December", as the server's first-month line),
+  the weekday only where the screen had one, the year only when it is not this one. The erasure's
+  day is now worked out in the reader's zone too, from the last moment before it, so it is never
+  a day before the erasure.
+- **A first question that failed before any request** (M4): the same book open on another device
+  moves the place on the server, so this page's report comes back "not applied, newer progress
+  kept" (`repository.update_position`, a stale base version that does not advance). The position
+  reporter took that answer as an unconfirmed position and every question then threw before
+  asking, until a page turn or a reload. Such an answer now settles the place (the server's place
+  already covers the page, since anything that advances is applied); a version the server refuses
+  as ahead of it is refreshed and the report sent again, once, by itself. A reading pass reset
+  elsewhere still reopens the book by itself, as before.
+- **Focus after a refused checkout** returns to the choice pressed, enabled again.
+- **The gentle note in the book chat** is shown whole when the chat opens on an earlier
+  conversation: the thread opens at the latest exchange unless that would cut the note off.
+- **Smaller ones.** A reader who has not started sees the plan sheet titled "Talk with Mothli"
+  and "Your two free weeks start the first time you try me out, so there’s no need to join yet.
+  If you join now, your plan starts today, in place of the free weeks." (paying first means the
+  free weeks never begin: `reader_plan_state` answers paying, then ended by the plan). A gift
+  says its end ("Mothli is on the house for you until 30 June. Enjoy!"); a gifted reader with a
+  plan of their own reads "Your own plan is still renewing too, so you’ll keep being charged for
+  it. You can cancel it here whenever you like."; the plan sheet's gift line, which no screen
+  could reach (Your account offers a gifted reader no "See the plan"), is gone. "Got it" on the
+  gentle note is remembered per reader on the device. The goodbye after deleting an account no
+  longer says the free weeks or shows the front page's plan part. A new reader's empty shelf has
+  one hello; the home chat's says "Your first two weeks with me are free, starting the first time
+  you try me out." The home chat's rest lines say "Your books and your place in each are right
+  here." (backend `spend.on_the_shelf`, used by `home_conversation.py`; the book chat's lines and
+  who rests, and until when, are unchanged). The hosted shelf asks for no cover picture and the
+  reading page for no reading-history offer (hosted mode has neither route; no 404 any more). The
+  streak reads "3-day streak" on both screens (each device keeps its own, as before: the walk's
+  two numbers came from two browsers). The front page has a second "Sign in to start reading"
+  beside the prices, the same door.
+
+Walked again after the fixes, on the same tools: the payment link, the late payment (arrived at
+75 seconds, the home chat open without a reload by 100), both events in one tick, the refusals'
+focus, Keep my plan with Paddle down, the dates on the account, the confirmation and the waiting
+screen, the ended shelf, and the note on a phone width. Still not seen: real Paddle, real time
+zones other than Berlin's, a screen reader.

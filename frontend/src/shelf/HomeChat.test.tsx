@@ -167,9 +167,16 @@ describe("HomeChat", () => {
     render(<HomeChat />);
     await screen.findByLabelText("Ask Mothli about your books");
     ask("What next?");
-    await waitFor(() => expect(screen.getByRole("status").textContent).toBe(line));
+    // On the shelf it speaks of the books, not one book (L6 of the plan walk); only the words.
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe(
+      "Mothli has talked a lot with you today and is resting until tomorrow. Your books and your place in each are right here."));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(box().value).toBe("What next?");
+    // A refusal that came without its words: the app's own line, for the shelf too.
+    mocks.askHome.mockRejectedValueOnce(new ApiError("", 503, "allowance_reached"));
+    ask("What next?");
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe(
+      "We’ve talked a lot today — let’s pick this up tomorrow. Your books and your place in each are right here."));
     mocks.askHome.mockRejectedValueOnce(new ApiError("Mothli is still answering you.", 429, "companion_busy"));
     ask("What next?");
     await waitFor(() => expect(screen.getByRole("status").textContent)

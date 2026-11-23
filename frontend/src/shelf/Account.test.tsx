@@ -306,12 +306,19 @@ describe("Your plan", () => {
       ["Your last payment didn’t go through. Paddle will try again, or you can update your card here."],
       ["Update payment details", "Cancel my plan"]],
     ["gift", { state: "paying", plan: "gift", next_date: null }, ["Mothli is on the house for you. Enjoy!"], []],
-    ["gift with a date", { state: "paying", plan: "gift", next_date: DATE }, ["Mothli is on the house for you. Enjoy!"], []],
-    ["gift and a plan", { ...PAYING, plan: "gift" },
-      ["Mothli is on the house for you. Enjoy!", "You have a plan of your own too."],
+    // L2 of the plan walk: the gift's end when it has one; a plan of their own said plainly.
+    ["gift with a date", { state: "paying", plan: "gift", next_date: DATE },
+      [`Mothli is on the house for you until ${day}. Enjoy!`], []],
+    ["gift and a plan", { ...PAYING, plan: "gift", next_date: null },
+      ["Mothli is on the house for you. Enjoy!",
+        "Your own plan is still renewing too, so you’ll keep being charged for it. You can cancel it here whenever you like."],
+      ["Update payment details", "Cancel my plan"]],
+    ["gift with a date and a plan", { ...PAYING, plan: "gift" },
+      [`Mothli is on the house for you until ${day}. Enjoy!`,
+        "Your own plan is still renewing too, so you’ll keep being charged for it. You can cancel it here whenever you like."],
       ["Update payment details", "Cancel my plan"]],
     ["gift and a cancelled plan", { ...PAYING, plan: "gift", cancel_scheduled: true },
-      ["Mothli is on the house for you. Enjoy!", "Your plan won’t renew."], ["Keep my plan"]],
+      [`Mothli is on the house for you until ${day}. Enjoy!`, "Your plan won’t renew."], ["Keep my plan"]],
   ])("%s", async (_name, values, expected, offered) => {
     const { part } = await sheetFor(planOf({ why: null, plan: null, ...values }));
     expect(lines(part)).toEqual(expected);
@@ -457,14 +464,26 @@ describe("Your plan", () => {
 });
 
 describe("planDay", () => {
-  test("a day in the reader's own words, with the year only when it is not this one", () => {
+  // Catches: a day written in the browser's own order ("December 3") beside the server's
+  // "21 December" (M3 of the plan walk, 23 November 2026), or the year shown for this year.
+  test("one way of writing a day: day then month, the year only when it is not this one", () => {
     const now = new Date("2026-11-23T12:00:00Z");
-    expect(planDay("2026-12-03T10:00:00+00:00", now, "en-GB", "UTC")).toBe("3 December");
-    expect(planDay("2027-12-03T10:00:00+00:00", now, "en-GB", "UTC")).toBe("3 December 2027");
-    expect(planDay("2026-12-03T10:00:00+00:00", now, "en-US", "UTC")).toBe("December 3");
+    expect(planDay("2026-12-03T10:00:00+00:00", now, "UTC")).toBe("3 December");
+    expect(planDay("2027-12-03T10:00:00+00:00", now, "UTC")).toBe("3 December 2027");
+    // In any time zone, whatever the browser's language: the same order.
+    expect(planDay("2026-12-03T10:00:00+00:00", now, "America/New_York")).toBe("3 December");
     // The reader's own time zone decides the day.
-    expect(planDay("2026-12-03T23:30:00+00:00", now, "en-GB", "Asia/Tokyo")).toBe("4 December");
+    expect(planDay("2026-12-03T23:30:00+00:00", now, "Asia/Tokyo")).toBe("4 December");
+    expect(planDay("2026-12-03T03:30:00+00:00", now, "America/Los_Angeles")).toBe("2 December");
     expect(planDay("not a date", now)).toBe("");
+  });
+
+  test("the account sheet says the renewal day that way", async () => {
+    mocks.plan.mockResolvedValue(planOf({ state: "paying", plan: "yearly", subscribed: true,
+      next_date: "2099-11-23T10:00:00+00:00" }));
+    render(<Account session={session} onClose={() => {}} />);
+    expect(await screen.findByText(/^You’re on the yearly plan\. It renews on /)).toBeTruthy();
+    expect(screen.getByText(/It renews on/).textContent).toMatch(/^You’re on the yearly plan\. It renews on (22|23|24) November 2099\.$/);
   });
 });
 

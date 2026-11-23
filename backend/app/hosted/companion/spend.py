@@ -285,15 +285,27 @@ def background_guard_reached(conn, owner_id) -> str | None:
     return _background_guard_reached(row, _limits)
 
 
+_BOOK_PLACE = "Your book and your place are right here."
+_SHELF_PLACE = "Your books and your place in each are right here."
+
+
+def on_the_shelf(message: str) -> str:
+    """The same line said in the home chat, where the reader is on their shelf rather than in
+    one book: only the words about the book change, never who rests or until when."""
+    return message.replace(_BOOK_PLACE, _SHELF_PLACE)
+
+
 class AllowanceReached(RuntimeError):
     """A companion call refused before any money was spent. ``code`` is what the stream's error
-    event carries; the message is written for the reader and names no amount and no setting."""
+    event carries; the message is written for the reader and names no amount and no setting.
+    ``shelf_message`` is the same message as the home chat says it."""
 
     def __init__(self, limit: str, message: str, *, code: str = "allowance_reached") -> None:
         super().__init__(message)
         self.limit = limit
         self.code = code
         self.reader_message = message
+        self.shelf_message = on_the_shelf(message)
         # More of the stream's error event, over its status (``PlanNeeded``).
         self.extra = {}
 

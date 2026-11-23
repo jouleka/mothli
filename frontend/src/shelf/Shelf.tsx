@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Book, type ClassicsCatalog } from "../api";
-import { readingStreak, recentDays } from "../journey/journey";
+import { readingStreak, recentDays, streakName } from "../journey/journey";
 import { InstallApp } from "../pwa/InstallApp";
 import {
   activeOfflineOwner,
@@ -17,7 +17,9 @@ import { MothliMark } from "../ui/MothliMark";
 import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupportedBookMessage } from "../import/bookFiles";
 import { readLastPassage, sinceLabel } from "../reader/lastPassage";
 import { shelfJourney } from "../reader/chapterPlace";
+import { useMothliEnded } from "../ui/mothliStanding";
 import { Account } from "./Account";
+import { keptWithoutPlanNote, takeKeptWithoutPlan } from "./SignIn";
 import { RemoveBook } from "./RemoveBook";
 import { HomeChat } from "./HomeChat";
 import "./shelf-redesign.css";
@@ -102,7 +104,7 @@ function StreakStrip() {
       </ol>
       <p className="ml-streak-line">
         <strong id="ml-streak-title">
-          {streak > 0 ? `${streak}-day streak` : "No streak yet"}
+          {streak > 0 ? streakName(streak) : "No streak yet"}
         </strong>
         <span>
           {readCount
@@ -132,6 +134,18 @@ export function Shelf({
   const owner = activeOfflineOwner();
   // A hosted server without Mothli's chat: no home chat, and no line inviting a question.
   const chat = offersChat(session);
+  // Hosted mode has no cover pictures for a reader's own books (no route): cloth covers only,
+  // and nothing asked that can only answer 404.
+  const hosted = session !== undefined;
+  // A reader whose free weeks or plan are over: the home chat shows its invitation, and nothing
+  // else on the shelf offers them a chat they cannot have (ADR 0045 section 6).
+  const mothliEnded = useMothliEnded();
+  const offersTalk = chat && !mothliEnded;
+  // "Keep my plan" on the waiting screen kept the account but not the plan: said once, here.
+  const [keptNote] = useState(keptWithoutPlanNote);
+  useEffect(() => {
+    if (keptNote) takeKeptWithoutPlan();
+  }, [keptNote]);
   const [books, setBooks] = useState<Book[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -534,7 +548,7 @@ export function Shelf({
           <p className="m-hand">Hi, I’m Mothli. I’m an AI that reads along with you, and I only know the pages you’ve already read.</p>
           <ul>
             <li><strong>Read</strong> your book, at your pace.</li>
-            <li><strong>Ask me</strong> “wait, who was that?”</li>
+            {!mothliEnded && <li><strong>Ask me</strong> “wait, who was that?”</li>}
             <li><strong>Keep</strong> the good bits in your notebook.</li>
           </ul>
         </section>
@@ -547,6 +561,12 @@ export function Shelf({
       </header>
 
       <main id="library-main" className="ml-main" tabIndex={-1}>
+        {keptNote && (
+          <p className="notice ml-notice" role="status">
+            <Icon name="info" />
+            <span>{keptNote}</span>
+          </p>
+        )}
         {err && (
           <div className="notice notice--error ml-notice" role="alert">
             <Icon name="info" />
@@ -609,7 +629,7 @@ export function Shelf({
                   <Moth size={44} />
                   <div className="m-hand ml-note-text">
                     <p>{resuming ? "I remember where you stopped." : "This one is ready when you are."}</p>
-                    {chat && <p>Ask me about a name or a scene and I’ll answer from the pages you’ve read.</p>}
+                    {offersTalk && <p>Ask me about a name or a scene and I’ll answer from the pages you’ve read.</p>}
                   </div>
                 </div>
               )}
@@ -649,7 +669,7 @@ export function Shelf({
                 <div className="m-hand ml-note-text ml-note-text--large">
                   <p>Hi, I’m Mothli. I’m an AI that reads along with you.</p>
                   <p>I only ever know the pages you’ve read, so I can’t spoil anything.</p>
-                  {chat && <p>Ask me “wait, who was that?” whenever you like. I’ll write back in the margin.</p>}
+                  {offersTalk && <p>Ask me “wait, who was that?” whenever you like. I’ll write back in the margin.</p>}
                 </div>
               </div>
             </div>
@@ -792,7 +812,7 @@ export function Shelf({
                           title={bookName(book)}
                           onClick={() => openBook(book.book_id)}
                         >
-                          <BookCover book={book} art={`/api/books/${encodeURIComponent(book.book_id)}/cover`} />
+                          <BookCover book={book} art={hosted ? undefined : `/api/books/${encodeURIComponent(book.book_id)}/cover`} />
                         </button>
                         <span className="sr-only" id={`book-${book.book_id}-title`}>{book.title}</span>
                         <div className="ml-book-actions">

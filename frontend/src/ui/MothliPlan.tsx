@@ -28,6 +28,9 @@ import "./mothli-plan.css";
 
 export const MOTHLI_HELLO =
   "Hi, I’m Mothli! Your first two weeks with me are free, so ask me anything about the pages you’ve read. No spoilers, promise.";
+/** The home chat's hello on an empty shelf, which already says "Hi, I’m Mothli" beside it: no
+ * second hello, and nothing about pages read before there is a book. */
+export const HOME_HELLO_NO_BOOKS = "Your first two weeks with me are free, starting the first time you try me out.";
 export const SIGN_UP_LINE = "Reading here is free, always. Talking with me is free for your first two weeks.";
 export const INVITATIONS: Record<"time" | "ceiling" | "plan", string> = {
   time: "Our two free weeks are over. I loved reading along with you! Your books, your place and your highlights stay right here, free, always. Join me on the plan and we’ll pick up right where we left off.",
@@ -179,7 +182,16 @@ export function MothliInvitation({
 
 /** The gentle note at the top of a chat panel, in the free weeks' last two days, until "Got it".
  * `after` is where focus goes once the note is gone (the chat's own box). */
-export function MothliEndingNote({ home = false, after }: { home?: boolean; after?: RefObject<HTMLElement> }) {
+export function MothliEndingNote({
+  home = false,
+  after,
+  onShown,
+}: {
+  home?: boolean;
+  after?: RefObject<HTMLElement>;
+  /** Told once the note is on the page, so the chat can bring it into view. */
+  onShown?: () => void;
+}) {
   const standing = useMothliStanding();
   const due = standing?.state === "free" && standing.ending_note && !endingNoteSeen();
   const [day, setDay] = useState<string | null>(null);
@@ -213,6 +225,12 @@ export function MothliEndingNote({ home = false, after }: { home?: boolean; afte
 
   // Without the day the note cannot be said as written, so it is not said.
   const when = day ? endingWhen(day) : null;
+  const shown = Boolean(due && when);
+  const onShownRef = useRef(onShown);
+  onShownRef.current = onShown;
+  useEffect(() => {
+    if (shown) onShownRef.current?.();
+  }, [shown]);
   if (!due || !when) return null;
   const gotIt = () => {
     after?.current?.focus();

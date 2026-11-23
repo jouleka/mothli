@@ -56,6 +56,7 @@ import {
   endingWhen,
   forgetEndingDay,
   GOT_IT,
+  HOME_HELLO_NO_BOOKS,
   INVITATIONS,
   KEEP_TALKING,
   MOTHLI_HELLO,
@@ -443,6 +444,19 @@ describe("not started: the start call and the hello", () => {
     expect(screen.queryByText(MOTHLI_HELLO)).toBeNull();
   });
 
+  // Catches: a second "Hi, I’m Mothli" under the empty shelf's own, or a hello inviting
+  // questions "about the pages you’ve read" to a reader with no book yet (L5 of the plan walk).
+  test("at home with no book yet: one hello, and a line that suits an empty shelf", async () => {
+    stand("new");
+    render(<HomeChat shelfEmpty />);
+    const hello = await screen.findByText(HOME_HELLO_NO_BOOKS);
+    expect(HOME_HELLO_NO_BOOKS).toBe("Your first two weeks with me are free, starting the first time you try me out.");
+    expect(screen.queryByText(MOTHLI_HELLO)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/Hi, I’m Mothli/);
+    expect(hello.textContent).not.toMatch(/pages you’ve read/);
+    noCounter(HOME_HELLO_NO_BOOKS);
+  });
+
   test.each([["free"], ["paying"], ["nothing told"]] as const)("no hello for a reader %s", async (state) => {
     if (state === "nothing told") setMothliStanding(null);
     else stand(state);
@@ -481,6 +495,72 @@ describe("the gentle note in the last two days", () => {
     await waitFor(() => expect(mocks.homeConversation).toHaveBeenCalled());
     await act(async () => {});
     expect(screen.queryByText(endingNote(day()))).toBeNull();
+  });
+
+  // Catches: the book chat opening scrolled to the latest exchange, so on a phone the note's
+  // first line is cut off at the top (M6 of the plan walk, 23 November 2026). jsdom has no
+  // layout: the latest exchange is placed 400 pixels down, the note at the top.
+  test("with an earlier conversation, the note is shown whole, not scrolled past", async () => {
+    const tops = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetTop");
+    const scroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTop");
+    const scrolled = new WeakMap<Element, number>();
+    Object.defineProperty(HTMLElement.prototype, "offsetTop", {
+      configurable: true, get(this: HTMLElement) { return this.hasAttribute("data-latest-exchange") ? 400 : 0; },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollTop", {
+      configurable: true,
+      get(this: HTMLElement) { return scrolled.get(this) ?? 0; },
+      set(this: HTMLElement, value: number) { scrolled.set(this, value); },
+    });
+    try {
+      mocks.bookConversation.mockResolvedValue({ read_frontier: point,
+        turns: [turn("user", "Who is Aldric?"), turn("assistant", "Aldric keeps the forge.")] });
+      // Without the note: the thread opens at the latest exchange, as before.
+      stand("free", null, false);
+      const plain = render(<AskTheBook {...book} />);
+      await screen.findByText("Aldric keeps the forge.");
+      const thread = () => screen.getByRole("region", { name: "Book conversation" });
+      await waitFor(() => expect(thread().scrollTop).toBe(400));
+      plain.unmount();
+      // With it: the note, whole, at the top.
+      stand("free", null, true);
+      mocks.plan.mockResolvedValue(planOf({ state: "free", next_date: ends }));
+      render(<AskTheBook {...book} />);
+      await screen.findByText("Aldric keeps the forge.");
+      await screen.findByText(endingNote(day()));
+      await waitFor(() => expect(thread().scrollTop).toBe(0));
+    } finally {
+      if (tops) Object.defineProperty(HTMLElement.prototype, "offsetTop", tops);
+      else delete (HTMLElement.prototype as { offsetTop?: number }).offsetTop;
+      if (scroll) Object.defineProperty(HTMLElement.prototype, "scrollTop", scroll);
+      else delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop;
+    }
+  });
+
+  // Catches: "Got it" kept for the device, so a second reader signed in here later never sees
+  // their own note (L3 of the plan walk, 23 November 2026).
+  test("“Got it” is remembered for each reader on the device, not for the device", async () => {
+    const note = { state: "free", why: null, ending_note: true };
+    mocks.plan.mockResolvedValue(planOf({ state: "free", next_date: ends }));
+    setMothliStanding(note, EMAIL, "reader-a");
+    const first = render(<AskTheBook {...book} />);
+    await screen.findByText(endingNote(day()));
+    fireEvent.click(screen.getByRole("button", { name: GOT_IT }));
+    first.unmount();
+    expect(localStorage.getItem("mothli.ending-note-seen:reader-a")).toBe("yes");
+    expect(localStorage.getItem("mothli.ending-note-seen")).toBeNull();
+    // Another reader signs in on the same device: their own note.
+    setMothliStanding(note, "other@example.test", "reader-b");
+    const second = render(<AskTheBook {...book} />);
+    expect(await screen.findByText(endingNote(day()))).toBeTruthy();
+    second.unmount();
+    // The first reader again: still hidden for them.
+    setMothliStanding(note, EMAIL, "reader-a");
+    render(<AskTheBook {...book} />);
+    await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByText(endingNote(day()))).toBeNull();
+    setMothliStanding(null, null, null);
   });
 
   test("at home too, and “See the plan” opens the plan sheet and comes back to its button", async () => {

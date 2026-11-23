@@ -7,6 +7,7 @@
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { api, ApiError, type Plan } from "../api";
 import { Button } from "../ui/Button";
+import { readerDay } from "../ui/readerDay";
 import "./home-chat.css";
 import "./account.css";
 
@@ -22,7 +23,8 @@ export const ACCOUNT_PLAN_LINES = {
   retrying: "Your last payment didn’t go through. Paddle will try again, or you can update your card here.",
   wontRenew: "Your plan won’t renew.",
   gift: "Mothli is on the house for you. Enjoy!",
-  giftAndPlan: "You have a plan of your own too.",
+  giftAndPlan:
+    "Your own plan is still renewing too, so you’ll keep being charged for it. You can cancel it here whenever you like.",
   seePlan: "See the plan",
   update: "Update payment details",
   opening: "Opening…",
@@ -35,6 +37,8 @@ export const ACCOUNT_PLAN_LINES = {
   failedAction: "I couldn’t do that just now. Check your connection and try again.",
 } as const;
 export const freeEnds = (day: string) => `Your free weeks end on ${day}.`;
+/** A gift with an end: the last day it lasts, in the reader's own zone. */
+export const giftUntil = (day: string) => `Mothli is on the house for you until ${day}. Enjoy!`;
 export const renews = (kind: "monthly" | "yearly", day: string | null) =>
   day ? `You’re on the ${kind} plan. It renews on ${day}.` : `You’re on the ${kind} plan.`;
 export const planEnds = (day: string) => `Your plan ends on ${day}.`;
@@ -58,8 +62,6 @@ export function deletingPlanLine(plan: Plan, now = new Date()): string {
 /** The waiting screen: section 11's words, and the day the plan is paid for until. */
 export const waitingPlanLine = (day: string | null) =>
   day ? `${ACCOUNT_PLAN_LINES.wontRenew} It’s paid for until ${day}.` : ACCOUNT_PLAN_LINES.wontRenew;
-export const KEEP_PLAN_FAILED =
-  "Your account is back, but I couldn’t keep your plan just now. Try again in a few minutes, or keep it from Your account.";
 
 /** The server's own refusals of a change, each with a kind line; nothing on screen changes. */
 export const PLAN_REFUSED: Record<string, string> = {
@@ -67,18 +69,10 @@ export const PLAN_REFUSED: Record<string, string> = {
   paddle_unavailable: "I can’t reach our payment service just now, so nothing has changed. Please try again in a minute.",
 };
 
-/** A day in the reader's own locale and time zone: "3 December" (the year only when it is not
- * this one). */
-export function planDay(iso: string, now = new Date(), locale?: string, timeZone?: string): string {
-  const when = new Date(iso);
-  if (Number.isNaN(when.getTime())) return "";
-  const year = (date: Date) => new Intl.DateTimeFormat("en", { year: "numeric", timeZone }).format(date);
-  return when.toLocaleDateString(locale, {
-    day: "numeric",
-    month: "long",
-    ...(year(when) !== year(now) ? { year: "numeric" } : {}),
-    timeZone,
-  });
+/** A day in the reader's own time zone, written as on every plan screen: "3 December" (the year
+ * only when it is not this one). See ../ui/readerDay.ts. */
+export function planDay(iso: string, now = new Date(), timeZone?: string): string {
+  return readerDay(iso, { now, timeZone });
 }
 
 function refusal(reason: unknown): string {
@@ -133,7 +127,8 @@ export function YourPlan({
     lines.push(plan.why === "ceiling" ? ACCOUNT_PLAN_LINES.endedCeiling
       : plan.why === "plan" ? ACCOUNT_PLAN_LINES.endedPlan : ACCOUNT_PLAN_LINES.endedTime);
   else if (gift) {
-    lines.push(ACCOUNT_PLAN_LINES.gift);
+    // The plan's next_date is the gift's last moment while it lasts (none for a gift for good).
+    lines.push(day ? giftUntil(day) : ACCOUNT_PLAN_LINES.gift);
     if (plan.subscribed)
       lines.push(plan.payment_retrying ? ACCOUNT_PLAN_LINES.retrying
         : plan.cancel_scheduled ? ACCOUNT_PLAN_LINES.wontRenew : ACCOUNT_PLAN_LINES.giftAndPlan);

@@ -175,6 +175,62 @@ describe("reader startup and search boundaries", () => {
     expect(mocks.readFrontier.mock.calls.some((args) => args[1])).toBe(true);
     unmount();
   });
+  // Catches (M4 of the plan walk, 23 November 2026): the same book open on another device moves
+  // its place on the server, so this page's report comes back "not applied, newer progress
+  // kept". That answer was taken as an unconfirmed position: every question then failed with "I
+  // couldn’t get a reply. Try again?" before any request, Retry the same, until a reload.
+  test("a place kept from another device does not stop the question, nor the next one", async () => {
+    mocks.putPosition.mockResolvedValue({ bookmark: 2, current_chapter: 3, chapter_progress: 0, position_epoch: 0,
+      cfi: "elsewhere", position_version: 7, applied: false, conflict: "stale_behind" });
+    mocks.askBook.mockResolvedValue({ as_of_chapter: 1, insufficient_evidence: false,
+      claims: [{ text: "Oren trims the lantern.", citation_ids: [] }], citations: [], cost: null });
+    const { unmount } = render(<ReaderPage bookId="b" onBack={() => {}} />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+    act(() => document.querySelector("foliate-view")!.dispatchEvent(new CustomEvent("relocate", {
+      detail: { cfi: "0:start", section: { current: 0 } },
+    })));
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Mothli" }));
+    fireEvent.change(screen.getByLabelText("Message Mothli"), { target: { value: "Who is Oren?" } });
+    fireEvent.submit(screen.getByLabelText("Message Mothli").closest("form")!);
+    await waitFor(() => expect(mocks.askBook).toHaveBeenCalledTimes(1));
+    expect(mocks.putPosition).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Oren trims the lantern.")).toBeTruthy();
+    expect(screen.queryByText("I couldn’t get a reply. Try again?")).toBeNull();
+    expect(screen.getByText("Newer progress kept")).toBeTruthy();
+    // And the next question too, with nothing reloaded.
+    fireEvent.change(screen.getByLabelText("Message Mothli"), { target: { value: "And the harbour?" } });
+    fireEvent.submit(screen.getByLabelText("Message Mothli").closest("form")!);
+    await waitFor(() => expect(mocks.askBook).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText("I couldn’t get a reply. Try again?")).toBeNull();
+    unmount();
+  });
+
+  // Catches: a place the server says is ahead of this device's copy (its version moved on): the
+  // report was dropped and every question failed until a reload. The page takes the server's
+  // place and sends its report again, once, by itself.
+  test("a version the server refuses is refreshed by itself and the report sent again", async () => {
+    mocks.putPosition
+      .mockRejectedValueOnce(new ApiError("reading position version is ahead of the server; reload before continuing", 409))
+      .mockResolvedValue({ bookmark: 1, current_chapter: 2, chapter_progress: 0, position_epoch: 0, cfi: "0:start",
+        position_version: 4, applied: true });
+    mocks.askBook.mockResolvedValue({ as_of_chapter: 1, insufficient_evidence: false,
+      claims: [{ text: "Oren trims the lantern.", citation_ids: [] }], citations: [], cost: null });
+    const { unmount } = render(<ReaderPage bookId="b" onBack={() => {}} />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+    mocks.position.mockResolvedValue({ bookmark: 1, cfi: "0:resume", position_epoch: 0, position_version: 3 });
+    act(() => document.querySelector("foliate-view")!.dispatchEvent(new CustomEvent("relocate", {
+      detail: { cfi: "0:start", section: { current: 0 } },
+    })));
+    fireEvent.click(screen.getByRole("button", { name: "Talk to Mothli" }));
+    fireEvent.change(screen.getByLabelText("Message Mothli"), { target: { value: "Who is Oren?" } });
+    fireEvent.submit(screen.getByLabelText("Message Mothli").closest("form")!);
+    expect(await screen.findByText("Oren trims the lantern.")).toBeTruthy();
+    expect(mocks.putPosition).toHaveBeenCalledTimes(2);
+    expect(mocks.putPosition.mock.calls[1][5]).toBe(3);   // sent again on the server's version
+    expect(screen.queryByText("I couldn’t get a reply. Try again?")).toBeNull();
+    unmount();
+  });
+
   // Catches: "I haven't read this" in Contents leaving the chat's earlier turns on screen. The
   // reading pass does not change, so only ReaderPage knows: it must take the conversation off
   // the screen at once and have the panel ask the server again once the change is saved.
@@ -1033,7 +1089,7 @@ describe("the reading streak", () => {
       render(<ReaderPage bookId="b" onBack={() => {}} />);
       await waitFor(() => expect(mocks.init).toHaveBeenCalled());
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
-      expect(screen.queryByText("Reading streak:")).toBeNull();
+      expect(screen.queryByText(/-day streak$/)).toBeNull();
       const doc = document.implementation.createHTMLDocument("chapter");
       doc.body.innerHTML = "<p>Some words of chapter two to read.</p><p>And the next page.</p>";
       const page = (index: number) => {
@@ -1044,13 +1100,37 @@ describe("the reading streak", () => {
       const view = document.querySelector("foliate-view") as TestFoliateView;
       act(() => view.dispatchEvent(new CustomEvent("relocate", {
         detail: { cfi: "epubcfi(/6/4!/4/2/1:0)", section: { current: 1 }, range: page(0) } })));
-      expect(screen.queryByText("Reading streak:")).toBeNull();
+      expect(screen.queryByText(/-day streak$/)).toBeNull();
       now += 60_000;      // a minute on that page, then the next one
       act(() => view.dispatchEvent(new CustomEvent("relocate", {
         detail: { cfi: "epubcfi(/6/4!/4/4/1:0)", section: { current: 1 }, range: page(1) } })));
-      await waitFor(() => expect(screen.getByText("Reading streak:").parentElement?.textContent).toMatch(/1$/));
+      // Said as the shelf says it (L8 of the plan walk), the number alone on show.
+      await waitFor(() => expect(screen.getByText("1-day streak").parentElement?.getAttribute("title")).toBe("1-day streak"));
+      expect(screen.getByText("1-day streak").parentElement?.textContent).toBe("1-day streak1");
     } finally {
       clock.mockRestore();
+    }
+  });
+});
+
+// L7 of the plan walk: a 404 in the console on every book opened in hosted mode, the offer of
+// chapters read in another app asked of a server that keeps no such history and has no route.
+describe("the offer of chapters read elsewhere", () => {
+  test("is asked only where the server keeps reading history (local mode), never hosted", async () => {
+    const extra = mocks as Record<string, unknown>;
+    extra.readMap = vi.fn().mockResolvedValue({ chapters: [{ atom: 1, read: 0 }] });
+    extra.readOffer = vi.fn().mockResolvedValue({ offer: null });
+    try {
+      const hosted = render(<ReaderPage bookId="b" onBack={() => {}} hosted />);
+      await waitFor(() => expect(extra.readMap).toHaveBeenCalled());
+      await act(async () => {});
+      expect(extra.readOffer).not.toHaveBeenCalled();
+      hosted.unmount();
+      render(<ReaderPage bookId="b" onBack={() => {}} />);
+      await waitFor(() => expect(extra.readOffer).toHaveBeenCalledWith("b"));
+    } finally {
+      delete extra.readMap;
+      delete extra.readOffer;
     }
   });
 });

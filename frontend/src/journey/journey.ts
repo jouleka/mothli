@@ -49,6 +49,11 @@ export function readingStreak(now = new Date()): number {
   return streak;
 }
 
+/** The streak in words, the same on the shelf and on the reading page: "3-day streak". */
+export function streakName(streak: number): string {
+  return `${streak}-day streak`;
+}
+
 /** The last seven days, oldest first, for a small streak strip. */
 export function recentDays(now = new Date()): { key: string; label: string; read: boolean; today: boolean }[] {
   const days = new Set(readDays());

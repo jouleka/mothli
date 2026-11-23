@@ -19,17 +19,25 @@ export const MOTHLI_PLAN = "mothli_plan";
 
 const STATES = new Set(["new", "free", "paying", "ended"]);
 const WHYS = new Set(["time", "ceiling", "plan"]);
+// The gentle note's "Got it", remembered for each reader on this device: another reader signed in
+// here later still sees their own note.
 const NOTE_SEEN_KEY = "mothli.ending-note-seen";
 
 let standing: MothliStanding | null = null;
 let email: string | null = null;
-let noteSeen = readNoteSeen();
+let reader: string | null = null;
+// Read again whenever the session says who the reader is (setMothliStanding).
+let noteSeen = false;
 const listeners = new Set<() => void>();
 const tell = () => listeners.forEach((listener) => listener());
 
+const noteSeenKey = () => (reader ? `${NOTE_SEEN_KEY}:${reader}` : null);
+
 function readNoteSeen(): boolean {
+  const key = noteSeenKey();
+  if (!key) return false;
   try {
-    return localStorage.getItem(NOTE_SEEN_KEY) === "yes";
+    return localStorage.getItem(key) === "yes";
   } catch {
     return false;
   }
@@ -47,10 +55,12 @@ export function standingOf(value: unknown): MothliStanding | null {
   return { state: state as MothliStanding["state"], why: whyOf(why), ending_note: ending_note === true };
 }
 
-/** Set from the session (and in tests). `readerEmail` is prefilled in the plan sheet's checkout. */
-export function setMothliStanding(next: unknown, readerEmail?: string | null): void {
+/** Set from the session (and in tests). `readerEmail` is prefilled in the plan sheet's checkout;
+ * `readerId` is whose "Got it" on the gentle note is remembered. */
+export function setMothliStanding(next: unknown, readerEmail?: string | null, readerId?: string | null): void {
   standing = standingOf(next);
   if (readerEmail !== undefined) email = readerEmail;
+  if (readerId !== undefined) reader = readerId;
   noteSeen = readNoteSeen();
   tell();
 }
@@ -84,15 +94,16 @@ export function noteMothliJoined(): void {
   tell();
 }
 
-/** The gentle note's "Got it", remembered on this device. */
+/** The gentle note's "Got it", remembered for this reader on this device. */
 export function endingNoteSeen(): boolean {
   return noteSeen;
 }
 
 export function dismissEndingNote(): void {
   noteSeen = true;
+  const key = noteSeenKey();
   try {
-    localStorage.setItem(NOTE_SEEN_KEY, "yes");
+    if (key) localStorage.setItem(key, "yes");
   } catch {
     /* Remembered for this visit only. */
   }
