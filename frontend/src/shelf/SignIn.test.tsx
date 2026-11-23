@@ -46,7 +46,9 @@ describe("SignInGate", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Read with a friend in the margin." })).toBeTruthy();
     const door = screen.getByRole("link", { name: "Sign in to start reading" });
     expect(door.getAttribute("href")).toBe("/api/auth/login?return_to=%2F%3Fbook%3Db1");
-    expect(screen.getAllByRole("link")).toHaveLength(1);
+    // One way in; every other link is the footer's (the public pages, ADR 0045 step 8).
+    const footer = screen.getByRole("navigation", { name: "About Mothli" });
+    expect(screen.getAllByRole("link").filter((link) => !footer.contains(link))).toEqual([door]);
     expect(container.querySelector("form, input")).toBeNull();
     expect(await axeAA(container)).toHaveNoViolations();
   });

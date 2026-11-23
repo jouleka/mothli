@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from app.hosted.auth.api import SESSION_COOKIE
 from app.hosted.auth.tokens import new_token
-from tests.hosted.test_billing import CHECKOUT_URL, KEY, LIVE_KEY, paddle_settings
+from tests.hosted.test_billing import CHECKOUT_URL, KEY, LIVE_KEY, OPERATOR, paddle_settings
 from tests.hosted.test_companion_stream_settings import _SignedIn
 from tests.hosted.test_paddle_messages_postgres import MONTHLY, SECRET, YEARLY, YEARLY_NEW
 from tests.hosted.test_platform_pays import _Tenant
@@ -28,7 +28,7 @@ BILLING_DSN = "postgresql://unused.invalid/b"
 PADDLE = dict(paddle_webhook_secret=SECRET, paddle_price_monthly=MONTHLY,
               paddle_price_yearly=f"{YEARLY_NEW},{YEARLY}", hosted_billing_dsn=BILLING_DSN)
 # Paddle's messages and its API: the key comes with Mothli's own payment-link page.
-KEYED = {**PADDLE, "paddle_api_key": KEY, "paddle_checkout_url": CHECKOUT_URL}
+KEYED = {**PADDLE, "paddle_api_key": KEY, "paddle_checkout_url": CHECKOUT_URL, **OPERATOR}
 
 
 def test_the_client_token_is_checked_loosely_against_its_environment() -> None:

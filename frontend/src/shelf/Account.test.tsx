@@ -64,6 +64,17 @@ describe("Account", () => {
     expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
   });
 
+  // Catches (ADR 0045 step 8): the terms, privacy, refunds or contact page out of reach from the
+  // account sheet, or opened in place of it.
+  test("links the public pages, each opened beside the sheet", async () => {
+    render(<Account session={{ ...session, chat: false }} onClose={() => {}} />);
+    await act(() => new Promise((settled) => setTimeout(settled, 0)));
+    expect(["Terms", "Privacy", "Refunds", "Contact"].map((name) => {
+      const link = screen.getByRole("link", { name });
+      return [link.getAttribute("href"), link.getAttribute("target")];
+    })).toEqual([["/terms", "_blank"], ["/privacy", "_blank"], ["/refunds", "_blank"], ["/contact", "_blank"]]);
+  });
+
   // Catches: a door to a screen the server does not have (hosted answers 404 until a later part).
   test("does not show what Mothli remembers where the server answers 404", async () => {
     mocks.recollections.mockRejectedValue(new ApiError("Not Found", 404));
