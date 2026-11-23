@@ -363,11 +363,52 @@ def test_paddle_down_slow_or_overloaded_gives_a_kind_error_and_writes_nothing(sh
             assert "nothing has changed" in detail["message"]
             assert not any(character.isdigit() for character in detail["message"])
             assert "paddle" not in detail["message"].casefold()
-    assert written(database) == before
-    assert checkouts(database, readers["b"]) == []
+    # The plans and messages are as they were; B's checkouts were kept before Paddle was asked
+    # (one for each failure), and none is used.
+    assert written(database)[:2] == before[:2]
+    assert [used for _o, _d, used, _days in checkouts(database, readers["b"])] == [False] * 5
     # Each call was sent once.
     assert len(standin.requests) == 1 + 5 * 3
     assert "stand-in" not in caplog.text
+
+
+def test_the_checkout_token_is_kept_before_paddle_is_asked(shop, database, readers,
+                                                           monkeypatch):
+    """The break it catches: a transaction created at Paddle whose token Mothli never stored (the
+    database unreachable, or the process stopped, between the two), so the reader can pay and
+    the payment binds to no one. The token is written first. If that write fails, Paddle is never
+    asked and the reader gets the kind error. If Paddle fails after it, nothing else changes, the
+    kept row is never used, and a later checkout works and binds."""
+    from app.hosted import subscribe as subscribe_module
+
+    client, tokens, standin = shop
+    a = readers["a"]
+    before = written(database)
+
+    def unreachable(*_args):
+        raise psycopg.OperationalError("stand-in: the database is unreachable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(subscribe_module, "_record_checkout", unreachable)
+        response = ask(client, tokens, "a", "checkout", {"plan": "monthly"})
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "paddle_unavailable"
+    assert standin.requests == [] and written(database) == before
+
+    standin.fail = "down"
+    response = ask(client, tokens, "a", "checkout", {"plan": "monthly"})
+    assert response.status_code == 503
+    assert len(standin.requests) == 1
+    assert written(database)[:2] == before[:2]
+    [(_owner, kept, used, _days)] = checkouts(database, a)
+    assert not used and messages.plan_of(database, a)[0] == "new"
+
+    standin.fail = None
+    subscribe(client, tokens, standin, "a", a, sub_id("a"))
+    assert messages.plan_of(database, a) == ("paying", None, "paddle")
+    rows = checkouts(database, a)
+    assert [(bytes(digest) == bytes(kept), used) for _o, digest, used, _d in rows] == [
+        (True, False), (False, True)]
 
 
 def test_a_cancel_within_thirty_minutes_of_the_renewal_says_try_again_in_a_few_minutes(

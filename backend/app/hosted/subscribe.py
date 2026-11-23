@@ -5,10 +5,10 @@ the reader's own plan, each signed in with the CSRF token, each only for the ses
 (no route takes an account, a subscription or a customer id from the browser), and each writing
 only through the billing role:
 
-- ``POST /api/billing/checkout`` ``{"plan": "monthly" | "yearly"}``: creates the Paddle
+- ``POST /api/billing/checkout`` ``{"plan": "monthly" | "yearly"}``: keeps the digest of a fresh
+  checkout token for the reader (``paddle_checkouts``, seven days), then creates the Paddle
   transaction for the plan's current price (the first id in its setting) with custom data naming
-  the reader and a fresh checkout token, keeps a digest of the token for the reader
-  (``paddle_checkouts``, seven days), and answers ``{"transaction_id": "txn_..."}`` for Paddle.js
+  the reader and that token, and answers ``{"transaction_id": "txn_..."}`` for Paddle.js
   to open checkout with. Refused while the reader has a live Paddle plan. A gifted reader may
   subscribe: the gift still wins while it lasts, and the plan pays from the day it starts.
 - ``POST /api/billing/cancel``: schedules the cancel at the end of the period paid for.
@@ -199,14 +199,20 @@ async def checkout(body: CheckoutIn, request: Request,
     if await run_in_threadpool(_checkouts_today, dsn, owner.value) >= CHECKOUTS_PER_DAY:
         return _refused(429, "checkout_busy",
                         "Let’s take a little break from checkouts. Please try again later.")
+    # The token is kept before Paddle hears of it: a checkout whose token Mothli never stored
+    # could be paid for and bind to no one. If Paddle then fails, the row is never used and
+    # expires (it still counts toward the day's checkouts).
     token = new_token()
+    try:
+        await run_in_threadpool(_record_checkout, dsn, owner.value, token)
+    except psycopg.Error:
+        return _refused(503, *_UNAVAILABLE)
     try:
         transaction = await run_in_threadpool(
             paddle_api(request).create_transaction, prices[0],
             {"mothli_reader": str(owner.value), "mothli_checkout": token})
     except (PaddleUnavailable, PaddleRefused):
         return _refused(503, *_UNAVAILABLE)
-    await run_in_threadpool(_record_checkout, dsn, owner.value, token)
     return JSONResponse({"transaction_id": transaction}, headers=_NO_STORE)
 
 
