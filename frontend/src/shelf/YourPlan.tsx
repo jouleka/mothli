@@ -13,7 +13,7 @@ import "./account.css";
 export const ACCOUNT_PLAN_LINES = {
   loading: "Looking up your plan…",
   failed: "I couldn’t look up your plan just now. Try again in a moment.",
-  new: "Talking with Mothli is free for your first two weeks, starting the first time you ask it something.",
+  new: "Talking with Mothli is free for your first two weeks, starting the first time you use it.",
   free: "You’re in your free weeks with Mothli.",
   endedTime: "Your two free weeks with Mothli are over. Your books stay free, always.",
   endedCeiling: "Your free start with Mothli is all used up. Your books stay free, always.",

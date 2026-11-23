@@ -276,7 +276,7 @@ describe("Your plan", () => {
   // Every state of ADR 0045 section 6, each line exactly, and only the buttons that work.
   test.each<[string, Partial<Plan>, string[], string[]]>([
     ["new", { state: "new", next_date: null },
-      ["Talking with Mothli is free for your first two weeks, starting the first time you ask it something."],
+      ["Talking with Mothli is free for your first two weeks, starting the first time you use it."],
       ["See the plan"]],
     ["free weeks", { state: "free", next_date: DATE }, [`Your free weeks end on ${day}.`], ["See the plan"]],
     ["ended: two weeks", { state: "ended", why: "time", next_date: null },

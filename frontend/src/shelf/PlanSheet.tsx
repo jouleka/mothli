@@ -2,7 +2,9 @@
  * the prices Paddle gives this reader (yearly first, as a month, with its saving), then Paddle's
  * checkout over the page for a transaction the server made. When the checkout completes or closes
  * nothing is assumed: the sheet asks the server for the plan until it says the reader is on it,
- * for a bounded time, and says plainly what to do if the payment has not arrived yet.
+ * for a bounded time. After a completed payment it says plainly what to do if the plan has not
+ * arrived yet; after a checkout only closed, a short check (in case the completed event was
+ * missed), then the two plans again with a calm line.
  *
  * Opened from the account sheet, and from anywhere else that renders it: `<PlanSheet email=…
  * onClose=… />` (it reads the plan itself unless given one). A modal sheet like "What Mothli
@@ -38,12 +40,13 @@ export const PLAN_LINES = {
   paddle: "Payments are handled by Paddle, who sells Mothli on our behalf.",
   paying: "Your checkout is open. Take your time, I’ll be right here.",
   waiting: "One moment, I’m getting ready…",
+  checking: "One moment…",
+  nothingChanged: "No worries, nothing has changed. Pick a plan whenever you like.",
   joined: "You’re on the plan! I’m so glad we get to keep talking.",
   done: "Done",
   slow:
     "Your payment may still be on its way to me. That can take a minute or two. Reopen Your account in a little while and you’ll see your plan there.",
   close: "Close",
-  again: "See the plans again",
 } as const;
 /** The server's refusals of a checkout, each in Mothli's voice. */
 export const CHECKOUT_REFUSED: Record<string, string> = {
@@ -59,14 +62,15 @@ export const yearlyTotal = (total: string, saving: number | null) =>
 export const monthlyTotal = (total: string) => `${total} a month`;
 
 // After the checkout, how often and how long to ask the server whether the plan has arrived.
-// A payment Paddle has completed gets the longer wait; a checkout only closed, the shorter.
+// A payment Paddle has completed gets the longer wait; a checkout only closed, a short check in
+// case the completed event was missed.
 export const ASK_EVERY_MS = 2_000;
 export const WAIT_AFTER_PAYMENT_MS = 60_000;
 export const WAIT_AFTER_CLOSING_MS = 8_000;
 
 type Phase =
   | "loading" | "notOffered" | "already" | "unreachable" | "choose"
-  | "paying" | "waiting" | "joined" | "slow";
+  | "paying" | "checking" | "waiting" | "joined" | "slow";
 
 export function PlanSheet({
   email,
@@ -86,8 +90,8 @@ export function PlanSheet({
   const [prices, setPrices] = useState<PlanPrices | null>(null);
   const [starting, setStarting] = useState<"monthly" | "yearly" | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  // Whether Paddle said the payment completed (the longer wait, and no way back to the plans).
-  const [completed, setCompleted] = useState(false);
+  // Back at the plans after a checkout closed with nothing paid: the calm line says so.
+  const [unchanged, setUnchanged] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const paddleRef = useRef<PaddleLike | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -160,24 +164,26 @@ export function PlanSheet({
     // Run once, and again from the start for each "Try again".
   }, [attempt]);
 
-  // Paddle's checkout events: completed or closed, the wait begins; nothing more is assumed.
+  // Paddle's checkout events: a completed payment starts the wait, a closed checkout the short
+  // check; nothing more is assumed.
   useEffect(
     () =>
       listenToPaddle((event) => {
-        if (event.name === "checkout.completed") {
-          setCompleted(true);
-          if (phaseRef.current === "paying" || phaseRef.current === "waiting") setPhase("waiting");
-        } else if (event.name === "checkout.closed" && phaseRef.current === "paying") setPhase("waiting");
+        const now = phaseRef.current;
+        if (event.name === "checkout.completed" && (now === "paying" || now === "checking")) setPhase("waiting");
+        else if (event.name === "checkout.closed" && now === "paying") setPhase("checking");
       }),
     [],
   );
 
   // The wait: ask the server for the plan until it says the reader is on it, or time runs out.
+  // Out of time after a payment: where to look. After a checkout only closed: the plans again.
   useEffect(() => {
-    if (phase !== "waiting") return;
+    if (phase !== "waiting" && phase !== "checking") return;
     let stale = false;
     let timer = 0;
-    const until = Date.now() + (completed ? WAIT_AFTER_PAYMENT_MS : WAIT_AFTER_CLOSING_MS);
+    const paid = phase === "waiting";
+    const until = Date.now() + (paid ? WAIT_AFTER_PAYMENT_MS : WAIT_AFTER_CLOSING_MS);
     const ask = async () => {
       try {
         const now = await api.plan();
@@ -192,26 +198,33 @@ export function PlanSheet({
         // A passing failure: ask again.
       }
       if (stale) return;
-      if (Date.now() + ASK_EVERY_MS > until) setPhase("slow");
-      else timer = window.setTimeout(() => void ask(), ASK_EVERY_MS);
+      if (Date.now() + ASK_EVERY_MS > until) {
+        if (paid) setPhase("slow");
+        else {
+          setUnchanged(true);
+          setPhase("choose");
+        }
+      } else timer = window.setTimeout(() => void ask(), ASK_EVERY_MS);
     };
     timer = window.setTimeout(() => void ask(), ASK_EVERY_MS);
     return () => {
       stale = true;
       window.clearTimeout(timer);
     };
-  }, [phase, completed]);
+  }, [phase]);
 
   // A new message in the sheet's own words takes focus, so it is read out.
   useEffect(() => {
-    if (["notOffered", "already", "unreachable", "waiting", "joined", "slow"].includes(phase))
+    if (["notOffered", "already", "unreachable", "checking", "waiting", "joined", "slow"].includes(phase)
+      || (phase === "choose" && unchanged))
       messageRef.current?.focus();
-  }, [phase]);
+  }, [phase, unchanged]);
 
   const choose = async (which: "monthly" | "yearly") => {
     if (starting || !paddleRef.current) return;
     setStarting(which);
     setProblem(null);
+    setUnchanged(false);
     let transaction: string;
     try {
       transaction = (await api.startCheckout(which)).transaction_id;
@@ -222,7 +235,6 @@ export function PlanSheet({
       return;
     }
     try {
-      setCompleted(false);
       setPhase("paying");
       paddleRef.current.Checkout.open({
         transactionId: transaction,
@@ -242,9 +254,11 @@ export function PlanSheet({
     : phase === "already" ? PLAN_LINES.already
     : phase === "unreachable" ? PLAN_LINES.unreachable
     : phase === "paying" ? PLAN_LINES.paying
+    : phase === "checking" ? PLAN_LINES.checking
     : phase === "waiting" ? PLAN_LINES.waiting
     : phase === "joined" ? PLAN_LINES.joined
     : phase === "slow" ? PLAN_LINES.slow
+    : phase === "choose" && unchanged ? PLAN_LINES.nothingChanged
     : "";
   const startsToday = plan?.state === "free" || plan?.plan === "gift";
 
@@ -266,7 +280,7 @@ export function PlanSheet({
             tabIndex={-1}
             role="status"
             className={message ? "ml-plan-message" : "ml-plan-message ml-plan-message--empty"}
-            aria-busy={phase === "loading" || phase === "waiting" || undefined}
+            aria-busy={phase === "loading" || phase === "checking" || phase === "waiting" || undefined}
           >
             {message}
           </p>
@@ -340,10 +354,7 @@ export function PlanSheet({
             </div>
           )}
           {phase === "slow" && (
-            <div className="ml-pending-actions">
-              {!completed && (
-                <Button variant="secondary" onClick={() => setPhase("choose")}>{PLAN_LINES.again}</Button>
-              )}
+            <div>
               <Button variant="primary" onClick={onClose}>{PLAN_LINES.close}</Button>
             </div>
           )}

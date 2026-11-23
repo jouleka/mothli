@@ -252,23 +252,56 @@ describe("after the checkout", () => {
       "Your payment may still be on its way to me. That can take a minute or two. Reopen Your account in a little while and you’ll see your plan there.");
     expect(screen.queryByRole("alert")).toBeNull();
     // Paid: no way back to the plans, which could pay twice.
-    expect(screen.queryByRole("button", { name: "See the plans again" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Choose/ })).toBeNull();
     // The sheet's own "Close" button, after the corner one.
     fireEvent.click(screen.getAllByRole("button", { name: "Close" })[1]);
     expect(onClose).toHaveBeenCalledTimes(1);
     noCounter(document.body);
   });
 
-  test("a checkout closed without paying: a short wait, then back to the plans if wanted", async () => {
+  // Catches: a reader who closed the checkout without paying told a payment may be on its way
+  // (untrue and worrying), or left without the plans.
+  test("a checkout closed without paying: a short neutral check, then the plans again, calmly", async () => {
     const { paddle } = await paying();
     mocks.plan.mockReset().mockResolvedValue(planOf());
     act(() => paddle.emit("checkout.closed"));
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("One moment…");
+    expect(document.activeElement).toBe(status);
+    expect(screen.queryByRole("button", { name: /Choose/ })).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(WAIT_AFTER_CLOSING_MS + ASK_EVERY_MS));
+    expect(status.textContent).toBe("No worries, nothing has changed. Pick a plan whenever you like.");
+    expect(document.activeElement).toBe(status);
+    expect(document.body.textContent).not.toMatch(/payment may still be on its way/);
+    expect(screen.queryAllByRole("button", { name: "Close" })).toHaveLength(1);   // the corner one only
+    expect(mocks.plan.mock.calls.length).toBeLessThanOrEqual(WAIT_AFTER_CLOSING_MS / ASK_EVERY_MS);
+    noCounter(document.body);
+    // The choices are simply there again; choosing clears the line.
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Choose monthly" }));
+    await waitFor(() => expect(paddle.opened).toHaveLength(2));
+    expect(status.textContent).toBe("Your checkout is open. Take your time, I’ll be right here.");
+  });
+
+  test("a closed checkout the server finds paid after all: on the plan", async () => {
+    const { paddle, onJoined } = await paying();
+    mocks.plan.mockReset().mockResolvedValue(PAYING);
+    act(() => paddle.emit("checkout.closed"));
+    await act(() => vi.advanceTimersByTimeAsync(ASK_EVERY_MS));
+    expect(screen.getByRole("status").textContent).toBe("You’re on the plan! I’m so glad we get to keep talking.");
+    expect(onJoined).toHaveBeenCalledWith(PAYING);
+  });
+
+  test("a completed event during the short check starts the full wait", async () => {
+    const { paddle } = await paying();
+    mocks.plan.mockReset().mockResolvedValue(planOf());
+    act(() => paddle.emit("checkout.closed"));
+    act(() => paddle.emit("checkout.completed"));
     expect(screen.getByRole("status").textContent).toBe("One moment, I’m getting ready…");
     await act(() => vi.advanceTimersByTimeAsync(WAIT_AFTER_CLOSING_MS + ASK_EVERY_MS));
+    expect(screen.getByRole("status").textContent).toBe("One moment, I’m getting ready…");
+    await act(() => vi.advanceTimersByTimeAsync(WAIT_AFTER_PAYMENT_MS));
     expect(screen.getByRole("status").textContent).toMatch(/^Your payment may still be on its way to me\./);
-    expect(mocks.plan.mock.calls.length).toBeLessThanOrEqual(WAIT_AFTER_CLOSING_MS / ASK_EVERY_MS);
-    fireEvent.click(screen.getByRole("button", { name: "See the plans again" }));
-    expect(screen.getByRole("button", { name: "Choose yearly" })).toBeTruthy();
   });
 
   test("a passing failure while waiting is asked again", async () => {

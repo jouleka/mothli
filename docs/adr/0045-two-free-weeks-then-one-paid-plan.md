@@ -323,9 +323,11 @@ Nobody has seen either in a browser yet, and nothing was run against Paddle: Pad
   ([checkout open](https://developer.paddle.com/paddle-js/methods/paddle-checkout-open)); the
   reader can change the email there. `checkout.completed` and `checkout.closed`
   ([events](https://developer.paddle.com/paddle-js/events)) start the wait: the sheet asks
-  `GET /api/billing/plan` every two seconds until `subscribed`, for 60 seconds after a completed
-  payment and 8 after a checkout only closed, then says the payment may still be on its way and to
-  reopen Your account. After a closed checkout (not a completed one) it also offers the plans again.
+  `GET /api/billing/plan` every two seconds until `subscribed`. After a completed payment ("One
+  moment, I’m getting ready…") it asks for 60 seconds, then says the payment may still be on its
+  way and to reopen Your account. After a checkout only closed ("One moment…") it asks for 8
+  seconds, in case the completed event was missed, then shows the two plans again with "No
+  worries, nothing has changed. Pick a plan whenever you like."
 - **The browser's security policy.** Paddle publishes no list of addresses (searched its developer
   pages and its whole documentation text, 23 November 2026). Read instead from Paddle.js 2.13.0
   itself: the checkout window is `https://buy.paddle.com` (sandbox `sandbox-buy.paddle.com`), the
@@ -345,7 +347,7 @@ Nobody has seen either in a browser yet, and nothing was run against Paddle: Pad
   `plan`), and `onJoined(plan)` is called once the server says the reader is on it. The opener
   puts focus back.
 - **Choices made**: the account sheet speaks of a New reader too ("Talking with Mothli is free
-  for your first two weeks, starting the first time you ask it something.") and of each way to be
+  for your first two weeks, starting the first time you use it.") and of each way to be
   Ended, each with "See the plan"; section 6 named only the free weeks' line. A payment being
   retried shows "Cancel my plan" beside "Update payment details", so cancelling is never hidden. A
   gifted reader who also holds a plan sees the gift line, then "You have a plan of your own too."
