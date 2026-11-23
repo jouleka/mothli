@@ -181,12 +181,12 @@ services:
     depends_on:
       db: {condition: service_healthy}
 
-  # The daily backup's uploader (runbook step 4), started by deploy/backup.sh from the server's
-  # crontab: it uploads each night's backup file to Cloudflare R2, keeps the newest 14 there, and
-  # reads the book files (read-only) into the backup. It holds the four R2 settings and nothing
-  # else: no database role at all (the dump is taken inside `db` by the superuser over its own
-  # socket, so no database password leaves that container), no app.env, no data network. Never
-  # given to web or worker.
+  # The daily backup's encrypter and uploader (runbook step 4), started by deploy/backup.sh from
+  # the server's crontab: it encrypts each night's backup file with the backup key, uploads it to
+  # Cloudflare R2, keeps the newest 14 there, and reads the book files (read-only) into the backup.
+  # It holds the four R2 settings and the backup key and nothing else: no database role at all
+  # (the dump is taken inside `db` by the superuser over its own socket, so no database password
+  # leaves that container), no app.env, no data network. Neither is ever given to another service.
   backup:
     <<: *backend
     profiles: [tools]
@@ -199,6 +199,7 @@ services:
       MOTHLI_BACKUP_BUCKET: ${MOTHLI_BACKUP_BUCKET:-mothli-protected-backups}
       MOTHLI_BACKUP_ACCESS_KEY_ID: ${MOTHLI_BACKUP_ACCESS_KEY_ID:-}
       MOTHLI_BACKUP_SECRET_ACCESS_KEY: ${MOTHLI_BACKUP_SECRET_ACCESS_KEY:-}
+      MOTHLI_BACKUP_ENCRYPTION_KEY: ${MOTHLI_BACKUP_ENCRYPTION_KEY:-}
     volumes:
       - books:/var/lib/mothli/books:ro
     networks: [egress]

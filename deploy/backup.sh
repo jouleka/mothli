@@ -5,10 +5,12 @@
 # or by hand the same way. The app keeps running. Every line it prints starts with the UTC time; the
 # last one says "backup ok" or "BACKUP FAILED", and a failure exits non-zero.
 #
-# What is in the file (mothli-backup-<UTC time>.tar):
+# The file (mothli-backup-<UTC time>.tar.age) is a tar encrypted on this server, before it is
+# uploaded, with the backup key MOTHLI_BACKUP_ENCRYPTION_KEY from deploy/.env (an age file; the key
+# is NOT in the backup and never in R2). Inside the tar:
 #   database.dump   every table, in pg_restore's format: accounts, reading, notes, conversations,
 #                   Mothli's story memory and chapter notes, spend records, the audit log
-#   books.tar       the readers' book files exactly as on disk (still encrypted with
+#   books.tar       the readers' book files exactly as on disk (also encrypted with
 #                   HOSTED_STORAGE_FILESYSTEM_KEY, which is NOT in the backup)
 #   counts.txt      rows per table, read back from database.dump (the restore compares them)
 #   SHA256SUMS      checksums of the three, checked before a restore trusts them
@@ -35,8 +37,11 @@ if ! flock -n 9; then
 fi
 
 started=$(date +%s)
-name="mothli-backup-$(date -u +%Y%m%dT%H%M%SZ).tar"
-work="$DIR/${name%.tar}"
+name="mothli-backup-$(date -u +%Y%m%dT%H%M%SZ).tar.age"
+step="checking the backup key"
+$COMPOSE run --rm --no-deps -T backup python -m app.hosted.backups check-key
+
+work="$DIR/${name%.tar.age}"
 mkdir "$work"
 log "backup started: $name"
 
@@ -59,10 +64,13 @@ $COMPOSE run --rm --no-deps -T --entrypoint sh backup -c \
   > "$work/books.tar"
 log "book files: $(tar -tf "$work/books.tar" | grep -c '\.epub\.enc$' || true), $(du -h "$work/books.tar" | cut -f1)"
 
-step="writing checksums and the backup file"
+step="writing checksums and the encrypted backup file"
 (cd "$work" && sha256sum database.dump counts.txt books.tar > SHA256SUMS)
-tar -C "$work" --remove-files -cf "$DIR/$name" database.dump counts.txt books.tar SHA256SUMS
+# The tar goes straight into the encryption: no unencrypted copy of the whole backup is written.
+tar -C "$work" --remove-files -cf - database.dump counts.txt books.tar SHA256SUMS \
+  | $COMPOSE run --rm --no-deps -T backup python -m app.hosted.backups encrypt > "$DIR/$name"
 rmdir "$work"
+# The size of the encrypted file, which is what is uploaded and checked in the bucket.
 size=$(stat -c %s "$DIR/$name")
 
 step="uploading to R2"
@@ -71,6 +79,6 @@ $COMPOSE run --rm --no-deps -T backup python -m app.hosted.backups upload "$name
   < "$DIR/$name"
 
 # In R2 now: drop this file and anything an earlier failed run left here.
-rm -f "$DIR"/mothli-backup-*.tar
+rm -f "$DIR"/mothli-backup-*.tar.age
 rm -rf "$DIR"/mothli-backup-*/
 log "backup ok: $name, $(( size / 1000000 )) MB, in $(( $(date +%s) - started )) s"

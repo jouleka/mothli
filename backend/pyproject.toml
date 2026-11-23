@@ -22,6 +22,7 @@ dependencies = [
     "joserfc>=1.7,<2",        # hosted OIDC ID-token signature verification (LIT-40)
     "boto3>=1.35",             # S3-compatible hosted source-object storage (LIT-43)
     "cryptography>=44",        # authenticated encryption for hosted filesystem objects (LIT-43)
+    "pyrage>=1.4",             # age-format encryption of the nightly backups (runbook step 4)
 ]
 
 [project.optional-dependencies]
