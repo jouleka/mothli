@@ -1,8 +1,8 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
-**Status:** Proposed (2026-11-20). Step 1 is built (see below); nothing else is. The owner's
-decisions in "What the owner decided" are settled; the numbers and the choices in "Open points for
-the owner" are his to make.
+**Status:** Proposed (2026-11-20). Steps 1 and 2 are built (see below); nothing else is. The
+owner's decisions in "What the owner decided" are settled; the numbers and the choices in "Open
+points for the owner" are his to make, and point 7 is decided (23 November 2026).
 
 **Step 1 built (2026-11-20).** Migration `0037_reader_plans.sql`: `reader_plans` (`owner_id`,
 `free_started_at`, `updated_at`; row-level security forced; the tenant role holds `SELECT` only),
@@ -30,6 +30,35 @@ far" (step 5), background work by state (step 6), "your plan.json" in the copy o
 7; `reader_plans` is listed as left out of the copy until then), and open point 4 (the platform's
 day in the free weeks).
 
+**Step 2 built (2026-11-23).** Migration `0038_reader_gifts.sql`: `reader_plans.gift_until` (a
+`DATE`, NULL for none, `9999-12-31` for "for good"; a gift lasts to the end of its UTC day);
+`set_gift(reader, until)`, a security definer that only the operator role may execute (it makes the
+reader's row if they have none, and with NULL ends the gift; it answers whether the account
+exists); and `reader_plan_state` made again with three more columns, `paid_by` (`gift` while a
+gift lasts; Paddle's plans come later), `gift_until`, and `free_spent_usd` (the reader's own chat
+since their free weeks began, for the operator's look). A live gift answers `paying`; a passed one
+leaves the reader `new`, `free` or `ended` as they would be. The operator role gains `SELECT` on
+`reader_plans` and `EXECUTE` on the two functions (`backend/scripts/hosted_roles.py`), and the
+deployment's check now verifies its functions as it does the tenant's. The command
+`python -m app.hosted.plans` (`gift ID [--until YYYY-MM-DD]`, `gift ID --end`, `show ID`) runs in
+the `tools` container; `show` prints the state, the dates and that spend as one line of JSON,
+nothing else. The spend check needed no new code: `paying` is not `free`, so a gifted reader is held
+by the reader's day and month caps with today's lines, or by their own `owner_limits` caps where set,
+and never by the free ceiling. A gifted reader's first question still stamps their free weeks, once,
+so they cannot have them after the gift ends. Choices made in building it:
+
+- **`set_gift` takes a date, not a time**, as section 8 says ("a far date"). `--until 2027-06-30`
+  is Mothli on the house through the end of that UTC day.
+- **`show` reads `HOSTED_FREE_DAYS` and `HOSTED_FREE_USD` from its own environment** (the app's
+  defaults when they are absent), because the `tools` container is given no `deploy/app.env`. If
+  the owner ever changes either in `app.env`, he passes the same with `-e` (the runbook says so).
+  It affects only the state `show` prints for a reader without a gift.
+- **The Paddle messages' migration moves to the next free number** (`0039_paddle_events.sql` in
+  step 3), since 0038 is the gifts'.
+- **A paying reader's hidden guards are the owner's numbers**, decided with this step (section 4):
+  `HOSTED_READER_USD_PER_DAY` 1.00 and `HOSTED_READER_USD_PER_MONTH` 4.00 by default. Without this,
+  a gifted reader, the owner's own account included, would rest at about the sixth question a day.
+
 File and line references are to `main` at 2475b6f (PR #136). Nothing in this record was run against a
 database, a server, a model or Paddle. Every claim about the code comes from reading the lines cited
 next to it. Every claim about Paddle comes from Paddle's own pages, read on 20 November 2026, linked
@@ -47,7 +76,8 @@ next to the claim. No code, test, migration or setting changes with this record.
 4. **The free weeks have one hidden ceiling, in dollars of real chat spend: $2.10** (about 100
    replies). No "resting until tomorrow" stop during the free weeks.
 5. **A paying reader has two hidden guards**: a day guard that shows today's resting line, and a
-   month ceiling. Proposed: $0.60 a day and $4.00 a month. No number is ever shown.
+   month ceiling. Decided by the owner on 23 November 2026: $1.00 a day and $4.00 a month, and
+   $6.30 for a subscriber's first paid month only (section 4). No number is ever shown.
 6. **No counter, anywhere, ever, and never the word "unlimited".** The only words about the free
    weeks are a friendly hello at the start and one gentle note in the last two days.
 7. **A reader whose free weeks are over keeps everything.** Conversations, their own notes and what
@@ -225,15 +255,27 @@ one does (section 11).
 
 ### 4. The paid allowance
 
-**No number shown, ever.** Two hidden guards, reusing the existing settings and lines:
+**No number shown, ever.** Two hidden guards, reusing the existing settings and lines. **Decided by
+the owner on 23 November 2026**: about 47 replies a day, about 190 a month, and about 300 in a
+reader's first paid month only; at 2.1 cents a reply, $1.00 a day, $4.00 a month and $6.30 for the
+first paid month.
 
-- **A day guard**: `HOSTED_READER_USD_PER_DAY`, proposed $0.60 (about 28 replies). Past it, the reader
-  sees today's line, unchanged: "We’ve talked a lot today, so I’m resting until tomorrow. Your book and
-  your place are right here." (`spend.py:212-213`).
-- **A month ceiling**: `HOSTED_READER_USD_PER_MONTH`, proposed $4.00 (about 190 replies). Past it, the
-  reader sees today's month line, unchanged: "We’ve talked our way through this month, so I’ll be back at
-  the start of the next. Your book and your place are right here." (`spend.py:214-215`). No number, no
-  date of a reset counter; "the start of the next" is the 1st of the UTC month, as the code counts.
+- **A day guard**: `HOSTED_READER_USD_PER_DAY`, **$1.00** (about 47 replies; proposed $0.60, decided
+  $1.00). Past it, the reader sees today's line, unchanged: "We’ve talked a lot today, so I’m resting
+  until tomorrow. Your book and your place are right here." (`spend.py:212-213`).
+- **A month ceiling**: `HOSTED_READER_USD_PER_MONTH`, **$4.00** (about 190 replies; decided as
+  proposed). Past it, the reader sees today's month line, unchanged: "We’ve talked our way through
+  this month, so I’ll be back at the start of the next. Your book and your place are right here."
+  (`spend.py:214-215`). No number, no date of a reset counter; "the start of the next" is the 1st of
+  the UTC month, as the code counts.
+- **The first paid month**: **$6.30** (about 300 replies) in place of the $4.00 month, once per
+  subscriber, counted from when their first paid plan starts. Decided, **not built in step 2**: it
+  needs to know when a Paddle plan started, so it belongs to step 3. A gift has no first month: a
+  gifted reader has $1.00 a day and $4.00 a month.
+
+The two defaults are built (step 2): `HOSTED_READER_USD_PER_DAY` 1.00 and
+`HOSTED_READER_USD_PER_MONTH` 4.00 in `backend/app/config.py`, `SpendLimits` and
+`deploy/app.env.example`. The free weeks are unchanged: $2.10, no day stop.
 
 Once the gate (step 5) is in, these two settings apply only to paying readers: readers in the free
 weeks have the free ceiling instead, and New and Ended readers cannot start a reply. The names stay,
@@ -252,8 +294,11 @@ see the warning below.
 | $5.00 | 238 replies | $7.33 − 5.42 = **$1.91 (26%)** | $5.18 − 5.42 = **−$0.24 (a loss)** |
 
 "Full use" is the worst case: a reader who talks to the ceiling every month. Most will use far less. A
-day guard of $0.60 means the month ceiling can only be reached by talking a lot on at least seven
-days. Recommended: $0.60 a day and $4.00 a month, then tune both with real use.
+day guard of $1.00 means the month ceiling can only be reached by talking a lot on at least four
+days. Decided (23 November 2026): $1.00 a day and $4.00 a month, as the table's middle row, then tune
+both with real use. The first paid month's $6.30 is once per subscriber: at full use that month leaves
+$7.33 − 6.30 − 0.42 = **$0.61 (8%)** of a monthly plan, and a yearly subscriber's first month is
+carried by the rest of their year.
 
 **A warning about story memory, from ADR 0044, not changed here.** A paying reader who imports novels
 nobody else has is the first to build their story memory: about $4 to $5.40 a novel. The existing
@@ -563,8 +608,9 @@ The owner's own account and test accounts are **Paying without Paddle**: `reader
 - `... show <account id>` prints the state, the dates and the spend since the free weeks began, and
   nothing else (no book, no words).
 - A gift is never visible to other readers. The account sheet says "Mothli is on the house for you."
-- Gifted readers have the paying readers' hidden guards. The owner can lift his own with the existing
-  `owner_limits` override (`limits.py`).
+- Gifted readers have the paying readers' hidden guards: $1.00 a day and $4.00 a month, with no
+  first-month ceiling (section 4). The owner can lift his own with the existing `owner_limits`
+  override (`limits.py`).
 
 ### 9. Spoiler protection: nothing here removes or weakens a layer
 
@@ -639,14 +685,20 @@ test suite (its messages are made and signed in the tests).
    only; gifted readers are Paying in `reader_plan_state`. Tests: the command sets and ends a gift; the
    tenant role cannot call `set_gift`; a gifted reader has the paying guards. **Reader sees:** nothing;
    the owner and testers are never stopped by the free ceiling.
-3. **Paddle's messages.** Migration `0038_paddle_events.sql`: `paddle_events` (event id, type, time,
+3. **Paddle's messages.** Migration `0039_paddle_events.sql` (numbered 0038 when this record was
+   written; 0038 went to the gifts of step 2): `paddle_events` (event id, type, time,
    account, outcome; no payload kept); the `billing` role in `hosted_roles.py` and `grants.py`;
    `POST /api/billing/paddle` (signature, time window, duplicates, order, matching). Settings
    `PADDLE_ENVIRONMENT` and `PADDLE_WEBHOOK_SECRET`. Tests first, with messages signed in the test: a bad
    or missing signature writes nothing; an old timestamp is refused; a repeat is ignored; an older message
    after a newer one changes nothing; `active`, `past_due`, scheduled cancel, `canceled`, `paused` give the
    states of section 1; an unknown account is recorded and ignored; the billing role cannot read any other
-   table. **Reader sees:** nothing yet.
+   table. **And the first paid month** (section 4, decided 23 November 2026): the first time a
+   Paddle plan makes a reader paying is kept, once per account and never moved, and for the month
+   that follows the reader's month is $6.30 in place of `HOSTED_READER_USD_PER_MONTH` (a setting,
+   `HOSTED_FIRST_PAID_MONTH_USD`); the day stays $1.00, and a gift never gets it. Tests: a first plan
+   gets the larger month and a second plan after a gap does not; a gifted reader does not; the day
+   line and the month line are today's. **Reader sees:** nothing yet.
 4. **Subscribe, cancel, payment details.** `POST /api/billing/checkout`, `/cancel`, `/keep`, `/portal`
    (signed in, CSRF), through the billing role and Paddle's API with `PADDLE_API_KEY`; the plan sheet and
    the account sheet's part (section 6); Paddle's script and window allowed in the three security
@@ -722,9 +774,11 @@ Each is a question with choices; the recommendation is first.
    (b) Build for New readers without a bound (warmest; up to about $5 a novel nobody else has, for
    readers who may never try Mothli). (c) No warm-up (cheapest; every first session starts cold).
    Recommended: (a).
-7. **The ceilings in numbers.** Free: $2.10 (about 100 replies). Paying: $0.60 a day and $4.00 a month
-   (section 4's table; $3.00 is safer for the yearly plan, $5.00 loses money on a heavy yearly reader).
-   Recommended: $2.10, $0.60, $4.00.
+7. **The ceilings in numbers.** **Decided by the owner on 23 November 2026**: paying, $1.00 a day
+   (about 47 replies) and $4.00 a month (about 190), and $6.30 (about 300) for a subscriber's first
+   paid month only; free, $2.10 (about 100 replies) as before. (Proposed were $0.60 a day and $4.00 a
+   month; section 4's table: $3.00 is safer for the yearly plan, $5.00 loses money on a heavy yearly
+   reader.)
 8. **Mothli's own refund policy** (Paddle needs a page). (a) "Ask within 14 days of a payment and we’ll
    refund it, no questions asked." (b) Paddle's buyer terms only (refunds where the law requires them).
    Recommended: (a); simple, kind and cheap at these prices.
@@ -745,7 +799,7 @@ Each is a question with choices; the recommendation is first.
   question.
 - A sign-up costs at most about $2.10 in chat, plus a bounded warm-up; a reader who never pays costs
   nothing after their free weeks.
-- A new database table and role, two migrations, one Paddle message route, four small billing routes, one
+- A new database table and role, three migrations (the gifts took one of their own), one Paddle message route, four small billing routes, one
   operator command, and three public pages.
 - The owner holds three new secrets and two price ids. No secret is in the repository.
 - No layer of spoiler protection changes.

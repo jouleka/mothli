@@ -459,9 +459,9 @@ def test_the_free_weeks_change_nothing_a_reply_reads_searches_or_sends(
         make_app, readers, database, monkeypatch):
     """Spoiler safety (ADR 0045 section 9): the plan check only admits or refuses a model call.
     The break it catches: anything a reply reads, searches or sends that differs because the
-    reader is in their free weeks. The same reader, book, place and question, in the free weeks
-    and on day 15: the passages retrieved, the writer's prompt and system, and everything Jev is
-    given are identical."""
+    reader is in their free weeks, or gifted (ADR 0045 step 2). The same reader, book, place and
+    question, in the free weeks, on day 15, and with a gift: the passages retrieved, the writer's
+    prompt and system, and everything Jev is given are identical."""
     a, book, app = opened(make_app, readers)
     a.read(book, 2, 1, 5)
     retrieved = []
@@ -488,6 +488,11 @@ def test_the_free_weeks_change_nothing_a_reply_reads_searches_or_sends(
     move_start(database, a.owner, "15 days")
     assert state(database, a.owner) == ("ended", "time")
     after_them = asked()
+    with psycopg.connect(database) as conn:
+        conn.execute("SELECT set_gift(%s, '9999-12-31'::date)", (a.owner,))
+    assert state(database, a.owner) == ("paying", None)
+    gifted = asked()
     assert in_the_free_weeks[0] and in_the_free_weeks[2] and in_the_free_weeks[3]
     assert after_them == in_the_free_weeks
+    assert gifted == in_the_free_weeks
     assert "Corvus moved lamp 6" not in "".join(in_the_free_weeks[2])

@@ -997,8 +997,8 @@ def test_a_new_database_has_one_notes_account_that_never_signs_in(database: str)
         assert conn.execute("SELECT count(*) FROM books WHERE owner_id = %s",
                             (account,)).fetchone()[0] == 0
         # 0035 adds the later-name check, 0036 the background budget, 0037 the start of the free
-        # weeks (their own tests below).
-        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE}
+        # weeks, 0038 the gift (their own tests below).
+        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
     apply_migrations(database)
     with psycopg.connect(database) as conn:
         assert conn.execute("SELECT account_id FROM notes_account").fetchall() == [(account,)]
@@ -1067,7 +1067,7 @@ def test_one_build_per_chapter_marks_the_editions_keeps_one_a_file_and_adds_one_
             "SELECT proowner::regrole::text, proacl::text, prosecdef, provolatile, proconfig, "
             "pg_get_function_identity_arguments(oid), pg_get_function_result(oid) "
             "FROM pg_proc WHERE oid = %s::regprocedure", (_NEW_DOOR,)).fetchone() == record
-        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE}
+        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
         before, after = _EDITION_MARK
         assert body.count(before) == 1
         assert conn.execute("SELECT prosrc FROM pg_proc WHERE oid = %s::regprocedure",
@@ -1218,7 +1218,7 @@ def test_the_later_name_words_start_empty_change_nothing_else_and_only_the_owner
             "read_any text[], read_proper text[], read_also text[], read_not text[]")
         assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
                                 (_LATER_NAMES,)).fetchone()[0]
-        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE}
+        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
 
 
 # ---- 0036: background work is Mothli's, not the reader's allowance (ADR 0041 section 6) ---------
@@ -1273,7 +1273,7 @@ def test_background_spend_is_marked_by_its_names_and_nothing_else_changes(
             True, ["search_path=pg_catalog, public, pg_temp"], "day_cap numeric", "boolean")
         assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
                                 (_BACKGROUND_OPEN,)).fetchone()[0]
-        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE}
+        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
         # Today's background spend is $0.05 in the ledger and $0.05 still open.
         assert conn.execute("SELECT companion_background_open(0.11)").fetchone()[0] is True
         assert conn.execute("SELECT companion_background_open(0.10)").fetchone()[0] is False
@@ -1331,7 +1331,65 @@ def test_reader_plans_start_empty_change_nothing_else_and_only_the_start_writes(
                                     (function,)).fetchone()[0]
         assert conn.execute("SELECT count(*) FROM pg_proc WHERE proname = 'start_free_weeks'"
                             ).fetchone()[0] == 1
-        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE}
+        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
+
+
+# ---- 0038: gifts (ADR 0045 step 2) ------------------------------------------------------------------
+
+READER_GIFTS = 38
+_SET_GIFT = "set_gift(uuid,date)"
+# The SECURITY DEFINER functions migrations after the door add: 0035 the later-name check, 0036
+# the background budget, 0037 the start of the free weeks, 0038 the gift.
+_LATER_DEFINERS = {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE, _SET_GIFT}
+
+
+def test_gifts_start_empty_change_no_plan_and_only_set_gift_writes_them(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0038 with a reader in their free weeks and
+    one who never asked: a gift given to anyone by the migration, a start moved or a state
+    changed; set_gift callable by PUBLIC, not a security definer, with another search path or
+    other arguments; or the state made a security definer (it would read every reader's spend)
+    or left callable by PUBLIC when it was made again."""
+    _apply_before(database, READER_GIFTS, monkeypatch)
+    started, never = uuid.uuid4(), uuid.uuid4()
+    with psycopg.connect(database) as conn:
+        for reader in (started, never):
+            conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (reader,))
+        conn.execute("INSERT INTO reader_plans (owner_id, free_started_at)"
+                     " VALUES (%s, now() - interval '3 days')", (started,))
+        plans = conn.execute("SELECT to_jsonb(plan) FROM reader_plans AS plan").fetchall()
+        states = [conn.execute("SELECT state, why, free_started_at, free_ends_at"
+                               " FROM reader_plan_state(%s, 14, 2.10)", (reader,)).fetchone()
+                  for reader in (started, never)]
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT to_jsonb(plan) - 'gift_until' FROM reader_plans AS plan"
+                            ).fetchall() == plans
+        assert conn.execute("SELECT count(*) FROM reader_plans WHERE gift_until IS NOT NULL"
+                            ).fetchone()[0] == 0
+        assert [conn.execute("SELECT state, why, free_started_at, free_ends_at"
+                             " FROM reader_plan_state(%s, 14, 2.10)", (reader,)).fetchone()
+                for reader in (started, never)] == states
+        assert conn.execute("SELECT paid_by, gift_until, free_spent_usd FROM reader_plan_state"
+                            "(%s, 14, 2.10)", (never,)).fetchone() == (None, None, 0)
+        assert conn.execute(
+            "SELECT prosecdef, provolatile, proconfig, pg_get_function_identity_arguments(oid),"
+            " pg_get_function_result(oid) FROM pg_proc WHERE oid = %s::regprocedure",
+            (_SET_GIFT,)).fetchone() == (
+            True, "v", ["search_path=pg_catalog, public, pg_temp"], "reader uuid, until date",
+            "boolean")
+        assert conn.execute(
+            "SELECT prosecdef, provolatile, pg_get_function_identity_arguments(oid)"
+            " FROM pg_proc WHERE oid = %s::regprocedure", (_PLAN_STATE,)).fetchone() == (
+            False, "s", "reader uuid, free_days integer, free_usd numeric")
+        for function in (_SET_GIFT, _PLAN_STATE):
+            assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
+                                    (function,)).fetchone()[0]
+        assert conn.execute("SELECT count(*) FROM pg_proc WHERE proname IN"
+                            " ('set_gift', 'reader_plan_state')").fetchone()[0] == 2
+        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
 
 
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:
