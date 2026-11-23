@@ -9,6 +9,9 @@ import { PENDING_DELETION_EVENT, SIGNED_OUT_EVENT, type OfflineSession } from ".
 import { Button } from "../ui/Button";
 import { Moth } from "../ui/Moth";
 import { MothliMark } from "../ui/MothliMark";
+import { forgetPaymentLink, paymentLinkTransaction } from "./paddle";
+import { PaymentLink } from "./PaymentLink";
+import { PlanSheet } from "./PlanSheet";
 import { TakeACopy } from "./TakeACopy";
 import "./shelf-redesign.css";
 import "./account.css";
@@ -96,9 +99,12 @@ export function signInHref(path = `${window.location.pathname}${window.location.
   return `/api/auth/login?return_to=${encodeURIComponent(safe)}`;
 }
 
-export function SignIn({ ended = false }: { ended?: boolean }) {
+export function SignIn({ ended = false, paymentLink = null }: { ended?: boolean; paymentLink?: string | null }) {
   const [retried] = useState(recentAttempt);
   const [deleted] = useState(deletedNote);
+  // A payment link's checkout (PaymentLink.tsx): signing in comes back to it until it is paid,
+  // then to the shelf.
+  const [returnLink, setReturnLink] = useState(paymentLink);
   const [offline, setOffline] = useState(() => typeof navigator !== "undefined" && !navigator.onLine);
   useEffect(() => {
     const update = () => setOffline(!navigator.onLine);
@@ -147,9 +153,10 @@ export function SignIn({ ended = false }: { ended?: boolean }) {
                   You’re offline right now. Sign in once you’re back on the internet.
                 </p>
               )}
+              {paymentLink && <PaymentLink transaction={paymentLink} onPaid={() => setReturnLink(null)} />}
               <a
                 className="ui-button ui-button--primary ml-spread-cta ml-welcome-cta"
-                href={signInHref()}
+                href={paymentLink ? signInHref(returnLink ? `/?_ptxn=${returnLink}` : "/") : signInHref()}
                 aria-describedby="welcome-door"
                 onClick={() => {
                   noteAttempt();
@@ -283,6 +290,12 @@ export function SignInGate({ session, children }: { session?: OfflineSession | n
   const hosted = session !== undefined;
   const [ended, setEnded] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
+  // Mothli's payment-link page (`/?_ptxn=…`): read once, then taken out of the address before
+  // Paddle.js can load. Signed in: the plan sheet opens that checkout. Signed out: PaymentLink.
+  const [paymentLink, setPaymentLink] = useState(() => (hosted ? paymentLinkTransaction() : null));
+  useEffect(() => {
+    if (paymentLink) forgetPaymentLink();
+  }, [paymentLink]);
   useEffect(() => {
     if (!hosted) return;
     const signedOut = () => setEnded(true);
@@ -304,9 +317,16 @@ export function SignInGate({ session, children }: { session?: OfflineSession | n
     }
   }, [session]);
   if (!hosted) return <>{children}</>;
-  if (session === null) return <SignIn />;
+  if (session === null) return <SignIn paymentLink={paymentLink} />;
   if (ended) return <SignIn ended />;
   const eraseAfter = session.erase_after ?? pending;
   if (eraseAfter) return <PendingDeletion eraseAfter={eraseAfter} />;
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      {paymentLink && (
+        <PlanSheet transaction={paymentLink} email={session.user.email} onClose={() => setPaymentLink(null)} />
+      )}
+    </>
+  );
 }

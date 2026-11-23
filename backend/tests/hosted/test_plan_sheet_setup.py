@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from app.hosted.auth.api import SESSION_COOKIE
 from app.hosted.auth.tokens import new_token
-from tests.hosted.test_billing import KEY, LIVE_KEY, paddle_settings
+from tests.hosted.test_billing import CHECKOUT_URL, KEY, LIVE_KEY, paddle_settings
 from tests.hosted.test_companion_stream_settings import _SignedIn
 from tests.hosted.test_paddle_messages_postgres import MONTHLY, SECRET, YEARLY, YEARLY_NEW
 from tests.hosted.test_platform_pays import _Tenant
@@ -27,25 +27,25 @@ LIVE_TOKEN = "_".join(("live", "clientstandin" * 2))
 BILLING_DSN = "postgresql://unused.invalid/b"
 PADDLE = dict(paddle_webhook_secret=SECRET, paddle_price_monthly=MONTHLY,
               paddle_price_yearly=f"{YEARLY_NEW},{YEARLY}", hosted_billing_dsn=BILLING_DSN)
+# Paddle's messages and its API: the key comes with Mothli's own payment-link page.
+KEYED = {**PADDLE, "paddle_api_key": KEY, "paddle_checkout_url": CHECKOUT_URL}
 
 
 def test_the_client_token_is_checked_loosely_against_its_environment() -> None:
     """The break it catches: a real token refused over a character a guessed pattern left out;
     a sandbox token used with live Paddle or the reverse; a placeholder or a token with a space
     accepted; a token set with no checkout route to use it. A refusal names the setting."""
-    assert paddle_settings(**PADDLE, paddle_api_key=KEY).paddle_client_token == ""
-    assert paddle_settings(**PADDLE, paddle_api_key=KEY,
-                           paddle_client_token=TOKEN).paddle_client_token == TOKEN
-    live = {**PADDLE, "paddle_environment": "production", "paddle_api_key": LIVE_KEY}
+    assert paddle_settings(**KEYED).paddle_client_token == ""
+    assert paddle_settings(**KEYED, paddle_client_token=TOKEN).paddle_client_token == TOKEN
+    live = {**KEYED, "paddle_environment": "production", "paddle_api_key": LIVE_KEY}
     assert paddle_settings(**live, paddle_client_token=LIVE_TOKEN).paddle_client_token \
         == LIVE_TOKEN
-    for values in ({**PADDLE, "paddle_api_key": KEY, "paddle_client_token": LIVE_TOKEN},
+    for values in ({**KEYED, "paddle_client_token": LIVE_TOKEN},
                    {**live, "paddle_client_token": TOKEN},
-                   {**PADDLE, "paddle_api_key": KEY, "paddle_client_token": "OWNER_MUST_FILL_IN"},
-                   {**PADDLE, "paddle_api_key": KEY,
-                    "paddle_client_token": TOKEN.replace("client", "client ", 1)},
-                   {**PADDLE, "paddle_api_key": KEY, "paddle_client_token": TOKEN + "\n"},
-                   {**PADDLE, "paddle_api_key": KEY, "paddle_client_token": "test_"},
+                   {**KEYED, "paddle_client_token": "OWNER_MUST_FILL_IN"},
+                   {**KEYED, "paddle_client_token": TOKEN.replace("client", "client ", 1)},
+                   {**KEYED, "paddle_client_token": TOKEN + "\n"},
+                   {**KEYED, "paddle_client_token": "test_"},
                    {**PADDLE, "paddle_client_token": TOKEN}):
         with pytest.raises(ValidationError) as refused:
             paddle_settings(**values)
@@ -59,15 +59,13 @@ def test_the_checkout_setup_is_the_token_the_environment_and_each_plans_current_
     checkout route, or no client token)."""
     from app.hosted.subscribe import checkout_setup
 
-    assert checkout_setup(paddle_settings(**PADDLE, paddle_api_key=KEY,
-                                          paddle_client_token=TOKEN)) == {
+    assert checkout_setup(paddle_settings(**KEYED, paddle_client_token=TOKEN)) == {
         "environment": "sandbox", "client_token": TOKEN,
         "prices": {"monthly": MONTHLY, "yearly": YEARLY_NEW}}
-    only_yearly = {**PADDLE, "paddle_price_monthly": ""}
-    assert checkout_setup(paddle_settings(**only_yearly, paddle_api_key=KEY,
-                                          paddle_client_token=TOKEN))["prices"] == {
-        "monthly": None, "yearly": YEARLY_NEW}
-    assert checkout_setup(paddle_settings(**PADDLE, paddle_api_key=KEY)) is None
+    only_yearly = {**KEYED, "paddle_price_monthly": ""}
+    assert checkout_setup(paddle_settings(**only_yearly, paddle_client_token=TOKEN))["prices"] \
+        == {"monthly": None, "yearly": YEARLY_NEW}
+    assert checkout_setup(paddle_settings(**KEYED)) is None
     assert checkout_setup(paddle_settings(**PADDLE)) is None
     assert checkout_setup(paddle_settings()) is None
 
@@ -103,8 +101,7 @@ def test_the_plan_carries_what_the_browser_needs_and_no_secret(tmp_path, monkeyp
     """The break it catches: the API key, the webhook secret or the billing address reaching the
     browser in the plan; the setup missing where checkout works; the sheet told it may cancel,
     keep or manage where those routes do not exist."""
-    answer, text = plan_answer(tmp_path, monkeypatch, **PADDLE, paddle_api_key=KEY,
-                               paddle_client_token=TOKEN)
+    answer, text = plan_answer(tmp_path, monkeypatch, **KEYED, paddle_client_token=TOKEN)
     assert answer == {**ROW, "manage": True, "checkout": {
         "environment": "sandbox", "client_token": TOKEN,
         "prices": {"monthly": MONTHLY, "yearly": YEARLY_NEW}}}
@@ -112,7 +109,7 @@ def test_the_plan_carries_what_the_browser_needs_and_no_secret(tmp_path, monkeyp
         assert secret not in text, secret
 
 
-@pytest.mark.parametrize("values", [{}, PADDLE, {**PADDLE, "paddle_api_key": KEY}],
+@pytest.mark.parametrize("values", [{}, PADDLE, KEYED],
                          ids=["no-paddle", "messages-only", "no-client-token"])
 def test_a_server_without_checkout_says_so_and_holds_no_secret(values, tmp_path,
                                                                monkeypatch) -> None:
@@ -122,6 +119,41 @@ def test_a_server_without_checkout_says_so_and_holds_no_secret(values, tmp_path,
     assert answer["checkout"] is None
     assert answer["manage"] is ("paddle_api_key" in values)
     assert KEY not in text and SECRET not in text and "unused.invalid" not in text
+
+
+def payment_link_answer(tmp_path, **values):
+    """``GET /api/billing/payment-link`` through the hosted app, signed out (no session)."""
+    from app.main import create_app
+    from tests.hosted.test_companion_stream_settings import hosted_settings
+
+    app = create_app(hosted_settings(tmp_path, **values), auth_repository=_SignedIn(),
+                     tenant_repository=_Readers(), oidc_client=object())
+    with TestClient(app, base_url="https://reader.example") as client:
+        return client.get("/api/billing/payment-link")
+
+
+def test_the_payment_link_page_reads_the_token_and_environment_and_nothing_else(
+        tmp_path) -> None:
+    """Mothli's payment-link page, which a visitor arriving from Paddle's email may open signed
+    out. The break it catches: the read needing a session (the visitor could not pay); answering
+    more than the two values Paddle.js needs (a price, the address, the API key, the webhook
+    secret, the billing role's address); cached; or answering where no checkout opens."""
+    response = payment_link_answer(tmp_path, **KEYED, paddle_client_token=TOKEN)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"environment": "sandbox", "client_token": TOKEN}
+    assert "no-store" in response.headers["cache-control"]
+    for secret in (KEY, SECRET, BILLING_DSN, "apikey", "ntfset", "unused.invalid", MONTHLY,
+                   YEARLY_NEW, CHECKOUT_URL, "reader.example"):
+        assert secret not in response.text, secret
+    live = payment_link_answer(tmp_path, **{**KEYED, "paddle_environment": "production",
+                                            "paddle_api_key": LIVE_KEY},
+                               paddle_client_token=LIVE_TOKEN)
+    assert live.json() == {"environment": "production", "client_token": LIVE_TOKEN}
+    assert LIVE_KEY not in live.text
+    for values in ({}, PADDLE, KEYED):
+        refused = payment_link_answer(tmp_path, **values)
+        assert refused.status_code == 404, values
+        assert KEY not in refused.text and SECRET not in refused.text
 
 
 # ---- the browser's rules for outside scripts ------------------------------------------------------

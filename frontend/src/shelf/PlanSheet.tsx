@@ -9,7 +9,8 @@
  * Opened from the account sheet, and from anywhere else that renders it: `<PlanSheet email=…
  * onClose=… />` (it reads the plan itself unless given one). A modal sheet like "What Mothli
  * remembers" (fl-scrim / fl-sheet), with the same focus handling; the opener puts focus back.
- * Paddle.js is fetched only when this sheet opens (./paddle.ts). */
+ * Paddle.js is fetched only when this sheet opens (./paddle.ts). Given a `transaction` (Paddle's
+ * payment link, `/?_ptxn=…`, read by SignIn.tsx's gate), it opens that checkout at once instead. */
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, ApiError, type Plan } from "../api";
@@ -24,6 +25,7 @@ import "./account.css";
 export const PLAN_TITLE = "Keep talking with Mothli";
 export const PLAN_LINES = {
   loading: "Getting the prices for you…",
+  resuming: "One moment, I’m opening your checkout…",
   notOffered: "The plan isn’t on offer here just yet. Your books stay free either way.",
   already: "Good news: you’re already on the plan! There’s nothing more to do.",
   unreachable:
@@ -75,6 +77,7 @@ type Phase =
 export function PlanSheet({
   email,
   plan: given,
+  transaction,
   onClose,
   onJoined,
 }: {
@@ -82,10 +85,14 @@ export function PlanSheet({
   email?: string | null;
   /** The plan, when the opener already has it; otherwise the sheet asks. */
   plan?: Plan;
+  /** A checkout the reader started earlier, from Paddle's payment link (`_ptxn`): opened at once,
+   * unless they are on the plan already, with the same wait after it. */
+  transaction?: string;
   onClose: () => void;
   onJoined?: (plan: Plan) => void;
 }) {
   const [phase, setPhase] = useState<Phase>("loading");
+  const [resume, setResume] = useState(transaction ?? null);
   const [plan, setPlan] = useState<Plan | null>(given ?? null);
   const [prices, setPrices] = useState<PlanPrices | null>(null);
   const [starting, setStarting] = useState<"monthly" | "yearly" | null>(null);
@@ -151,6 +158,15 @@ export function PlanSheet({
       if (!setup) return setPhase("notOffered");
       try {
         const paddle = await loadPaddle(setup);
+        if (stale) return;
+        if (resume) {
+          // The checkout from the payment link, once; the prices only for afterwards.
+          setResume(null);
+          paddleRef.current = paddle;
+          openCheckout(paddle, resume);
+          planPrices(paddle, setup.prices).then((found) => { if (!stale) setPrices(found); }, () => {});
+          return;
+        }
         const found = await planPrices(paddle, setup.prices);
         if (stale) return;
         paddleRef.current = paddle;
@@ -234,22 +250,25 @@ export function PlanSheet({
       else setProblem(reason instanceof ApiError && reason.code && CHECKOUT_REFUSED[reason.code] || CHECKOUT_FAILED);
       return;
     }
+    openCheckout(paddleRef.current, transaction);
+    setStarting(null);
+  };
+
+  function openCheckout(paddle: PaddleLike, transaction: string) {
     try {
       setPhase("paying");
-      paddleRef.current.Checkout.open({
+      paddle.Checkout.open({
         transactionId: transaction,
         ...(email ? { customer: { email } } : {}),
         settings: { displayMode: "overlay", locale: "en" },
       });
     } catch {
       setPhase("unreachable");
-    } finally {
-      setStarting(null);
     }
-  };
+  }
 
   const message =
-    phase === "loading" ? PLAN_LINES.loading
+    phase === "loading" ? (resume ? PLAN_LINES.resuming : PLAN_LINES.loading)
     : phase === "notOffered" ? PLAN_LINES.notOffered
     : phase === "already" ? PLAN_LINES.already
     : phase === "unreachable" ? PLAN_LINES.unreachable

@@ -381,11 +381,13 @@ def test_the_billing_role_reaches_the_web_process_and_paddle_stays_off_in_the_te
     template = (DEPLOY / "app.env.example").read_text(encoding="utf-8")
     for setting in ("PADDLE_ENVIRONMENT", "PADDLE_WEBHOOK_SECRET", "PADDLE_PRICE_MONTHLY",
                     "PADDLE_PRICE_YEARLY", "PADDLE_WEBHOOK_TOLERANCE_SECONDS", "PADDLE_API_KEY",
-                    "PADDLE_CLIENT_TOKEN"):
+                    "PADDLE_CLIENT_TOKEN", "PADDLE_CHECKOUT_URL"):
         assert f"\n# {setting}=" in template, setting
         assert f"\n{setting}=" not in template, setting
     assert "\n# PADDLE_API_KEY=OWNER_MUST_FILL_IN\n" in template
     assert "\n# PADDLE_CLIENT_TOKEN=OWNER_MUST_FILL_IN\n" in template
+    assert "\n# PADDLE_CHECKOUT_URL=https://OWNER_MUST_FILL_IN/\n" in template
+    assert template_settings(monkeypatch, tmp_path).paddle_checkout_url == ""
     assert template_settings(monkeypatch, tmp_path).paddle_client_token == ""
     assert template_settings(monkeypatch, tmp_path).paddle_webhook_secret is None
     assert template_settings(monkeypatch, tmp_path).paddle_api_key is None
