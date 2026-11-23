@@ -8,7 +8,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { axeAA } from "../test-a11y";
 import { SignIn } from "../shelf/SignIn";
-import { PADDLE_LINKS, SHARED_NOTES } from "./legal";
+import { CHAT_NOT_OPEN, PADDLE_LINKS, SHARED_NOTES } from "./legal";
 import { PAGE_PATHS, publicPageAt, routedPublicPage, type PublicPageName } from "./pages";
 import { NOT_OPEN, PublicPage, SITE_FAILED, TITLES, forgetSite } from "./PublicPage";
 import type { Site } from "./site";
@@ -66,7 +66,7 @@ describe("where each page is", () => {
 
   // Catches: a footer link missing, or one leading to an address that is not its page.
   test("every page is reached from the footer, on every page", async () => {
-    serve({ operator: OPERATOR, plan: null });
+    serve({ operator: OPERATOR, plan: null, writer: null });
     for (const page of PAGES) {
       await opened(page);
       const footer = screen.getByRole("navigation", { name: "About Mothli" });
@@ -83,7 +83,7 @@ describe("where each page is", () => {
   // Catches (Paddle: contact details reachable from the home page): contact more than one click
   // from the signed-out front page, or the contact page without the address.
   test("contact is one click from the front page, and its page gives the address", async () => {
-    serve({ operator: OPERATOR, plan: PLAN });
+    serve({ operator: OPERATOR, plan: PLAN, writer: null });
     render(<SignIn />);
     const footer = await screen.findByRole("navigation", { name: "About Mothli" });
     const contact = within(footer).getByRole("link", { name: "Contact" });
@@ -101,7 +101,7 @@ describe("the pages' words", () => {
   // Catches: the terms without the seller's legal name (Paddle's review), a page with the
   // operator's details missing, or a page failing accessibility.
   test("each page names who runs Mothli and passes the accessibility checks", async () => {
-    serve({ operator: OPERATOR, plan: null });
+    serve({ operator: OPERATOR, plan: null, writer: null });
     for (const page of PAGES) {
       const { container } = await opened(page);
       expect(container.textContent).toContain("Example Reading Ltd");
@@ -115,7 +115,7 @@ describe("the pages' words", () => {
   // Catches (the owner's rules): a counter, "unlimited", "14 days", a money-back promise, a
   // guarantee or a countdown on any public page or the front page.
   test("no page says a number of questions, unlimited, a refund promise or a countdown", async () => {
-    serve({ operator: OPERATOR, plan: PLAN });
+    serve({ operator: OPERATOR, plan: PLAN, writer: null });
     for (const page of PAGES) {
       const { container } = await opened(page);
       expect(container.textContent).not.toMatch(NEVER);
@@ -130,7 +130,7 @@ describe("the pages' words", () => {
   // Catches (the owner's decision on refunds): a refund page that promises anything of Mothli's
   // own instead of pointing to Paddle's terms, or forgets cancelling and the free weeks.
   test("the refunds page is Paddle's terms, cancelling any time and the free weeks", async () => {
-    serve({ operator: OPERATOR, plan: null });
+    serve({ operator: OPERATOR, plan: null, writer: null });
     const { container } = await opened("refunds");
     const text = container.textContent ?? "";
     expect(text).toContain("refunds are handled by Paddle, under Paddle’s own terms");
@@ -146,7 +146,7 @@ describe("the pages' words", () => {
   // seller, AI answers can be wrong, the shared notes sentence, the providers by kind, the 30
   // days, the backups and Paddle's own records after erasure, cookies only for signing in.
   test("the terms and the privacy page say what Mothli really does", async () => {
-    serve({ operator: OPERATOR, plan: null });
+    serve({ operator: OPERATOR, plan: null, writer: "OpenAI" });
     let text = (await opened("terms")).container.textContent ?? "";
     for (const said of [
       "Mothli is run by Example Reading Ltd, based in Ireland",
@@ -154,20 +154,43 @@ describe("the pages' words", () => {
       "They can be wrong",
       "Only upload books you have the right to use",
       "governed by the law of Ireland",
+      // Step 7: asking to delete stops the plan renewing by itself; never "cancel first".
+      "If you’re on the plan, asking to delete your account stops it from renewing, so you won’t be charged again. You keep Mothli until the end of the month or year you have paid for, or until your account is erased, whichever comes first. If you come back within the 30 days, your plan still ends unless you choose “Keep my plan”.",
       SHARED_NOTES,
     ]) expect(text).toContain(said);
+    expect(text).not.toMatch(/cancel it[^.]*before you delete/i);
     cleanup();
     text = (await opened("privacy")).container.textContent ?? "";
     for (const said of [
-      "TypeSafe", "OpenAI", "Cloudflare", "The sign-in service", "Paddle",
+      "OpenAI, whose AI model writes Mothli’s replies and notes, and TypeSafe",
+      "Cloudflare", "The sign-in service", "Paddle",
       "We never see or keep your card details",
       "we keep everything for 30 days",
       "for up to two weeks after that",
-      "keeps its own records of your payments, even after we erase your account",
+      "keeps its own records of your purchases and payments, even after we erase your account. We don’t ask Paddle to delete them.",
+      "deleting your account stops it from renewing",
+      "and your plan (when your free weeks began, any gift, and your plan’s status and dates)",
+      "The books themselves aren’t in it: open a book, press Notebook, and choose “Download the book”.",
       "Mothli sets three cookies, all needed for signing in",
       "no advertising, analytics or tracking cookies",
       SHARED_NOTES,
     ]) expect(text).toContain(said);
+    expect(text).not.toContain("Anthropic");
+  });
+
+  // Catches: the privacy page offering two possibilities, or naming a company the server does
+  // not send to; or naming any AI company where the chat is not open on this server.
+  test("the privacy page names the one AI company this server uses, or none", async () => {
+    serve({ operator: OPERATOR, plan: null, writer: "Anthropic" });
+    let text = (await opened("privacy")).container.textContent ?? "";
+    expect(text).toContain("Anthropic, whose AI model writes Mothli’s replies and notes, and TypeSafe");
+    expect(text).not.toContain("OpenAI");
+    cleanup();
+    forgetSite();
+    serve({ operator: OPERATOR, plan: null, writer: null });
+    text = (await opened("privacy")).container.textContent ?? "";
+    expect(text).toContain(CHAT_NOT_OPEN);
+    expect(text).not.toMatch(/OpenAI|Anthropic|TypeSafe/);
   });
 });
 
@@ -175,7 +198,7 @@ describe("the operator's details missing", () => {
   // Catches: terms published with holes (no name, no country, no address) where the server has
   // not been given them.
   test("every page says Mothli is not open for sign-ups here, and nothing else", async () => {
-    serve({ operator: null, plan: null });
+    serve({ operator: null, plan: null, writer: null });
     for (const page of PAGES) {
       const { container } = await opened(page);
       expect(screen.getByText(NOT_OPEN)).toBeTruthy();
@@ -193,7 +216,7 @@ describe("the operator's details missing", () => {
     serve("fail");
     render(<PublicPage page="terms" />);
     await screen.findByText(SITE_FAILED);
-    serve({ operator: OPERATOR, plan: null });
+    serve({ operator: OPERATOR, plan: null, writer: null });
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     await screen.findByText(/Mothli is run by Example Reading Ltd, based in Ireland/);
   });
@@ -203,7 +226,7 @@ describe("the front page", () => {
   // Catches: prices other than the catalog's, the monthly plan first, the saving or the month
   // worked out wrong or from anything but the two prices, the free weeks or the card left out.
   test("the prices are the server's, the yearly plan first as a month with its saving", async () => {
-    serve({ operator: OPERATOR, plan: PLAN });
+    serve({ operator: OPERATOR, plan: PLAN, writer: null });
     const { container } = render(<SignIn />);
     const yearly = await screen.findByText("$6.67 a month, billed yearly");
     const total = screen.getByText("$79.99 a year, 48% less than paying monthly.");
@@ -220,7 +243,7 @@ describe("the front page", () => {
   // Catches: another catalog's figures shown wrong (each figure follows the server's amounts and
   // currency; nothing is written in the app).
   test("other figures from the catalog are shown as they are", async () => {
-    serve({ operator: OPERATOR, plan: { currency: "EUR", monthly: "1000", yearly: "9000" } });
+    serve({ operator: OPERATOR, plan: { currency: "EUR", monthly: "1000", yearly: "9000" }, writer: null });
     render(<SignIn />);
     await screen.findByText("€7.50 a month, billed yearly");
     expect(screen.getByText("€90.00 a year, 25% less than paying monthly.")).toBeTruthy();
@@ -230,7 +253,7 @@ describe("the front page", () => {
   // Catches: a wrong or stale number where Paddle could not be read, or is not set up here, or
   // the server could not be reached: the plan is shown without any figure.
   test("with no prices from the server there is no figure at all", async () => {
-    for (const answer of [{ operator: OPERATOR, plan: null }, "fail", 503] as const) {
+    for (const answer of [{ operator: OPERATOR, plan: null, writer: null }, "fail", 503] as const) {
       forgetSite();
       serve(answer);
       const { container } = render(<SignIn />);
@@ -245,7 +268,7 @@ describe("the front page", () => {
   // Catches (the security policy must not widen): Paddle's script, or any script, font, image or
   // stylesheet from another site, loaded on the front page or a public page.
   test("nothing on the public pages is loaded from another site", async () => {
-    serve({ operator: OPERATOR, plan: PLAN });
+    serve({ operator: OPERATOR, plan: PLAN, writer: null });
     const { container } = render(<SignIn />);
     await screen.findByText("$12.99 a month");
     for (const page of PAGES) {

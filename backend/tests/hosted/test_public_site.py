@@ -254,7 +254,7 @@ def test_the_public_read_gives_the_operator_and_the_prices_signed_out(tmp_path) 
         assert response.json() == {
             "operator": {"legal_name": "Example Reading Ltd", "country": "Ireland",
                          "contact_email": "hello@reader.example"},
-            "plan": {"currency": "USD", "monthly": "1299", "yearly": "7999"}}
+            "plan": {"currency": "USD", "monthly": "1299", "yearly": "7999"}, "writer": None}
         assert "no-store" in response.headers["cache-control"]
         for secret in (KEY, SECRET, BILLING_DSN, "unused.invalid", "apikey", "ntfset", MONTHLY,
                        YEARLY_NEW, YEARLY, "test_", CHECKOUT_URL):
@@ -269,7 +269,7 @@ def test_without_paddle_or_without_the_operator_the_read_says_so_and_calls_nothi
     an operator published with a detail missing."""
     for values in ({}, PADDLE):
         responses, recorder = site_answer(tmp_path, **values)
-        assert responses[0].json() == {"operator": None, "plan": None}, values
+        assert responses[0].json() == {"operator": None, "plan": None, "writer": None}, values
         assert recorder.requests == []
     responses, recorder = site_answer(tmp_path, **OPERATOR)
     assert responses[0].json()["operator"]["legal_name"] == "Example Reading Ltd"
@@ -289,6 +289,35 @@ def test_paddle_unreachable_or_refusing_gives_no_figure_and_is_not_asked_again_a
             assert response.json()["plan"] is None
             assert response.json()["operator"] is not None
         assert len(recorder.requests) == 1
+
+
+# ---- the AI company the privacy page names ----------------------------------------------------
+
+def test_the_privacy_page_is_told_the_ai_company_this_server_really_uses(tmp_path) -> None:
+    """The break it catches: the privacy page offering two possibilities, or naming a company
+    the server does not send to; a key, a model or a full address in the answer; a company named
+    where the chat is not open here. Chosen by the same rule as the model client: an Anthropic
+    key wins, an OpenAI key goes to OpenAI unless OPENAI_BASE_URL points elsewhere."""
+    from app.hosted.site import writer
+    from tests.hosted.test_companion_stream_settings import CHAT, hosted_settings
+    from tests.hosted.test_platform_pays import KEY_CANARY
+
+    anthropic = {**CHAT, "openai_api_key": None, "anthropic_api_key": KEY_CANARY}
+    for values, named in (
+            (CHAT, "OpenAI"),
+            ({**CHAT, "openai_base_url": "https://api.openai.com/v1/"}, "OpenAI"),
+            (anthropic, "Anthropic"),
+            ({**CHAT, "anthropic_api_key": KEY_CANARY}, "Anthropic"),
+            ({**CHAT, "openai_base_url": "https://llm.example/v1",
+              "hosted_provider_allowed_origins": "https://llm.example"}, "llm.example"),
+            ({}, None)):
+        settings = hosted_settings(tmp_path, **values)
+        assert writer(settings) == named, values
+    for values in (CHAT, anthropic, {}):
+        responses, _recorder = site_answer(tmp_path, **values)
+        answer = responses[0]
+        assert answer.json()["writer"] == writer(hosted_settings(tmp_path, **values))
+        assert KEY_CANARY not in answer.text and "/v1" not in answer.text
 
 
 # ---- the proxy and the browser's rules ----------------------------------------------------------
