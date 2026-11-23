@@ -1,6 +1,6 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
-**Status:** Proposed (2026-11-20). Step 1 is built (see below); nothing else is. The
+**Status:** Proposed (2026-11-20). Steps 1 and 2 are built (see below); nothing else is. The
 owner's decisions in "What the owner decided" are settled; the numbers and the choices in "Open
 points for the owner" are his to make, and point 7 is decided (23 November 2026).
 
@@ -29,6 +29,35 @@ ceiling can still open the cast and "Story so far"), the start call from the cas
 far" (step 5), background work by state (step 6), "your plan.json" in the copy of one's data (step
 7; `reader_plans` is listed as left out of the copy until then), and open point 4 (the platform's
 day in the free weeks).
+
+**Step 2 built (2026-11-23).** Migration `0038_reader_gifts.sql`: `reader_plans.gift_until` (a
+`DATE`, NULL for none, `9999-12-31` for "for good"; a gift lasts to the end of its UTC day);
+`set_gift(reader, until)`, a security definer that only the operator role may execute (it makes the
+reader's row if they have none, and with NULL ends the gift; it answers whether the account
+exists); and `reader_plan_state` made again with three more columns, `paid_by` (`gift` while a
+gift lasts; Paddle's plans come later), `gift_until`, and `free_spent_usd` (the reader's own chat
+since their free weeks began, for the operator's look). A live gift answers `paying`; a passed one
+leaves the reader `new`, `free` or `ended` as they would be. The operator role gains `SELECT` on
+`reader_plans` and `EXECUTE` on the two functions (`backend/scripts/hosted_roles.py`), and the
+deployment's check now verifies its functions as it does the tenant's. The command
+`python -m app.hosted.plans` (`gift ID [--until YYYY-MM-DD]`, `gift ID --end`, `show ID`) runs in
+the `tools` container; `show` prints the state, the dates and that spend as one line of JSON,
+nothing else. The spend check needed no new code: `paying` is not `free`, so a gifted reader is held
+by the reader's day and month caps with today's lines, or by their own `owner_limits` caps where set,
+and never by the free ceiling. A gifted reader's first question still stamps their free weeks, once,
+so they cannot have them after the gift ends. Choices made in building it:
+
+- **`set_gift` takes a date, not a time**, as section 8 says ("a far date"). `--until 2027-06-30`
+  is Mothli on the house through the end of that UTC day.
+- **`show` reads `HOSTED_FREE_DAYS` and `HOSTED_FREE_USD` from its own environment** (the app's
+  defaults when they are absent), because the `tools` container is given no `deploy/app.env`. If
+  the owner ever changes either in `app.env`, he passes the same with `-e` (the runbook says so).
+  It affects only the state `show` prints for a reader without a gift.
+- **The Paddle messages' migration moves to the next free number** (`0039_paddle_events.sql` in
+  step 3), since 0038 is the gifts'.
+- **A paying reader's hidden guards are the owner's numbers**, decided with this step (section 4):
+  `HOSTED_READER_USD_PER_DAY` 1.00 and `HOSTED_READER_USD_PER_MONTH` 4.00 by default. Without this,
+  a gifted reader, the owner's own account included, would rest at about the sixth question a day.
 
 File and line references are to `main` at 2475b6f (PR #136). Nothing in this record was run against a
 database, a server, a model or Paddle. Every claim about the code comes from reading the lines cited

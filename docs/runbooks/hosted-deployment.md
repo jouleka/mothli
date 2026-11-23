@@ -295,6 +295,32 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
   used up, and on day 15 the day and month caps apply again. Setting a reader's own day or month
   limit with `app.hosted.limits` takes them out of that rule: their own limits then apply, free
   weeks or not. Clearing both puts them back under it.
+- **Mothli on the house: your own account and test accounts** (ADR 0045, gifts). A gifted account
+  is a paying reader without Paddle: never stopped by the free weeks' ceiling, and held only by a
+  paying reader's hidden day and month guards ($1.00 and $4.00), or by its own limits if you set
+  them with `app.hosted.limits`. Find the account's id in the audit log (below; sign in with it
+  first), then give it a gift for good:
+  ```
+  docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.plans gift ACCOUNT_ID
+  ```
+  or until the end of a day (UTC), for a tester:
+  ```
+  docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.plans gift ACCOUNT_ID --until 2027-06-30
+  ```
+  Look at where an account stands (the state, the dates, and its own chat spend since its free
+  weeks began; never a book or a word of a conversation):
+  ```
+  docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.plans show ACCOUNT_ID
+  ```
+  It prints one line, for example
+  `{"chat_usd_since_free_start": "0", "free_ends_at": null, "free_started_at": null, "gift_until": "for good", "owner_id": "…", "paid_by": "gift", "state": "paying", "why": null}`.
+  `state` is `new` (never asked Mothli anything), `free` (in the two free weeks), `ended` (with
+  `why`: `time` or `ceiling`) or `paying` (`paid_by`: `gift`). End a gift with
+  `... python -m app.hosted.plans gift ACCOUNT_ID --end`; the account is then wherever it would
+  be without it (a gifted account's first question still started its free weeks, so they are not
+  had again). Nothing is shown to the reader yet. If you have changed `HOSTED_FREE_DAYS` or
+  `HOSTED_FREE_USD` in `deploy/app.env`, add the same to `show` (`run --rm -e HOSTED_FREE_USD=3.00
+  tools ...`) so it reports a reader without a gift as the server sees them.
 - **"Add to my books" in the free library always says Mothli couldn't get the book.** The web
   process fetches each book itself, over HTTPS, from Project Gutenberg's `gutenberg.pglaf.org`
   and `www.gutenberg.org` (nowhere else, and through no proxy). If your server's provider or a
