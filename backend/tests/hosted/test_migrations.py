@@ -122,6 +122,7 @@ def test_every_tenant_table_has_non_null_owner_and_rls(database: str) -> None:
         "recollections",
         "recollection_cursors",
         "name_words",
+        "reader_plans",
     }
 
     with psycopg.connect(database) as conn:
@@ -995,8 +996,9 @@ def test_a_new_database_has_one_notes_account_that_never_signs_in(database: str)
                             (account,)).fetchone()[0] == 1
         assert conn.execute("SELECT count(*) FROM books WHERE owner_id = %s",
                             (account,)).fetchone()[0] == 0
-        # 0035 adds the later-name check, 0036 the background budget (their own tests below).
-        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN}
+        # 0035 adds the later-name check, 0036 the background budget, 0037 the start of the free
+        # weeks (their own tests below).
+        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE}
     apply_migrations(database)
     with psycopg.connect(database) as conn:
         assert conn.execute("SELECT account_id FROM notes_account").fetchall() == [(account,)]
@@ -1065,7 +1067,7 @@ def test_one_build_per_chapter_marks_the_editions_keeps_one_a_file_and_adds_one_
             "SELECT proowner::regrole::text, proacl::text, prosecdef, provolatile, proconfig, "
             "pg_get_function_identity_arguments(oid), pg_get_function_result(oid) "
             "FROM pg_proc WHERE oid = %s::regprocedure", (_NEW_DOOR,)).fetchone() == record
-        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN}
+        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE}
         before, after = _EDITION_MARK
         assert body.count(before) == 1
         assert conn.execute("SELECT prosrc FROM pg_proc WHERE oid = %s::regprocedure",
@@ -1216,7 +1218,7 @@ def test_the_later_name_words_start_empty_change_nothing_else_and_only_the_owner
             "read_any text[], read_proper text[], read_also text[], read_not text[]")
         assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
                                 (_LATER_NAMES,)).fetchone()[0]
-        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN}
+        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE}
 
 
 # ---- 0036: background work is Mothli's, not the reader's allowance (ADR 0041 section 6) ---------
@@ -1271,10 +1273,65 @@ def test_background_spend_is_marked_by_its_names_and_nothing_else_changes(
             True, ["search_path=pg_catalog, public, pg_temp"], "day_cap numeric", "boolean")
         assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
                                 (_BACKGROUND_OPEN,)).fetchone()[0]
-        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN}
+        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE}
         # Today's background spend is $0.05 in the ledger and $0.05 still open.
         assert conn.execute("SELECT companion_background_open(0.11)").fetchone()[0] is True
         assert conn.execute("SELECT companion_background_open(0.10)").fetchone()[0] is False
+
+
+# ---- 0037: the two free weeks (ADR 0045 step 1) ---------------------------------------------------
+
+READER_PLANS = 37
+_START_FREE = "start_free_weeks()"
+_PLAN_STATE = "reader_plan_state(uuid,integer,numeric)"
+
+
+def test_reader_plans_start_empty_change_nothing_else_and_only_the_start_writes(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0037 with readers who have talked with
+    Mothli: a free weeks started for anyone by the migration (an existing reader's two weeks would
+    start at the deployment, not at their next question), an account or a cost changed; the table
+    without forced row security or with a privilege for PUBLIC; the start callable by PUBLIC, not
+    a security definer, with another search path, or taking any argument (a reader could choose
+    a date or an account); or the state a security definer (it would read every reader's spend)."""
+    _apply_before(database, READER_PLANS, monkeypatch)
+    reader = uuid.uuid4()
+    with psycopg.connect(database) as conn:
+        conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (reader,))
+        conn.execute("INSERT INTO cost_ledger (owner_id, phase, model, usd, idempotency_key,"
+                     " purpose) VALUES (%s, 'synthesis', 'm', 0.5, 'a-reply', 'stream-reply')",
+                     (reader,))
+        users = conn.execute("SELECT to_jsonb(person) FROM users AS person ORDER BY id").fetchall()
+        ledger = conn.execute("SELECT to_jsonb(entry) FROM cost_ledger AS entry").fetchall()
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT to_jsonb(person) FROM users AS person ORDER BY id"
+                            ).fetchall() == users
+        assert conn.execute("SELECT to_jsonb(entry) FROM cost_ledger AS entry").fetchall() == ledger
+        assert conn.execute("SELECT count(*) FROM reader_plans").fetchone()[0] == 0
+        assert conn.execute("SELECT state, why FROM reader_plan_state(%s, 14, 2.10)",
+                            (reader,)).fetchone() == ("new", None)
+        assert conn.execute("SELECT relrowsecurity AND relforcerowsecurity FROM pg_class"
+                            " WHERE oid = 'public.reader_plans'::regclass").fetchone()[0]
+        assert not any(conn.execute(
+            "SELECT has_table_privilege('public', 'public.reader_plans', %s)", (privilege,)
+        ).fetchone()[0] for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"))
+        assert conn.execute(
+            "SELECT prosecdef, provolatile, proconfig, pg_get_function_identity_arguments(oid)"
+            " FROM pg_proc WHERE oid = %s::regprocedure", (_START_FREE,)).fetchone() == (
+            True, "v", ["search_path=pg_catalog, public, pg_temp"], "")
+        assert conn.execute(
+            "SELECT prosecdef, provolatile, pg_get_function_identity_arguments(oid)"
+            " FROM pg_proc WHERE oid = %s::regprocedure", (_PLAN_STATE,)).fetchone() == (
+            False, "s", "reader uuid, free_days integer, free_usd numeric")
+        for function in (_START_FREE, _PLAN_STATE):
+            assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
+                                    (function,)).fetchone()[0]
+        assert conn.execute("SELECT count(*) FROM pg_proc WHERE proname = 'start_free_weeks'"
+                            ).fetchone()[0] == 1
+        assert _definers(conn) == _DEFINERS | {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE}
 
 
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:

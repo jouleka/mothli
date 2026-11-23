@@ -43,6 +43,9 @@ TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     # are inserted through the existing grant on ``jobs``.
     "recollections": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
     "recollection_cursors": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
+    # ADR 0045 step 1: when the reader's two free weeks started (migration 0037). Read only: the
+    # one write a reader's session makes is through ``start_free_weeks`` below.
+    "reader_plans": frozenset({"SELECT"}),
 }
 
 # A book's story memory (ADR 0042, ADR 0044): the tables the door reads (the first nine), what a
@@ -118,6 +121,11 @@ TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
     "story_memory_door(uuid)": frozenset({"EXECUTE"}),
     "story_memory_later_names(uuid,integer,text[],text[],text[],text[],text[],text[])":
         frozenset({"EXECUTE"}),
+    # Migration 0037 (ADR 0045 step 1): stamps the start of the free weeks for the reader the
+    # transaction is set to, once; it takes no argument. And where a reader stands, which runs as
+    # its caller, so row-level security shows the reader only their own row and spend.
+    "start_free_weeks()": frozenset({"EXECUTE"}),
+    "reader_plan_state(uuid,integer,numeric)": frozenset({"EXECUTE"}),
 }
 
 # ADR 0041 part 8: the account purge, run once a day from the command line, never by web or

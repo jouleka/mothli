@@ -289,6 +289,12 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
   ```
   docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.limits show --owner READER_ID
   ```
+  A reader in their two free weeks (ADR 0045: the 14 days after their first question,
+  `HOSTED_FREE_DAYS`) is not held by the day and month caps but by one ceiling for the whole free
+  weeks, `HOSTED_FREE_USD` ($2.10) of their own chat; past it they are told their free start is
+  used up, and on day 15 the day and month caps apply again. Setting a reader's own day or month
+  limit with `app.hosted.limits` takes them out of that rule: their own limits then apply, free
+  weeks or not. Clearing both puts them back under it.
 - **"Add to my books" in the free library always says Mothli couldn't get the book.** The web
   process fetches each book itself, over HTTPS, from Project Gutenberg's `gutenberg.pglaf.org`
   and `www.gutenberg.org` (nowhere else, and through no proxy). If your server's provider or a
@@ -313,7 +319,8 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
   `ANTHROPIC_API_KEY`) and the checker, TypeSafe (`TYPESAFE_API_KEY`), in `deploy/app.env`.
 - The spending caps: $0.10 per reader per day and $2.00 per reader per month are placeholders to
   confirm or change; $15 a day for the whole platform and $10 a day for story memory are the
-  owner's numbers (ADR 0044).
+  owner's numbers (ADR 0044). A reader's two free weeks and their $2.10 ceiling
+  (`HOSTED_FREE_DAYS`, `HOSTED_FREE_USD`) are ADR 0045's proposal, also to confirm or change.
 - How long backups are kept, and where the off-server copies go. That is also how long a deleted
   account's data lives on in backups (step 4).
 - Where the offline copy of `deploy/.env` and `deploy/app.env` is kept.

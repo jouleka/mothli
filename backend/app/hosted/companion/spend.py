@@ -30,6 +30,17 @@ the budget of every reader's background work for the day (``HOSTED_BACKGROUND_US
 checked call by call. The platform's day counts them as it counts every call. Calls in flight are
 counted on each side apart.
 
+A reader's two free weeks (ADR 0045 step 1, migration 0037) start at their first question
+(``start_free_weeks``, called by the ask routes). While they last the reader's day and month are
+not checked; one ceiling is instead, ``HOSTED_FREE_USD`` of their own chat spend since the start,
+read by ``reader_plan_state`` in the same transaction under the same lock and counted as the day
+and month are (the conversation only, the ledger and reservations left open). A reply admitted
+under it is finished as under the day. Everything else holds as for every reader: the lifetime
+cap, the calls in flight, the platform's day. After the two weeks the day and month are back. A
+reader whose ``owner_limits`` row sets their own day or month cap is held by those caps instead,
+free weeks or not: an operator's word about one reader wins. Background work is never read for
+the ceiling and never stopped by it.
+
 Story memory is never a reader's spend (ADR 0044 section 5): a chapter's calls are reserved by a
 store bound to the notes account (``NotesCatalog`` in ``store.py``) against the edition being
 built, under the same rules, with the notes account's own caps: its ``owner_limits`` day cap, or
@@ -112,6 +123,10 @@ class SpendLimits:
     background_usd_per_day: Decimal = Decimal("3.00")
     reader_background_usd_per_day: Decimal = Decimal("1.00")
     reader_background_usd_per_month: Decimal = Decimal("5.00")
+    # ADR 0045 step 1: a reader's two free weeks (``HOSTED_FREE_DAYS``) and their one ceiling, in
+    # dollars of their own chat spend since the start (``HOSTED_FREE_USD``).
+    free_usd: Decimal = Decimal("2.10")
+    free_days: int = 14
 
 
 _limits_guard = threading.Lock()
@@ -129,16 +144,20 @@ def set_spend_limits(*, reader_usd_per_day, reader_usd_per_month, platform_usd_p
                      background_usd_per_day=SpendLimits.background_usd_per_day,
                      reader_background_usd_per_day=SpendLimits.reader_background_usd_per_day,
                      reader_background_usd_per_month=SpendLimits.reader_background_usd_per_month,
+                     free_usd=SpendLimits.free_usd, free_days=SpendLimits.free_days,
                      ) -> None:
     """Set this process's caps from settings (startup only, like the connection limit)."""
     global _limits
     values = [_money(value) for value in (
         reader_usd_per_day, reader_usd_per_month, platform_usd_per_day, notes_usd_per_day,
-        background_usd_per_day, reader_background_usd_per_day, reader_background_usd_per_month)]
+        background_usd_per_day, reader_background_usd_per_day, reader_background_usd_per_month,
+        free_usd)]
     if any(not value.is_finite() or value < 0 for value in values):
         raise ValueError("spend caps must be finite and non-negative")
+    if not isinstance(free_days, int) or isinstance(free_days, bool) or free_days < 1:
+        raise ValueError("the free weeks must last at least one day")
     with _limits_guard:
-        _limits = SpendLimits(*values)
+        _limits = SpendLimits(*values, free_days)
 
 
 def spend_limits() -> SpendLimits:
@@ -216,6 +235,11 @@ _MONTH = ("We’ve talked our way through this month, so I’ll be back at the s
 _LIFETIME = ("We’ve used up the conversations this account has. "
              "Your books and your place are right here.")
 _BUSY = "Give me a moment, I’m still on your last question. Then ask again."
+# ADR 0045 section 6, "Ended at the free ceiling", without its button until the plan exists: the
+# free weeks are not over, so it must not say they are. No number, no counter, never "unlimited".
+_FREE = ("We’ve talked so much these first days that your free start with me is all used up. "
+         "That’s a good sign! Your books, your place and your highlights stay right here, free, "
+         "always.")
 _PLATFORM = ("I’m resting for the rest of today and I’ll be back tomorrow. "
              "Your book and your place are right here.")
 # For the logs only: background work is never mentioned to a reader.
@@ -299,6 +323,30 @@ class SpendStore(OwnerBoundAdapter):
             raise ValueError(f"unknown cost reservation {reservation_id!r}")
         return row
 
+    # ---- the two free weeks (ADR 0045 step 1) -----------------------------------------------
+    def start_free_weeks(self) -> None:
+        """The reader's first question: stamp the start of their free weeks, once. The database
+        decides the account (the one this transaction is set to) and the time (its own clock);
+        a start already stamped is kept."""
+        with self._transaction() as conn:
+            conn.execute("SELECT public.start_free_weeks()")
+
+    def _free_weeks(self, conn, policy, limits) -> str | None:
+        """"open" while the reader's free weeks last, "used" once their own chat since the start
+        has reached the free ceiling within them, None when the free weeks do not apply and the
+        reader's day and month caps do: before the first question, after the two weeks, for the
+        notes account, and for a reader whose ``owner_limits`` row sets their own day or month
+        cap (an operator's word about one reader wins over the free weeks). Read in the caller's
+        transaction, under the owner's spend lock, from ``reader_plan_state``."""
+        if self._NOTES or policy["max_spend_usd_per_day"] is not None \
+                or policy["max_spend_usd_per_month"] is not None:
+            return None
+        plan = conn.execute("SELECT state,why FROM public.reader_plan_state(%s,%s,%s)",
+                            (self._owner.value, limits.free_days, limits.free_usd)).fetchone()
+        if plan["state"] == "free":
+            return "open"
+        return "used" if plan["why"] == "ceiling" else None
+
     # ---- the four calls the wrappers make ---------------------------------------------------
     def reserve_cost(self, book_id, *, phase, model, input_tokens, output_tokens, usd,
                      max_input_tokens, max_output_tokens, max_usd, chapter_ordinal=None,
@@ -314,6 +362,9 @@ class SpendStore(OwnerBoundAdapter):
         lifetime allowance are not read, and its own guards and the budget of all readers'
         background work refuse it instead, with ``BackgroundAllowanceReached``. The calls in
         flight are counted on each side apart, so background work never makes the chat wait.
+
+        In the reader's free weeks the free ceiling stands in for their day and month (module
+        docstring); it only admits or refuses the call, as they do.
         """
         for value, what in ((input_tokens, "input_tokens"), (output_tokens, "output_tokens"),
                             (max_input_tokens, "max_input_tokens"),
@@ -369,13 +420,18 @@ class SpendStore(OwnerBoundAdapter):
                     raise BackgroundAllowanceReached(guard, _BACKGROUND)
                 reached = None
             else:
-                reached = _reader_cap_reached(used, policy, limits, notes=self._NOTES)
+                # In the free weeks one ceiling stands in for the day and the month (ADR 0045).
+                free = self._free_weeks(conn, policy, limits)
+                reached = (None if free == "open" else "free" if free == "used"
+                           else _reader_cap_reached(used, policy, limits, notes=self._NOTES))
             if under_way or background:
                 pass            # admitted with its first call: it finishes; or not the reader's
             elif reached == "day":
                 raise ReaderAllowanceReached("day", _DAY)
             elif reached == "month":
                 raise ReaderAllowanceReached("month", _MONTH)
+            elif reached == "free":
+                raise ReaderAllowanceReached("free", _FREE)
             elif (lifetime_cap is not None
                   and used["lifetime"] + used["held_all"] + amount > lifetime_cap):
                 raise ReaderAllowanceReached("lifetime", _LIFETIME)
