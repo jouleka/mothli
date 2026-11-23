@@ -62,6 +62,15 @@ OPERATOR_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "jobs": frozenset({"SELECT"}),
     "cost_ledger": frozenset({"SELECT"}),
     "cost_reservations": frozenset({"SELECT"}),
+    # ADR 0045 step 2: shows where a reader stands (python -m app.hosted.plans show). Read only:
+    # a gift is written through set_gift below.
+    "reader_plans": frozenset({"SELECT"}),
+}
+# ADR 0045 step 2 (migration 0038): gives and ends a gift, the one write on reader_plans this role
+# makes, and reads where a reader stands. No other role may execute set_gift.
+OPERATOR_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
+    "set_gift(uuid,date)": frozenset({"EXECUTE"}),
+    "reader_plan_state(uuid,integer,numeric)": frozenset({"EXECUTE"}),
 }
 
 
@@ -87,7 +96,8 @@ RUNTIME_ROLES: tuple[Role, ...] = (
          TENANT_FUNCTION_PRIVILEGES),
     Role("worker", "MOTHLI_DB_WORKER_PASSWORD", True, WORKER_TABLE_PRIVILEGES, {}),
     Role("audit", "MOTHLI_DB_AUDIT_PASSWORD", True, AUDIT_TABLE_PRIVILEGES, {}),
-    Role("operator", "MOTHLI_DB_OPERATOR_PASSWORD", True, OPERATOR_TABLE_PRIVILEGES, {}),
+    Role("operator", "MOTHLI_DB_OPERATOR_PASSWORD", True, OPERATOR_TABLE_PRIVILEGES,
+         OPERATOR_FUNCTION_PRIVILEGES),
     # ADR 0041 part 8: erases accounts 30 days after the reader asked (python -m app.hosted.purge).
     # Never in web or worker.
     Role("purge", "MOTHLI_DB_PURGE_PASSWORD", True, PURGE_OTHER_TABLE_PRIVILEGES, {},
@@ -257,17 +267,19 @@ def verify(admin_dsn: str, env: dict[str, str], prefix: str) -> None:
         PostgresTenantRepository(role_dsn(env, prefix, roles["tenant"])).check_runtime_role())
     PostgresWorkerRepository(role_dsn(env, prefix, roles["worker"])).check_runtime_role()
     PostgresAccountPurge(role_dsn(env, prefix, roles["purge"])).check_runtime_role()
-    # The tenant startup check reads tables only: the functions are checked here, both ways.
-    tenant = role_name(prefix, roles["tenant"])
+    # The startup checks read tables only: the tenant's and the operator's functions are checked
+    # here, both ways (held by the role, not by PUBLIC).
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
-        for function in TENANT_FUNCTION_PRIVILEGES:
-            signature = f"public.{function}"
-            held = conn.execute("SELECT has_function_privilege(%s, %s, 'EXECUTE')",
-                                (tenant, signature)).fetchone()[0]
-            public = conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
-                                  (signature,)).fetchone()[0]
-            if not held or public:
-                raise ProvisioningError(f"function privileges on {function} are not as reviewed")
+        for role in RUNTIME_ROLES:
+            for function in role.functions:
+                signature = f"public.{function}"
+                held = conn.execute("SELECT has_function_privilege(%s, %s, 'EXECUTE')",
+                                    (role_name(prefix, role), signature)).fetchone()[0]
+                public = conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
+                                      (signature,)).fetchone()[0]
+                if not held or public:
+                    raise ProvisioningError(
+                        f"function privileges on {function} are not as reviewed")
 
 
 def deploy(env: dict[str, str], prefix: str) -> None:

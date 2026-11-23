@@ -143,12 +143,13 @@ class Settings(BaseSettings):
     # The most database connections the hosted companion adapters hold at once in one process
     # (ADR 0041 section 2): a burst of page reports cannot exceed Postgres max_connections.
     hosted_companion_db_connections: int = Field(default=20, ge=1, le=1000)
-    # The owner pays for the companion's AI in hosted mode (ADR 0041 section 6). The amounts are
-    # DEFAULTS TO BE CONFIRMED BY THE OWNER: per reader per UTC day and per UTC month (used where
-    # the reader's owner_limits row leaves its own cap NULL), and for the whole platform per UTC
-    # day, whatever any reader does.
-    hosted_reader_usd_per_day: float = Field(default=0.10, ge=0, le=1000, allow_inf_nan=False)
-    hosted_reader_usd_per_month: float = Field(default=2.00, ge=0, le=10000, allow_inf_nan=False)
+    # The owner pays for the companion's AI in hosted mode (ADR 0041 section 6): per reader per
+    # UTC day and per UTC month (used where the reader's owner_limits row leaves its own cap
+    # NULL), and for the whole platform per UTC day, whatever any reader does. A paying reader's
+    # two hidden guards, the owner's numbers (ADR 0045 section 4, decided 23 November 2026):
+    # $1.00 a day and $4.00 a month, about 47 and 190 replies at 2.1 cents. Never shown.
+    hosted_reader_usd_per_day: float = Field(default=1.00, ge=0, le=1000, allow_inf_nan=False)
+    hosted_reader_usd_per_month: float = Field(default=4.00, ge=0, le=10000, allow_inf_nan=False)
     hosted_platform_usd_per_day: float = Field(default=15.00, ge=0, le=100000, allow_inf_nan=False)
     # ADR 0045 step 1: a reader's two free weeks with Mothli, from their first question. While
     # they last the reader's day and month above are not applied; one ceiling in dollars of their

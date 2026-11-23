@@ -12,12 +12,14 @@ import base64
 import logging
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import deps
 from app.config import Settings
+from app.hosted.companion.spend import SpendLimits
 from app.llm.client import LLMClient
 from app.llm.factory import PlatformClientsUnavailable, build_platform_clients
 from app.main import create_app
@@ -135,14 +137,17 @@ def hosted_settings(tmp_path, env_file=None, **values) -> Settings:
 PAID = {"openai_api_key": KEY_CANARY, "jev_enabled": True, "typesafe_api_key": JEV_CANARY}
 
 
-def test_the_cap_settings_have_the_owners_provisional_defaults(tmp_path) -> None:
-    """The break it catches: a cap default drifting from the amounts the owner was told ($0.10
-    per reader per day, $2.00 per month, to be confirmed by the owner; the platform's day $15,
-    raised from $5 by the owner on 18 November 2026 so that story memory and the chat do not
-    starve each other, ADR 0044 section 5)."""
+def test_the_cap_settings_have_the_owners_defaults(tmp_path) -> None:
+    """The break it catches: a cap default drifting from the owner's numbers: $1.00 per reader
+    per day and $4.00 per month, a paying reader's hidden guards (ADR 0045 section 4, decided 23
+    November 2026; about 47 and 190 replies at 2.1 cents); the platform's day $15, raised from $5
+    by the owner on 18 November 2026 so that story memory and the chat do not starve each other
+    (ADR 0044 section 5)."""
     settings = hosted_settings(tmp_path)
     assert (settings.hosted_reader_usd_per_day, settings.hosted_reader_usd_per_month,
-            settings.hosted_platform_usd_per_day) == (0.10, 2.00, 15.00)
+            settings.hosted_platform_usd_per_day) == (1.00, 4.00, 15.00)
+    assert (SpendLimits().reader_usd_per_day, SpendLimits().reader_usd_per_month) == (
+        Decimal("1.00"), Decimal("4.00"))
 
 
 @pytest.mark.parametrize("setting, value", [

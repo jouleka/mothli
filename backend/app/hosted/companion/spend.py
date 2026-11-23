@@ -41,6 +41,13 @@ reader whose ``owner_limits`` row sets their own day or month cap is held by tho
 free weeks or not: an operator's word about one reader wins. Background work is never read for
 the ceiling and never stopped by it.
 
+A gifted reader (ADR 0045 step 2, migration 0038: the owner's own account and test accounts,
+given a gift by the operator's command) is a paying reader: ``reader_plan_state`` answers
+``paying`` while the gift lasts, the free ceiling is not applied to them, and they are held by
+the reader's day and month (the paying readers' hidden guards) with today's lines, or by their own
+``owner_limits`` caps where those are set. Everything else holds as for every reader. A gift that
+has passed leaves the reader where they would be without it.
+
 Story memory is never a reader's spend (ADR 0044 section 5): a chapter's calls are reserved by a
 store bound to the notes account (``NotesCatalog`` in ``store.py``) against the edition being
 built, under the same rules, with the notes account's own caps: its ``owner_limits`` day cap, or
@@ -116,8 +123,9 @@ class SpendLimits:
     (ADR 0041 section 6, amended): all readers' together in a UTC day, and one reader's in a UTC
     day and month. No reader ever sees them."""
 
-    reader_usd_per_day: Decimal = Decimal("0.10")
-    reader_usd_per_month: Decimal = Decimal("2.00")
+    # A paying reader's hidden guards (ADR 0045 section 4, the owner's numbers).
+    reader_usd_per_day: Decimal = Decimal("1.00")
+    reader_usd_per_month: Decimal = Decimal("4.00")
     platform_usd_per_day: Decimal = Decimal("15.00")
     notes_usd_per_day: Decimal = Decimal("10.00")
     background_usd_per_day: Decimal = Decimal("3.00")
@@ -334,8 +342,9 @@ class SpendStore(OwnerBoundAdapter):
     def _free_weeks(self, conn, policy, limits) -> str | None:
         """"open" while the reader's free weeks last, "used" once their own chat since the start
         has reached the free ceiling within them, None when the free weeks do not apply and the
-        reader's day and month caps do: before the first question, after the two weeks, for the
-        notes account, and for a reader whose ``owner_limits`` row sets their own day or month
+        reader's day and month caps do: before the first question, after the two weeks, while a
+        gift lasts (``paying``), for the notes account, and for a reader whose ``owner_limits``
+        row sets their own day or month
         cap (an operator's word about one reader wins over the free weeks). Read in the caller's
         transaction, under the owner's spend lock, from ``reader_plan_state``."""
         if self._NOTES or policy["max_spend_usd_per_day"] is not None \
