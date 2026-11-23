@@ -54,6 +54,9 @@
 
 	handle {
 		root * /srv/mothli
+		# The public pages (ADR 0045 step 8) are the app's own page, at addresses of their own.
+		@pages path /terms /privacy /refunds /contact
+		rewrite @pages /index.html
 		encode zstd gzip
 		@hashed path /assets/*
 		header @hashed Cache-Control "public, max-age=31536000, immutable"

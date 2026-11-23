@@ -17,6 +17,7 @@ import { Icon } from "../ui/Icon";
 import { noteMothliJoined } from "../ui/mothliStanding";
 import { MothliRemembers } from "./MothliRemembers";
 import { PlanSheet } from "./PlanSheet";
+import { PAGE_PATHS } from "../public/pages";
 import { TakeACopy } from "./TakeACopy";
 import { noteAccountDeleted } from "./SignIn";
 import { YourPlan } from "./YourPlan";
@@ -300,6 +301,17 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
                 Delete my account
               </button>
             </div>
+
+            {/* The public pages (ADR 0045 step 8), opened beside the sheet. */}
+            <p className="ml-mem-quiet ml-account-pages">
+              <a href={PAGE_PATHS.terms} target="_blank" rel="noopener">Terms</a>
+              {" · "}
+              <a href={PAGE_PATHS.privacy} target="_blank" rel="noopener">Privacy</a>
+              {" · "}
+              <a href={PAGE_PATHS.refunds} target="_blank" rel="noopener">Refunds</a>
+              {" · "}
+              <a href={PAGE_PATHS.contact} target="_blank" rel="noopener">Contact</a>
+            </p>
           </div>
         )}
       </div>

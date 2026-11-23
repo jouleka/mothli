@@ -14,6 +14,8 @@ import ReactDOM from "react-dom/client";
 import { initializeOfflineSupport, offersChat, type OfflineSession } from "./pwa/offline";
 import { ReadingHistory } from "./history/ReadingHistory";
 import { FreeLibrary } from "./library/FreeLibrary";
+import { routedPublicPage } from "./public/pages";
+import { PublicPage } from "./public/PublicPage";
 import { ReaderPage } from "./reader/ReaderPage";
 import { Shelf } from "./shelf/Shelf";
 import { SignInGate } from "./shelf/SignIn";
@@ -137,6 +139,15 @@ function Boot() {
           </Button>
         )}
       </main>
+    );
+  }
+  // Hosted: the public pages (ADR 0045 step 8) at their own addresses, signed in or not.
+  const page = routedPublicPage(initialization.session, window.location.pathname);
+  if (page) {
+    return (
+      <React.StrictMode>
+        <PublicPage page={page} />
+      </React.StrictMode>
     );
   }
   return (

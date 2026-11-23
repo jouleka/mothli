@@ -10,6 +10,7 @@ import { Button } from "../ui/Button";
 import { Moth } from "../ui/Moth";
 import { SIGN_UP_LINE } from "../ui/MothliPlan";
 import { MothliMark } from "../ui/MothliMark";
+import { AboutMothli, SiteFooter, useSite } from "../public/PublicPage";
 import { forgetPaymentLink, paymentLinkTransaction } from "./paddle";
 import { PaymentLink } from "./PaymentLink";
 import { PlanSheet } from "./PlanSheet";
@@ -107,6 +108,8 @@ export function SignIn({ ended = false, paymentLink = null }: { ended?: boolean;
   // then to the shelf.
   const [returnLink, setReturnLink] = useState(paymentLink);
   const [offline, setOffline] = useState(() => typeof navigator !== "undefined" && !navigator.onLine);
+  // The public pages' read (ADR 0045 step 8): who runs Mothli and the plan's prices, if known.
+  const { site } = useSite();
   useEffect(() => {
     const update = () => setOffline(!navigator.onLine);
     window.addEventListener("online", update);
@@ -184,7 +187,11 @@ export function SignIn({ ended = false, paymentLink = null }: { ended?: boolean;
             </div>
           </div>
         </section>
+        {/* What Mothli is and what the plan costs, for a visitor (and Paddle's reviewers); not
+            on the welcome-back, nor beside a payment link's checkout. */}
+        {!ended && !paymentLink && <AboutMothli site={site} />}
       </main>
+      <SiteFooter site={site} />
     </div>
   );
 }

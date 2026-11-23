@@ -1,0 +1,116 @@
+/* The public pages (ADR 0045 step 8): the front page's part about Mothli, the footer, and the
+ * terms, privacy, refunds and contact pages. Colours and type come from theme/mothli.css, so the
+ * dark theme follows; nothing is loaded from anywhere else. */
+
+.pp-main { outline: none; }
+.pp-article {
+  max-width: 44rem;
+  margin: 40px auto 56px;
+  font: 400 19px/1.6 var(--m-book);
+  color: var(--m-body);
+}
+.pp-article h1 {
+  margin: 0 0 8px;
+  font: 600 clamp(36px, 5vw, 54px) / 1.05 var(--m-display);
+  color: var(--m-ink);
+}
+.pp-article h2 {
+  margin: 32px 0 8px;
+  font: 600 26px/1.2 var(--m-display);
+  color: var(--m-ink);
+}
+.pp-article p,
+.pp-article ul { margin: 0 0 12px; }
+.pp-article ul { padding-left: 1.2em; }
+.pp-article li { margin-bottom: 8px; }
+.pp-article strong { font-weight: 600; color: var(--m-ink); }
+.pp-article a,
+.pp-about a,
+.pp-footer a { color: var(--m-accent); text-underline-offset: 3px; }
+.pp-article a:hover,
+.pp-footer a:hover { color: var(--m-accent-hover); }
+.pp-lede { font-size: 21px; }
+.pp-updated,
+.pp-quiet { font: 400 15px/1.5 var(--m-ui); color: var(--m-soft); }
+.pp-not-open {
+  padding: 16px 20px;
+  border-left: 3px solid var(--m-accent);
+  background: var(--m-surface);
+}
+.pp-problem { display: grid; justify-items: start; gap: 12px; }
+.pp-back { margin-top: 40px; font: 500 16px/1.4 var(--m-ui); }
+
+/* ---------- the front page's part ---------- */
+.pp-about {
+  max-width: 52rem;
+  margin: 0 auto 48px;
+  font: 400 19px/1.55 var(--m-book);
+  color: var(--m-body);
+}
+.pp-about h2 {
+  margin: 0 0 16px;
+  font: 600 clamp(28px, 3.6vw, 40px) / 1.1 var(--m-display);
+  color: var(--m-ink);
+}
+.pp-about h2 + p,
+.pp-about p { margin: 0 0 12px; }
+.pp-points { display: grid; gap: 12px; margin: 0 0 48px; padding: 0; list-style: none; }
+.pp-points strong,
+.pp-free strong { font-weight: 600; color: var(--m-ink); }
+.pp-prices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin: 20px 0;
+  padding: 0;
+  list-style: none;
+}
+.pp-price {
+  padding: 20px 24px;
+  border: 1px solid var(--m-line-strong);
+  border-radius: 6px;
+  background: var(--m-surface);
+}
+.pp-price--best { border-color: var(--m-accent); box-shadow: var(--m-shadow); }
+.pp-price h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 6px;
+  font: 600 22px/1.2 var(--m-display);
+  color: var(--m-ink);
+}
+.pp-price p { margin: 0; font-size: 16px; color: var(--m-soft); }
+.pp-price .pp-price-main { font: 500 21px/1.35 var(--m-book); color: var(--m-ink); }
+.pp-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--m-accent-wash);
+  font: 600 12px/1.4 var(--m-ui);
+  letter-spacing: 0.04em;
+  color: var(--m-accent);
+}
+
+/* ---------- the footer ---------- */
+.pp-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 24px;
+  padding: 20px 0 0;
+  border-top: 1px solid var(--m-line-strong);
+  font: 400 15px/1.5 var(--m-ui);
+  color: var(--m-soft);
+}
+.pp-footer ul { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0; padding: 0; list-style: none; }
+.pp-footer a { display: inline-block; padding: 6px 0; }
+.pp-footer p { margin: 0; }
+
+@media (max-width: 720px) {
+  .pp-article { margin: 24px auto 40px; font-size: 18px; }
+  .pp-lede { font-size: 19px; }
+  .pp-article h2 { font-size: 23px; }
+  .pp-about { font-size: 18px; }
+}
