@@ -420,6 +420,9 @@ def create_app(
                     free_usd=settings.hosted_free_usd,
                     free_days=settings.hosted_free_days,
                     first_paid_month_usd=settings.hosted_first_paid_month_usd,
+                    warmup_days=settings.hosted_warmup_days,
+                    warmup_new_chapters=settings.hosted_warmup_new_chapters,
+                    warmup_notes_usd=settings.hosted_warmup_notes_usd,
                 )
                 if _platform_ai_configured(settings):
                     platform = build_platform_clients(settings)

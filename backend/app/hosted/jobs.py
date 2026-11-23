@@ -18,7 +18,12 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.hosted.audit import record_event
-from app.hosted.tenant.grants import ALL_TABLE_PRIVILEGES, WORKER_TABLE_PRIVILEGES
+from app.hosted.tenant.grants import (
+    ALL_TABLE_PRIVILEGES,
+    WORKER_COLUMN_PRIVILEGES,
+    WORKER_FUNCTION_PRIVILEGES,
+    WORKER_TABLE_PRIVILEGES,
+)
 
 # ADR 0041 section 5: the companion's background kinds. At most one of an owner, kind and book
 # waits (a unique index) and at most one runs (the claim); they wait while the platform's provider
@@ -113,6 +118,51 @@ WHERE chapter.owner_id=%(owner)s AND chapter.book_id=%(book)s
   AND receipt.retracted_at IS NULL
   AND chapter.revealed_at>=%(first)s AND chapter.revealed_at<=%(last)s
 """
+
+
+# Where a reader stands, for their background work (ADR 0045 section 5): their state from
+# ``reader_plan_state`` (the one function the session, the spend check and this all call), whether
+# they signed up within the warm-up's days, what Mothli's background work for them has cost (the
+# ledger and every reservation still open, of any age: before their first question that is their
+# chapter notes alone, recollections coming only from replies), and how many chapters their
+# story-memory runs were the first to build, ever (their jobs that published; a job row is kept for
+# the life of the account, so for a reader who has never asked this is the count over the whole
+# time they have been new).
+_STANDING = """
+SELECT plan.state,
+       COALESCE(person.created_at>now()-make_interval(days=>%(days)s::integer),false) AS warm,
+       COALESCE((SELECT sum(entry.usd) FROM public.cost_ledger AS entry
+                 WHERE entry.owner_id=%(owner)s AND entry.background),0)
+       + COALESCE((SELECT sum(held.reserved_usd) FROM public.cost_reservations AS held
+                   WHERE held.owner_id=%(owner)s AND held.background AND held.state='reserved'),0)
+         AS notes_usd,
+       (SELECT count(*) FROM public.jobs AS job
+        WHERE job.owner_id=%(owner)s AND job.kind='story_memory'
+          AND job.payload_metadata @> '{"published":true}'::jsonb) AS first_builds
+FROM public.reader_plan_state(%(owner)s,%(free_days)s::integer,%(free_usd)s::numeric) AS plan
+LEFT JOIN public.users AS person ON person.id=%(owner)s
+"""
+
+
+def background_held(conn: psycopg.Connection, owner_id: uuid.UUID) -> bool:
+    """Whether Mothli does no background work for this reader now (ADR 0045 section 5): their
+    free weeks are over and they do not pay (``ended``), or they have never asked Mothli
+    anything (``new``) and are past the warm-up: more than ``HOSTED_WARMUP_DAYS`` since sign-up,
+    ``HOSTED_WARMUP_NOTES_USD`` of chapter notes, or ``HOSTED_WARMUP_NEW_CHAPTERS`` chapters of
+    story memory their reading was the first to build. In their free weeks and while they pay,
+    never. Read on the caller's connection (rows as dicts); it writes nothing and is told to no
+    reader."""
+    from app.hosted.companion.spend import spend_limits
+
+    limits = spend_limits()
+    row = conn.execute(_STANDING, {"owner": owner_id, "days": limits.warmup_days,
+                                   "free_days": limits.free_days,
+                                   "free_usd": limits.free_usd}).fetchone()
+    if row["state"] == "ended":
+        return True
+    return row["state"] == "new" and (
+        not row["warm"] or row["notes_usd"] >= limits.warmup_notes_usd
+        or row["first_builds"] >= limits.warmup_new_chapters)
 
 
 def _edition(row) -> Edition:
@@ -223,6 +273,30 @@ class PostgresWorkerRepository:
                 """,
                 ([name.removeprefix("public.") for name in required],),
             ).fetchall()
+            # ADR 0045 step 6: SELECT on the listed columns of a table and on no other column
+            # of it, and nothing else on any of its columns; and EXECUTE on its one function.
+            for table, allowed in sorted(WORKER_COLUMN_PRIVILEGES.items()):
+                for column in conn.execute(
+                    """
+                    SELECT attname FROM pg_attribute
+                    WHERE attrelid=%s::regclass AND attnum>0 AND NOT attisdropped
+                    ORDER BY attnum
+                    """,
+                    (f"public.{table}",),
+                ).fetchall():
+                    for privilege in ("SELECT", "INSERT", "UPDATE", "REFERENCES"):
+                        held = conn.execute(
+                            "SELECT has_column_privilege(current_user,%s,%s,%s) AS held",
+                            (f"public.{table}", column["attname"], privilege),
+                        ).fetchone()["held"]
+                        if held != (privilege == "SELECT" and column["attname"] in allowed):
+                            incorrect.append(f"{table}.{column['attname']}:{privilege}")
+            for function in sorted(WORKER_FUNCTION_PRIVILEGES):
+                if not conn.execute(
+                    "SELECT has_function_privilege(current_user,%s,'EXECUTE') AS held",
+                    (f"public.{function}",),
+                ).fetchone()["held"]:
+                    incorrect.append(f"{function}:EXECUTE")
         if incorrect or unexpected:
             raise WorkerConfigurationError(
                 "worker runtime role privileges are not the reviewed repository allow-list"
@@ -353,6 +427,12 @@ class PostgresWorkerRepository:
         conversation (ADR 0041 section 6, amended). A ``story_memory`` job is never held here:
         its spend is the notes account's (ADR 0044 section 5); the run itself applies the
         chapter guards and the notes ceiling, and waits for the next UTC day past either.
+
+        Then where the owner stands with their plan (ADR 0045 section 5, ``background_held``): a
+        companion job of any kind whose owner is ended, or new and past the warm-up, is finished
+        here without work and without spending, as a cancelled job is, and the next job is
+        looked for. A job already claimed or running is not touched: work that began is
+        finished, as a reply under way is.
         """
         self._validate_worker_id(worker_id)
         lease_seconds = _seconds(lease_for)
@@ -413,6 +493,20 @@ class PostgresWorkerRepository:
                         (row["owner_id"], row["id"]),
                     )
                     capped_owners.append(row["owner_id"])
+                    continue
+                if row["kind"] in COMPANION_KINDS and background_held(conn, row["owner_id"]):
+                    # ADR 0045 section 5: no background work for this reader now (ended, or new
+                    # and past the warm-up). Finished without work and without spending, as a
+                    # cancelled job is: no attempt, no call, nothing read. Nothing is said to
+                    # anyone; their next question asks for the work again.
+                    conn.execute(
+                        """
+                        UPDATE public.jobs
+                        SET state='cancelled',completed_at=now(),updated_at=now()
+                        WHERE owner_id=%s AND id=%s AND state='pending'
+                        """,
+                        (row["owner_id"], row["id"]),
+                    )
                     continue
                 concurrency = conn.execute(
                     """
@@ -764,6 +858,13 @@ class PostgresWorkerRepository:
                 """,
                 (owner_id,),
             ).fetchone()
+
+    def held_back(self, owner_id: uuid.UUID) -> bool:
+        """``background_held`` for this owner, on a connection of its own: what a story-memory
+        run asks again just before it would be the first to build a chapter (ADR 0045 section 5,
+        the warm-up's chapters). Reads nothing of any edition."""
+        with self._connect() as conn:
+            return background_held(conn, owner_id)
 
     def unremembered_before(self, edition: Edition, ordinal: int) -> int:
         """How many chapters in a row, ending just before ``ordinal``, the edition keeps as

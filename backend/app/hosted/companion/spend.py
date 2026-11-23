@@ -138,6 +138,13 @@ class SpendLimits:
     # ADR 0045 step 3: a subscriber's first paid month (``HOSTED_FIRST_PAID_MONTH_USD``), in place
     # of the month for the 30 days after their first Paddle plan began, once per account.
     first_paid_month_usd: Decimal = Decimal("6.30")
+    # ADR 0045 section 5, step 6: a reader who has never asked Mothli anything gets background work
+    # within ``warmup_days`` of sign-up, up to ``warmup_new_chapters`` chapters of story memory
+    # their reading is the first to build and ``warmup_notes_usd`` of chapter notes, then none
+    # until their first question (``app.hosted.jobs``, the claim). Read by the worker only.
+    warmup_days: int = 30
+    warmup_new_chapters: int = 25
+    warmup_notes_usd: Decimal = Decimal("0.50")
 
 
 _limits_guard = threading.Lock()
@@ -157,20 +164,28 @@ def set_spend_limits(*, reader_usd_per_day, reader_usd_per_month, platform_usd_p
                      reader_background_usd_per_month=SpendLimits.reader_background_usd_per_month,
                      free_usd=SpendLimits.free_usd, free_days=SpendLimits.free_days,
                      first_paid_month_usd=SpendLimits.first_paid_month_usd,
+                     warmup_days=SpendLimits.warmup_days,
+                     warmup_new_chapters=SpendLimits.warmup_new_chapters,
+                     warmup_notes_usd=SpendLimits.warmup_notes_usd,
                      ) -> None:
     """Set this process's caps from settings (startup only, like the connection limit)."""
     global _limits
     values = [_money(value) for value in (
         reader_usd_per_day, reader_usd_per_month, platform_usd_per_day, notes_usd_per_day,
         background_usd_per_day, reader_background_usd_per_day, reader_background_usd_per_month,
-        free_usd, first_paid_month_usd)]
+        free_usd, first_paid_month_usd, warmup_notes_usd)]
     if any(not value.is_finite() or value < 0 for value in values):
         raise ValueError("spend caps must be finite and non-negative")
     if not isinstance(free_days, int) or isinstance(free_days, bool) or free_days < 1:
         raise ValueError("the free weeks must last at least one day")
+    if any(not isinstance(count, int) or isinstance(count, bool) or count < 0
+           for count in (warmup_days, warmup_new_chapters)):
+        raise ValueError("the warm-up's days and chapters must be non-negative whole numbers")
     with _limits_guard:
-        *values, first_paid_month = values
-        _limits = SpendLimits(*values, free_days, first_paid_month)
+        *values, first_paid_month, warmup_notes = values
+        _limits = SpendLimits(*values, free_days, first_paid_month, warmup_days=warmup_days,
+                              warmup_new_chapters=warmup_new_chapters,
+                              warmup_notes_usd=warmup_notes)
 
 
 def spend_limits() -> SpendLimits:
@@ -391,6 +406,16 @@ class SpendStore(OwnerBoundAdapter):
         a start already stamped is kept."""
         with self._transaction() as conn:
             conn.execute("SELECT public.start_free_weeks()")
+
+    def plan_state(self) -> str:
+        """Where this reader stands, ``new``, ``free``, ``paying`` or ``ended``, from
+        ``reader_plan_state`` with this process's free weeks: what the routes read to decide
+        whether to ask for background work (ADR 0045 section 5). Nothing a reader is shown."""
+        limits = _limits
+        with self._transaction() as conn:
+            return conn.execute(
+                "SELECT state FROM public.reader_plan_state(%s,%s,%s)",
+                (self._owner.value, limits.free_days, limits.free_usd)).fetchone()["state"]
 
     def _plan(self, conn, policy, limits) -> tuple[str | None, dict | None]:
         """(free weeks, first paid month), read in the caller's transaction, under the owner's
