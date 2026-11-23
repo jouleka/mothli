@@ -554,6 +554,7 @@ def test_the_regular_check_fetches_only_the_stored_ids_it_is_given_and_stops_whe
     applied: list = []
     monkeypatch.setattr(paddle_check, "apply_message",
                         lambda dsn, message: applied.append(message.subscription_id) or "applied")
+    monkeypatch.setattr(paddle_check, "owes_cancel", lambda dsn, reader: False)
 
     def answer(request: httpx.Request) -> httpx.Response:
         sub = request.url.path.rsplit("/", 1)[1]
@@ -573,3 +574,36 @@ def test_the_regular_check_fetches_only_the_stored_ids_it_is_given_and_stops_whe
     assert paddle_check.check("dsn", down, PRICES, size=3, pause=0,
                               sleep=lambda _s: None) == (0, 0, 1)
     assert len(recorder.requests) == 1
+
+
+def test_the_regular_check_asks_for_an_owed_cancel_for_that_reader_alone(monkeypatch) -> None:
+    """ADR 0045 step 7. The break it catches: the check not asking for the cancel owed to a
+    reader who asked to delete their account, asking it for another reader, asking it before
+    the reader's own subscription was fetched, or carrying on when Paddle is away."""
+    from app.hosted import paddle_check
+
+    owing, other = uuid.uuid4(), uuid.uuid4()
+    stored = [(owing, sub_id("one")), (other, sub_id("two"))]
+    monkeypatch.setattr(paddle_check, "plans_to_check", lambda dsn, size: stored[:size])
+    monkeypatch.setattr(paddle_check, "apply_message", lambda dsn, message: "older")
+    monkeypatch.setattr(paddle_check, "owes_cancel", lambda dsn, reader: reader == owing)
+    asked: list = []
+    outcomes = ["done"]
+    monkeypatch.setattr(paddle_check, "cancel_owed",
+                        lambda dsn, api, prices, reader: asked.append(reader) or outcomes[0])
+    api, recorder = api_with(lambda r: httpx.Response(
+        200, json={"data": subscription_entity(r.url.path.rsplit("/", 1)[1])}))
+    pauses: list = []
+    assert paddle_check.check("dsn", api, PRICES, size=5, pause=1.0,
+                              sleep=pauses.append) == (2, 1, 0)
+    assert asked == [owing] and pauses == [1.0, 1.0]
+    assert [r.url.path for r in recorder.requests] == [f"/subscriptions/{s}" for _o, s in stored]
+
+    for outcome, expected, fetched in (("unavailable", (1, 0, 1), 1), ("locked", (2, 0, 1), 2)):
+        asked.clear()
+        outcomes[0] = outcome
+        api, recorder = api_with(lambda r: httpx.Response(
+            200, json={"data": subscription_entity(r.url.path.rsplit("/", 1)[1])}))
+        assert paddle_check.check("dsn", api, PRICES, size=5, pause=0,
+                                  sleep=lambda _s: None) == expected
+        assert asked == [owing] and len(recorder.requests) == fetched

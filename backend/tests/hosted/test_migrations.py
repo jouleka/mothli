@@ -1382,11 +1382,12 @@ def test_gifts_start_empty_change_no_plan_and_only_set_gift_writes_them(
     apply_migrations(database)
 
     with psycopg.connect(database) as conn:
-        # (Less the columns later migrations add: 0039's and 0040's Paddle part.)
+        # (Less the columns later migrations add: 0039's, 0040's and 0041's Paddle part.)
         assert conn.execute(
             "SELECT to_jsonb(plan) - 'gift_until' - %s::text[] FROM reader_plans AS plan",
             (["paddle_customer_id", "paddle_subscription_id", "paddle_status", "period_ends_at",
-              "ends_at", "paddle_occurred_at", "first_paid_at", "paddle_price_id"],)
+              "ends_at", "paddle_occurred_at", "first_paid_at", "paddle_price_id",
+              "cancel_owed_since"],)
         ).fetchall() == plans
         assert conn.execute("SELECT count(*) FROM reader_plans WHERE gift_until IS NOT NULL"
                             ).fetchone()[0] == 0
@@ -1446,8 +1447,8 @@ def test_paddle_columns_start_empty_change_no_plan_and_only_the_billing_lookup_c
 
     paddle = ("paddle_customer_id", "paddle_subscription_id", "paddle_status", "period_ends_at",
               "ends_at", "paddle_occurred_at", "first_paid_at",
-              # (and 0040's, below)
-              "paddle_price_id")
+              # (and 0040's and 0041's, below)
+              "paddle_price_id", "cancel_owed_since")
     with psycopg.connect(database) as conn:
         assert conn.execute(
             "SELECT to_jsonb(plan) - %s::text[] FROM reader_plans AS plan ORDER BY owner_id",
@@ -1536,8 +1537,9 @@ def test_checkouts_start_empty_no_plan_changes_and_the_check_lists_only_stored_l
     apply_migrations(database)
 
     with psycopg.connect(database) as conn:
-        assert conn.execute("SELECT to_jsonb(plan) - 'paddle_price_id' FROM reader_plans AS plan"
-                            " ORDER BY owner_id").fetchall() == plans
+        # (Less 0041's column, below.)
+        assert conn.execute("SELECT to_jsonb(plan) - 'paddle_price_id' - 'cancel_owed_since'"
+                            " FROM reader_plans AS plan ORDER BY owner_id").fetchall() == plans
         assert conn.execute("SELECT count(*) FROM reader_plans WHERE paddle_price_id IS NOT NULL"
                             ).fetchone()[0] == 0
         assert [conn.execute(query, (reader,)).fetchone()
@@ -1581,6 +1583,66 @@ def test_checkouts_start_empty_no_plan_changes_and_the_check_lists_only_stored_l
         assert sorted(conn.execute(listed, (10,)).fetchall()) == sorted(
             [(paying, subs[paying]), (ended, subs[ended])])
         assert len(conn.execute(listed, (1,)).fetchall()) == 1
+        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
+
+
+# ---- 0041: the cancel owed when a paying reader asks to delete (ADR 0045 step 7) --------------------
+
+CANCEL_OWED = 41
+
+
+def test_no_cancel_is_owed_after_the_migration_and_owed_cancels_are_checked_first(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0041 with readers paying through Paddle:
+    a plan changed or a cancel marked owed by the migration; the check's list no longer a
+    security definer with its search path, callable by PUBLIC, answering an erased account or
+    more than asked; or a plan whose cancel is owed not first in the list (with many plans, the
+    regular check could take hours to reach it while the reader's renewal draws near)."""
+    _apply_before(database, CANCEL_OWED, monkeypatch)
+    readers = [uuid.uuid4() for _ in range(12)]
+    erased = uuid.uuid4()
+    subs = {owner: "sub_" + owner.hex[:26] for owner in (*readers, erased)}
+    with psycopg.connect(database) as conn:
+        for owner in (*readers, erased):
+            conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (owner,))
+            conn.execute("INSERT INTO reader_plans (owner_id, paddle_subscription_id,"
+                         " paddle_status, paddle_occurred_at) VALUES (%s, %s, 'active', now())",
+                         (owner, subs[owner]))
+        conn.execute("UPDATE users SET status = 'deleted', deleted_at = now() WHERE id = %s",
+                     (erased,))
+        plans = conn.execute("SELECT to_jsonb(plan) FROM reader_plans AS plan ORDER BY owner_id"
+                             ).fetchall()
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT to_jsonb(plan) - 'cancel_owed_since' FROM reader_plans AS plan"
+                            " ORDER BY owner_id").fetchall() == plans
+        assert conn.execute("SELECT count(*) FROM reader_plans WHERE cancel_owed_since IS NOT NULL"
+                            ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT prosecdef, provolatile, proconfig, pg_get_function_identity_arguments(oid),"
+            " pg_get_function_result(oid) FROM pg_proc WHERE oid = %s::regprocedure",
+            (_PLANS_TO_CHECK,)).fetchone() == (
+            True, "v", ["search_path=pg_catalog, public, pg_temp"], "size integer",
+            "TABLE(reader uuid, subscription text)")
+        assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
+                                (_PLANS_TO_CHECK,)).fetchone()[0]
+        listed = "SELECT reader, subscription FROM paddle_plans_to_check(%s)"
+        assert sorted(conn.execute(listed, (50,)).fetchall()) == sorted(
+            (owner, subs[owner]) for owner in readers)
+        # Owed: asked to delete, the plan live with no scheduled end. Already cancelled to the
+        # period's end, or ended: owed nothing more, so not ahead of the rest.
+        owed, cancelled, ended = readers[-1], readers[-2], readers[-3]
+        conn.execute("UPDATE reader_plans SET cancel_owed_since = now() WHERE owner_id = ANY(%s)",
+                     ([owed, cancelled, ended],))
+        conn.execute("UPDATE reader_plans SET ends_at = now() + interval '9 days'"
+                     " WHERE owner_id = %s", (cancelled,))
+        conn.execute("UPDATE reader_plans SET paddle_status = 'canceled' WHERE owner_id = %s",
+                     (ended,))
+        for _ in range(8):
+            assert conn.execute(listed, (1,)).fetchall() == [(owed, subs[owed])]
+        assert len(conn.execute(listed, (5,)).fetchall()) == 5
         assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
 
 
