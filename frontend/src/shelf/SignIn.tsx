@@ -137,7 +137,8 @@ export function SignIn({ ended = false, paymentLink = null }: { ended?: boolean;
                 ? "You’ve been signed out. Sign in again and I’ll take you straight back to where you were."
                 : "Bring a book you love. Mothli reads along with you and only knows it as far as you’ve read, so it can never spoil what happens next."}
             </p>
-            {!ended && <p className="ml-spread-lede">{SIGN_UP_LINE}</p>}
+            {/* Not beside a payment link's checkout: that reader has used Mothli and is joining. */}
+            {!ended && !paymentLink && <p className="ml-spread-lede">{SIGN_UP_LINE}</p>}
             <div className="ml-spread-foot">
               {deleted && (
                 <p className="ml-welcome-note" role="status">
