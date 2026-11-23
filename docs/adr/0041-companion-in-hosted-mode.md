@@ -747,7 +747,8 @@ history import (part 11). Changes and missing screens:
 - Signed out mid-read (401): back to sign-in and then to the same place.
 - Terms and privacy pages (they must name the writer's provider and TypeSafe, map B9.7). Built by
   ADR 0045 step 8 (23 November 2026): `/terms`, `/privacy`, `/refunds` and `/contact`, with the
-  writer named as OpenAI or Anthropic and TypeSafe as the checker.
+  writer named as the server's settings choose it (OpenAI, Anthropic, or another
+  OpenAI-compatible service's host) and TypeSafe as the checker.
 
 ### 9. Testing: what every part must prove before it merges
 

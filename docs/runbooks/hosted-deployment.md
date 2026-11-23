@@ -582,9 +582,11 @@ and are true to what the code does on the day they are dated. Before going live,
 by someone who knows the law where you are: ADR 0045's "Step 8 built" lists each statement that is
 a legal choice (the law that applies, the limit on responsibility, the minimum age of 16, who is
 responsible for readers' data and on what basis, data handled outside the EU) and the ones you
-must check yourself: name your sign-in service, your AI writer (OpenAI or Anthropic) and the
-company you rent the server from, if you want them named; and check what each AI company keeps of
-what it is sent, under your account's terms with them.
+must check yourself: name your sign-in service and the company you rent the server from, if you
+want them named; and check what each AI company keeps of what it is sent, under your account's
+terms with them. The privacy page names the AI company your chat uses by itself, from the AI keys
+in `deploy/app.env` (Anthropic, OpenAI, or the host in `OPENAI_BASE_URL`), and with no keys says
+the chat is not open here.
 
 The proxy serves the app's page at those four addresses (`deploy/Caddyfile`, `@pages`); nothing
 else changes in it, and the browser's security policy is the same as before.
