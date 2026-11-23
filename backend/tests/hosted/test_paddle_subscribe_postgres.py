@@ -562,10 +562,13 @@ def test_the_plan_says_state_kind_date_cancel_and_retry_and_never_an_amount(shop
     client, tokens, standin = shop
     a, b = readers["a"], readers["b"]
     keys = {"state", "why", "plan", "next_date", "subscribed", "cancel_scheduled",
-            "payment_retrying"}
+            "payment_retrying", "manage", "checkout"}
     new = plan(client, tokens, "a")
+    # ``manage`` and ``checkout`` say what this server can do (no client token here: no checkout
+    # in the browser); tests/hosted/test_plan_sheet_setup.py holds them.
     assert new == {"state": "new", "why": None, "plan": None, "next_date": None,
-                   "subscribed": False, "cancel_scheduled": False, "payment_retrying": False}
+                   "subscribed": False, "cancel_scheduled": False, "payment_retrying": False,
+                   "manage": True, "checkout": None}
     messages.stamp(tenant_dsn, a)
     free = plan(client, tokens, "a")
     assert (free["state"], free["plan"]) == ("free", None)
