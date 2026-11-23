@@ -12,11 +12,17 @@ export const BUSY_LINE = "Give me a second — I’m still on your last question
 
 const finalLines = new Set([ALLOWANCE_LINE]);
 
-/** The line to show, and whether asking again now could help (it cannot at the allowance). */
-export function companionPause(reason: unknown): { line: string; final: boolean } | null {
+const BOOK_PLACE = "Your book and your place are right here.";
+const SHELF_PLACE = "Your books and your place in each are right here.";
+
+/** The line to show, and whether asking again now could help (it cannot at the allowance).
+ * `shelf`: said in the home chat, where the reader is on their shelf, so it speaks of the books
+ * rather than one book (the server says it so too); only those words change. */
+export function companionPause(reason: unknown, { shelf = false } = {}): { line: string; final: boolean } | null {
   if (!(reason instanceof ApiError)) return null;
   if (reason.code === "allowance_reached") {
-    const line = reason.message && reason.status === 429 ? reason.message : ALLOWANCE_LINE;
+    const said = reason.message && reason.status === 429 ? reason.message : ALLOWANCE_LINE;
+    const line = shelf ? said.replace(BOOK_PLACE, SHELF_PLACE) : said;
     finalLines.add(line);
     return { line, final: true };
   }

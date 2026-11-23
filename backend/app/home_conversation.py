@@ -427,10 +427,12 @@ def stream_home(body, catalog, store, settings, client, worker, elsewhere, recol
             large = "per-call" in str(exc)
             # Hosted mode: the reader's or the platform's allowance (ADR 0041 section 6), or
             # the gate (ADR 0045 step 5), whose event is a 402 with why.
+            # Said as for the shelf the reader is on ("Your books…"), not for one book.
             allowance = exc.__cause__ if getattr(exc.__cause__, "reader_message", None) else None
             yield {"type": "error", "status": 413 if large else 429,
                    "message": "request too large" if large else "book cost ceiling reached",
-                   **({"code": allowance.code, "message": allowance.reader_message,
+                   **({"code": allowance.code,
+                       "message": getattr(allowance, "shelf_message", allowance.reader_message),
                        **getattr(allowance, "extra", {})} if allowance else {})}
         except AskRetrievalLimit as exc:
             failure = exc

@@ -246,7 +246,7 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
       setSpoken([]);
       // Mothli needs the plan: the invitation takes the conversation's place, and no line is said.
       if (needsPlan(reason)) return;
-      const paused = companionPause(reason);
+      const paused = companionPause(reason, { shelf: true });
       if (paused) setPause(paused.line);
       else setError(reason instanceof ApiError && reason.status === 503
         ? "Mothli can’t check its reply right now, so it said nothing. Try again in a moment."

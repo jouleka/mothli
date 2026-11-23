@@ -16,7 +16,10 @@ from test_home_conversation import ask  # noqa: E402
 from test_page_read_frontier import confirm, page_env as page_env  # noqa: E402,F401
 from test_stream_conversation import events_of, stream_models  # noqa: E402
 
+from datetime import date  # noqa: E402
+
 from app.catalog.catalog import HOME_SPEND  # noqa: E402
+from app.hosted.companion import spend  # noqa: E402
 from app.hosted.companion.spend import (  # noqa: E402
     PlanNeeded, PlatformAllowanceReached, ReaderAllowanceReached)
 
@@ -92,6 +95,32 @@ def test_a_home_reply_at_the_allowance_ends_with_its_code_and_stores_nothing(bar
     assert seen["prompt"] == []
     assert app.state.catalog.get_turns(None, incarnation="home") == []
     assert app.state.catalog.get_costs(HOME_SPEND) == []
+
+
+def test_a_home_reply_at_a_rest_line_speaks_of_the_shelf_not_one_book(bare, monkeypatch):
+    """The break it catches (L6 of the plan walk, 23 November 2026): the home chat, where the
+    reader is on their shelf, told "Your book and your place are right here." Only the words
+    change: the same refusal, the same code, nobody rested otherwise or for longer."""
+    api, app, _settings = bare
+    shelf = "Your books and your place in each are right here."
+    for line, said in (
+        (spend._DAY, "We’ve talked a lot today, so I’m resting until tomorrow. " + shelf),
+        (spend._MONTH, "We’ve talked our way through this month, so I’ll be back at the start of "
+                       "the next. " + shelf),
+        (spend._PLATFORM, "I’m resting for the rest of today and I’ll be back tomorrow. " + shelf),
+        (spend.first_month_line(date(2026, 12, 21)),
+         "We’ve talked our way through your first month together already! I’ll be back on "
+         "21 December. " + shelf),
+    ):
+        stand_ins(app, monkeypatch, "Hi, I'm Mothli, and I read along with you.")
+        refusal = spend.ReaderAllowanceReached("day", line)
+        refuse(app.state.catalog, monkeypatch, refusal)
+        assert ask(api, "hello") == [{"type": "error", "status": 429, "code": "allowance_reached",
+                                      "message": said}]
+        assert "Your book and" not in said
+        # In a book the line is as it was.
+        assert refusal.reader_message == line and line.endswith("Your book and your place are right here.")
+        monkeypatch.undo()
 
 
 def test_a_local_ceiling_ends_exactly_as_before(bare, monkeypatch):
