@@ -123,6 +123,7 @@ def test_every_tenant_table_has_non_null_owner_and_rls(database: str) -> None:
         "recollection_cursors",
         "name_words",
         "reader_plans",
+        "paddle_events",
     }
 
     with psycopg.connect(database) as conn:
@@ -162,7 +163,10 @@ def test_every_tenant_table_has_non_null_owner_and_rls(database: str) -> None:
 
     assert expected_tables <= tables
     assert tenant_tables <= owner_tables
-    assert nullable_owner_columns == []
+    # One table may hold a row with no account: a Paddle message about one of Mothli's prices
+    # that names no account, or one unknown or erased (ADR 0045 step 3). Its rows that do name an
+    # account go with the account (the purge reads every owner_id column).
+    assert nullable_owner_columns == [("paddle_events",)]
     assert tenant_tables <= rls_tables
 
 
@@ -997,7 +1001,7 @@ def test_a_new_database_has_one_notes_account_that_never_signs_in(database: str)
         assert conn.execute("SELECT count(*) FROM books WHERE owner_id = %s",
                             (account,)).fetchone()[0] == 0
         # 0035 adds the later-name check, 0036 the background budget, 0037 the start of the free
-        # weeks, 0038 the gift (their own tests below).
+        # weeks, 0038 the gift, 0039 the Paddle look-up (their own tests below).
         assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
     apply_migrations(database)
     with psycopg.connect(database) as conn:
@@ -1339,8 +1343,10 @@ def test_reader_plans_start_empty_change_nothing_else_and_only_the_start_writes(
 READER_GIFTS = 38
 _SET_GIFT = "set_gift(uuid,date)"
 # The SECURITY DEFINER functions migrations after the door add: 0035 the later-name check, 0036
-# the background budget, 0037 the start of the free weeks, 0038 the gift.
-_LATER_DEFINERS = {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE, _SET_GIFT}
+# the background budget, 0037 the start of the free weeks, 0038 the gift, 0039 the look-up of
+# which account a Paddle message is for.
+_PADDLE_READER = "paddle_reader(text,uuid)"
+_LATER_DEFINERS = {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE, _SET_GIFT, _PADDLE_READER}
 
 
 def test_gifts_start_empty_change_no_plan_and_only_set_gift_writes_them(
@@ -1391,6 +1397,90 @@ def test_gifts_start_empty_change_no_plan_and_only_set_gift_writes_them(
                             " ('set_gift', 'reader_plan_state')").fetchone()[0] == 2
         assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
 
+
+# ---- 0039: Paddle's messages (ADR 0045 step 3) -----------------------------------------------------
+
+PADDLE_EVENTS = 39
+
+
+def test_paddle_columns_start_empty_change_no_plan_and_only_the_billing_lookup_crosses_accounts(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0039 with a reader in their free weeks, a
+    gifted reader and one who never asked: anyone made paying, a start or a gift moved, a state
+    changed by the migration; the recorded messages' table without forced row security, with a
+    privilege for PUBLIC, or keeping a payload; the look-up callable by PUBLIC, not a security
+    definer, with another search path or other arguments, or answering for an erased account; or
+    the state made a security definer or left callable by PUBLIC when it was made again."""
+    _apply_before(database, PADDLE_EVENTS, monkeypatch)
+    started, gifted, never, erased = (uuid.uuid4() for _ in range(4))
+    with psycopg.connect(database) as conn:
+        for reader in (started, gifted, never, erased):
+            conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (reader,))
+        conn.execute("UPDATE users SET status = 'deleted', deleted_at = now() WHERE id = %s",
+                     (erased,))
+        conn.execute("INSERT INTO reader_plans (owner_id, free_started_at)"
+                     " VALUES (%s, now() - interval '3 days')", (started,))
+        conn.execute("SELECT set_gift(%s, '9999-12-31'::date)", (gifted,))
+        plans = conn.execute("SELECT to_jsonb(plan) FROM reader_plans AS plan ORDER BY owner_id"
+                             ).fetchall()
+        query = ("SELECT state, why, free_started_at, free_ends_at, paid_by, gift_until,"
+                 " free_spent_usd FROM reader_plan_state(%s, 14, 2.10)")
+        states = [conn.execute(query, (reader,)).fetchone() for reader in (started, gifted, never)]
+    apply_migrations(database)
+
+    paddle = ("paddle_customer_id", "paddle_subscription_id", "paddle_status", "period_ends_at",
+              "ends_at", "paddle_occurred_at")
+    with psycopg.connect(database) as conn:
+        assert conn.execute(
+            "SELECT to_jsonb(plan) - %s::text[] FROM reader_plans AS plan ORDER BY owner_id",
+            (list(paddle),)).fetchall() == plans
+        assert conn.execute(
+            "SELECT count(*) FROM reader_plans WHERE num_nonnulls(" + ", ".join(paddle) + ") > 0"
+        ).fetchone()[0] == 0
+        assert [conn.execute(query, (reader,)).fetchone()
+                for reader in (started, gifted, never)] == states
+        assert conn.execute("SELECT paddle_status, period_ends_at, plan_ends_at FROM"
+                            " reader_plan_state(%s, 14, 2.10)", (never,)).fetchone() == (
+            None, None, None)
+        assert conn.execute("SELECT count(*) FROM paddle_events").fetchone()[0] == 0
+        columns = [row[0] for row in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public'"
+            " AND table_name = 'paddle_events' ORDER BY ordinal_position")]
+        assert columns == ["event_id", "event_type", "occurred_at", "owner_id", "outcome",
+                           "received_at"]
+        for table in ("paddle_events", "reader_plans"):
+            assert conn.execute("SELECT relrowsecurity AND relforcerowsecurity FROM pg_class"
+                                " WHERE oid = %s::regclass", (f"public.{table}",)).fetchone()[0]
+            assert not any(conn.execute(
+                "SELECT has_table_privilege('public', %s, %s)", (f"public.{table}", privilege)
+            ).fetchone()[0] for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"))
+        assert conn.execute(
+            "SELECT prosecdef, provolatile, proconfig, pg_get_function_identity_arguments(oid),"
+            " pg_get_function_result(oid) FROM pg_proc WHERE oid = %s::regprocedure",
+            (_PADDLE_READER,)).fetchone() == (
+            True, "s", ["search_path=pg_catalog, public, pg_temp"], "subscription text, named uuid",
+            "uuid")
+        assert conn.execute(
+            "SELECT prosecdef, provolatile, pg_get_function_identity_arguments(oid)"
+            " FROM pg_proc WHERE oid = %s::regprocedure", (_PLAN_STATE,)).fetchone() == (
+            False, "s", "reader uuid, free_days integer, free_usd numeric")
+        for function in (_PADDLE_READER, _PLAN_STATE):
+            assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
+                                    (function,)).fetchone()[0]
+        lookup = "SELECT paddle_reader(%s, %s)"
+        sub = "sub_" + "a" * 26
+        assert conn.execute(lookup, (sub, started)).fetchone()[0] == started
+        assert conn.execute(lookup, (sub, erased)).fetchone()[0] is None
+        assert conn.execute(lookup, (sub, uuid.uuid4())).fetchone()[0] is None
+        assert conn.execute(lookup, (sub, None)).fetchone()[0] is None
+        conn.execute("UPDATE reader_plans SET paddle_subscription_id = %s, paddle_status ="
+                     " 'active', paddle_occurred_at = now() WHERE owner_id = %s", (sub, gifted))
+        assert conn.execute(lookup, (sub, started)).fetchone()[0] == gifted
+        with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+            conn.execute("UPDATE reader_plans SET paddle_status = 'active' WHERE owner_id = %s",
+                         (started,))
+        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
 
 def test_rls_uses_transaction_local_owner_context(database: str) -> None:
     apply_migrations(database)

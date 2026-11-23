@@ -27,6 +27,7 @@ from app.ingest.worker import IngestWorker
 from app.hosted.auth import account as account_api
 from app.hosted.auth import api as auth_api
 from app.hosted.auth.oidc import OIDCClient
+from app.hosted import billing as hosted_billing
 from app.hosted.auth.repository import PostgresAuthRepository
 from app.hosted.companion import routes as companion_routes
 from app.hosted.companion import set_connection_limit
@@ -532,6 +533,9 @@ def create_app(
         app.include_router(companion_routes.reader_router)
         # The free library (ADR 0041 part 11): the local paths, without covers.
         app.include_router(hosted_classics.router)
+        # Paddle's messages (ADR 0045 step 3): the route exists only with its secret set.
+        if settings.paddle_webhook_secret is not None:
+            app.include_router(hosted_billing.router)
         app.add_middleware(_EpubUploadBodyLimit, max_file_bytes=settings.epub_max_upload_bytes)
         app.add_middleware(_HostedNoStore)
     else:

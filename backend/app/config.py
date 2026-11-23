@@ -6,6 +6,7 @@ client with ``allow_stub=settings.allow_stub``; if no real LLM provider resolves
 not set, the client RAISES and the app refuses to start (default-deny — a silent stub deploy would
 produce garbage extractions). The key never leaves the process; settings are never logged wholesale.
 """
+import re
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -15,6 +16,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # app/config.py -> app -> backend -> repo root (D-A7: parents[2], verified against the layout)
 ENV_FILE = str(Path(__file__).resolve().parents[2] / ".env")
+# Paddle's ids are a prefix and 26 lowercase letters or digits; its notification destination's
+# secret key starts pdl_ntfset_ (developer.paddle.com/webhooks/signature-verification).
+_PADDLE_PRICE = re.compile(r"pri_[a-z0-9]{26}")
+_PADDLE_SECRET = re.compile(r"pdl_ntfset_[A-Za-z0-9_]{16,200}")
+
+
+def _items(value: str) -> tuple[str, ...]:
+    """A comma-separated setting's values, stripped, empty ones dropped."""
+    return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
 class Settings(BaseSettings):
@@ -184,6 +194,20 @@ class Settings(BaseSettings):
     hosted_story_memory_new_chapters_per_day: int = Field(default=30, ge=0, le=100000)
     hosted_story_memory_new_chapters_per_month: int = Field(default=300, ge=0, le=1000000)
     hosted_story_memory_new_files_per_month: int = Field(default=5, ge=0, le=100000)
+    # ADR 0045 step 3: Paddle's messages (POST /api/billing/paddle). With no PADDLE_WEBHOOK_SECRET
+    # the route does not exist. The secret is the notification destination's (Paddle shows it
+    # once); the price ids are Mothli's own, each setting one id or several separated by commas
+    # (a price replaced in Paddle stays here while readers keep it). Paddle's account is shared
+    # with another product of the owner's: a message about any other price is answered and kept
+    # nowhere. HOSTED_BILLING_DSN is the billing role, the only one that writes a reader's plan.
+    paddle_environment: Literal["sandbox", "production"] = "sandbox"
+    paddle_webhook_secret: SecretStr | None = None
+    paddle_price_monthly: str = ""
+    paddle_price_yearly: str = ""
+    # How far a message's signed time may be from the server's clock. Paddle's own libraries
+    # allow five seconds; the repeat check by event id also stops a replay.
+    paddle_webhook_tolerance_seconds: int = Field(default=300, ge=5, le=3600)
+    hosted_billing_dsn: SecretStr | None = None
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
@@ -254,6 +278,28 @@ class Settings(BaseSettings):
             raise ValueError("HOSTED_STORY_MEMORY is a hosted-mode setting")
         if self.hosted_story_memory and not self.reader_conversation_jev:
             raise ValueError("story memory in hosted mode requires READER_CONVERSATION_JEV")
+        # ADR 0045 step 3: Paddle's messages. A line left empty is no secret.
+        if self.paddle_webhook_secret is not None \
+                and not self.paddle_webhook_secret.get_secret_value():
+            self.paddle_webhook_secret = None
+        for label, value in (("PADDLE_PRICE_MONTHLY", self.paddle_price_monthly),
+                             ("PADDLE_PRICE_YEARLY", self.paddle_price_yearly)):
+            if any(not _PADDLE_PRICE.fullmatch(item) for item in _items(value)):
+                raise ValueError(f"{label} must be Paddle price ids (pri_...), separated by commas")
+        if set(_items(self.paddle_price_monthly)) & set(_items(self.paddle_price_yearly)):
+            raise ValueError("PADDLE_PRICE_MONTHLY and PADDLE_PRICE_YEARLY share a price id")
+        if self.paddle_webhook_secret is not None:
+            if not hosted:
+                raise ValueError("PADDLE_WEBHOOK_SECRET is a hosted-mode setting")
+            if not _PADDLE_SECRET.fullmatch(self.paddle_webhook_secret.get_secret_value()):
+                raise ValueError("PADDLE_WEBHOOK_SECRET must be the notification destination's "
+                                 "secret key as Paddle shows it (pdl_ntfset_...)")
+            missing = [name for name, value in (
+                ("HOSTED_BILLING_DSN", self.hosted_billing_dsn),
+                ("PADDLE_PRICE_MONTHLY or PADDLE_PRICE_YEARLY", self.paddle_prices()))
+                if not value]
+            if missing:
+                raise ValueError("Paddle's messages require " + ", ".join(missing))
         if self.deployment_mode != "hosted":
             return self
 
@@ -366,6 +412,11 @@ class Settings(BaseSettings):
         the app at sign-in (``GET /api/auth/session``), so it shows no chat where there is none."""
         return bool(self.reader_conversation_stream and self.reader_page_context
                     and self.reader_read_map)
+
+    def paddle_prices(self) -> frozenset[str]:
+        """Mothli's own Paddle price ids, monthly and yearly, old and current: a message about
+        any other price is not Mothli's (ADR 0045 step 3)."""
+        return frozenset(_items(self.paddle_price_monthly) + _items(self.paddle_price_yearly))
 
     def oidc_signing_algorithm_values(self) -> tuple[str, ...]:
         return tuple(item.strip() for item in self.oidc_signing_algorithms.split(",") if item.strip())

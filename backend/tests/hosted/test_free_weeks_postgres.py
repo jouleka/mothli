@@ -459,9 +459,10 @@ def test_the_free_weeks_change_nothing_a_reply_reads_searches_or_sends(
         make_app, readers, database, monkeypatch):
     """Spoiler safety (ADR 0045 section 9): the plan check only admits or refuses a model call.
     The break it catches: anything a reply reads, searches or sends that differs because the
-    reader is in their free weeks, or gifted (ADR 0045 step 2). The same reader, book, place and
-    question, in the free weeks, on day 15, and with a gift: the passages retrieved, the writer's
-    prompt and system, and everything Jev is given are identical."""
+    reader is in their free weeks, or gifted (ADR 0045 step 2), or paying through Paddle (step
+    3). The same reader, book, place and question, in the free weeks, on day 15, with a gift and
+    on a Paddle plan: the passages retrieved, the writer's prompt and system, and everything Jev
+    is given are identical."""
     a, book, app = opened(make_app, readers)
     a.read(book, 2, 1, 5)
     retrieved = []
@@ -492,7 +493,18 @@ def test_the_free_weeks_change_nothing_a_reply_reads_searches_or_sends(
         conn.execute("SELECT set_gift(%s, '9999-12-31'::date)", (a.owner,))
     assert state(database, a.owner) == ("paying", None)
     gifted = asked()
+    # ADR 0045 step 3: paying through Paddle, as a checked message leaves the row.
+    with psycopg.connect(database) as conn:
+        conn.execute("SELECT set_gift(%s, NULL::date)", (a.owner,))
+        conn.execute("UPDATE reader_plans SET paddle_customer_id = %s,"
+                     " paddle_subscription_id = %s, paddle_status = 'active',"
+                     " paddle_occurred_at = now() WHERE owner_id = %s",
+                     ("ctm_" + "c" * 26, "sub_" + "s" * 26, a.owner))
+        assert conn.execute("SELECT state, paid_by FROM reader_plan_state(%s, 14, 2.10)",
+                            (a.owner,)).fetchone() == ("paying", "paddle")
+    paying = asked()
     assert in_the_free_weeks[0] and in_the_free_weeks[2] and in_the_free_weeks[3]
     assert after_them == in_the_free_weeks
     assert gifted == in_the_free_weeks
+    assert paying == in_the_free_weeks
     assert "Corvus moved lamp 6" not in "".join(in_the_free_weeks[2])
