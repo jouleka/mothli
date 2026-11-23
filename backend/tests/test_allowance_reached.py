@@ -18,7 +18,7 @@ from test_stream_conversation import events_of, stream_models  # noqa: E402
 
 from app.catalog.catalog import HOME_SPEND  # noqa: E402
 from app.hosted.companion.spend import (  # noqa: E402
-    PlatformAllowanceReached, ReaderAllowanceReached)
+    PlanNeeded, PlatformAllowanceReached, ReaderAllowanceReached)
 
 DAY = ReaderAllowanceReached("day", "Mothli has talked a lot with you today. Back tomorrow.")
 BUSY = ReaderAllowanceReached("calls_in_flight", "Mothli is still answering you.",
@@ -102,3 +102,34 @@ def test_a_local_ceiling_ends_exactly_as_before(bare, monkeypatch):
     refuse(app.state.catalog, monkeypatch, RuntimeError("book USD cost ceiling reached"))
     assert ask(api, "hello") == [{"type": "error", "status": 429,
                                   "message": "book cost ceiling reached"}]
+
+
+# ADR 0045 step 5: a reader whose free weeks end (or whose plan stops) between the route's gate and
+# the reply's first call is refused there, and the stream's error event is the gate's answer.
+GATE = PlanNeeded("ceiling")
+
+
+def test_the_gate_met_by_a_book_reply_ends_it_with_402_and_why(page_env, monkeypatch):
+    """The break it catches: a 429 or an allowance line where the screens look for the gate
+    (status 402, code ``mothli_plan`` and why, as the routes' own refusal), why lost, or a model
+    called past the refusal."""
+    api, bid, app, settings = page_env
+    point = confirm(api, bid)
+    settings.reader_conversation_jev = settings.reader_conversation_stream = True
+    looked = stream_models(app, monkeypatch, "Mara put the cobalt key in a red tin.")
+    refuse(app.state.catalog, monkeypatch, GATE)
+    response = api.post(f"/api/books/{bid}/ask/stream",
+                        json={"question": "What did Mara do?", "read_frontier": point})
+    assert events_of(response) == [{"type": "error", "status": 402, "code": "mothli_plan",
+                                    "why": "ceiling", "message": "Mothli needs the plan"}]
+    assert looked == [] and "cobalt" not in response.text
+
+
+def test_the_gate_met_by_a_home_reply_ends_it_with_402_and_why(bare, monkeypatch):
+    """As in a book, on the home screen."""
+    api, app, _settings = bare
+    seen = stand_ins(app, monkeypatch, "Hi, I'm Mothli, and I read along with you.")
+    refuse(app.state.catalog, monkeypatch, PlanNeeded("time"))
+    assert ask(api, "hello") == [{"type": "error", "status": 402, "code": "mothli_plan",
+                                  "why": "time", "message": "Mothli needs the plan"}]
+    assert seen["prompt"] == []

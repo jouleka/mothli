@@ -46,7 +46,7 @@ from tests.hosted.test_companion_stream_postgres import (
     restore_caps,  # noqa: F401  (autouse: the hosted app sets this process's caps)
 )
 from tests.hosted.test_deploy import load_roles
-from tests.hosted.test_free_weeks_postgres import refused, shelve, stamp
+from tests.hosted.test_free_weeks_postgres import gated, refused, shelve, stamp
 
 pytestmark = pytest.mark.postgres
 
@@ -375,8 +375,9 @@ def test_each_status_gives_the_state_of_section_1(paddle, database, readers):
 def test_a_reader_who_paid_and_stopped_is_never_back_in_the_free_weeks(paddle, tenant_dsn,
                                                                        database, readers):
     """The break it catches: a reader who subscribed during their free weeks and cancelled
-    given the rest of the free weeks (and the free ceiling) back; or a gift not winning over a
-    cancelled plan while it lasts."""
+    given the rest of the free weeks (and the free ceiling) back, or answered at all: ended with
+    why "plan", they meet the gate (ADR 0045 step 5), not the paying readers' day (step 1's
+    stopgap); or a gift not winning over a cancelled plan while it lasts."""
     a = readers["a"]
     book = shelve(database, a)
     stamp(tenant_dsn, a)
@@ -386,13 +387,11 @@ def test_a_reader_who_paid_and_stopped_is_never_back_in_the_free_weeks(paddle, t
     assert plan_of(database, a) == ("paying", None, "paddle")
     post(paddle, message(sub_id("a"), "canceled", reader=a, at=now + timedelta(seconds=1)))
     assert plan_of(database, a) == ("ended", "plan", None)
-    # Not held by the free ceiling: the free weeks are not theirs any more.
+    # Not back in the free weeks: the gate, with nothing spent.
     set_spend_limits(reader_usd_per_day=Decimal("0.10"), reader_usd_per_month=2,
                      platform_usd_per_day=100, free_usd=Decimal("0.05"))
     chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
-    spend(chat, book, 0.06)
-    spend(chat, book, 0.04)
-    refused(chat, book, "day", _DAY)
+    gated(chat, book, "plan")
     with psycopg.connect(database) as conn:
         conn.execute("SELECT set_gift(%s, '9999-12-31'::date)", (a,))
     assert plan_of(database, a) == ("paying", None, "gift")
