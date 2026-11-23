@@ -428,6 +428,24 @@ prices. Each run prints one line, `checked 12, changed 0, failed 0`; `failed` ab
 was unreachable or refused (the run stops at the first sign Paddle is down and tries again next
 hour). `--size` (1 to 1000) and `--pause` (seconds, 0.25 to 60) change the page and the pause.
 
+**The client token** (ADR 0045 step 4, the plan sheet). The reader's browser uses it to show the
+two prices from Paddle and open Paddle's checkout. Paddle calls it safe to publish, but it is still
+set here, never written in the app:
+
+1. In Paddle: **Developer tools > Authentication > Client-side tokens > New client-side token**.
+   Name it "Mothli web". A sandbox token starts `test_`, a live one `live_`.
+2. In `deploy/app.env`, remove the `#` from `PADDLE_CLIENT_TOKEN` and paste it. It must come from
+   the same Paddle as `PADDLE_ENVIRONMENT` (the server refuses to start otherwise) and needs
+   `PADDLE_API_KEY` set (the server makes every checkout). Then
+   `docker compose -f deploy/compose.yaml up -d --wait`.
+3. Live only: in Paddle's dashboard, under **Website approval**, add your domain. Paddle's live
+   checkout opens only on an approved domain; the sandbox approves domains by itself
+   ([go-live checklist](https://developer.paddle.com/build/go-live-checklist/)).
+
+Without it, Your account still shows where each reader stands, with no "See the plan". The
+browser's security policy allows Paddle's own addresses for its script, its checkout window and
+its prices (`backend/app/main.py`, `deploy/Caddyfile`); nothing to set for that.
+
 ## 5. Restoring
 
 ### 5.1 Test a backup (once a month, on the live server)

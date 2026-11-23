@@ -1,7 +1,7 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
-**Status:** Proposed (2026-11-20). Steps 1, 2, 3 and 6 and the server half of step 4 are built
-(see below); nothing else is. The
+**Status:** Proposed (2026-11-20). Steps 1, 2, 3, 4 (server and screens) and 6 are built (see
+below), short of the sandbox walk; nothing else is. The
 owner's decisions in "What the owner decided" are settled; the numbers and the choices in "Open
 points for the owner" are his to make, and point 7 is decided (23 November 2026).
 
@@ -288,6 +288,78 @@ way); the exact error Paddle gives a cancel inside the 30 minutes, and for a can
 an undo's answers carry an `updated_at` newer than the message they cause; the dashboard's names
 for the key's permissions; the regular check, which has never run from a crontab in the web
 container; and the walk with test cards that section 11 asks for.
+
+**Step 4, screens, built (2026-11-23).** The plan sheet and the plan part of the account sheet.
+Nobody has seen either in a browser yet, and nothing was run against Paddle: Paddle.js is a fake
+`window.Paddle` in every test.
+
+- **What the browser is told.** `GET /api/billing/plan` gains `manage` (whether the cancel, keep
+  and portal routes exist: `PADDLE_API_KEY` is set) and `checkout` (`checkout_setup`: the
+  environment, the client token and the price sold for each plan, the first id of each setting;
+  null without the key, the token or a price). Folded into the plan rather than a route of its
+  own: the sheet needs both together, and one request is one less to fail. New setting
+  `PADDLE_CLIENT_TOKEN`: public by design
+  ([client-side tokens](https://developer.paddle.com/paddle-js/about/client-side-tokens): "safe to
+  publish"), still a setting; `test_` for the sandbox, `live_` for live, then anything but
+  whitespace; requires `PADDLE_API_KEY`. Tests hold that no answer carries the API key, the
+  webhook secret or the billing address.
+- **Paddle.js** (`frontend/src/shelf/paddle.ts`) is added as Paddle's own script tag from
+  `https://cdn.paddle.com/paddle/v2/paddle.js`
+  ([include Paddle.js](https://developer.paddle.com/paddle-js/about/include-paddlejs)), only when
+  the plan sheet opens; no package. `Paddle.Environment.set("sandbox")` first in the sandbox
+  ([environment](https://developer.paddle.com/paddle-js/methods/paddle-environment-set)), then
+  `Paddle.Initialize` once a page with the token and one event callback
+  ([initialize](https://developer.paddle.com/paddle-js/methods/paddle-initialize)). Prices come from
+  `Paddle.PricePreview` with both price ids and no address, so Paddle places the reader by their
+  connection and answers in their currency with tax
+  ([price preview](https://developer.paddle.com/paddle-js/methods/paddle-pricepreview); amounts in
+  the currency's smallest unit, [preview prices](https://developer.paddle.com/api-reference/pricing-preview/preview-prices)).
+  Shown: Paddle's own formatted totals; the yearly plan as a month is its total over twelve,
+  rounded to the smallest unit and formatted for the currency; the saving is
+  `floor((12 × monthly − yearly) × 100 / (12 × monthly))` percent, shown only when it is at least 1.
+  At $12.99 and $79.99: "$6.67 a month, billed yearly" and "$79.99 a year, 48% less than paying
+  monthly." Checkout: `Paddle.Checkout.open({transactionId, customer: {email}, settings:
+  {displayMode: "overlay", locale: "en"}})`
+  ([checkout open](https://developer.paddle.com/paddle-js/methods/paddle-checkout-open)); the
+  reader can change the email there. `checkout.completed` and `checkout.closed`
+  ([events](https://developer.paddle.com/paddle-js/events)) start the wait: the sheet asks
+  `GET /api/billing/plan` every two seconds until `subscribed`, for 60 seconds after a completed
+  payment and 8 after a checkout only closed, then says the payment may still be on its way and to
+  reopen Your account. After a closed checkout (not a completed one) it also offers the plans again.
+- **The browser's security policy.** Paddle publishes no list of addresses (searched its developer
+  pages and its whole documentation text, 23 November 2026). Read instead from Paddle.js 2.13.0
+  itself: the checkout window is `https://buy.paddle.com` (sandbox `sandbox-buy.paddle.com`), the
+  price preview `fetch`es `https://api.paddle.com/pricing-preview` (sandbox `sandbox-api`), and
+  `Initialize` adds the stylesheet `https://cdn.paddle.com/paddle/v2/assets/css/paddle.css`
+  (sandbox `sandbox-cdn`). Allowed exactly those, in `backend/app/main.py`, `deploy/Caddyfile` and
+  `frontend/vite.config.ts`: `script-src` gains `https://cdn.paddle.com`; `style-src` gains
+  `https://cdn.paddle.com https://sandbox-cdn.paddle.com`; `frame-src` gains
+  `https://buy.paddle.com https://sandbox-buy.paddle.com`; `connect-src` gains
+  `https://api.paddle.com https://sandbox-api.paddle.com`. One policy for both environments,
+  because the Caddyfile's is fixed text. Not allowed: `https://public.profitwell.com`, the script
+  Paddle.js adds with a live token for Paddle Retain, which Mothli does not use; the browser
+  blocks it and the checkout does not need it.
+- **Where the plan sheet opens**: from the account sheet only. The chat's, the cast's and
+  "Story so far"'s invitations (step 5) render `<PlanSheet email={session.user.email}
+  onClose={...} />` from `frontend/src/shelf/PlanSheet.tsx`; it reads the plan itself (or takes
+  `plan`), and `onJoined(plan)` is called once the server says the reader is on it. The opener
+  puts focus back.
+- **Choices made**: the account sheet speaks of a New reader too ("Talking with Mothli is free
+  for your first two weeks, starting the first time you ask it something.") and of each way to be
+  Ended, each with "See the plan"; section 6 named only the free weeks' line. A payment being
+  retried shows "Cancel my plan" beside "Update payment details", so cancelling is never hidden. A
+  gifted reader who also holds a plan sees the gift line, then "You have a plan of your own too."
+  (or "Your plan won’t renew." once cancelled) and its buttons; their cancel confirmation names
+  no day, because the plan's renewal is not in the answer while the gift is. Following open point
+  9 (a), the plan sheet says "Join now and your plan starts today." in the free weeks and under a
+  gift. No refund line: a commented place in the sheet waits for open point 8.
+
+Not verifiable without a browser and Paddle's sandbox: that the overlay opens with a server-made
+draft transaction and the prefilled email; the price preview's real answer; that the policy is
+enough (a blocked address shows only in the browser's console); that `Referrer-Policy:
+no-referrer` does not trouble Paddle's domain check (Paddle.js passes the page in its own
+`source_page` parameter); the order of `checkout.completed` and `checkout.closed`; the portal tab
+on phones; and how either sheet looks.
 
 **Step 6 built (2026-11-23).** Background work follows where a reader stands (section 5). No
 migration. Settings `HOSTED_WARMUP_DAYS` (30), `HOSTED_WARMUP_NEW_CHAPTERS` (25) and
@@ -1100,6 +1172,8 @@ Each is a question with choices; the recommendation is first.
 2. That a refund does not end the subscription by itself: no Paddle page read says either way.
 3. Whether Paddle's emails to buyers can be turned off or reworded; nothing here depends on it.
 4. The exact addresses Paddle's script and checkout window need in the browser's security policy.
+   Read from Paddle.js itself with the screens of step 4 (see "Step 4, screens, built"); still to
+   be seen working in a browser.
 5. The shape of `custom_data` in a real message (an older Paddle page describes it as text holding JSON);
    to be seen in the sandbox in step 3.
 6. How long a customer portal link lasts (Paddle says the token is temporary, no figure).
