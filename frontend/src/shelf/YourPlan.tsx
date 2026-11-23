@@ -40,6 +40,27 @@ export const renews = (kind: "monthly" | "yearly", day: string | null) =>
 export const planEnds = (day: string) => `Your plan ends on ${day}.`;
 export const confirmCancel = (day: string) =>
   `Cancel your plan? I’ll stay with you until ${day}, and you won’t be charged again. Your books stay yours, always.`;
+/** Deleting the account while paying (ADR 0045 step 7). Asking to delete cancels the plan at
+ * the end of what was paid for; the reader is signed out at once, so Mothli is theirs again only
+ * if they come back within the 30 days, and then until the day paid for. `eraseBy` is when the
+ * account would be erased: the day said is whichever comes first, truthfully. */
+export const DELETING_PLAN = "Your plan won’t renew, so you won’t be charged again.";
+export function deletingPlanLine(plan: Plan, now = new Date()): string {
+  if (plan.plan === "gift" || !plan.next_date) return DELETING_PLAN;
+  const paidUntil = new Date(plan.next_date);
+  const day = planDay(plan.next_date, now);
+  if (Number.isNaN(paidUntil.getTime()) || !day) return DELETING_PLAN;
+  const eraseBy = now.getTime() + 30 * 24 * 60 * 60 * 1000;
+  return paidUntil.getTime() <= eraseBy
+    ? `${DELETING_PLAN} Change your mind before ${day} and Mothli is still yours until then.`
+    : `${DELETING_PLAN} Change your mind within the 30 days and Mothli is still yours until ${day}.`;
+}
+/** The waiting screen: section 11's words, and the day the plan is paid for until. */
+export const waitingPlanLine = (day: string | null) =>
+  day ? `${ACCOUNT_PLAN_LINES.wontRenew} It’s paid for until ${day}.` : ACCOUNT_PLAN_LINES.wontRenew;
+export const KEEP_PLAN_FAILED =
+  "Your account is back, but I couldn’t keep your plan just now. Try again in a few minutes, or keep it from Your account.";
+
 /** The server's own refusals of a change, each with a kind line; nothing on screen changes. */
 export const PLAN_REFUSED: Record<string, string> = {
   try_again_soon: "Your plan is renewing right now. Please try again in a few minutes.",

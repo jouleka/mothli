@@ -18,7 +18,13 @@ A reader who asked to delete their account is kept, signed out and refused every
    plus one ``account.purge``; the ``users`` row stays as a bare id (the audit events refer to
    it), its name and email emptied, and ``erase_after`` cleared, meaning "erased".
 
-A crash after step 1 leaves the account "erasing"; the next run finishes it. Nothing is logged.
+A crash after step 1 leaves the account "erasing"; the next run finishes it. Nothing is logged,
+but for one thing: an account whose Paddle plan still renews (live, with no scheduled end) is
+held before step 1, untouched, with a warning naming no one, until Paddle confirms the cancel the
+reader was owed when they asked to delete (ADR 0045 step 7; the regular check asks for it). Its
+rows go with the rest once it is erased: ``reader_plans``, ``paddle_events`` and
+``paddle_checkouts`` too. Paddle keeps its own records as the seller; Mothli asks it to delete
+nothing.
 
 Then it erases the story notes of a book file nobody holds any more (ADR 0044 section 6). An
 **edition** is the notes account's ``books`` row of one file (marked by ``edition_of``); a
@@ -43,6 +49,7 @@ a new edition from its first chapter.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 import uuid
@@ -56,6 +63,9 @@ from app.hosted.storage import SourceObjectRef
 from app.hosted.tenant.grants import ALL_TABLE_PRIVILEGES, purge_table_privileges
 from app.hosted.tenant.models import OwnerId
 from app.hosted.tenant.repository import ERASED_WITH_THE_BOOK
+
+
+_LOG = logging.getLogger(__name__)
 
 
 class PurgeConfigurationError(RuntimeError):
@@ -186,6 +196,16 @@ class PostgresAccountPurge:
             ).fetchone()
         return int(row[0])
 
+    def plan_renews(self, owner_id: uuid.UUID) -> bool:
+        """Whether this account's Paddle plan, as Mothli last knew it, would still renew: live
+        (``active``, ``trialing`` or ``past_due``) with no scheduled end. Erasing it would leave
+        Paddle charging a reader Mothli no longer knows (ADR 0045 step 7)."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT 1 FROM public.reader_plans WHERE owner_id = %s"
+                " AND paddle_status IN ('active', 'trialing', 'past_due') AND ends_at IS NULL",
+                (owner_id,)).fetchone() is not None
+
     def begin(self, owner_id: uuid.UUID) -> bool:
         """Step 1. True when this account is now being erased (just now or by an earlier run)."""
         with self._connect() as conn:
@@ -194,6 +214,10 @@ class PostgresAccountPurge:
                 UPDATE public.users
                 SET status = 'deleted', deleted_at = now(), updated_at = now()
                 WHERE id = %s AND status = 'deleting' AND erase_after <= now()
+                  AND NOT EXISTS (
+                    SELECT 1 FROM public.reader_plans AS plan WHERE plan.owner_id = users.id
+                      AND plan.paddle_status IN ('active', 'trialing', 'past_due')
+                      AND plan.ends_at IS NULL)
                 """,
                 (owner_id,),
             )
@@ -332,6 +356,7 @@ class PostgresAccountPurge:
 class PurgeResult:
     erased: int
     unfinished: int
+    held: int = 0
 
 
 def purge_account(repository: PostgresAccountPurge, storage, owner_id: uuid.UUID) -> bool:
@@ -345,15 +370,26 @@ def purge_account(repository: PostgresAccountPurge, storage, owner_id: uuid.UUID
 
 def purge_due_accounts(repository: PostgresAccountPurge, storage) -> PurgeResult:
     """Every account that is due, one at a time; one that cannot be finished now (storage away,
-    a lost connection) waits for the next run and never holds up the others."""
-    erased = unfinished = 0
+    a lost connection) waits for the next run and never holds up the others. An account whose
+    Paddle plan still renews is held, untouched, with a warning, until Paddle confirms its
+    cancel: its row is what lets the cancel be asked for, and the only record that Paddle is
+    charging someone, so it is never erased while the plan renews."""
+    erased = unfinished = held = 0
     for owner_id in repository.due():
         try:
+            if repository.plan_renews(owner_id):
+                held += 1
+                # For the operator: no id, nothing of the reader.
+                _LOG.warning("purge held an account whose Paddle plan still renews: it is not "
+                             "erased until Paddle confirms the cancel (the regular check asks "
+                             "for it hourly); see the runbook, 'Deleting an account while "
+                             "paying'")
+                continue
             if purge_account(repository, storage, owner_id):
                 erased += 1
         except Exception:  # noqa: BLE001 - counted; the next run picks the account up again
             unfinished += 1
-    return PurgeResult(erased=erased, unfinished=unfinished)
+    return PurgeResult(erased=erased, unfinished=unfinished, held=held)
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,10 +443,10 @@ def main(argv: list[str] | None = None) -> int:
         editions = purge_unheld_editions(repository, storage)
     finally:
         storage.close()
-    print(f"erased {result.erased}, unfinished {result.unfinished}, waiting {waiting}; "
-          f"editions erased {editions.erased}, unfinished {editions.unfinished}, "
-          f"waiting {editions.waiting}")
-    return 1 if result.unfinished or editions.unfinished else 0
+    print(f"erased {result.erased}, unfinished {result.unfinished}, held {result.held}, "
+          f"waiting {waiting}; editions erased {editions.erased}, "
+          f"unfinished {editions.unfinished}, waiting {editions.waiting}")
+    return 1 if result.unfinished or result.held or editions.unfinished else 0
 
 
 if __name__ == "__main__":

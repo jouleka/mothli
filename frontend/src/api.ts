@@ -309,6 +309,10 @@ export type PlanCheckout = {
   prices: { monthly: string | null; yearly: string | null };
 };
 /** Hosted: where the reader stands with their plan (ADR 0045 section 6). No amount, no count. */
+/** For the waiting screen of a reader who asked to delete their account: whether their plan
+ * won't renew (cancelled, or its cancel on its way), and the day it is paid for until. */
+export type PlanEnding = { wont_renew: boolean; ends: string | null };
+
 export type Plan = {
   state: "new" | "free" | "ended" | "paying";
   why: "time" | "ceiling" | "plan" | null;
@@ -978,6 +982,10 @@ export const api = {
   /** Hosted: undo a scheduled cancel; answers the plan. */
   keepPlan: () =>
     fetch("/api/billing/keep", { method: "POST", headers: csrfHeaders() }).then((r) => j<Plan>(r)),
+  /** Hosted, open to a reader waiting to be erased too: whether their plan won't renew, and the
+   * day it is paid for until (ADR 0045 step 7). 404 where this server manages no plans. */
+  planEnding: () =>
+    fetch("/api/billing/ending", { cache: "no-store" }).then((r) => j<PlanEnding>(r)),
   /** Hosted: a one-time link to Paddle's customer portal. Never kept. */
   planPortal: () =>
     fetch("/api/billing/portal", { method: "POST", headers: csrfHeaders() }).then((r) => j<{ url: string }>(r)),
