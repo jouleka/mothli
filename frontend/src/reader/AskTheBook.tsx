@@ -2,6 +2,7 @@ import {
   type FormEvent,
   type MutableRefObject,
   type ReactNode,
+  useCallback,
   useEffect,
   useId,
   useRef,
@@ -188,6 +189,14 @@ function mergeWithServer(server: AskExchange[], shown: AskExchange[], loadStarte
   const sitting = shown.filter((exchange) => !exchange.stored);
   return [...kept, ...justArrived, ...sitting].sort((left, right) => left.at - right.at).slice(-40);
 }
+/** Where the thread opens: at the latest exchange, unless the gentle note at its top would then be
+ * cut off; the note is shown whole first (on a phone the latest exchange starts below it). */
+function latestTop(node: HTMLElement): number {
+  const latest = node.querySelector<HTMLElement>("[data-latest-exchange]")?.offsetTop ?? 0;
+  const note = node.querySelector<HTMLElement>(".mothli-ending");
+  return note ? Math.min(latest, note.offsetTop) : latest;
+}
+
 function readableAnswer(answer: AskAnswer): string {
   return [answer.calculation, readableBookAnswer(answer)].filter(Boolean).join("\n\n");
 }
@@ -493,11 +502,17 @@ export function AskTheBook({
       }
     }
     if (busy) node.scrollTop = node.scrollHeight;
-    else
-      node.scrollTop =
-        node.querySelector<HTMLElement>("[data-latest-exchange]")?.offsetTop ??
-        0;
+    else node.scrollTop = latestTop(node);
   }, [exchanges.length, busy, streaming]);
+  // The gentle note sits at the top of the thread and arrives once the plan is read, often after
+  // the thread has scrolled to the latest exchange: bring it fully into view then, so a phone
+  // never shows it cut off at the top.
+  const showEndingNote = useCallback(() => {
+    const node = conversationRef.current;
+    const note = node?.querySelector<HTMLElement>(".mothli-ending");
+    if (node && note && !session.getSnapshot().busy && node.scrollTop > note.offsetTop)
+      node.scrollTop = note.offsetTop;
+  }, [session]);
   useEffect(() => {
     setPeopleOpen(false);
     setPeople([]);
@@ -953,7 +968,7 @@ export function AskTheBook({
             role="region"
             aria-label="Book conversation"
           >
-            <MothliEndingNote after={inputRef} />
+            <MothliEndingNote after={inputRef} onShown={showEndingNote} />
             {confirmClear && (
               <div className="mothli-clear lp-clear">
                 <span>Start a fresh chat? Saved replies stay in Notebook.</span>

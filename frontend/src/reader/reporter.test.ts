@@ -88,6 +88,19 @@ describe("PositionReporter", () => {
     await expect(r.flushAndWait()).resolves.toBeUndefined();
   });
 
+  // Catches (M4 of the plan walk): newer progress kept from another device taken as an
+  // unconfirmed position, so every question failed until a reload.
+  test("awaitable flush accepts newer progress the server kept, and shows it as kept", async () => {
+    const states: string[] = [];
+    const put = vi.fn(async (): Promise<"kept"> => "kept");
+    r = new PositionReporter(put, 700, (state) => states.push(state));
+    r.schedule("behind-another-device", 700, 7);
+    await expect(r.flushAndWait()).resolves.toBeUndefined();
+    await expect(r.flushAndWait()).resolves.toBeUndefined();
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(states.at(-1)).toBe("conflict");
+  });
+
   test("awaitable flush cannot carry a pre-reset page into the new pass", async () => {
     let release!: () => void;
     r = new PositionReporter(async () => new Promise<void>((resolve) => { release = resolve; }));

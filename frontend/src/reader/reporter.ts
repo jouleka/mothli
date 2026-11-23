@@ -13,7 +13,10 @@ export type PendingPosition = {
   completedChapter: number;
   positionEpoch: number;
 };
-type DeliveryResult = "saved" | "conflict" | "queued" | void;
+/** "kept": the server answered and kept newer progress (another device's), which already covers
+ * this page; shown as a conflict ("Newer progress kept") but the position is settled. "conflict":
+ * the report belongs to a pass or version the server no longer has; not confirmed. */
+type DeliveryResult = "saved" | "kept" | "conflict" | "queued" | void | undefined;
 
 /**
  * A serialized, debounced position outbox. Failed network deliveries remain queued and retry with
@@ -191,7 +194,7 @@ export class PositionReporter {
         this.timer = setTimeout(() => void this.fire(), 0);
       } else {
         this.onState(
-          result === "conflict"
+          result === "conflict" || result === "kept"
             ? "conflict"
             : result === "queued"
               ? "queued"

@@ -12,7 +12,7 @@ import { Button } from "../ui/Button";
 import { companionPause, needsPlan } from "../ui/companionPause";
 import { Icon } from "../ui/Icon";
 import { Moth } from "../ui/Moth";
-import { MOTHLI_HELLO, MothliEndingNote, MothliInvitation } from "../ui/MothliPlan";
+import { HOME_HELLO_NO_BOOKS, MOTHLI_HELLO, MothliEndingNote, MothliInvitation } from "../ui/MothliPlan";
 import { noteMothliUsed, useMothliStanding } from "../ui/mothliStanding";
 import { MothliRemembers } from "./MothliRemembers";
 import "./home-chat.css";
@@ -399,7 +399,9 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
       <MothliEndingNote home after={inputRef} />
       {empty ? (
         <div className="ml-hc-hello">
-          {standing?.state === "new" && <p className="ml-hc-hand">{MOTHLI_HELLO}</p>}
+          {standing?.state === "new" && (
+            <p className="ml-hc-hand">{shelfEmpty ? HOME_HELLO_NO_BOOKS : MOTHLI_HELLO}</p>
+          )}
           <p className="ml-hc-hand">{shelfEmpty ? FIRST_INTRO : INTRO}</p>
           <div className="ml-hc-starters">
             {(shelfEmpty ? FIRST_STARTERS : STARTERS).map((starter) => (

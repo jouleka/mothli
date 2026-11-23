@@ -104,7 +104,7 @@ function Boot() {
       .then((session) => {
         if (!active) return;
         // Where the reader stands with Mothli; every chat, the cast and "Story so far" follow it.
-        setMothliStanding(session?.mothli ?? null, session?.user?.email ?? null);
+        setMothliStanding(session?.mothli ?? null, session?.user?.email ?? null, session?.user?.id ?? null);
         setInitialization({ ready: true, session });
       })
       .catch(() => {
