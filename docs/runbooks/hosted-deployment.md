@@ -116,6 +116,11 @@ The `migrate` step runs first on every start: it updates the database and resets
 database permission to exactly what the code expects. If it fails, the new web process does not
 start; see "When something is wrong".
 
+An update can need a new line in `deploy/.env`: compare it with `deploy/.env.example` after
+`git pull`. The update that brings Paddle's messages (ADR 0045 step 3) needs
+`MOTHLI_DB_BILLING_PASSWORD` (generate it with `openssl rand -hex 32`); without it Compose stops
+with `set MOTHLI_DB_BILLING_PASSWORD in deploy/.env` and nothing changes.
+
 ## 4. Backups (every night, to Cloudflare R2)
 
 Every night at 03:00 the server makes one backup file and puts it in a private Cloudflare R2
@@ -306,6 +311,61 @@ day uses about $0.42. Past any of them the work waits for the next day and the r
 nothing; their chat goes on. Note that the platform's day ($15) must leave room for the chat
 beside story memory ($10) and this budget ($3).
 
+## 4c. Paddle's messages: how a reader becomes a paying one
+
+Paddle tells Mothli about each subscription by calling `https://YOURDOMAIN/api/billing/paddle`
+with a signed message (ADR 0045 step 3). Mothli checks the signature, applies the subscription's
+status, and answers. Until you set it up, the address does not exist and nothing about plans
+changes. Subscribing from the app comes in a later step; this part only listens.
+
+**Your Paddle account also sells MySigner.** Its messages arrive here too. Mothli takes a message
+as its own only when it is about a subscription and every item on it is one of the price ids you
+put in `PADDLE_PRICE_MONTHLY` and `PADDLE_PRICE_YEARLY`. Every other message is answered "OK" and
+not kept at all. So those two lines must hold Mothli's prices and never MySigner's.
+
+To set it up, first in Paddle's sandbox (its own dashboard, its own ids and secret), later the
+same in the live account:
+
+1. In Paddle: **Catalog > Products**, Mothli's product with its two prices ($12.99 a month,
+   $79.99 a year). Copy each price's id (`pri_...`).
+2. In Paddle: **Events > Notifications > New destination**. Notification type: webhook. URL:
+   `https://YOURDOMAIN/api/billing/paddle`. Events: the `subscription.*` ones
+   (`subscription.created`, `.updated`, `.activated`, `.canceled`, `.past_due`, `.paused`,
+   `.resumed`, `.trialing`). Mothli reads no other kind; any other is answered and ignored.
+   Usage type: real and simulated events while you test (platform only afterwards). Save, then
+   copy the destination's secret key (`pdl_ntfset_...`) and keep it like a password; Paddle may
+   not show it again.
+3. On the server, in `deploy/app.env`, remove the `#` from the Paddle lines and fill them in:
+   - `PADDLE_ENVIRONMENT`: `sandbox` or `production`;
+   - `PADDLE_WEBHOOK_SECRET`: the destination's secret key from step 2;
+   - `PADDLE_PRICE_MONTHLY` and `PADDLE_PRICE_YEARLY`: the price ids from step 1.
+
+   Then `docker compose -f deploy/compose.yaml up -d --wait`.
+4. In Paddle, send a simulated `subscription.created` to the destination (Paddle's webhook
+   simulator). Its sample is for a price that is not Mothli's, so Mothli answers OK and keeps
+   nothing: Paddle shows the delivery as successful. A delivery Paddle shows as failed with 400
+   means the secret does not match: copy it again.
+
+**A new price later** (the yearly launch price becoming $89.99, a new price in Paddle): put the
+new id first and keep the old one, separated by a comma, for example
+`PADDLE_PRICE_YEARLY=pri_new...,pri_old...`, then `up -d --wait`. Readers on the old price stay
+paying for as long as it is in the line.
+
+**Where a reader stands.** `python -m app.hosted.plans show ACCOUNT_ID` (step 7) shows `paying`
+with `paid_by` `paddle` while their plan is live: active, or a payment Paddle is retrying
+(`past_due`), or cancelled but paid to the end of the period. A paused or cancelled plan shows
+`ended` with `why` `plan`; such a reader never gets the free weeks again. A gift wins while it
+lasts.
+
+**Rotating the secret.** Paddle may sign with an old and a new secret for a while; Mothli accepts
+a message that matches the secret it has. Paste the new secret into `deploy/app.env` and
+`up -d --wait` as soon as Paddle shows it.
+
+The web log says only when a message was refused (`paddle message refused: signature` or
+`... malformed`), never a secret, an email address or an id. What was done with each of Mothli's
+messages (`applied`, `older`, `other_subscription`, `no_account`) is kept with its id, type and
+time in the database, never its contents.
+
 ## 5. Restoring
 
 ### 5.1 Test a backup (once a month, on the live server)
@@ -480,7 +540,7 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
   It prints one line, for example
   `{"chat_usd_since_free_start": "0", "free_ends_at": null, "free_started_at": null, "gift_until": "for good", "owner_id": "…", "paid_by": "gift", "state": "paying", "why": null}`.
   `state` is `new` (never asked Mothli anything), `free` (in the two free weeks), `ended` (with
-  `why`: `time` or `ceiling`) or `paying` (`paid_by`: `gift`). End a gift with
+  `why`: `time`, `ceiling` or `plan`) or `paying` (`paid_by`: `gift` or `paddle`, step 4c). End a gift with
   `... python -m app.hosted.plans gift ACCOUNT_ID --end`; the account is then wherever it would
   be without it (a gifted account's first question still started its free weeks, so they are not
   had again). Nothing is shown to the reader yet. If you have changed `HOSTED_FREE_DAYS` or
@@ -514,6 +574,9 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
   and $10 a day for story memory (ADR 0044) are the owner's numbers. A reader's two free weeks and
   their $2.10 ceiling (`HOSTED_FREE_DAYS`, `HOSTED_FREE_USD`) are ADR 0045's proposal, to confirm
   or change.
+- Paddle (step 4c): Mothli's product and its two price ids, the notification destination and its
+  secret key, in the sandbox first and then live (`PADDLE_*` in `deploy/app.env`), and the billing
+  role's password (`MOTHLI_DB_BILLING_PASSWORD` in `deploy/.env`).
 - How long backups are kept, and where the off-server copies go. That is also how long a deleted
   account's data lives on in backups (step 4).
 - Where the offline copy of `deploy/.env` and `deploy/app.env` is kept.

@@ -64,7 +64,9 @@ LEFT_OUT = {
     "audit_events": "the security audit trail: internal records",
     "owner_limits": "limits the owner of Mothli sets; not shown anywhere in the app",
     "owner_request_windows": "a request counter, used to slow down floods",
-    "reader_plans": "when your free weeks with Mothli started, and any gift: account state",
+    "reader_plans": ("when your free weeks with Mothli started, any gift, and your plan's "
+                     "status and dates from Paddle: account state"),
+    "paddle_events": "the ids and times of Paddle's messages about your plan: payment records",
     "cost_ledger": "what replies cost: the app does not show it to readers",
     "cost_reservations": "money held while a reply is written: not shown in the app",
     "jobs": "background work: internal records with nothing of yours in them",

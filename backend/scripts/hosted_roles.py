@@ -33,6 +33,8 @@ from psycopg import conninfo, sql
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.hosted.tenant.grants import (  # noqa: E402
+    BILLING_FUNCTION_PRIVILEGES,
+    BILLING_TABLE_PRIVILEGES,
     PURGE_OTHER_TABLE_PRIVILEGES,
     TENANT_FUNCTION_PRIVILEGES,
     TENANT_TABLE_PRIVILEGES,
@@ -102,6 +104,10 @@ RUNTIME_ROLES: tuple[Role, ...] = (
     # Never in web or worker.
     Role("purge", "MOTHLI_DB_PURGE_PASSWORD", True, PURGE_OTHER_TABLE_PRIVILEGES, {},
          owner_tables=True),
+    # ADR 0045 step 3: writes a reader's Paddle plan from Paddle's checked messages (web, the
+    # Paddle message route only). Row-level security enforced, like the tenant role.
+    Role("billing", "MOTHLI_DB_BILLING_PASSWORD", False, BILLING_TABLE_PRIVILEGES,
+         BILLING_FUNCTION_PRIVILEGES),
 )
 ALL_ROLES: tuple[Role, ...] = (OWNER, *RUNTIME_ROLES)
 # Roles of tools that are gone, dropped with every privilege they hold where an earlier
@@ -267,9 +273,29 @@ def verify(admin_dsn: str, env: dict[str, str], prefix: str) -> None:
         PostgresTenantRepository(role_dsn(env, prefix, roles["tenant"])).check_runtime_role())
     PostgresWorkerRepository(role_dsn(env, prefix, roles["worker"])).check_runtime_role()
     PostgresAccountPurge(role_dsn(env, prefix, roles["purge"])).check_runtime_role()
-    # The startup checks read tables only: the tenant's and the operator's functions are checked
-    # here, both ways (held by the role, not by PUBLIC).
+    # The startup checks read tables only: every role's functions are checked here, both ways
+    # (held by the role, not by PUBLIC). The billing role has no startup check of its own (the
+    # web process uses it only for Paddle's messages), so its table rights are checked here too:
+    # exactly its list, nothing on any other table, and row-level security not bypassed.
     with psycopg.connect(admin_dsn, autocommit=True) as conn:
+        billing = roles["billing"]
+        name = role_name(prefix, billing)
+        held = conn.execute(
+            """SELECT table_class.relname, privilege
+               FROM pg_class AS table_class
+               JOIN pg_namespace AS namespace ON namespace.oid = table_class.relnamespace
+               CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE',
+                                       'REFERENCES','TRIGGER']) AS privilege
+               WHERE namespace.nspname = 'public' AND table_class.relkind = 'r'
+                 AND has_table_privilege(%s, table_class.oid, privilege)""",
+            (name,)).fetchall()
+        found: dict[str, set[str]] = {}
+        for table, privilege in held:
+            found.setdefault(table, set()).add(privilege)
+        bypass = conn.execute("SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname = %s",
+                              (name,)).fetchone()[0]
+        if found != {table: set(rights) for table, rights in billing.tables.items()} or bypass:
+            raise ProvisioningError("the billing role's privileges are not as reviewed")
         for role in RUNTIME_ROLES:
             for function in role.functions:
                 signature = f"public.{function}"

@@ -92,6 +92,7 @@ def test_one_grant_more_or_less_refuses_and_the_script_restores_exactly(provisio
     worker = roles.role_name(prefix, next(r for r in roles.RUNTIME_ROLES if r.key == "worker"))
     auth = roles.role_name(prefix, next(r for r in roles.RUNTIME_ROLES if r.key == "auth"))
     purge = roles.role_name(prefix, next(r for r in roles.RUNTIME_ROLES if r.key == "purge"))
+    billing = roles.role_name(prefix, next(r for r in roles.RUNTIME_ROLES if r.key == "billing"))
 
     def check_purge() -> None:
         PostgresAccountPurge(dsn["purge"]).check_runtime_role()
@@ -122,6 +123,16 @@ def test_one_grant_more_or_less_refuses_and_the_script_restores_exactly(provisio
         ("GRANT SELECT ON platform_spend_days TO {}", purge, check_purge, PurgeConfigurationError),
         ("REVOKE DELETE ON chapter_notes FROM {}", purge, check_purge, PurgeConfigurationError),
         ("REVOKE EXECUTE ON FUNCTION companion_platform_reserve(numeric,numeric) FROM {}", tenant,
+         lambda: roles.verify(database, env, prefix), roles.ProvisioningError),
+        # ADR 0045 step 3: the billing role, which only Paddle's message route uses, has no
+        # startup check of its own; the deployment's check holds it to its list both ways.
+        ("GRANT SELECT ON users TO {}", billing,
+         lambda: roles.verify(database, env, prefix), roles.ProvisioningError),
+        ("GRANT DELETE ON paddle_events TO {}", billing,
+         lambda: roles.verify(database, env, prefix), roles.ProvisioningError),
+        ("REVOKE UPDATE ON reader_plans FROM {}", billing,
+         lambda: roles.verify(database, env, prefix), roles.ProvisioningError),
+        ("REVOKE EXECUTE ON FUNCTION paddle_reader(text,uuid) FROM {}", billing,
          lambda: roles.verify(database, env, prefix), roles.ProvisioningError),
     ]
     for statement, role, check, refusal in cases:

@@ -87,20 +87,33 @@ def test_the_role_script_matches_every_startup_check_as_written() -> None:
         BACKEND / "app" / "hosted" / "auth" / "repository.py", "PostgresAuthRepository")
     assert by_key["worker"].tables is WORKER_TABLE_PRIVILEGES
     assert by_key["tenant"].tables is TENANT_TABLE_PRIVILEGES
-    for key in ("auth", "worker", "audit", "operator"):
+    for key in ("auth", "worker", "audit", "operator", "billing"):
         tables, functions = granted(roles.render(roles.grant_statements("mothli", by_key[key])))
         assert tables == by_key[key].tables
         assert functions == by_key[key].functions
-    # Only the operator's gift command may give a gift (ADR 0045 step 2); no role but the tenant
-    # and the operator executes any function.
+    # Only the operator's gift command may give a gift (ADR 0045 step 2); no role but the tenant,
+    # the operator and the billing role executes any function.
     assert by_key["operator"].functions == {
         "set_gift(uuid,date)": {"EXECUTE"},
         "reader_plan_state(uuid,integer,numeric)": {"EXECUTE"}}
     assert by_key["operator"].tables["reader_plans"] == {"SELECT"}
-    assert [role.key for role in roles.RUNTIME_ROLES if role.functions] == ["tenant", "operator"]
+    assert [role.key for role in roles.RUNTIME_ROLES if role.functions] == [
+        "tenant", "operator", "billing"]
     assert not any("set_gift" in function for function in TENANT_FUNCTION_PRIVILEGES)
+    # ADR 0045 step 3: Paddle's messages write a plan through the billing role alone: section 1's
+    # rights on its two tables and the one look-up, row-level security not bypassed. No other
+    # role may write a plan's Paddle part or record a message.
+    assert by_key["billing"].tables == {"reader_plans": {"SELECT", "INSERT", "UPDATE"},
+                                        "paddle_events": {"SELECT", "INSERT"}}
+    assert by_key["billing"].functions == {"paddle_reader(text,uuid)": {"EXECUTE"}}
+    assert by_key["billing"].password_env == "MOTHLI_DB_BILLING_PASSWORD"
+    for role in roles.RUNTIME_ROLES:
+        if role.key != "billing":
+            assert not ({"INSERT", "UPDATE"} & role.tables.get("reader_plans", frozenset()))
+            assert "paddle_events" not in role.tables
+            assert not any("paddle_reader" in function for function in role.functions)
     assert [role.bypass_rls for role in roles.RUNTIME_ROLES] == [
-        True, False, True, True, True, True]
+        True, False, True, True, True, True, False]
     assert [role.key for role in roles.RUNTIME_ROLES if role.owner_tables] == ["purge"]
     # The worker reads the money records for its cap check and writes none of them: every living
     # job reserves, notes and settles its spend as the tenant role (companion/spend.py).
@@ -329,6 +342,30 @@ def test_the_template_with_the_ai_keys_left_empty_starts_without_a_chat(monkeypa
     assert settings.reader_read_map and settings.reader_page_context
     with TestClient(hosted_app(settings), base_url="https://reader.example") as client:
         assert client.app.state.platform_client is None
+
+
+def test_the_billing_role_reaches_the_web_process_and_paddle_stays_off_in_the_template(
+        monkeypatch, tmp_path) -> None:
+    """The break it catches (ADR 0045 step 3): the billing role's password missing from the
+    deployment (the migration step would stop), its address not given to the web process, given
+    to the worker or a tool, or the template switching Paddle's messages on with placeholders.
+    Paddle's lines are there, commented out, holding placeholders only."""
+    compose = (DEPLOY / "compose.yaml").read_text(encoding="utf-8")
+    services = dict(re.findall(r"\n  ([a-z]+):\n(.*?)(?=\n  [a-z]+:\n|\nnetworks:)", compose,
+                               flags=re.S))
+    assert "MOTHLI_DB_BILLING_PASSWORD:" in services["migrate"]
+    assert "HOSTED_BILLING_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_billing:" in (
+        services["web"])
+    for name in ("worker", "tools", "purge"):
+        assert "BILLING" not in services[name], name
+    assert "MOTHLI_DB_BILLING_PASSWORD=GENERATE_WITH_openssl_rand_hex_32" in (
+        DEPLOY / ".env.example").read_text(encoding="utf-8")
+    template = (DEPLOY / "app.env.example").read_text(encoding="utf-8")
+    for setting in ("PADDLE_ENVIRONMENT", "PADDLE_WEBHOOK_SECRET", "PADDLE_PRICE_MONTHLY",
+                    "PADDLE_PRICE_YEARLY", "PADDLE_WEBHOOK_TOLERANCE_SECONDS"):
+        assert f"\n# {setting}=" in template, setting
+        assert f"\n{setting}=" not in template, setting
+    assert template_settings(monkeypatch, tmp_path).paddle_webhook_secret is None
 
 
 def test_the_real_settings_files_are_never_committed() -> None:

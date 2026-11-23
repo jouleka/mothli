@@ -64,6 +64,7 @@ services:
       MOTHLI_DB_AUDIT_PASSWORD: ${MOTHLI_DB_AUDIT_PASSWORD:?set MOTHLI_DB_AUDIT_PASSWORD in deploy/.env}
       MOTHLI_DB_OPERATOR_PASSWORD: ${MOTHLI_DB_OPERATOR_PASSWORD:?set MOTHLI_DB_OPERATOR_PASSWORD in deploy/.env}
       MOTHLI_DB_PURGE_PASSWORD: ${MOTHLI_DB_PURGE_PASSWORD:?set MOTHLI_DB_PURGE_PASSWORD in deploy/.env}
+      MOTHLI_DB_BILLING_PASSWORD: ${MOTHLI_DB_BILLING_PASSWORD:?set MOTHLI_DB_BILLING_PASSWORD in deploy/.env}
     networks: [data]
     depends_on:
       db: {condition: service_healthy}
@@ -84,6 +85,8 @@ services:
       OIDC_REDIRECT_URI: https://${MOTHLI_DOMAIN}/api/auth/callback
       HOSTED_AUTH_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_auth:${MOTHLI_DB_AUTH_PASSWORD:?set MOTHLI_DB_AUTH_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
       HOSTED_TENANT_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_tenant:${MOTHLI_DB_TENANT_PASSWORD:?set MOTHLI_DB_TENANT_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
+      # Paddle's messages only (ADR 0045 step 3): the billing role, row-level security enforced.
+      HOSTED_BILLING_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_billing:${MOTHLI_DB_BILLING_PASSWORD:?set MOTHLI_DB_BILLING_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
       HOSTED_STORAGE_BACKEND: filesystem
       HOSTED_STORAGE_FILESYSTEM_ROOT: /var/lib/mothli/books
     volumes:

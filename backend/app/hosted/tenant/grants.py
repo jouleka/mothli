@@ -128,6 +128,21 @@ TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
     "reader_plan_state(uuid,integer,numeric)": frozenset({"EXECUTE"}),
 }
 
+# ADR 0045 sections 1 and 7, step 3 (migration 0039): the billing role, used only by Paddle's
+# message route (and later the subscribe and cancel routes). It does not bypass row-level
+# security: each message's transaction is set to the account the message is for, as the tenant
+# role's is set to the session's reader, so it reads and writes that one reader's plan and their
+# recorded messages only. Exactly section 1's rights on its two tables, and one function: which
+# account holds a subscription (or, for a new one, whether the account a message names exists and
+# is not erased), the one look across accounts it needs, answered as one id.
+BILLING_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
+    "reader_plans": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    "paddle_events": frozenset({"SELECT", "INSERT"}),
+}
+BILLING_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
+    "paddle_reader(text,uuid)": frozenset({"EXECUTE"}),
+}
+
 # ADR 0041 part 8: the account purge, run once a day from the command line, never by web or
 # worker. It erases a reader 30 days after they asked, so it may read and delete every row that
 # carries an ``owner_id``: those tables are found in the database's own catalogue when the grants
