@@ -104,11 +104,14 @@ several, comma-separated, so an old price stays accepted), `PADDLE_WEBHOOK_TOLER
 - **Which account.** The account holding the subscription id wins; the custom data names the
   account only for a subscription Mothli has not stored. A message naming no account, an unknown
   one or an erased one is recorded with no account (`no_account`) and ignored.
-- **A second subscription for one reader.** A newer message about a live subscription takes the
-  place of a stored one that is not live (a new plan after a cancel) or of a live one; a message
-  about any other subscription that is not live (the old one's late cancel) is recorded
-  `other_subscription` and changes nothing. Two live subscriptions for one reader are not
-  supported: whichever was written last is the one Mothli follows.
+- **A second subscription for one reader.** Another subscription naming a reader takes the place
+  of theirs only once theirs is no longer live (cancelled or paused, or past its scheduled end):
+  a new plan after a cancel. While their own plan is live, any other subscription naming them,
+  live or not, is recorded `other_subscription` and changes nothing, so someone who subscribed in
+  their name and then cancelled cannot end their plan. The cost: a reader whose plan is cancelled
+  at once (a refund) and who subscribes again before Paddle's cancel message arrives has the new
+  subscription recorded `other_subscription`, and shows as ended when the cancel arrives, until
+  the new plan's next message (its renewal). Step 4's reconciliation repairs it sooner.
 - **Only subscription messages.** Section 7 recorded `transaction.payment_failed` and
   `adjustment.*`; they are not read at all (a failed payment arrives as `subscription.past_due`
   anyway, and adjustments carry no price id to tell Mothli's from MySigner's). The runbook has the
@@ -120,7 +123,15 @@ several, comma-separated, so an old price stays accepted), `PADDLE_WEBHOOK_TOLER
   clock, kept once per account and never moved), while a Paddle plan pays and no gift does, the
   reader's month check is their chat since `first_paid_at` against `HOSTED_FIRST_PAID_MONTH_USD`
   ($6.30) instead of their calendar month against $4.00. The day guard stays; an operator's own
-  month cap wins; at the ceiling the reader sees today's month line. **The bound**: within the 30
+  month cap wins. **What the reader sees at its ceiling** is always true: they can talk again
+  when the 30 days end, unless those end within this UTC calendar month and this month's chat
+  has already reached the ordinary month, in which case they can on the 1st and see today's
+  month line ("…I’ll be back at the start of the next…"). Otherwise they see a line of its own
+  naming the day: "We’ve talked our way through your first month together already! I’ll be back
+  on 22 December. Your book and your place are right here." The day is the first that has begun
+  nowhere on Earth before the 30 days end (the day after their end in UTC+14, or that day when
+  they end at its midnight), since the server does not know the reader's time zone; so in UTC it
+  can be a day after the real moment. No amount, no count, no countdown. **The bound**: within the 30
   days a reader's chat reaches at most $6.30, however the days fall across calendar months (plus,
   as for every cap, the replies already under way). After them the calendar month counts everything
   spent in it, first month included, so for a reader whose 30 days straddle two calendar months the
@@ -817,7 +828,17 @@ test suite (its messages are made and signed in the tests).
    app, chooses the account in the custom data; the app shows prices it was given and none of its own;
    cancel schedules at the period's end; frontend tests for every line of the account sheet. Then a walk
    through the sandbox by hand with Paddle's test cards, written up in the pull request. **Reader sees:**
-   they can subscribe and cancel from Your account.
+   they can subscribe and cancel from Your account. Added with step 3 (23 November 2026):
+   - **A new subscription is bound to a checkout the server made**, not to custom data alone.
+     Paddle.js lets any checkout carry any custom data, so the server stores, for the reader, the
+     transaction it created (its id), and a new subscription becomes that reader's only when it
+     came from that transaction (how Paddle links the two, for example the transaction's
+     `subscription_id`, is to be confirmed in the sandbox); one that names a reader but came from
+     no checkout of theirs is recorded and ignored.
+   - **A reconciliation against Paddle's API**, as Paddle's provisioning guide recommends: on a
+     schedule, and for one reader on demand, the server reads the stored subscription (and the
+     reader's customer's other subscriptions) from Paddle and applies them as a message would, so
+     a lost, refused or out-of-order message is repaired without waiting for the next renewal.
 5. **The gate and the words.** The session's `mothli`; `402 mothli_plan` on the routes of section 6; the
    invitations, the hello, the ending note and the sign-up line; `POST /api/reader/mothli/start` from the
    cast and "Story so far"; the corner note without its offer for Ended readers. Tests first: the
