@@ -10,6 +10,7 @@ import {
   queuePosition,
   SIGNED_OUT_EVENT,
 } from "./pwa/offline";
+import { mothliStanding, setMothliStanding } from "./ui/mothliStanding";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -375,6 +376,50 @@ describe("Hosted writes", () => {
       status: 429, code: "allowance_reached", message: "Mothli is resting until tomorrow.",
     });
     await expect(api.askHome("Who?", () => {})).rejects.toMatchObject({ status: 429, code: "companion_busy" });
+  });
+
+  // Catches (ADR 0045 step 5): an ended reader meeting ordinary error lines because the app did not
+  // learn the gate's answer, whether the route said it or a reply said it mid-stream; or another
+  // refusal (a 402 with another code, a 429) taken for it.
+  test("a 402 mothli_plan, as an answer or mid-stream, tells the app why; nothing else does", async () => {
+    const point = { id: "a".repeat(64), atom: 2, offset: 120, position_epoch: 0, available_chapter: 2 };
+    const json = (status: number, detail: unknown) =>
+      new Response(JSON.stringify({ detail }), { status, headers: { "content-type": "application/json" } });
+    const stream = (event: unknown) => new Response(
+      `data: ${JSON.stringify({ type: "sentence", text: "Well," })}\n\ndata: ${JSON.stringify(event)}\n\n`,
+      { status: 200, headers: { "content-type": "text/event-stream" } });
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(json(402, { code: "something_else" }))
+      .mockResolvedValueOnce(json(429, { code: "allowance_reached", message: "Resting." }))
+      .mockResolvedValueOnce(json(402, { code: "mothli_plan", why: "time" }))
+      .mockResolvedValueOnce(stream({ type: "error", status: 402, code: "mothli_plan", why: "ceiling", message: "Mothli needs the plan" }))
+      .mockResolvedValueOnce(stream({ type: "error", status: 402, code: "mothli_plan", why: "plan", message: "Mothli needs the plan" }));
+    setMothliStanding({ state: "free", why: null, ending_note: false });
+    await expect(api.graph("book", 2)).rejects.toMatchObject({ status: 402, code: "something_else" });
+    await expect(api.homeConversation()).rejects.toMatchObject({ status: 429 });
+    expect(mothliStanding()).toEqual({ state: "free", why: null, ending_note: false });
+    await expect(api.notes("book", 2)).rejects.toMatchObject({ status: 402, code: "mothli_plan" });
+    expect(mothliStanding()).toEqual({ state: "ended", why: "time", ending_note: false });
+    await expect(api.askBookStream("book", "Who?", 2, point, () => {})).rejects.toMatchObject({ status: 402, code: "mothli_plan" });
+    expect(mothliStanding()).toEqual({ state: "ended", why: "ceiling", ending_note: false });
+    await expect(api.askHome("Who?", () => {})).rejects.toMatchObject({ status: 402, code: "mothli_plan" });
+    expect(mothliStanding()).toEqual({ state: "ended", why: "plan", ending_note: false });
+    setMothliStanding(null);
+  });
+
+  // Catches: the start call sending anything but the book, or none, with the CSRF token.
+  test("the start call names the book, or nothing, and answers where the reader stands", async () => {
+    vi.spyOn(document, "cookie", "get").mockReturnValue("__Host-litlet-csrf=csrf-token");
+    const standing = { state: "free", why: null, ending_note: false };
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify(standing), { status: 200, headers: { "content-type": "application/json" } }));
+    expect(await api.startMothli("book")).toEqual(standing);
+    expect(await api.startMothli()).toEqual(standing);
+    expect(fetch).toHaveBeenNthCalledWith(1, "/api/reader/mothli/start", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ book_id: "book" }),
+      headers: expect.objectContaining({ "X-CSRF-Token": "csrf-token" }),
+    }));
+    expect(fetch).toHaveBeenNthCalledWith(2, "/api/reader/mothli/start", expect.objectContaining({ body: "{}" }));
   });
 
   // Catches: a hosted sign-in that ended going unnoticed, leaving the reader on failing screens.

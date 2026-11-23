@@ -51,6 +51,20 @@ describe("SignInGate", () => {
     expect(await axeAA(container)).toHaveNoViolations();
   });
 
+  // Catches (ADR 0045 section 6, "At sign-up"): the welcome not saying reading is free and Mothli
+  // free for the first two weeks, or saying it with a number or a countdown; or the line on the
+  // welcome-back of a reader signed out mid-read, who already knows.
+  test("the welcome says, once, that reading is free and Mothli free for the first two weeks", () => {
+    const line = "Reading here is free, always. Talking with me is free for your first two weeks.";
+    const first = render(<SignInGate session={null}>{theApp()}</SignInGate>);
+    expect(screen.getAllByText(line)).toHaveLength(1);
+    expect(first.container.textContent).not.toMatch(/\d|unlimited|questions? left/i);
+    first.unmount();
+    render(<SignInGate session={signedIn}>{theApp()}</SignInGate>);
+    act(() => announceSignedOut());
+    expect(screen.queryByText(line)).toBeNull();
+  });
+
   // Catches: a reader signed out mid-read left on failing screens, or sent back to the shelf
   // instead of the book they were in.
   test("hosted and signed in: a 401 brings the welcome back, pointing at the same page", () => {
