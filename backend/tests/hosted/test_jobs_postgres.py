@@ -24,7 +24,11 @@ from app.hosted.jobs import (
     WorkerConfigurationError,
 )
 from app.hosted.limits import update_limits
-from app.hosted.tenant.grants import worker_grants
+from app.hosted.tenant.grants import (
+    WORKER_COLUMN_PRIVILEGES,
+    WORKER_FUNCTION_PRIVILEGES,
+    worker_grants,
+)
 from app.hosted.migrations import apply_migrations
 
 pytestmark = pytest.mark.postgres
@@ -97,6 +101,14 @@ def worker_dsn(database: str, admin_dsn: str):
                     sql.Identifier(role),
                 )
             )
+        # ADR 0045 step 6: when a reader signed up (two columns of users) and where they stand.
+        for table, columns in WORKER_COLUMN_PRIVILEGES.items():
+            conn.execute(sql.SQL("GRANT SELECT ({}) ON {} TO {}").format(
+                sql.SQL(", ").join(sql.Identifier(column) for column in sorted(columns)),
+                sql.Identifier(table), sql.Identifier(role)))
+        for function in WORKER_FUNCTION_PRIVILEGES:
+            conn.execute(sql.SQL("GRANT EXECUTE ON FUNCTION {} TO {}").format(
+                sql.SQL("public.") + sql.SQL(function), sql.Identifier(role)))
     runtime_dsn = conninfo.make_conninfo(database, user=role)
     try:
         yield runtime_dsn

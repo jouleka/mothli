@@ -1,7 +1,7 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
-**Status:** Proposed (2026-11-20). Steps 1, 2 and 3 and the server half of step 4 are built (see
-below); nothing else is. The
+**Status:** Proposed (2026-11-20). Steps 1, 2, 3 and 6 and the server half of step 4 are built
+(see below); nothing else is. The
 owner's decisions in "What the owner decided" are settled; the numbers and the choices in "Open
 points for the owner" are his to make, and point 7 is decided (23 November 2026).
 
@@ -213,8 +213,10 @@ client.
   nothing. One consequence: a late message about a reader's old, replaced subscription (its token
   used) is now `no_account` where step 3 recorded `other_subscription` or `older`; it changes
   nothing either way. Seven days covers a checkout left open overnight and Paddle's retries of a
-  first message (about two days live). A reader's own browser may see their token (Paddle.js
-  shows the checkout's custom data); it binds to them alone.
+  first message (about two days live). The digest is written before Paddle is asked, so no
+  transaction exists whose token Mothli did not keep; a checkout Paddle then fails is never used
+  and expires. A reader's own browser may see their token (Paddle.js shows the checkout's custom
+  data); it binds to them alone.
 - **No customer is set on the transaction.** Section 7 said "with the reader's email as the
   customer"; [create a transaction](https://developer.paddle.com/api-reference/transactions/create-transaction)
   takes no email, only a `customer_id`, and making or finding a customer by email could reach a
@@ -250,8 +252,8 @@ client.
   more) requires `PADDLE_WEBHOOK_SECRET`. The logs hold one fixed line per failure.
 - **The regular check** (`python -m app.hosted.paddle_check`), from the crontab in the web
   container, hourly in the runbook: the simpler choice, because that container already holds the
-  key, the billing address and the prices, it needs no new service, and the worker's files belong
-  to step 6. A page of 100 by default, a second between calls, stops at the first sign Paddle is
+  key, the billing address and the prices, and it needs no new service; the worker was step 6's,
+  built alongside. A page of 100 by default, a second between calls, stops at the first sign Paddle is
   down; it fetches only ids `paddle_plans_to_check` hands it and applies them as messages.
 
 Where Paddle's documentation (read 23 November 2026) differs from this record, or adds to it:
@@ -284,7 +286,57 @@ change a server-made transaction's custom data (it cannot learn another reader's
 way); the exact error Paddle gives a cancel inside the 30 minutes, and for a cancel of a
 `past_due` plan; the portal answer's real shape and how long its link lasts; that a cancel's and
 an undo's answers carry an `updated_at` newer than the message they cause; the dashboard's names
-for the key's permissions; and the walk with test cards that section 11 asks for.
+for the key's permissions; the regular check, which has never run from a crontab in the web
+container; and the walk with test cards that section 11 asks for.
+
+**Step 6 built (2026-11-23).** Background work follows where a reader stands (section 5). No
+migration. Settings `HOSTED_WARMUP_DAYS` (30), `HOSTED_WARMUP_NEW_CHAPTERS` (25) and
+`HOSTED_WARMUP_NOTES_USD` (0.50), carried with the other caps to the web process and the worker
+(which now also carries `HOSTED_FREE_DAYS` and `HOSTED_FREE_USD`, so both read the same state).
+The worker role gains `SELECT` on `reader_plans`, `EXECUTE` on `reader_plan_state`, and `SELECT`
+on two columns of `users`, `id` and `created_at`, and on no other column (`grants.py`,
+`hosted_roles.py`; its startup check verifies every column of `users` both ways and the function).
+
+- **At the claim** (`backend/app/hosted/jobs.py`, `background_held`): after the existing
+  background guard (a capped reader's notes still move to the next UTC day), a companion job of
+  any kind whose reader is `ended`, or `new` and past the warm-up, is finished without work and
+  without spending, as a cancelled job is (state `cancelled`, no attempt, the handler never
+  called, so nothing is read). `free` and `paying` readers are not looked at further. The new
+  reader's three bounds are read in the same statement as the state: sign-up within the days; the
+  reader's background ledger and open background reservations, of any age, against the notes
+  amount (before a first question that is their chapter notes alone, recollections coming only
+  from replies); and their story-memory jobs that published, ever, against the chapters. Past any
+  of the three, all of their background work stops, as for Ended.
+- **In the story-memory run**: just before a run would be the first to build a chapter (where the
+  ADR 0044 guards are applied, which still follow), it asks the same again and, if held, ends
+  without spending or asking for its next run.
+- **In the routes**: a finished chapter, "I've read this" and the first page read ask for no job
+  for an Ended reader (the page itself is recorded as before); a question from an Ended reader
+  passes no notes queue or recollection queue to the reply. A question from anyone else asks for
+  the book's story memory, and the reply asks for its chapter notes as before, so a reader who
+  pays again (or a new one, whose question just started the free weeks) has both built up to
+  their place: chapter notes for the chapters fully read, story memory to the target the read
+  map gives (one chapter past the last finished), served only through their place. The routes do
+  not look at a new reader's warm-up (the tenant role holds nothing on `users`): such a reader's
+  pages still ask, and the claim finishes those jobs.
+- **Work under way is finished.** The claim decides whether a run happens; a run it let start
+  finishes, whatever the reader's state becomes meanwhile, as a reply under way does. So a bound
+  can be passed by the runs under way when it is met: a notes run is at most ten chapters (about
+  $0.07), a story-memory run one chapter, and one reader has at most two jobs running at once by
+  default (`owner_limits.max_provider_concurrency`). **The warm-up's most per sign-up who never
+  asks**, at section 5's figures: $0.50 + 25 × $0.09 = $2.75, plus at most two runs under way when
+  a bound is met (about $0.16 more at worst), and only for a file nobody else has.
+- **"Could not verify" 9, settled**: job rows are never deleted except with the account (the
+  purge) and by migration 0028 (the retired `ingest_book` kind only); neither the tenant nor the
+  worker role holds `DELETE` on `jobs`, and removing a book keeps its jobs (cancelled). So a
+  reader's story-memory jobs that published are kept for the life of the account, and counting
+  them over all time is the count over the whole time a reader has been new (no other state comes
+  before `new`).
+- **Two existing tests changed, no assertion changed**: in the ADR 0044 chapter-guard test and the
+  abuse case (`test_story_memory_one_ahead_postgres.py`) the reader never asks, so is now New and
+  would meet the warm-up's 25 chapters before the guards' 30 and 300; both now start the reader's
+  free weeks first. The run's repository call is listed in that file's spoiler test (`REACH`) as
+  reading nothing of an edition. Nothing a reader is served changes in this step (that is step 5).
 
 File and line references are to `main` at 2475b6f (PR #136). Nothing in this record was run against a
 database, a server, a model or Paddle. Every claim about the code comes from reading the lines cited
@@ -1055,6 +1107,7 @@ Each is a question with choices; the recommendation is first.
 8. Whether Paddle's checkout records the EU buyer's consent to start using digital content at once, which
    decides the 14-day withdrawal right; legal advice before launch is worth it.
 9. That old `story_memory` job rows are kept long enough to count a New reader's first builds over 30 days
-   (`first_builds` reads them; their removal was not traced).
+   (`first_builds` reads them; their removal was not traced). Settled with step 6: they are kept for
+   the life of the account (see "Step 6 built").
 10. Every money figure: 2.1 cents a reply, 0.7 cents a chapter of notes and 7 to 9 cents a chapter of story
     memory come from earlier measurements and records, not from a run for this record.

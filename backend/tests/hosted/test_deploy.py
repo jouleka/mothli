@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 from app.hosted.tenant.grants import (
     TENANT_FUNCTION_PRIVILEGES,
     TENANT_TABLE_PRIVILEGES,
+    WORKER_COLUMN_PRIVILEGES,
+    WORKER_FUNCTION_PRIVILEGES,
     WORKER_TABLE_PRIVILEGES,
 )
 from tests.hosted.test_platform_pays import hosted_app
@@ -38,7 +40,7 @@ def granted(text: str) -> tuple[dict[str, frozenset[str]], dict[str, frozenset[s
     tables: dict[str, set[str]] = {}
     functions: dict[str, set[str]] = {}
     for line in text.splitlines():
-        table = re.fullmatch(r'GRANT (.+) ON TABLE "public"\."(\w+)" TO "\w+";', line)
+        table = re.fullmatch(r'GRANT ([A-Z, ]+) ON TABLE "public"\."(\w+)" TO "\w+";', line)
         function = re.fullmatch(r"GRANT (.+) ON FUNCTION public\.(\S+) TO \"\w+\";", line)
         if table:
             tables.setdefault(table[2], set()).update(table[1].split(", "))
@@ -98,7 +100,18 @@ def test_the_role_script_matches_every_startup_check_as_written() -> None:
         "reader_plan_state(uuid,integer,numeric)": {"EXECUTE"}}
     assert by_key["operator"].tables["reader_plans"] == {"SELECT"}
     assert [role.key for role in roles.RUNTIME_ROLES if role.functions] == [
-        "tenant", "operator", "billing"]
+        "tenant", "worker", "operator", "billing"]
+    # ADR 0045 step 6: the worker reads where a reader stands, through the one function, and
+    # when they signed up, through two columns of users and no other: never a name or an email.
+    assert by_key["worker"].functions is WORKER_FUNCTION_PRIVILEGES == {
+        "reader_plan_state(uuid,integer,numeric)": {"EXECUTE"}}
+    assert by_key["worker"].tables["reader_plans"] == {"SELECT"}
+    assert "users" not in by_key["worker"].tables
+    assert by_key["worker"].columns is WORKER_COLUMN_PRIVILEGES == {"users": {"id", "created_at"}}
+    worker_text = roles.render(roles.grant_statements("mothli", by_key["worker"]))
+    assert 'GRANT SELECT ("created_at", "id") ON TABLE "public"."users" TO "mothli_worker";' \
+        in worker_text.splitlines()
+    assert [role.key for role in roles.RUNTIME_ROLES if role.columns] == ["worker"]
     assert not any("set_gift" in function for function in TENANT_FUNCTION_PRIVILEGES)
     # ADR 0045 step 3: Paddle's messages write a plan through the billing role alone: section 1's
     # rights on its two tables and the one look-up, row-level security not bypassed. No other

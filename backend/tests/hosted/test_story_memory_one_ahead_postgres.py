@@ -240,6 +240,9 @@ def test_a_reader_past_a_chapter_guard_waits_whole_for_tomorrow_and_others_build
         models = Lamps(extraction, monkeypatch)
         repository = PostgresWorkerRepository(worker_dsn)
         a, book = opened(shelf, readers)                  # a page read: target 1
+        # In their free weeks: a reader who has never asked is held to the warm-up's 25 chapters
+        # first (ADR 0045 step 6, its own tests); these guards are every other reader's.
+        HostedCompanionCatalog(app.state.companion_dsn, OwnerId(a.owner)).start_free_weeks()
         _seeded, seed_book = opened(shelf, readers, title="Seeded", reading=False)
         seed_first_builds(database, a.owner, seed_book, limit - 1, ended=ended)
         a.mark(book, [1])                                 # target 2
@@ -329,6 +332,9 @@ def test_the_abuse_case_many_files_read_through_is_bounded_by_the_guards(
     extraction = extraction_client()
     writer = Writer(extraction, monkeypatch)
     a = Reader(client, tokens, "a", readers["a"])
+    # In their free weeks: a reader who has never asked is held to the warm-up's 25 chapters
+    # first (ADR 0045 step 6, its own tests); this is the guards' case for every other reader.
+    HostedCompanionCatalog(app.state.companion_dsn, OwnerId(a.owner)).start_free_weeks()
     books = [upload(client, tokens, "a", long_lamps(f"The Long Lamp Book, Printing {n}"))
              for n in range(1, 8)]
     for book in books:
@@ -470,6 +476,9 @@ REACH = {
     "commit_chapter_memory": lambda claim, **publish: ("writes", publish["chapter"]["ordinal"]),
     "edition_of": lambda claim, **_create: None,
     "first_builds": lambda owner_id: None,
+    # ADR 0045 step 6: where the reader stands with their plan (the warm-up's chapters); it
+    # reads the reader's plan, spend and jobs, nothing of any edition.
+    "held_back": lambda owner_id: None,
     "heartbeat": lambda claim, **_lease: None,
     "start": lambda claim: None,
     "succeed": lambda claim: None,

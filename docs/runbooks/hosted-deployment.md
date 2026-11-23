@@ -311,6 +311,19 @@ day uses about $0.42. Past any of them the work waits for the next day and the r
 nothing; their chat goes on. Note that the platform's day ($15) must leave room for the chat
 beside story memory ($10) and this budget ($3).
 
+**Background work by plan** (ADR 0045 step 6). Both kinds above run as described for readers in
+their free weeks and for paying readers (gifts included). For a reader whose free weeks are over
+and who does not pay, none: the worker finishes their waiting jobs without doing or paying for
+anything, and their pages ask for no new ones (their place is still kept). When they pay again,
+their next question asks for it, and it catches up to where they are. A reader who has signed up
+and never asked anything gets a warm-up, so their first session is not cold: within 30 days of
+signing up (`HOSTED_WARMUP_DAYS`), up to 25 chapters of story memory their reading is the first to
+have made (`HOSTED_WARMUP_NEW_CHAPTERS`) and $0.50 of chapter notes (`HOSTED_WARMUP_NOTES_USD`);
+past any of the three, nothing until their first question. At most about $2.75 a sign-up who
+never asks. Readers are never told any of it. The worker reads a reader's plan, and when they
+signed up (two columns of `users`, never a name or an email); `scripts/hosted_roles.py deploy`
+grants and checks both.
+
 ## 4c. Paddle's messages: how a reader becomes a paying one
 
 Paddle tells Mothli about each subscription by calling `https://YOURDOMAIN/api/billing/paddle`

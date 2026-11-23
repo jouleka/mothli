@@ -189,6 +189,16 @@ class Settings(BaseSettings):
                                                         allow_inf_nan=False)
     hosted_reader_background_usd_per_month: float = Field(default=5.00, ge=0, le=10000,
                                                           allow_inf_nan=False)
+    # ADR 0045 section 5, step 6: background work by where a reader stands with their plan. As
+    # above in the free weeks and for paying readers; none once their free weeks are over and
+    # they do not pay. A reader who has signed up and never asked Mothli anything gets a bounded
+    # warm-up so their first session is not cold: background work within this many days of
+    # sign-up, up to this many chapters of story memory their reading is the first to build, and
+    # up to this much of chapter notes, all counted over the whole time they have not asked. Past
+    # any of the three it stops, silently, until their first question. Never shown to a reader.
+    hosted_warmup_days: int = Field(default=30, ge=0, le=365)
+    hosted_warmup_new_chapters: int = Field(default=25, ge=0, le=100000)
+    hosted_warmup_notes_usd: float = Field(default=0.50, ge=0, le=1000, allow_inf_nan=False)
     # ADR 0042 sections 3 and 6, ADR 0044: story memory in hosted mode, built by the worker's
     # story_memory jobs for every reader's book, one chapter ahead of their reading, once per book
     # file. HOSTED_STORY_MEMORY turns the feature on at all.
