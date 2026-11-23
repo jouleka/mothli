@@ -1,7 +1,7 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
-**Status:** Proposed (2026-11-20). Steps 1, 2, 3, 4 (server and screens) and 6, the server
-half of step 5, and Mothli's own payment link in the shared Paddle account ("One Paddle account,
+**Status:** Proposed (2026-11-20). Steps 1, 2, 3, 4 (server and screens), 5 (server and
+screens) and 6, and Mothli's own payment link in the shared Paddle account ("One Paddle account,
 several products", at the end) are built (see below), short of the sandbox walk; nothing else is. The
 owner's decisions in "What the owner decided" are settled; the numbers and the choices in "Open
 points for the owner" are his to make, and point 7 is decided (23 November 2026).
@@ -1335,3 +1335,62 @@ neither is changed for Mothli. Nothing was run against Paddle: it is stood in fo
 - **Still to be seen in the sandbox:** the transaction accepting `checkout.url` on the sandbox
   domain, Paddle's abandoned-checkout email linking to `https://<domain>/?_ptxn=…`, the checkout
   opening from it signed in and signed out, and the payment binding to the reader.
+
+**Step 5, screens, built (2026-11-23).** What a reader sees of the free weeks and of the gate,
+frontend only. Section 6's lines are used word for word. Nobody has seen any of it in a browser
+yet.
+
+- **Where the reader stands, in the app** (`frontend/src/ui/mothliStanding.ts`): one copy of the
+  server's last word. It starts from the session's `mothli` (null in local mode, without a chat,
+  when the plan cannot be read, and offline, where the saved session carries none). It changes
+  without a reload when the server answers any route `402 mothli_plan` (read in the client's one
+  error path, `api.ts`), when a reply's error event carries the same code mid-stream, when the start
+  route answers, when a new reader's first reply arrives (their question started the free weeks),
+  and when the plan sheet says the reader is on the plan (from an invitation, the gentle note or
+  the account sheet). The invitation shows only where that copy says `ended`. When it is null, or a
+  request fails for any other reason, every panel behaves as before.
+- **Ended** (`frontend/src/ui/MothliPlan.tsx`): in the chat in a book, the cast, "Story so far"
+  (each tab of the panel; its header and tabs stay) and the home chat (its title and "What Mothli
+  remembers" stay), the invitation by why with "Keep talking with Mothli", which opens the plan
+  sheet. Nothing of the conversation, the cast or the notes is asked for or shown, including what
+  was on screen before the server said so. A question sent anyway, or a stored conversation the
+  gate refuses, shows the invitation and no line; the question stays in the book chat's box. The
+  invitation's words take focus when they replace content that had it, or when the panel has just
+  opened, and never on a page just loaded. On the reading page, the note after a chapter keeps
+  "That’s Chapter 3 done!" (and a milestone) and drops the offer, its button and its people. Names
+  in the page are not looked up, and any names already marked are cleared. The welcome-back card,
+  whose only buttons ask Mothli, is not shown (section 6 does not name it; it is an offer the reader
+  cannot have, like the corner note's). Clearing a conversation is not offered while ended: the
+  panel's content is the invitation. The server still allows it.
+- **Joining**: on the plan sheet's `onJoined` the copy becomes `paying` when the sheet closes. The
+  panel comes back, its stored conversation or the cast or the notes are asked for again, and focus
+  goes to the chat's box. A sheet closed without joining reads the plan once, in case the reader
+  joined elsewhere (the sheet's "already on the plan" says so without calling `onJoined`).
+- **New**: the hello replaces the book chat's greeting at the top of the conversation, above the
+  box, and stays while the first question is on its way, until the reply arrives. At home it sits
+  above the home chat's own first line. **The start call** is made from the panel when the cast or
+  "Story so far" tab is shown, which happens only by the reader's tap (a tab, a person in the
+  corner note, a name card's "more"). It is also made from "Who was that?", the cast's list in the
+  chat. It is made only for a reader the copy says is `new`, and once: the route's answer makes
+  them `free`. The app's own cast and notes fetches on the reading page never call it.
+- **The gentle note**: at the top of both chats when the copy says `free` with `ending_note`. It
+  asks `GET /api/billing/plan` once a page for `next_date` and names its weekday in the reader's
+  own time zone ("end on Thursday"). It is not said at all if the plan cannot be read. "Got it" is
+  remembered on the device (`mothli.ending-note-seen`), for both chats. "See the plan" opens the
+  plan sheet.
+- **The sign-up line** sits under the welcome's lede. It is not shown on the welcome-back of a
+  reader signed out mid-read, nor beside a payment link's checkout (that reader has used Mothli and
+  is joining).
+- **Keyboard**: the chat panel yields Escape and Tab to the plan sheet over it. Without that,
+  Escape in the sheet also closed the panel in the phone layout.
+
+Tests (frontend only): `frontend/src/ui/MothliPlan.test.tsx` (every line word for word, none with
+a digit, "unlimited", "questions left", hours or a countdown; the invitation by each why on each of
+the four surfaces; a 402 in a reply, mid-stream and on a stored conversation; joining brings each
+panel back; the start call from each tap and never for `free`, `paying` or null; the hello until the
+first reply; the note, its day and "Got it"; null as before), and additions to `api.test.ts`,
+`ReaderPage.lifecycle.test.tsx` (the corner note for an ended reader; the automatic fetches never
+start the free weeks), `SignIn.test.tsx` and `PaymentLink.test.tsx`. Not seen in a browser: the
+invitation's and the note's look on a phone and in the dark theme, the focus moves with a real
+screen reader, the plan sheet opened over the chat panel (inert and focus), and the weekday in real
+time zones.
