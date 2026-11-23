@@ -1,7 +1,7 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
-**Status:** Proposed (2026-11-20). Steps 1, 2, 3 and 6 and the server half of step 4 are built
-(see below); nothing else is. The
+**Status:** Proposed (2026-11-20). Steps 1, 2, 3 and 6 and the server halves of steps 4 and 5 are
+built (see below); nothing else is. The
 owner's decisions in "What the owner decided" are settled; the numbers and the choices in "Open
 points for the owner" are his to make, and point 7 is decided (23 November 2026).
 
@@ -337,6 +337,84 @@ on two columns of `users`, `id` and `created_at`, and on no other column (`grant
   would meet the warm-up's 25 chapters before the guards' 30 and 300; both now start the reader's
   free weeks first. The run's repository call is listed in that file's spoiler test (`REACH`) as
   reading nothing of an edition. Nothing a reader is served changes in this step (that is step 5).
+
+**Step 5, server half, built (2026-11-23).** The gate, the start route and the session's
+`mothli`; no migration, no new setting. The invitations, the hello, the ending note and the
+sign-up line are the screens' (the next pull request).
+
+- **The gate** (`backend/app/hosted/companion/gate.py`, and two dependencies in `routes.py`,
+  `_mothli` and `_csrf_mothli`). A route behind it takes its reader through the dependency, which
+  reads `reader_plan_state` alone and, for an ended reader, answers `402` with
+  `{"detail": {"code": "mothli_plan", "why": "time" | "ceiling" | "plan"}}`, the shape of the
+  app's other coded refusals (the pending deletion's, the plan routes'), with no message: the
+  screens choose the words by why. As a dependency it runs before the route's body, so before the
+  reader's catalog, source, search or story memory are opened, before the free weeks are stamped
+  and before anything is reserved; after the session, the request limit and (for a question) the
+  CSRF check. It depends on nothing but the reader's own row and chat: the same answer for a book
+  of theirs, another reader's or none. A database that cannot be reached is `503`, never a yes.
+- **Gated**: `POST /api/books/{id}/ask/stream`, `GET /api/books/{id}/conversation`,
+  `GET /api/books/{id}/graph` (the cast), `GET /api/books/{id}/character/{entity}` (a person's
+  card), `GET /api/books/{id}/notes` ("Story so far"), `GET /api/books/{id}/ingest` (its
+  progress), `POST /api/reader/ask/stream` (the home chat), `GET /api/reader/conversation`.
+  **Not gated, on purpose**: everything that is reading (the books, the file, the manifest, the
+  place and its reset, preferences, search in the book, highlights, notes and bookmarks, the
+  library and the free library, the read map, page reports, "I've read this", the read
+  frontier), clearing a conversation (forgetting is always allowed), the profile (reading status
+  and the reader's own reactions), "What Mothli remembers" (section 6: the reader's own data, to
+  read and to forget), the account, the copy of one's data, `GET /api/billing/plan`, and the start
+  route. **The stored conversations are gated**: section 6 puts the invitation in place of the
+  chat panel's content and section 9 has them "shown through the same filter when they return";
+  they are kept, and in the copy of one's data meanwhile. A non-database test lists every hosted
+  route on one side or the other and checks the dependency stands on exactly the gated ones.
+- **A reply under way finishes; a reply that meets the gate in the stream says so.** A reader
+  who ends between the gate and the reply's first call (another reply reached their ceiling, the
+  two weeks ran out, a plan stopped) is refused there by `reserve_cost` with `PlanNeeded`, whose
+  error event is `{"type": "error", "status": 402, "code": "mothli_plan", "why": ..., "message":
+  "Mothli needs the plan"}` (the message is for the logs). A reply's later calls are never
+  refused, as before.
+- **The free ceiling and the stopgap.** Step 1's line at the ceiling (`_FREE`) is removed: at the
+  ceiling a reader is ended with why `ceiling`, and the gate's one answer is theirs, in a book and
+  at home. After day 15 a reader who does not pay is ended with why `time` and gated, no longer
+  held by the paying readers' day and month. Those two now hold paying readers (with the first
+  paid month), readers in their free weeks whose own `owner_limits` caps are set, and readers who
+  have not started. **A choice**: an ended reader is refused whatever their own `owner_limits`
+  caps. Step 1 let an operator's raised caps carry a reader past the free ceiling; with the gate
+  that would be two answers for one state (the session and the routes saying ended while the
+  chat answered), so a tester the owner wants past it is given a gift (step 2).
+- **`POST /api/reader/mothli/start`** (signed in, CSRF; `404` where this server has no chat),
+  body `{"book_id": "<uuid>"}` or `{}`. Unless the reader is ended it calls `start_free_weeks()`
+  exactly as a question does (once; a gifted reader is stamped too) and, with a book, asks for its
+  chapter notes and story memory as a question does since step 6 (a book not the reader's adds
+  nothing). An ended reader is stamped with nothing and asked for nothing. It answers `200` with
+  the session's `mothli`. The app's own fetches stay plain reads: allowed for `new`, `free` and
+  `paying`, refused for `ended`, and they never start the clock.
+- **The session** (`GET /api/auth/session`) gains `"mothli": {"state": "new" | "free" | "paying"
+  | "ended", "why": "time" | "ceiling" | "plan" | null, "ending_note": true | false}`, or `null`
+  where the server has no chat or the plan cannot be read just then (the gate still answers every
+  route itself). `ending_note` is true in the free weeks' last two days (from the database's
+  clock). **Not duplicated**: the plan's kind and dates (`plan`, `next_date`, the free weeks' end
+  the note names) stay `GET /api/billing/plan`'s, which the screens read when the note or the
+  account sheet shows; the sign-in screens need only the state. No amount, no count.
+- **What an ended reader sees in today's app**, until the screens land: an ordinary failure, no
+  invitation and no button. The chat in a book says "I couldn’t get a reply. Try again?", the
+  home chat "That didn’t go through. Your question is still here.", the cast "I couldn’t gather
+  the cast right now. Try again in a moment.", "Story so far" "I couldn’t open my notes right now.
+  Try again in a moment.", the people list in the chat "Couldn’t find the names. Try again?";
+  names in the page are not looked up, and the corner note after a chapter still offers "Want to
+  hear what I noticed?", whose "Tell me" meets the same chat failure. Reading is untouched. Before
+  this step the same reader past the ceiling saw step 1's ceiling line, and past day 15 was
+  answered up to the day and month.
+- **Existing tests changed** to the decided behaviour: in `test_free_weeks_postgres.py`, day 15
+  now meets the gate (was today's day line), the ceiling's next request meets the gate in a book
+  and at home (was the ceiling line), the adapter's refusals at the ceiling and after day 15 are
+  the gate's (were `free` and the day and month), an operator's raised caps no longer carry a
+  reader past the ceiling, and the spoiler test compares free weeks, gift and Paddle (the day-15
+  leg, now the gate's, moved to `test_mothli_gate_postgres.py`) and gained the home chat and the
+  cast and "Story so far" served; in `test_plans_postgres.py`, a gift that ends past the ceiling or
+  past day 15 meets the gate; in `test_paddle_messages_postgres.py`, a reader who paid and stopped
+  meets the gate (was the day); in `test_background_by_state_postgres.py`, the ended reader's cast
+  and progress are the gate's, then equal to the paying reader's once they pay. No spoiler test is
+  weakened or removed. `endpoints.json` lists the start route (version 26).
 
 File and line references are to `main` at 2475b6f (PR #136). Nothing in this record was run against a
 database, a server, a model or Paddle. Every claim about the code comes from reading the lines cited

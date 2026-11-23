@@ -547,6 +547,16 @@ lock (`reader_plan_state`, migration 0037). A reply admitted under it is finishe
 checks 1 and 2 as below, free weeks or not. Everything below holds as written for every other
 reader, and for every reader from day 15.
 
+**Superseded in part by ADR 0045 step 5 (the gate, 23 November 2026).** The paragraph above let
+a reader past day 15 who does not pay go on under checks 1 and 2 (step 1's stopgap), and showed
+a reader at the free ceiling a line of its own. Neither holds now: a reader `reader_plan_state`
+answers `ended` (two weeks passed, the free ceiling reached, or a paid plan that stopped) is
+refused every Mothli route with `402 mothli_plan` before anything is opened, and the reply's first
+call with the same answer (`PlanNeeded`) if they end between the route and the reply, whatever
+their own `owner_limits` caps. Checks 1 and 2 now hold only paying readers (a gift or a Paddle
+plan, with the first paid month of ADR 0045 section 4), readers in their free weeks whose own caps
+are set, and readers who have not started (whose questions start the free weeks first).
+
 **Where settings come from.** The same environment settings local mode reads, built into clients the
 same way: writer `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `LLM_LARGE_MODEL`,
 `LLM_CHEAP_MODEL` (`config.py:24-33`, `deps.py:21`); Jev `JEV_ENABLED`, `TYPESAFE_API_KEY`,
