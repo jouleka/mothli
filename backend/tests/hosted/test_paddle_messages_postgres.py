@@ -500,23 +500,24 @@ def test_a_new_subscription_is_a_readers_only_through_their_own_open_checkout(pa
     checkout whose custom data names a reader, and the payment binding to that reader, so they
     can make a reader paying, or later end a plan the reader made, without the server having
     made that checkout. A subscription Mothli has not stored is the named reader's only with a
-    checkout token kept for that same reader, unused and unexpired; each case below is recorded
-    with no account and changes nothing: no token, a token never made, another reader's token,
-    a used token, an expired one. The reader's own open checkout makes them paying and is used
-    up: the same token on another subscription later changes nothing."""
+    checkout token kept for that same reader and unused, however old; each case below is
+    recorded with no account and changes nothing: no token, a token never made, another reader's
+    token (old or new), a used token. The reader's own unused checkout makes them paying even past
+    its ``expires_at`` (a payment from Paddle's late reminder email must never be lost) and is
+    used up: the same token on another subscription later changes nothing."""
     a, b = readers["a"], readers["b"]
     now = datetime.now(UTC)
     before = everything(database)[0]
-    b_token, used, expired, never = (checkout_token(b, "b"), checkout_token(a, "used"),
-                                     checkout_token(a, "expired"), checkout_token(a, "never"))
+    b_token, b_old, used, never = (checkout_token(b, "b"), checkout_token(b, "old"),
+                                   checkout_token(a, "used"), checkout_token(a, "never"))
     seed_checkout(database, b, b_token)
+    seed_checkout(database, b, b_old, expired=True)
     seed_checkout(database, a, used, used=True)
-    seed_checkout(database, a, expired, expired=True)
     for step, custom in enumerate(({"mothli_reader": str(a)},
                                    {"mothli_reader": str(a), "mothli_checkout": never},
                                    {"mothli_reader": str(a), "mothli_checkout": b_token},
+                                   {"mothli_reader": str(a), "mothli_checkout": b_old},
                                    {"mothli_reader": str(a), "mothli_checkout": used},
-                                   {"mothli_reader": str(a), "mothli_checkout": expired},
                                    {"mothli_reader": str(a), "mothli_checkout": "short"})):
         payload = message(sub_id("forged"), custom=custom, event_type="subscription.created",
                           at=now + timedelta(seconds=step))
@@ -526,8 +527,9 @@ def test_a_new_subscription_is_a_readers_only_through_their_own_open_checkout(pa
     assert {(event[2], event[3]) for event in events(database)} == {(None, "no_account")}
     assert checkout_row(database, b, b_token) == (None,)          # B's token is still B's
 
+    # The reader's own checkout, made eight days ago and past its expires_at: still theirs.
     own = checkout_token(a, "own")
-    seed_checkout(database, a, own)
+    seed_checkout(database, a, own, expired=True)
     custom = {"mothli_reader": str(a), "mothli_checkout": own}
     post(paddle, message(sub_id("own"), custom=custom, event_type="subscription.created",
                          at=now + timedelta(seconds=10)), seed=False)
