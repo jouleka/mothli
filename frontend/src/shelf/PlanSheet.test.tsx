@@ -10,6 +10,7 @@ vi.mock("../api", async (importOriginal) => ({
   api: mocks,
 }));
 import { ApiError } from "../api";
+import { LATE_ASK_EVERY_MS, stopWatchingForLatePlan, watchingForLatePlan } from "../ui/latePlan";
 import { forgetPaddle } from "./paddle";
 import { fakePaddle, noCounter, paddleScripts, planOf, preview, settleScript } from "./plan-fakes";
 import {
@@ -17,6 +18,7 @@ import {
   CHECKOUT_FAILED,
   CHECKOUT_REFUSED,
   PLAN_LINES,
+  PLAN_TITLE_NEW,
   PlanSheet,
   WAIT_AFTER_CLOSING_MS,
   WAIT_AFTER_PAYMENT_MS,
@@ -42,6 +44,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   forgetPaddle();
+  stopWatchingForLatePlan();
 });
 
 describe("the plan sheet", () => {
@@ -86,6 +89,31 @@ describe("the plan sheet", () => {
     mocks.plan.mockResolvedValue(planOf({ state: "ended", why: "time", next_date: null }));
     await openSheet();
     expect(screen.queryByText("Join now and your plan starts today.")).toBeNull();
+  });
+
+  // Catches: "Keep talking" said to a reader who has not talked yet, or joining shown as costing
+  // nothing of their free weeks (paying first means the free weeks never start: reader_plan_state
+  // answers paying, then ended by the plan, and never free).
+  test("a reader who has not started: their own title, and what joining now means for the free weeks", async () => {
+    await openSheet({ plan: planOf({ state: "new", next_date: null }) });
+    const sheet = screen.getByRole("dialog", { name: "Talk with Mothli" });
+    expect(within(sheet).getAllByRole("heading")[0].textContent).toBe("Talk with Mothli");
+    expect(PLAN_TITLE_NEW).toBe("Talk with Mothli");
+    expect(within(sheet).getByText(
+      "Your two free weeks start the first time you try me out, so there’s no need to join yet. If you join now, your plan starts today, in place of the free weeks.",
+    )).toBeTruthy();
+    expect(PLAN_LINES.instead).toBe(
+      "Your two free weeks start the first time you try me out, so there’s no need to join yet. If you join now, your plan starts today, in place of the free weeks.");
+    expect(within(sheet).queryByText("Join now and your plan starts today.")).toBeNull();
+    noCounter(sheet);
+  });
+
+  // Catches: the line for a gifted reader kept although no screen opens the sheet for them
+  // (Your account offers a gifted reader no "See the plan").
+  test("a gifted reader is not told their plan starts today", async () => {
+    await openSheet({ plan: planOf({ state: "paying", plan: "gift", next_date: null }) });
+    expect(screen.queryByText("Join now and your plan starts today.")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Keep talking with Mothli" })).toBeTruthy();
   });
 
   test("a plan given by the opener is not asked for again", async () => {
@@ -200,7 +228,17 @@ describe("the checkout", () => {
     expect(code ? CHECKOUT_REFUSED[code] : CHECKOUT_FAILED).toBe(line);
     expect(paddle.opened).toEqual([]);
     expect((screen.getByRole("button", { name: "Choose yearly" }) as HTMLButtonElement).disabled).toBe(false);
+    // Focus does not fall to the page (M5): back on the button pressed, enabled again.
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Choose yearly" })));
     noCounter(document.body);
+  });
+
+  test("a refusal of the monthly choice puts focus back on it", async () => {
+    mocks.startCheckout.mockRejectedValueOnce(new ApiError("server words", 429, "checkout_busy"));
+    await openSheet();
+    fireEvent.click(screen.getByRole("button", { name: "Choose monthly" }));
+    await screen.findByRole("alert");
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Choose monthly" })));
   });
 
   test("already on the plan: says so, warmly, and offers nothing more", async () => {
@@ -244,8 +282,9 @@ describe("after the checkout", () => {
     noCounter(document.body);
   });
 
-  // Catches: a slow message from Paddle shown as an error, or as if the money were lost.
-  test("a payment the server has not heard of in time: plainly, where to look", async () => {
+  // Catches: a slow message from Paddle shown as an error, or as if the money were lost, or the
+  // reader sent away to look for it themselves.
+  test("a payment the server has not heard of in time: it may be on its way, and I’ll open up here", async () => {
     const { paddle, onClose } = await paying();
     mocks.plan.mockReset().mockResolvedValue(planOf());
     act(() => paddle.emit("checkout.completed"));
@@ -254,7 +293,9 @@ describe("after the checkout", () => {
     await act(() => vi.advanceTimersByTimeAsync(ASK_EVERY_MS * 2));
     const status = screen.getByRole("status");
     expect(status.textContent).toBe(
-      "Your payment may still be on its way to me. That can take a minute or two. Reopen Your account in a little while and you’ll see your plan there.");
+      "Your payment may still be on its way to me. That can take a few minutes. There’s nothing you need to do: as soon as it arrives, I’ll open up right here by myself.");
+    expect(PLAN_LINES.slow).toBe(status.textContent);
+    expect(status.textContent).not.toMatch(/Your account|reopen|reload/i);
     expect(screen.queryByRole("alert")).toBeNull();
     // Paid: no way back to the plans, which could pay twice.
     expect(screen.queryByRole("button", { name: /Choose/ })).toBeNull();
@@ -262,6 +303,56 @@ describe("after the checkout", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Close" })[1]);
     expect(onClose).toHaveBeenCalledTimes(1);
     noCounter(document.body);
+  });
+
+  // Catches: a late payment that never opens the sheet up (H2), or a watch with no end.
+  test("a payment that arrives after the wait: the open sheet says so, without a reload", async () => {
+    const { paddle, onJoined } = await paying();
+    mocks.plan.mockReset().mockResolvedValue(planOf());
+    act(() => paddle.emit("checkout.completed"));
+    await act(() => vi.advanceTimersByTimeAsync(WAIT_AFTER_PAYMENT_MS + ASK_EVERY_MS));
+    expect(screen.getByRole("status").textContent).toBe(PLAN_LINES.slow);
+    expect(watchingForLatePlan()).toBe(true);
+    // The quiet watch asks every so often; the payment arrives a few minutes later.
+    await act(() => vi.advanceTimersByTimeAsync(LATE_ASK_EVERY_MS * 3));
+    expect(onJoined).not.toHaveBeenCalled();
+    mocks.plan.mockResolvedValue(PAYING);
+    await act(() => vi.advanceTimersByTimeAsync(LATE_ASK_EVERY_MS));
+    expect(screen.getByRole("status").textContent).toBe("You’re on the plan! I’m so glad we get to keep talking.");
+    expect(onJoined).toHaveBeenCalledWith(PAYING);
+    expect(watchingForLatePlan()).toBe(false);
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+  });
+
+  // Catches: a checkout reported completed then told "nothing has changed" because the closed
+  // event was read against a phase not yet rendered (H3), in either order, in the same tick.
+  test.each([
+    ["completed, then closed", ["checkout.completed", "checkout.closed"]],
+    ["closed, then completed", ["checkout.closed", "checkout.completed"]],
+  ])("both events in the same tick (%s): the wait for a payment, never nothing changed", async (_order, events) => {
+    const { paddle } = await paying();
+    mocks.plan.mockReset().mockResolvedValue(planOf());
+    act(() => {
+      for (const name of events) paddle.emit(name);
+    });
+    expect(screen.getByRole("status").textContent).toBe("One moment, I’m getting ready…");
+    await act(() => vi.advanceTimersByTimeAsync(WAIT_AFTER_CLOSING_MS + ASK_EVERY_MS));
+    expect(screen.getByRole("status").textContent).toBe("One moment, I’m getting ready…");
+    expect(document.body.textContent).not.toMatch(/nothing has changed/);
+    expect(screen.queryByRole("button", { name: /Choose/ })).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(WAIT_AFTER_PAYMENT_MS));
+    expect(screen.getByRole("status").textContent).toBe(PLAN_LINES.slow);
+  });
+
+  test("a completed event after the calm line still waits for the payment", async () => {
+    const { paddle } = await paying();
+    mocks.plan.mockReset().mockResolvedValue(planOf());
+    act(() => paddle.emit("checkout.closed"));
+    await act(() => vi.advanceTimersByTimeAsync(WAIT_AFTER_CLOSING_MS + ASK_EVERY_MS));
+    expect(screen.getByRole("status").textContent).toBe(PLAN_LINES.nothingChanged);
+    act(() => paddle.emit("checkout.completed"));
+    expect(screen.getByRole("status").textContent).toBe("One moment, I’m getting ready…");
+    expect(screen.queryByRole("button", { name: /Choose/ })).toBeNull();
   });
 
   // Catches: a reader who closed the checkout without paying told a payment may be on its way

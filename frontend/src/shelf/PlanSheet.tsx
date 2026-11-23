@@ -2,9 +2,10 @@
  * the prices Paddle gives this reader (yearly first, as a month, with its saving), then Paddle's
  * checkout over the page for a transaction the server made. When the checkout completes or closes
  * nothing is assumed: the sheet asks the server for the plan until it says the reader is on it,
- * for a bounded time. After a completed payment it says plainly what to do if the plan has not
- * arrived yet; after a checkout only closed, a short check (in case the completed event was
- * missed), then the two plans again with a calm line.
+ * for a bounded time. After a completed payment that has not arrived in that time it says the
+ * payment may still be on its way and keeps watching quietly (../ui/latePlan.ts), so Mothli opens
+ * up by itself when it comes; after a checkout only closed, a short check (in case the completed
+ * event was missed), then the two plans again with a calm line.
  *
  * Opened from the account sheet, and from anywhere else that renders it: `<PlanSheet email=…
  * onClose=… />` (it reads the plan itself unless given one). A modal sheet like "What Mothli
@@ -17,6 +18,8 @@ import { api, ApiError, type Plan } from "../api";
 import { keepTabFocusInside } from "../reader/focusTrap";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
+import { claimLatePlan, watchForLatePlan } from "../ui/latePlan";
+import { mothliStanding } from "../ui/mothliStanding";
 import { monthlyTotal, yearlyMonth, yearlyTotal } from "../ui/planFigures";
 import { PAGE_PATHS } from "../public/pages";
 import { listenToPaddle, loadPaddle, planPrices, type PaddleLike, type PlanPrices } from "./paddle";
@@ -25,6 +28,8 @@ import "./home-chat.css";
 import "./account.css";
 
 export const PLAN_TITLE = "Keep talking with Mothli";
+/** For a reader who has never used Mothli: there is nothing yet to keep talking about. */
+export const PLAN_TITLE_NEW = "Talk with Mothli";
 export const PLAN_LINES = {
   loading: "Getting the prices for you…",
   resuming: "One moment, I’m opening your checkout…",
@@ -40,6 +45,10 @@ export const PLAN_LINES = {
   chooseMonthly: "Choose monthly",
   starting: "One moment…",
   startsToday: "Join now and your plan starts today.",
+  // A reader who has not started: paying first means the free weeks never begin
+  // (reader_plan_state answers paying, then ended by the plan, never free).
+  instead:
+    "Your two free weeks start the first time you try me out, so there’s no need to join yet. If you join now, your plan starts today, in place of the free weeks.",
   cancelAnyTime: "Cancel any time from Your account. Your books stay free either way.",
   paddle: "Payments are handled by Paddle, who sells Mothli on our behalf.",
   paying: "Your checkout is open. Take your time, I’ll be right here.",
@@ -48,8 +57,9 @@ export const PLAN_LINES = {
   nothingChanged: "No worries, nothing has changed. Pick a plan whenever you like.",
   joined: "You’re on the plan! I’m so glad we get to keep talking.",
   done: "Done",
+  // True while ../ui/latePlan.ts keeps watching, which it does for a bounded time.
   slow:
-    "Your payment may still be on its way to me. That can take a minute or two. Reopen Your account in a little while and you’ll see your plan there.",
+    "Your payment may still be on its way to me. That can take a few minutes. There’s nothing you need to do: as soon as it arrives, I’ll open up right here by myself.",
   close: "Close",
 } as const;
 /** The server's refusals of a checkout, each in Mothli's voice. */
@@ -90,7 +100,15 @@ export function PlanSheet({
   onClose: () => void;
   onJoined?: (plan: Plan) => void;
 }) {
-  const [phase, setPhase] = useState<Phase>("loading");
+  const [phase, setPhaseState] = useState<Phase>("loading");
+  // The phase as it is now, for Paddle's listener: set together with the state, never from a
+  // render, so two events in the same tick see each other (a "closed" right after a "completed"
+  // must not read "paying" and undo the wait for the payment).
+  const phaseRef = useRef<Phase>("loading");
+  const setPhase = (next: Phase) => {
+    phaseRef.current = next;
+    setPhaseState(next);
+  };
   const [resume, setResume] = useState(transaction ?? null);
   const [plan, setPlan] = useState<Plan | null>(given ?? null);
   const [prices, setPrices] = useState<PlanPrices | null>(null);
@@ -103,8 +121,10 @@ export function PlanSheet({
   const rootRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const messageRef = useRef<HTMLParagraphElement>(null);
-  const phaseRef = useRef(phase);
-  phaseRef.current = phase;
+  const yearlyRef = useRef<HTMLButtonElement>(null);
+  const monthlyRef = useRef<HTMLButtonElement>(null);
+  // After a refused checkout, the choice pressed takes focus back once it is enabled again.
+  const refocus = useRef<"monthly" | "yearly" | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const onJoinedRef = useRef(onJoined);
@@ -180,12 +200,14 @@ export function PlanSheet({
   }, [attempt]);
 
   // Paddle's checkout events: a completed payment starts the wait, a closed checkout the short
-  // check; nothing more is assumed.
+  // check; nothing more is assumed. Once a payment is reported completed, a closed checkout never
+  // takes the sheet back, in whichever order or however close together the two arrive.
   useEffect(
     () =>
       listenToPaddle((event) => {
         const now = phaseRef.current;
-        if (event.name === "checkout.completed" && (now === "paying" || now === "checking")) setPhase("waiting");
+        if (event.name === "checkout.completed" && (now === "paying" || now === "checking" || now === "choose"))
+          setPhase("waiting");
         else if (event.name === "checkout.closed" && now === "paying") setPhase("checking");
       }),
     [],
@@ -228,6 +250,26 @@ export function PlanSheet({
     };
   }, [phase]);
 
+  // Out of time after a payment: the quiet watch (../ui/latePlan.ts) goes on asking, past this
+  // sheet. While the sheet is open it hears the news first and says it here.
+  useEffect(() => {
+    if (phase !== "slow") return;
+    watchForLatePlan();
+    return claimLatePlan((now) => {
+      if (phaseRef.current !== "slow") return false;
+      setPlan(now);
+      setPhase("joined");
+      onJoinedRef.current?.(now);
+      return true;
+    });
+  }, [phase]);
+
+  useEffect(() => {
+    if (starting || !refocus.current) return;
+    (refocus.current === "yearly" ? yearlyRef : monthlyRef).current?.focus();
+    refocus.current = null;
+  }, [starting]);
+
   // A new message in the sheet's own words takes focus, so it is read out.
   useEffect(() => {
     if (["notOffered", "already", "unreachable", "checking", "waiting", "joined", "slow"].includes(phase)
@@ -244,9 +286,13 @@ export function PlanSheet({
     try {
       transaction = (await api.startCheckout(which)).transaction_id;
     } catch (reason) {
-      setStarting(null);
       if (reason instanceof ApiError && reason.code === "already_subscribed") setPhase("already");
-      else setProblem(reason instanceof ApiError && reason.code && CHECKOUT_REFUSED[reason.code] || CHECKOUT_FAILED);
+      else {
+        setProblem(reason instanceof ApiError && reason.code && CHECKOUT_REFUSED[reason.code] || CHECKOUT_FAILED);
+        // The button was disabled while waiting, which drops focus to the page: put it back.
+        refocus.current = which;
+      }
+      setStarting(null);
       return;
     }
     openCheckout(paddleRef.current, transaction);
@@ -278,7 +324,9 @@ export function PlanSheet({
     : phase === "slow" ? PLAN_LINES.slow
     : phase === "choose" && unchanged ? PLAN_LINES.nothingChanged
     : "";
-  const startsToday = plan?.state === "free" || plan?.plan === "gift";
+  // A gifted reader is offered no "See the plan" (Your account), so no line is kept for them.
+  const startsToday = plan?.state === "free";
+  const notStarted = (plan?.state ?? mothliStanding()?.state) === "new";
 
   return createPortal(
     <div
@@ -291,7 +339,7 @@ export function PlanSheet({
           <Icon name="close" size={18} />
         </button>
         <div className="ml-mem-body">
-          <h2 id={titleId}>{PLAN_TITLE}</h2>
+          <h2 id={titleId}>{notStarted ? PLAN_TITLE_NEW : PLAN_TITLE}</h2>
           {/* Always on the page, so a screen reader hears each new line. */}
           <p
             ref={messageRef}
@@ -324,6 +372,7 @@ export function PlanSheet({
                       )}
                     </div>
                     <Button
+                      ref={yearlyRef}
                       variant="primary"
                       aria-describedby={yearlyId}
                       disabled={starting !== null}
@@ -339,6 +388,7 @@ export function PlanSheet({
                     <h3>{PLAN_LINES.monthly}</h3>
                     <p className="ml-plan-price" id={monthlyId}>{monthlyTotal(prices.monthly.total)}</p>
                     <Button
+                      ref={monthlyRef}
                       variant={prices.yearly ? "secondary" : "primary"}
                       aria-describedby={monthlyId}
                       disabled={starting !== null}
@@ -352,6 +402,7 @@ export function PlanSheet({
               </ul>
               {problem && <p className="fl-error" role="alert">{problem}</p>}
               {startsToday && <p className="ml-mem-quiet">{PLAN_LINES.startsToday}</p>}
+              {notStarted && <p className="ml-mem-quiet">{PLAN_LINES.instead}</p>}
               <p className="ml-mem-quiet">{PLAN_LINES.cancelAnyTime}</p>
               <p className="ml-mem-quiet">{PLAN_LINES.paddle}</p>
               {/* Open point 8, decided: no refund promise of Mothli's own, Paddle's terms only.

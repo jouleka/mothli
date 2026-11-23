@@ -10,6 +10,7 @@ import { Button } from "../ui/Button";
 import { Moth } from "../ui/Moth";
 import { SIGN_UP_LINE } from "../ui/MothliPlan";
 import { MothliMark } from "../ui/MothliMark";
+import { noteMothliJoined } from "../ui/mothliStanding";
 import { AboutMothli, SiteFooter, useSite } from "../public/PublicPage";
 import { forgetPaymentLink, paymentLinkTransaction } from "./paddle";
 import { PaymentLink } from "./PaymentLink";
@@ -384,7 +385,14 @@ export function SignInGate({ session, children }: { session?: OfflineSession | n
     <>
       {children}
       {paymentLink && (
-        <PlanSheet transaction={paymentLink} email={session.user.email} onClose={() => setPaymentLink(null)} />
+        <PlanSheet
+          transaction={paymentLink}
+          email={session.user.email}
+          // The chats, the cast and "Story so far" open again at once, without a reload, as
+          // from the account sheet and the invitations.
+          onJoined={() => noteMothliJoined()}
+          onClose={() => setPaymentLink(null)}
+        />
       )}
     </>
   );
