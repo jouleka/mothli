@@ -123,8 +123,9 @@ class SpendLimits:
     (ADR 0041 section 6, amended): all readers' together in a UTC day, and one reader's in a UTC
     day and month. No reader ever sees them."""
 
-    reader_usd_per_day: Decimal = Decimal("0.10")
-    reader_usd_per_month: Decimal = Decimal("2.00")
+    # A paying reader's hidden guards (ADR 0045 section 4, the owner's numbers).
+    reader_usd_per_day: Decimal = Decimal("1.00")
+    reader_usd_per_month: Decimal = Decimal("4.00")
     platform_usd_per_day: Decimal = Decimal("15.00")
     notes_usd_per_day: Decimal = Decimal("10.00")
     background_usd_per_day: Decimal = Decimal("3.00")

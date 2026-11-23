@@ -317,10 +317,11 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
 - The sign-in service: which one, and its issuer, client ID and client secret (`OIDC_*`).
 - The two AI accounts and their keys, for Mothli's chat: the writer (`OPENAI_API_KEY`, or
   `ANTHROPIC_API_KEY`) and the checker, TypeSafe (`TYPESAFE_API_KEY`), in `deploy/app.env`.
-- The spending caps: $0.10 per reader per day and $2.00 per reader per month are placeholders to
-  confirm or change; $15 a day for the whole platform and $10 a day for story memory are the
-  owner's numbers (ADR 0044). A reader's two free weeks and their $2.10 ceiling
-  (`HOSTED_FREE_DAYS`, `HOSTED_FREE_USD`) are ADR 0045's proposal, also to confirm or change.
+- The spending caps: $1.00 per reader per day and $4.00 per reader per month (a paying or gifted
+  reader's hidden guards, decided 23 November 2026, ADR 0045), $15 a day for the whole platform
+  and $10 a day for story memory (ADR 0044) are the owner's numbers. A reader's two free weeks and
+  their $2.10 ceiling (`HOSTED_FREE_DAYS`, `HOSTED_FREE_USD`) are ADR 0045's proposal, to confirm
+  or change.
 - How long backups are kept, and where the off-server copies go. That is also how long a deleted
   account's data lives on in backups (step 4).
 - Where the offline copy of `deploy/.env` and `deploy/app.env` is kept.

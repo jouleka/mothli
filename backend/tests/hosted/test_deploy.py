@@ -192,7 +192,7 @@ def test_every_setting_hosted_startup_requires_has_a_place_in_the_deployment() -
             if re.match(r"^[A-Z_]+=", line):
                 setting, value = line.split("=", 1)
                 assert (value.startswith(("GENERATE_WITH_", "OWNER_MUST_FILL_IN", "https://OWNER"))
-                        or value in {"0.10", "2.00", "15.00", "local-placeholder"}
+                        or value in {"1.00", "4.00", "15.00", "local-placeholder"}
                         or value.endswith("OWNER_MUST_FILL_IN.example")
                         or (name == "app.env.example" and working.get(setting) == value)), line
 
@@ -303,7 +303,7 @@ def test_the_template_with_both_ai_keys_filled_in_gives_a_working_checked_chat(
     assert settings.hosted_story_memory
     assert companion_kinds(settings) == {"chapter_notes", "recollect", "story_memory"}
     assert (settings.hosted_reader_usd_per_day, settings.hosted_reader_usd_per_month,
-            settings.hosted_platform_usd_per_day) == (0.10, 2.00, 15.00)
+            settings.hosted_platform_usd_per_day) == (1.00, 4.00, 15.00)
     # Mothli pays for notes from the notes ceiling, under the platform's day (ADR 0044).
     assert (settings.hosted_story_memory_usd_per_day,
             settings.hosted_story_memory_new_chapters_per_day,
