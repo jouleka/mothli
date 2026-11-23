@@ -36,6 +36,15 @@ APPROVED_SECURITY_LOG_MESSAGES = frozenset(
         # Paddle refused PADDLE_CHECKOUT_URL: its domain is not approved yet.
         "paddle refused the checkout address: approve the domain of PADDLE_CHECKOUT_URL in "
         "Paddle under Website approval",
+        # ADR 0045 step 7: the cancel owed to a reader who asked to delete their account
+        # (app/hosted/subscribe.py), and an account the purge holds while its plan still renews
+        # (app/hosted/purge.py). Neither names anyone.
+        "an owed cancel could not be applied: the regular check tries again",
+        "paddle refused an owed cancel while a renewal is under way: the regular check tries "
+        "again; if that renewal was charged, refund it (runbook)",
+        "purge held an account whose Paddle plan still renews: it is not erased until Paddle "
+        "confirms the cancel (the regular check asks for it hourly); see the runbook, "
+        "'Deleting an account while paying'",
     }
 )
 

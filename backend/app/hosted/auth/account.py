@@ -4,13 +4,20 @@ Asking to delete marks the account to be erased after 30 days, signs it out on e
 stops its background work; from then on every reader route refuses it (``tenant/api.py``
 ``_session``). Signing in again within the 30 days gives only the choice to keep the account or
 sign out. The erasure itself is the daily purge (``app/hosted/purge.py``), under its own role.
+
+A reader paying through Paddle is never charged again once they ask (ADR 0045 step 7): see
+``delete_account``. Coming back within the 30 days keeps the account and leaves the plan ending
+at the period's end; "Keep my plan" (``POST /api/billing/keep``) is what renews it again.
 """
 
 from __future__ import annotations
 
+import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
+from app.hosted import subscribe
 from app.hosted.auth.api import (
     _NO_STORE,
     CSRF_COOKIE,
@@ -84,11 +91,33 @@ async def export_account(request: Request, _guard: None = Depends(_owner_input_g
                  "Content-Disposition": f'attachment; filename="mothli-my-data-{day}.zip"'})
 
 
+def _billing(request: Request) -> str | None:
+    """The billing role's address where this server manages Paddle plans, else None."""
+    settings = request.app.state.settings
+    if settings.paddle_api_key is None or settings.hosted_billing_dsn is None:
+        return None
+    return settings.hosted_billing_dsn.get_secret_value()
+
+
 @router.post("/delete")
 async def delete_account(request: Request, owner_id: OwnerId = Depends(_csrf_owner)):
     """Signed in, with the CSRF token, and only from an ordinary account (``_csrf_owner``
-    refuses one already waiting to be erased)."""
+    refuses one already waiting to be erased).
+
+    A paying reader is never charged again (ADR 0045 step 7): before the account is marked, the
+    cancel of their plan at the end of the period paid for is recorded as owed to them, and once
+    it is marked that cancel is asked of Paddle through the code "Cancel my plan" runs. Paddle
+    unreachable, slow or refusing changes nothing for the request: the owed mark stays and the
+    regular check asks again every hour until Paddle's answer brings the scheduled end. A reader
+    with no live plan (a gift only, the free weeks, ended, or already cancelled) costs no call."""
     tenant = request.app.state.tenant_repository
+    billing = _billing(request)
+    if billing is not None:
+        try:
+            await run_in_threadpool(subscribe.owe_cancel, billing, owner_id.value)
+        except psycopg.Error:
+            # Nothing has happened yet: the reader is told to try again.
+            raise HTTPException(503, {"code": "account_busy"}) from None
     # Background work stops before the account is marked, so nothing it starts in between can
     # outlive the request, and again after, for a job added by a request that was already past
     # the sign-in check when this one began.
@@ -97,8 +126,12 @@ async def delete_account(request: Request, owner_id: OwnerId = Depends(_csrf_own
         owner_id=owner_id.value, now=_now(request)
     )
     if erase_after is None:
+        # Asked to be deleted by another request meanwhile: its owed cancel stands.
         raise HTTPException(409, {"code": "account_not_active"})
     await tenant.cancel_owner_jobs(owner_id)
+    if billing is not None:
+        await run_in_threadpool(subscribe.cancel_owed, billing, subscribe.paddle_api(request),
+                                request.app.state.settings.paddle_prices(), owner_id.value)
     response = JSONResponse({"erase_after": erase_after.isoformat()}, headers=_NO_STORE)
     # Every session of this reader has ended, this one included.
     _clear_cookie(response, SESSION_COOKIE, http_only=True)

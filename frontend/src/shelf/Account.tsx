@@ -19,7 +19,7 @@ import { MothliRemembers } from "./MothliRemembers";
 import { PlanSheet } from "./PlanSheet";
 import { TakeACopy } from "./TakeACopy";
 import { noteAccountDeleted } from "./SignIn";
-import { YourPlan } from "./YourPlan";
+import { deletingPlanLine, YourPlan } from "./YourPlan";
 import "../library/free-library.css";
 import "./home-chat.css";
 import "./account.css";
@@ -198,6 +198,9 @@ export function Account({ session, onClose }: { session: OfflineSession; onClose
             <p className="ml-account-who">Here’s what happens if you do.</p>
             <ul className="ml-account-steps">
               <li>You’re signed out everywhere, on every device, straight away.</li>
+              {plan !== null && typeof plan === "object" && plan.subscribed && (
+                <li>{deletingPlanLine(plan)}</li>
+              )}
               <li>
                 Everything is kept for 30 days, in case you change your mind. Sign in again before
                 then and you can keep your account.

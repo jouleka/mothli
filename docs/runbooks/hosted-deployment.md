@@ -264,9 +264,10 @@ who brings the file back within the 30 days keeps the notes; one who brings it b
 them built again, paid again.
 
 **Checking it ran.** Each run prints one line, for example
-`erased 1, unfinished 0, waiting 3; editions erased 0, unfinished 0, waiting 2`: accounts erased
-in this run, accounts it could not finish (it ends with an error then), and accounts still inside
-their 30 days; then the same for book files' notes. `tail deploy/backups/purge.log` shows the last runs. An
+`erased 1, unfinished 0, held 0, waiting 3; editions erased 0, unfinished 0, waiting 2`: accounts
+erased in this run, accounts it could not finish (it ends with an error then), accounts held back
+because their Paddle plan still renews (next part; it ends with an error then too), and accounts
+still inside their 30 days; then the same for book files' notes. `tail deploy/backups/purge.log` shows the last runs. An
 account it could not finish (book storage unreachable, the database restarted) is finished by the
 next run; nothing of it is shown to anyone meanwhile. The audit log of an erased account ends with
 `account.purge`:
@@ -274,6 +275,51 @@ next run; nothing of it is shown to anyone meanwhile. The audit log of an erased
 ```
 docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.audit show --owner READER_ID
 ```
+
+### Deleting an account while paying
+
+A reader who deletes their account while on the plan is never charged again (ADR 0045 step 7).
+Asking to delete records, in their plan's row, that the cancel is owed to them (the column
+`cancel_owed_since`), then asks Paddle to cancel the plan at the end of the period already paid
+for, exactly as "Cancel my plan" does. If Paddle is down, slow or refuses just then (it refuses a
+cancel in the 30 minutes before a renewal), the deletion still goes through, and the regular
+check (part 4c, hourly) asks again every run, those plans first, until Paddle's answer shows the
+cancel scheduled. Nothing for you to do in the ordinary case. The waiting screen tells the reader
+"Your plan won't renew." with the day it is paid for until.
+
+- **Changing their mind.** Within the 30 days the reader can keep their account; their plan still
+  ends on its day unless they press **Keep my plan** (on the waiting screen or in Your account),
+  which removes the cancel. If the paid period ends first, they are like any reader whose plan
+  ended.
+- **The purge never erases an account whose plan still renews.** If, when the 30 days are over,
+  the plan is still live with no scheduled end (Paddle never confirmed the cancel), the purge holds
+  that account, untouched, and writes to `purge.log`:
+  `purge held an account whose Paddle plan still renews: ...`. The line names no one. The run then
+  ends with an error, and `held` is above 0. The regular check keeps asking Paddle; the next purge
+  after Paddle confirms erases the account. If `held` stays above 0 for more than a day, look at
+  `paddle-check.log` (`failed` above 0 means Paddle is refusing or down), and find the held
+  accounts and their subscriptions:
+
+  ```
+  docker compose -f deploy/compose.yaml exec db psql -U postgres -d mothli -c "SELECT u.id, p.paddle_subscription_id, p.paddle_status, p.cancel_owed_since FROM users u JOIN reader_plans p ON p.owner_id = u.id WHERE u.status = 'deleting' AND u.erase_after <= now() AND p.paddle_status IN ('active','trialing','past_due') AND p.ends_at IS NULL"
+  ```
+
+  Then cancel each subscription in Paddle's dashboard (**Customers > Subscriptions**, the
+  subscription id, **Cancel**, at the end of the billing period); the next regular check and purge
+  finish the rest.
+- **A renewal that came first.** If Paddle refused the cancel because a renewal was under way, the
+  web log or `paddle-check.log` says `paddle refused an owed cancel while a renewal is under way:
+  ... refund it (runbook)`. That reader may have been charged once more after asking to delete.
+  Find readers whose cancel is owed with the query above, without the `erase_after` condition (or
+  `cancel_owed_since IS NOT NULL` alone), and in Paddle refund any payment of theirs made after
+  their `cancel_owed_since`.
+- **What is erased, and what is not.** Erasure takes the plan's row (`reader_plans`), the record of
+  Paddle's messages about it (`paddle_events`) and the reader's checkouts (`paddle_checkouts`)
+  with everything else. Paddle is the seller and keeps its own records of the customer, the
+  subscription and the payments; Mothli asks Paddle to delete nothing. The privacy page says so
+  (its sentence is in `docs/product/companion-open-items.md`).
+- **The copy of their data** holds `your plan.json`: when their free weeks began, any gift, and
+  their plan's kind, status and dates. No Paddle id, token or amount.
 
 ## 4b. Story memory: who's who and the story so far
 
@@ -430,6 +476,9 @@ It runs in the web container, which already holds the key, the billing role's ad
 prices. Each run prints one line, `checked 12, changed 0, failed 0`; `failed` above 0 means Paddle
 was unreachable or refused (the run stops at the first sign Paddle is down and tries again next
 hour). `--size` (1 to 1000) and `--pause` (seconds, 0.25 to 60) change the page and the pause.
+It is also what guarantees the cancel owed to a reader who deleted their account while paying
+(part 4a, "Deleting an account while paying"): those plans come first, and each that Paddle still
+shows renewing is asked for its cancel, counted in `changed` when Paddle confirms.
 
 **The client token** (ADR 0045 step 4, the plan sheet). The reader's browser uses it to show the
 two prices from Paddle and open Paddle's checkout. Paddle calls it safe to publish, but it is still

@@ -1,6 +1,6 @@
 /** The hosted account sheet: who is signed in, "What Mothli remembers" only where the server
  * keeps it, and a sign-out that says plainly what it clears. */
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { axeAA } from "../test-a11y";
 
@@ -16,7 +16,7 @@ import { ApiError, type Plan } from "../api";
 import { Account } from "./Account";
 import { forgetPaddle } from "./paddle";
 import { fakePaddle, noCounter, paddleScripts, planOf, settleScript } from "./plan-fakes";
-import { planDay } from "./YourPlan";
+import { DELETING_PLAN, deletingPlanLine, planDay } from "./YourPlan";
 
 const session = {
   user: { id: "05dbebd1-e9e8-4be8-8172-eb65ca8d2a67", display_name: "Wren Example" },
@@ -454,5 +454,60 @@ describe("planDay", () => {
     // The reader's own time zone decides the day.
     expect(planDay("2026-12-03T23:30:00+00:00", now, "en-GB", "Asia/Tokyo")).toBe("4 December");
     expect(planDay("not a date", now)).toBe("");
+  });
+});
+
+// ADR 0045 step 7: deleting the account while paying.
+describe("Deleting while paying", () => {
+  const steps = () => within(screen.getByRole("dialog", { name: "Delete your account?" }))
+    .getAllByRole("listitem").map((item) => item.textContent?.replace(/\s+/g, " "));
+  async function confirmFor(plan: Plan) {
+    mocks.plan.mockResolvedValue(plan);
+    render(<Account session={session} onClose={() => {}} />);
+    await waitFor(() => expect(mocks.plan).toHaveBeenCalled());
+    await waitFor(() => expect(document.querySelector(".ml-account-plan")?.textContent).not.toMatch(/Looking up/));
+    fireEvent.click(screen.getByRole("button", { name: "Delete my account" }));
+    return screen.getByRole("dialog", { name: "Delete your account?" });
+  }
+
+  // Catches: a paying reader not told their plan stops and they won't be charged again, told a
+  // day that isn't true, or told anything with a counter in it.
+  test("a paying reader is told, once and plainly, that the plan won't renew", async () => {
+    const far = "2099-12-03T10:00:00+00:00";
+    const sheet = await confirmFor(planOf({ state: "paying", plan: "yearly", subscribed: true, next_date: far }));
+    expect(steps()[1]).toBe(
+      "Your plan won’t renew, so you won’t be charged again. Change your mind within the 30 days "
+      + `and Mothli is still yours until ${planDay(far)}.`);
+    expect(steps()).toHaveLength(4);
+    noCounter(sheet);
+    expect(await axeAA(sheet)).toHaveNoViolations();
+  });
+
+  // Catches: the line shown to a reader with no plan that renews (free weeks, a gift alone).
+  test("a reader without a plan that renews hears nothing about one", async () => {
+    for (const values of [{ state: "free" as const, subscribed: false },
+      { state: "paying" as const, plan: "gift" as const, subscribed: false }]) {
+      await confirmFor(planOf({ next_date: null, ...values }));
+      expect(steps()).toHaveLength(3);
+      expect(steps().join(" ")).not.toMatch(/plan/);
+      cleanup();
+    }
+  });
+
+  test("the day said is whichever comes first: the day paid for, or the account's erasure", () => {
+    const now = new Date("2026-11-23T12:00:00Z");
+    const soonDate = "2026-12-03T10:00:00+00:00";
+    const laterDate = "2027-08-01T10:00:00+00:00";
+    const soon = planOf({ state: "paying", plan: "monthly", subscribed: true, next_date: soonDate });
+    expect(deletingPlanLine(soon, now)).toBe(
+      `Your plan won’t renew, so you won’t be charged again. Change your mind before ${planDay(soonDate, now)} and Mothli is still yours until then.`);
+    const later = { ...soon, plan: "yearly" as const, next_date: laterDate };
+    expect(deletingPlanLine(later, now)).toBe(
+      `Your plan won’t renew, so you won’t be charged again. Change your mind within the 30 days and Mothli is still yours until ${planDay(laterDate, now)}.`);
+    // Under a gift the day is the gift's, not the plan's: no day at all.
+    expect(deletingPlanLine({ ...soon, plan: "gift" }, now)).toBe(DELETING_PLAN);
+    expect(deletingPlanLine({ ...soon, next_date: null }, now)).toBe(DELETING_PLAN);
+    for (const line of [deletingPlanLine(soon, now), deletingPlanLine(later, now)])
+      expect(line).not.toMatch(/unlimited|questions?|left|hours?|countdown/i);
   });
 });

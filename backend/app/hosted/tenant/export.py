@@ -30,9 +30,10 @@ import time
 import uuid
 import zipfile
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from app.catalog.catalog import Catalog
+from app.config import _items
 from app.chapter_notes import VERSION, usable_notes
 from app.home_conversation import HOME, home_turns
 from app.hosted.companion.memory import ContentSnapshot, HostedBookStore, StoryMemoryUnavailable
@@ -56,6 +57,8 @@ IN_THE_COPY = {
     "conversation_turns": "each book's file (its chat) and home chat.json",
     "chapter_notes": "each book's file: Mothli's notes on the chapters you finished",
     "recollections": "what Mothli remembers.json",
+    "reader_plans": ("your plan.json: when your free weeks began, any gift, and your plan's "
+                     "kind, status and dates (Paddle's ids for it are left out)"),
 }
 LEFT_OUT = {
     "users": "you.json holds your name, email and when you joined; the rest is account state",
@@ -64,8 +67,6 @@ LEFT_OUT = {
     "audit_events": "the security audit trail: internal records",
     "owner_limits": "limits the owner of Mothli sets; not shown anywhere in the app",
     "owner_request_windows": "a request counter, used to slow down floods",
-    "reader_plans": ("when your free weeks with Mothli started, any gift, and your plan's "
-                     "status and dates from Paddle: account state"),
     "paddle_events": "the ids and times of Paddle's messages about your plan: payment records",
     "paddle_checkouts": "when you opened a checkout for the plan: payment records",
     "cost_ledger": "what replies cost: the app does not show it to readers",
@@ -120,6 +121,10 @@ home chat.json
     Your chat with Mothli on your home page.
 what Mothli remembers.json
     The little things Mothli remembers about you, and when you said them.
+your plan.json
+    When your free weeks with Mothli began, any gift, and your plan: monthly
+    or yearly, its status as Paddle gave it, and its dates. Paddle sells the
+    plan and keeps its own records of your payments.
 
 What isn't here
 ---------------
@@ -265,6 +270,7 @@ class _Copy:
                  marks_of: Callable[[str], dict | None],
                  looks_of: Callable[[str], dict | None]) -> None:
         self._settings = settings
+        self._dsn, self._owner = dsn, owner_id
         self._catalog = HostedCompanionCatalog(dsn, owner_id)
         self._store = HostedBookStore(dsn, owner_id)
         self._look = _LookOnly(self._catalog)
@@ -314,12 +320,47 @@ class _Copy:
                     entry.update(self._reading(book, read))
                 put(name, entry)
             put("shelf.json", {"books": shelf})
+            put("your plan.json", self._plan())
             if (settings.reader_conversation_stream and self._reading_on()):
                 turns = home_turns(self._look, read, limit=EVERYTHING)
                 stored = self._look.get_turns(None, incarnation=HOME)
                 put("home chat.json", {
                     "held_back_until_you_read_again": len(stored) - len(turns),
                     "chat": [_said(turn) for turn in turns]})
+
+    def _plan(self) -> dict:
+        """What ``reader_plans`` holds about the reader's free weeks, gift and plan, in words:
+        never Paddle's ids for the customer, the subscription or the price."""
+        # The catalog's own transaction: the reader's row only, within this process's limit on
+        # companion connections.
+        with self._catalog._transaction() as conn:
+            row = conn.execute(
+                "SELECT free_started_at, gift_until, paddle_status, paddle_price_id,"
+                " first_paid_at, period_ends_at, ends_at, cancel_owed_since"
+                " FROM public.reader_plans WHERE owner_id=%s", (self._owner.value,)).fetchone()
+        row = row or {}
+        began, gift, status = row.get("free_started_at"), row.get("gift_until"), \
+            row.get("paddle_status")
+        if gift is None:
+            gift_said = None
+        elif gift == date(9999, 12, 31):
+            gift_said = "Mothli on the house, for good"
+        else:
+            gift_said = f"Mothli on the house until the end of {gift.isoformat()} (UTC)"
+        plan = None
+        if status is not None:
+            price = row["paddle_price_id"]
+            kind = ("monthly" if price in _items(self._settings.paddle_price_monthly)
+                    else "yearly" if price in _items(self._settings.paddle_price_yearly)
+                    else None)
+            plan = {"kind": kind, "status_at_paddle": status,
+                    "first_paid": _when(row["first_paid_at"]),
+                    "this_period_ends": _when(row["period_ends_at"]),
+                    "ends": _when(row["ends_at"]),
+                    "sold_by": "Paddle sells the plan and keeps its own records of your payments."}
+        return {"free_weeks_began": _when(began), "gift": gift_said, "plan": plan,
+                "not_to_renew_since_you_asked_to_delete_your_account":
+                    _when(row.get("cancel_owed_since"))}
 
     def _reading(self, book: dict, read: dict) -> dict:
         """Where the reader is in one book, their chat in it and Mothli's chapter notes, through

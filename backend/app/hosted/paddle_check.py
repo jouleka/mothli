@@ -12,6 +12,11 @@ between calls, stays far under Paddle's 240 requests a minute
 (developer.paddle.com/api-reference/about/rate-limiting), and stops at the first sign that Paddle
 is unavailable.
 
+It is also how the cancel owed to a reader who asked to delete their account is guaranteed (ADR
+0045 step 7): those plans come first in the list, and for each that Paddle's answer still shows
+renewing, it asks for the cancel at the end of the period paid for through the code "Cancel my
+plan" runs (``subscribe.change``), every run until Paddle's answer brings the scheduled end.
+
 Run in the web container, which holds the key, the billing role's address and the prices, from
 the server's crontab (the runbook, step 4c):
 
@@ -30,6 +35,7 @@ import psycopg
 
 from app.hosted.billing import Malformed, apply_message, read_subscription
 from app.hosted.paddle_api import PaddleApi, PaddleRefused, PaddleUnavailable
+from app.hosted.subscribe import cancel_owed, owes_cancel
 
 
 def plans_to_check(dsn: str, size: int) -> list[tuple]:
@@ -42,7 +48,7 @@ def check(dsn: str, api: PaddleApi, prices: frozenset[str], *, size: int, pause:
           sleep=time.sleep) -> tuple[int, int, int]:
     """Fetch and apply up to ``size`` stored subscriptions; (checked, changed, failed)."""
     checked = changed = failed = 0
-    for index, (_reader, subscription) in enumerate(plans_to_check(dsn, size)):
+    for index, (reader, subscription) in enumerate(plans_to_check(dsn, size)):
         if index:
             sleep(pause)
         try:
@@ -64,6 +70,18 @@ def check(dsn: str, api: PaddleApi, prices: frozenset[str], *, size: int, pause:
             continue
         if message is not None and apply_message(dsn, message) == "applied":
             changed += 1
+        # The cancel owed to a reader who asked to delete their account, until Paddle's answer
+        # brings the scheduled end (ADR 0045 step 7).
+        if owes_cancel(dsn, reader):
+            sleep(pause)
+            outcome = cancel_owed(dsn, api, prices, reader)
+            if outcome == "unavailable":
+                failed += 1
+                break
+            if outcome == "locked":
+                failed += 1
+            elif outcome == "done":
+                changed += 1
     return checked, changed, failed
 
 

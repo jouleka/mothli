@@ -15,12 +15,20 @@ only through the billing role:
   to open checkout with. Refused while the reader has a live Paddle plan. A gifted reader may
   subscribe: the gift still wins while it lasts, and the plan pays from the day it starts.
 - ``POST /api/billing/cancel``: schedules the cancel at the end of the period paid for.
-- ``POST /api/billing/keep``: removes that scheduled cancel.
+- ``POST /api/billing/keep``: removes that scheduled cancel, and any cancel owed since the reader
+  asked to delete their account.
 - ``POST /api/billing/portal``: a customer portal session for the reader's own customer and
   subscription; answers ``{"url": ...}``. The link is never stored and never logged.
 
-And one public read, ``GET /api/billing/payment-link``: Paddle's environment and the public
-client token, for Mothli's payment-link page, which a visitor may open signed out.
+And two reads: ``GET /api/billing/payment-link`` (public): Paddle's environment and the public
+client token, for Mothli's payment-link page, which a visitor may open signed out; and
+``GET /api/billing/ending`` (signed in, open to a reader waiting to be erased too): whether the
+reader's plan won't renew, and the day it is paid for until, for the waiting screen.
+
+Asking to delete the account (ADR 0045 step 7, ``auth/account.py``) marks the cancel owed
+(``owe_cancel``) and then asks for it through ``change``, the code "Cancel my plan" runs. The mark
+is what guarantees it: whatever Paddle answers then, the regular check (``paddle_check.py``) asks
+again every hour while the plan is live with no scheduled end, until Paddle's answer brings one.
 
 Cancel and keep apply Paddle's answer at once, through the same code as a message
 (``billing.apply_message``: newer only, Mothli's prices only), and answer the plan as ``GET``
@@ -32,24 +40,28 @@ developer.paddle.com/errors/subscriptions/subscription_locked_renewal) answers 4
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from typing import Literal
 
 import psycopg
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
 from app.config import _items
-from app.hosted.auth.api import _NO_STORE
+from app.hosted.auth.api import _NO_STORE, authenticated_session
 from app.hosted.auth.tokens import new_token
 from app.hosted.billing import Malformed, apply_message, checkout_digest, read_subscription
+from app.hosted.limits import LimitExceededError
 from app.hosted.paddle_api import PaddleApi, PaddleRefused, PaddleUnavailable
-from app.hosted.tenant.api import _csrf_owner, _owner
+from app.hosted.tenant.api import _csrf_owner, _limit_failure, _owner, _owner_input_guard
 from app.hosted.tenant.models import OwnerId
+
+_LOG = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/billing", tags=["hosted-billing"])
 plan_router = APIRouter(prefix="/api/billing", tags=["hosted-billing"])
@@ -107,6 +119,55 @@ def stored_plan(dsn: str, owner: uuid.UUID) -> Stored:
             " AND (ends_at IS NULL OR now() < ends_at), false), ends_at"
             " FROM public.reader_plans WHERE owner_id=%s", (owner,)).fetchone()
     return Stored(None, None, False, None) if row is None else Stored(*row)
+
+
+# A plan that will renew: live, with no scheduled end. With ``cancel_owed_since`` set, the
+# cancel at the period's end is owed to the reader (migration 0041).
+_RENEWS = "paddle_status IN ('active', 'trialing', 'past_due') AND ends_at IS NULL"
+
+
+def owe_cancel(dsn: str, owner: uuid.UUID) -> None:
+    """The reader asked to delete their account: from now on the cancel of their plan at the end
+    of the period paid for is owed to them (a row is made if they have none, so a plan a late
+    payment brings is owed it too). No call to Paddle; ``change`` makes that."""
+    with psycopg.connect(dsn, connect_timeout=3) as conn, conn.transaction():
+        conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(owner),))
+        conn.execute("INSERT INTO public.reader_plans AS plan (owner_id, cancel_owed_since)"
+                     " VALUES (%s, now()) ON CONFLICT (owner_id) DO UPDATE"
+                     " SET cancel_owed_since = now(), updated_at = now()", (owner,))
+
+
+def forgive_cancel(dsn: str, owner: uuid.UUID) -> None:
+    """No cancel is owed any more: the reader chose "Keep my plan"."""
+    with psycopg.connect(dsn, connect_timeout=3) as conn, conn.transaction():
+        conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(owner),))
+        conn.execute("UPDATE public.reader_plans SET cancel_owed_since = NULL, updated_at = now()"
+                     " WHERE owner_id=%s AND cancel_owed_since IS NOT NULL", (owner,))
+
+
+def owes_cancel(dsn: str, owner: uuid.UUID) -> bool:
+    """Whether the reader's stored plan would renew though its cancel is owed to them."""
+    with psycopg.connect(dsn, connect_timeout=3) as conn, conn.transaction():
+        conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(owner),))
+        return conn.execute("SELECT 1 FROM public.reader_plans WHERE owner_id=%s"
+                            f" AND cancel_owed_since IS NOT NULL AND {_RENEWS}",
+                            (owner,)).fetchone() is not None
+
+
+def plan_ending(dsn: str, owner: uuid.UUID) -> dict:
+    """For the waiting screen: whether the reader's live Paddle plan won't renew (cancelled, or
+    its cancel owed), and the end of the period paid for (``ends``, None when not known)."""
+    with psycopg.connect(dsn, connect_timeout=3) as conn, conn.transaction():
+        conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(owner),))
+        row = conn.execute(
+            "SELECT COALESCE(ends_at, period_ends_at) FROM public.reader_plans WHERE owner_id=%s"
+            " AND paddle_status IN ('active', 'trialing', 'past_due')"
+            " AND (ends_at IS NULL OR now() < ends_at)"
+            " AND (ends_at IS NOT NULL OR cancel_owed_since IS NOT NULL)", (owner,)).fetchone()
+    if row is None:
+        return {"wont_renew": False, "ends": None}
+    return {"wont_renew": True,
+            "ends": None if row[0] is None else row[0].astimezone(UTC).isoformat()}
 
 
 def plan_payload(row: dict, monthly: frozenset[str], yearly: frozenset[str]) -> dict:
@@ -200,6 +261,10 @@ def _record_checkout(dsn: str, owner: uuid.UUID, token: str) -> None:
         conn.execute("INSERT INTO public.paddle_checkouts (owner_id, token_digest, expires_at)"
                      " VALUES (%s, %s, now() + make_interval(days => %s))",
                      (owner, checkout_digest(token), CHECKOUT_DAYS))
+        # A new plan of the reader's own, after the old one ended: not the plan whose cancel was
+        # owed to them when they asked to delete their account and then came back.
+        conn.execute("UPDATE public.reader_plans SET cancel_owed_since = NULL"
+                     " WHERE owner_id=%s AND cancel_owed_since IS NOT NULL", (owner,))
 
 
 def _checkouts_today(dsn: str, owner: uuid.UUID) -> int:
@@ -254,36 +319,69 @@ async def checkout(body: CheckoutIn, request: Request,
     return JSONResponse({"transaction_id": transaction}, headers=_NO_STORE)
 
 
-def _apply_answer(request: Request, entity: dict) -> None:
+def apply_answer(dsn: str, prices: frozenset[str], entity: dict) -> None:
     """Apply Paddle's answer about the reader's own subscription, as a message would be."""
-    settings = request.app.state.settings
     try:
-        message = read_subscription(entity, settings.paddle_prices())
+        message = read_subscription(entity, prices)
     except Malformed:
         return
     if message is not None:
-        apply_message(_billing_dsn(request), message)
+        apply_message(dsn, message)
+
+
+def change(dsn: str, api: PaddleApi, prices: frozenset[str], owner: uuid.UUID, *,
+           cancel: bool) -> str:
+    """Cancel the reader's own plan at the end of the period paid for, or keep it (removing a
+    scheduled cancel, and any cancel owed). The one way either is asked of Paddle: from the
+    account sheet, from asking to delete the account, and from the regular check. Answers
+    ``done``, ``no_plan``, ``unavailable`` or ``locked`` (Paddle's 30 minutes before a renewal);
+    only ``done`` changed anything. Paddle is called at most once, and only with the subscription
+    id stored for ``owner``."""
+    stored = stored_plan(dsn, owner)
+    if not stored.live:
+        return "no_plan"
+    if not cancel:
+        forgive_cancel(dsn, owner)
+    # Already as asked: nothing to send.
+    if (stored.ends_at is not None) == cancel:
+        return "done"
+    call = api.cancel if cancel else api.remove_scheduled_change
+    try:
+        entity = call(stored.subscription_id)
+    except PaddleUnavailable:
+        return "unavailable"
+    except PaddleRefused as refused:
+        return "locked" if refused.code.startswith("subscription_locked") else "unavailable"
+    if entity.get("id") == stored.subscription_id:
+        apply_answer(dsn, prices, entity)
+    return "done"
+
+
+def cancel_owed(dsn: str, api: PaddleApi, prices: frozenset[str], owner: uuid.UUID) -> str:
+    """Ask Paddle for the cancel owed to a reader who asked to delete their account
+    (``change``), and never raise: the owed mark stays until Paddle's answer brings the scheduled
+    end, and the regular check asks again. A renewal that came first is told to the operator."""
+    try:
+        outcome = change(dsn, api, prices, owner, cancel=True)
+    except Exception:  # noqa: BLE001 - the mark is kept; the regular check asks again
+        _LOG.warning("an owed cancel could not be applied: the regular check tries again")
+        return "unavailable"
+    if outcome == "locked":
+        _LOG.warning("paddle refused an owed cancel while a renewal is under way: the regular "
+                     "check tries again; if that renewal was charged, refund it (runbook)")
+    return outcome
 
 
 async def _change(request: Request, owner: OwnerId, *, cancel: bool) -> JSONResponse:
-    stored = await run_in_threadpool(stored_plan, _billing_dsn(request), owner.value)
-    if not stored.live:
+    outcome = await run_in_threadpool(
+        change, _billing_dsn(request), paddle_api(request),
+        request.app.state.settings.paddle_prices(), owner.value, cancel=cancel)
+    if outcome == "no_plan":
         return _refused(409, "no_plan", "There’s no plan here to change.")
-    # Already as asked: nothing to send.
-    if (stored.ends_at is not None) == cancel:
-        return await _plan_response(request, owner)
-    api = paddle_api(request)
-    call = api.cancel if cancel else api.remove_scheduled_change
-    try:
-        entity = await run_in_threadpool(call, stored.subscription_id)
-    except PaddleUnavailable:
+    if outcome == "locked":
+        return _refused(409, *_TRY_AGAIN_SOON)
+    if outcome == "unavailable":
         return _refused(503, *_UNAVAILABLE)
-    except PaddleRefused as refused:
-        if refused.code.startswith("subscription_locked"):
-            return _refused(409, *_TRY_AGAIN_SOON)
-        return _refused(503, *_UNAVAILABLE)
-    if entity.get("id") == stored.subscription_id:
-        await run_in_threadpool(_apply_answer, request, entity)
     return await _plan_response(request, owner)
 
 
@@ -295,6 +393,26 @@ async def cancel(request: Request, owner: OwnerId = Depends(_csrf_owner)) -> JSO
 @router.post("/keep")
 async def keep(request: Request, owner: OwnerId = Depends(_csrf_owner)) -> JSONResponse:
     return await _change(request, owner, cancel=False)
+
+
+@router.get("/ending")
+async def ending(request: Request, _guard: None = Depends(_owner_input_guard)) -> JSONResponse:
+    """Whether the reader's plan won't renew, and the day it is paid for until: for the waiting
+    screen of a reader who asked to delete their account, so signed in in any state (as
+    ``/api/account/export`` is), and counted against the request limit. No amount, no id."""
+    authenticated = await authenticated_session(request)
+    if authenticated is None:
+        raise HTTPException(401, "Authentication required")
+    owner = OwnerId(authenticated.principal.owner_id)
+    try:
+        await request.app.state.tenant_repository.consume_request_limit(owner)
+    except LimitExceededError as exc:
+        raise _limit_failure(exc) from exc
+    try:
+        found = await run_in_threadpool(plan_ending, _billing_dsn(request), owner.value)
+    except psycopg.Error:
+        return _refused(503, *_UNAVAILABLE)
+    return JSONResponse(found, headers=_NO_STORE)
 
 
 @router.post("/portal")

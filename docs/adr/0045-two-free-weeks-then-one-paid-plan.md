@@ -1,8 +1,9 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
 **Status:** Proposed (2026-11-20). Steps 1, 2, 3, 4 (server and screens), 5 (server and
-screens) and 6, and Mothli's own payment link in the shared Paddle account ("One Paddle account,
-several products", at the end) are built (see below), short of the sandbox walk; nothing else is. The
+screens), 6 and 7 (deleting an account while paying, and "your plan.json"), and Mothli's own
+payment link in the shared Paddle account ("One Paddle account, several products", at the end)
+are built (see below), short of the sandbox walk; nothing else is (step 8, the pages, is not). The
 owner's decisions in "What the owner decided" are settled; the numbers and the choices in "Open
 points for the owner" are his to make, and point 7 is decided (23 November 2026).
 
@@ -1398,3 +1399,86 @@ start the free weeks), `SignIn.test.tsx` and `PaymentLink.test.tsx`. Not seen in
 invitation's and the note's look on a phone and in the dark theme, the focus moves with a real
 screen reader, the plan sheet opened over the chat panel (inert and focus), and the weekday in real
 time zones.
+
+**Step 7 built (2026-11-23).** Deleting an account while paying, and "your plan.json". Nothing was
+run against Paddle: the tests' stand-in Paddle, behind the real client, holds the owner's other
+product's subscription and customer too, and nothing may touch them.
+
+- **Migration `0041_cancel_owed.sql`.** `reader_plans.cancel_owed_since`: when the reader asked to
+  delete their account. From then on the cancel of their plan at the end of the period paid for is
+  owed to them whenever the stored plan is live with no scheduled end. `paddle_plans_to_check`
+  made again with the same signature and rights, the owed plans first. No new role, right or
+  function.
+- **Asking to delete** (`POST /api/account/delete`, `auth/account.py`) writes the mark first, on
+  the billing role (a row is made for a reader who has none, so a plan a late payment brings to an
+  account waiting to be erased is owed it too); then the account is marked as before; then the
+  cancel is asked of Paddle through `subscribe.change`, the code "Cancel my plan" runs (one call,
+  `effective_from: next_billing_period`, the reader's stored subscription id only). Paddle
+  unreachable, slow, overloaded or refusing (`subscription_locked_*` inside the 30 minutes before
+  a renewal included) changes nothing for the request: the deletion goes through, the mark stays.
+  A database that cannot be reached for the mark refuses the request before anything happens
+  (`503 account_busy`; the app's "I couldn’t do that just now…"). A reader with no live plan, or
+  one already cancelled, costs no call.
+- **The guarantee: the mark and the regular check.** The check (`paddle_check.py`, hourly) takes the
+  owed plans first, fetches each, applies it, and while it still shows renewing asks for the
+  cancel through the same `change`, every run, until Paddle's answer brings the scheduled end.
+  Chosen over a retry by the daily purge because the check already holds the key, the billing
+  role and the prices, runs 24 times more often, and is the one place that already calls Paddle on
+  a schedule; the purge has no key. Chosen over retrying inside the request because a request
+  must never be sent twice to Paddle by the client, and the reader's deletion must not wait on it.
+  **What cannot be guaranteed**: a renewal that Paddle starts before the cancel gets through (the
+  30-minute lock) is charged; the cancel then takes effect at the end of that new period, and the
+  log says `paddle refused an owed cancel while a renewal is under way: ... refund it (runbook)`
+  for the operator, who refunds it in Paddle (the runbook's query finds the readers).
+- **Changing their mind.** Coming back within the 30 days (`POST /api/account/keep`) leaves the
+  mark: the plan still ends at the period's end, and the account sheet shows "Your plan ends on …"
+  with "Keep my plan" as before, the check confirming a cancel that was not yet through. "Keep my
+  plan" (`POST /api/billing/keep`, on the waiting screen after keeping the account, or on the
+  account sheet) clears the mark, then removes Paddle's scheduled cancel if there is one; a cancel
+  that never reached Paddle needs no call. A new checkout of the reader's own clears the mark too,
+  so a new plan after the old one ended is not cancelled by the old request. If the period ends
+  before they come back, they are an ended reader like any other. A race left as is: "Keep my
+  plan" pressed while the check is cancelling can end with the plan cancelled; the reader sees
+  "Your plan ends on …" with "Keep my plan" again (the safe way round).
+- **The waiting screen** reads `GET /api/billing/ending` (signed in in any state, as the copy of
+  one's data is; only where the server manages plans): `{"wont_renew", "ends"}`, true for a live
+  plan cancelled or owed its cancel, with the end of the period paid for. No id, no amount.
+- **Erasure.** The purge takes every row with the account's `owner_id`, `reader_plans`,
+  `paddle_events` and `paddle_checkouts` included (tested). **The safeguard**: the purge never
+  erases an account whose stored plan is live with no scheduled end. It holds it before the point
+  of no return (checked before, and again inside, the step that begins erasing), untouched, logs
+  `purge held an account whose Paddle plan still renews: ...` (no id, nothing of the reader),
+  counts it as `held` in its line and ends with an error, until the check has the cancel
+  confirmed; the next run erases it. Chosen over cancelling immediately from the purge: the purge
+  holds no Paddle key and should not; and over erasing everything but the plan row: the row is
+  what lets the cancel be asked for and the only trace that Paddle is charging someone. Paddle
+  keeps its own records as the seller; Mothli asks it to delete nothing.
+- **"your plan.json"** in the copy of one's data (`reader_plans` moves from left out to in the
+  copy): `free_weeks_began`; `gift` ("Mothli on the house, for good", or "…until the end of
+  2099-06-30 (UTC)", or null); `plan` (null, or `kind` monthly or yearly, `status_at_paddle`,
+  `first_paid`, `this_period_ends`, `ends`, and a `sold_by` line saying Paddle sells the plan and
+  keeps its own records); `not_to_renew_since_you_asked_to_delete_your_account`. Never Paddle's
+  customer, subscription or price ids, a checkout token or digest, or an amount. The read-me
+  names the file. `paddle_events` and `paddle_checkouts` stay left out, as payment records.
+- **What the reader sees.** On the delete confirmation, a reader with a live plan gets one more
+  line: "Your plan won’t renew, so you won’t be charged again." followed by "Change your mind
+  before 3 December and Mothli is still yours until then." when the day paid for comes before the
+  erasure, or "Change your mind within the 30 days and Mothli is still yours until 3 August."
+  when it comes after; under a gift, the first sentence alone (the day the sheet knows is the
+  gift's). On the waiting screen: "Your plan won’t renew. It’s paid for until 3 December." (or the
+  first sentence alone without a day), and "Keep my plan" beside "Keep my account", which keeps
+  the account, then the plan, then opens the app. If the plan cannot be kept just then: "Your
+  account is back, but I couldn’t keep your plan just now. Try again in a few minutes, or keep it
+  from Your account." No number of questions, no countdown, never "unlimited".
+
+Tests: `backend/tests/hosted/test_delete_while_paying_postgres.py` (the cancel for the deleting
+reader alone, by their stored id, MySigner untouched; no call without a live plan; Paddle timing
+out, down, overloaded, refusing, and locked for a renewal, at the request, then the check while
+still away and once back; coming back before and after the retry, "Keep my plan" from the waiting
+screen and the account sheet; a late payment on an account waiting to be erased; a new checkout
+after coming back; the purge holding while the cancel is unconfirmed, then erasing every plan
+row; "your plan.json"; the waiting screen's read), `test_migrations.py` (0041), `test_billing.py`
+(the check's owed cancel, non-database), and the frontend's `Account.test.tsx` and
+`SignIn.test.tsx`. Not verified: any of it against Paddle's sandbox (that a cancel's answer
+carries the scheduled change, the exact refusal inside the 30 minutes), the screens in a browser,
+and the purge and the check from their crontabs.
