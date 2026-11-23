@@ -244,9 +244,10 @@ def test_an_ended_reader_can_still_do_everything_that_is_reading(
              f"/api/books/{book}/read-frontier", "/api/books", "/api/reader/profile",
              "/api/reader/recollections", "/api/limits", "/api/costs", "/api/classics",
              "/api/billing/plan", "/api/auth/session"]
-    # The same answer as in the free weeks, word for word where nothing else moves it.
+    # The same answer as in the free weeks, word for word where nothing else moves it (the
+    # place's ``last_opened_at`` moves with every look at it, so it is compared by status).
     same_words = {f"/api/books/{book}", f"/api/books/{book}/manifest",
-                  f"/api/books/{book}/position", f"/api/books/{book}/preferences",
+                  f"/api/books/{book}/preferences",
                   f"/api/books/{book}/search?q=lamp", f"/api/books/{book}/marks",
                   f"/api/books/{book}/read-map", f"/api/books/{book}/read-frontier",
                   "/api/reader/profile", "/api/reader/recollections"}
