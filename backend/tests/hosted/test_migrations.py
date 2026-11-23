@@ -1430,7 +1430,7 @@ def test_paddle_columns_start_empty_change_no_plan_and_only_the_billing_lookup_c
     apply_migrations(database)
 
     paddle = ("paddle_customer_id", "paddle_subscription_id", "paddle_status", "period_ends_at",
-              "ends_at", "paddle_occurred_at")
+              "ends_at", "paddle_occurred_at", "first_paid_at")
     with psycopg.connect(database) as conn:
         assert conn.execute(
             "SELECT to_jsonb(plan) - %s::text[] FROM reader_plans AS plan ORDER BY owner_id",
@@ -1440,9 +1440,10 @@ def test_paddle_columns_start_empty_change_no_plan_and_only_the_billing_lookup_c
         ).fetchone()[0] == 0
         assert [conn.execute(query, (reader,)).fetchone()
                 for reader in (started, gifted, never)] == states
-        assert conn.execute("SELECT paddle_status, period_ends_at, plan_ends_at FROM"
+        assert conn.execute("SELECT paddle_status, period_ends_at, plan_ends_at, first_paid_at,"
+                            " first_month_spent_usd FROM"
                             " reader_plan_state(%s, 14, 2.10)", (never,)).fetchone() == (
-            None, None, None)
+            None, None, None, None, None)
         assert conn.execute("SELECT count(*) FROM paddle_events").fetchone()[0] == 0
         columns = [row[0] for row in conn.execute(
             "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public'"

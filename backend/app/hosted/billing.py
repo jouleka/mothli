@@ -65,6 +65,9 @@ _STATUSES = frozenset({"active", "trialing", "past_due", "paused", "canceled"})
 # Paddle's statuses that keep access (developer.paddle.com/build/subscriptions/
 # provision-access-webhooks): trialing as active, and past_due while Paddle retries a payment.
 _LIVE = frozenset({"active", "trialing", "past_due"})
+# The statuses of a plan that has been paid for: the first one applied starts the reader's first
+# paid month (ADR 0045 section 4), once per account, never moved (``first_paid_at``).
+_PAID = frozenset({"active", "past_due"})
 # The scheduled changes that end access on their date: a cancel to the end of what was paid, a
 # pause (Mothli never offers one; a paused plan is ended).
 _ENDING_CHANGES = frozenset({"cancel", "pause"})
@@ -224,8 +227,9 @@ def apply_message(dsn: str, message: SubscriptionMessage) -> str:
                     conn.execute(
                         """INSERT INTO public.reader_plans AS plan
                              (owner_id, paddle_customer_id, paddle_subscription_id, paddle_status,
-                              period_ends_at, ends_at, paddle_occurred_at)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s)
+                              period_ends_at, ends_at, paddle_occurred_at, first_paid_at)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s,
+                                   CASE WHEN %s THEN now() END)
                            ON CONFLICT (owner_id) DO UPDATE SET
                              paddle_customer_id = EXCLUDED.paddle_customer_id,
                              paddle_subscription_id = EXCLUDED.paddle_subscription_id,
@@ -233,9 +237,12 @@ def apply_message(dsn: str, message: SubscriptionMessage) -> str:
                              period_ends_at = EXCLUDED.period_ends_at,
                              ends_at = EXCLUDED.ends_at,
                              paddle_occurred_at = EXCLUDED.paddle_occurred_at,
+                             first_paid_at = COALESCE(plan.first_paid_at,
+                                                      EXCLUDED.first_paid_at),
                              updated_at = now()""",
                         (reader, message.customer_id, message.subscription_id, message.status,
-                         message.period_ends_at, message.ends_at, message.occurred_at))
+                         message.period_ends_at, message.ends_at, message.occurred_at,
+                         message.status in _PAID))
             recorded = conn.execute(
                 """INSERT INTO public.paddle_events
                      (event_id, event_type, occurred_at, owner_id, outcome)

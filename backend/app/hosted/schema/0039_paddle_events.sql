@@ -15,6 +15,10 @@ ALTER TABLE reader_plans
   ADD COLUMN period_ends_at TIMESTAMPTZ,
   ADD COLUMN ends_at TIMESTAMPTZ,
   ADD COLUMN paddle_occurred_at TIMESTAMPTZ,
+  -- The first time a Paddle plan made this reader paying (active or past_due), from the database
+  -- clock: kept once per account and never moved, by a cancel, a new plan or a gift. It starts
+  -- their first paid month (ADR 0045 section 4), which they have once.
+  ADD COLUMN first_paid_at TIMESTAMPTZ,
   ADD CONSTRAINT reader_plans_paddle_whole CHECK (
     (paddle_subscription_id IS NULL) = (paddle_status IS NULL)
     AND (paddle_subscription_id IS NULL) = (paddle_occurred_at IS NULL));
@@ -69,14 +73,19 @@ REVOKE ALL ON FUNCTION paddle_reader(TEXT, UUID) FROM PUBLIC;
 -- paid, which Paddle keeps active with a scheduled change until then (ends_at); a plan paused or
 -- cancelled, or past its scheduled end, is 'ended' with why 'plan'. A reader who had a Paddle
 -- plan and stopped is never back in the free weeks. Also answered: the plan's status, the end of
--- its period, and its scheduled end. Its result has new columns, so it is made again; the grants
--- are made again by the deployment's role script, which runs after the migrations.
+-- its period, and its scheduled end. And the first paid month (section 4): within 30 days of the
+-- first time a Paddle plan made the reader paying, while a Paddle plan pays (not a gift), the
+-- reader's own chat spend since that time (counted as the free weeks' is), which the spend check
+-- holds to HOSTED_FIRST_PAID_MONTH_USD in place of the calendar month; NULL otherwise. Its result
+-- has new columns, so it is made again; the grants are made again by the deployment's role script,
+-- which runs after the migrations.
 DROP FUNCTION reader_plan_state(UUID, INTEGER, NUMERIC);
 
 CREATE FUNCTION reader_plan_state(reader UUID, free_days INTEGER, free_usd NUMERIC)
 RETURNS TABLE (state TEXT, why TEXT, free_started_at TIMESTAMPTZ, free_ends_at TIMESTAMPTZ,
                paid_by TEXT, gift_until DATE, free_spent_usd NUMERIC, paddle_status TEXT,
-               period_ends_at TIMESTAMPTZ, plan_ends_at TIMESTAMPTZ)
+               period_ends_at TIMESTAMPTZ, plan_ends_at TIMESTAMPTZ, first_paid_at TIMESTAMPTZ,
+               first_month_spent_usd NUMERIC)
 LANGUAGE sql
 STABLE
 STRICT
@@ -84,7 +93,7 @@ SET search_path = pg_catalog, public, pg_temp
 AS $$
   WITH found AS (
     SELECT kept.free_started_at, kept.gift_until, kept.paddle_status, kept.period_ends_at,
-           kept.ends_at,
+           kept.ends_at, kept.first_paid_at,
            kept.gift_until >= (now() AT TIME ZONE 'UTC')::date AS gifted,
            kept.paddle_subscription_id IS NOT NULL AS paddled,
            kept.paddle_status IN ('active', 'trialing', 'past_due')
@@ -107,6 +116,24 @@ AS $$
                        AND NOT held.background
                        AND held.created_at <= now() - interval '15 minutes'
                        AND held.created_at >= plan.free_started_at), 0) AS usd
+  ), first_month AS (
+    SELECT found.first_paid_at
+    FROM found
+    WHERE found.paddle_live AND NOT found.gifted
+      AND now() < found.first_paid_at + interval '30 days'
+  ), first_spent AS (
+    SELECT first_month.first_paid_at,
+           COALESCE((SELECT sum(entry.usd) FROM public.cost_ledger AS entry
+                     WHERE entry.owner_id = reader_plan_state.reader
+                       AND entry.purpose IS NOT NULL AND NOT entry.background
+                       AND entry.recorded_at >= first_month.first_paid_at), 0)
+         + COALESCE((SELECT sum(held.reserved_usd) FROM public.cost_reservations AS held
+                     WHERE held.owner_id = reader_plan_state.reader
+                       AND held.state = 'reserved' AND held.purpose IS NOT NULL
+                       AND NOT held.background
+                       AND held.created_at <= now() - interval '15 minutes'
+                       AND held.created_at >= first_month.first_paid_at), 0) AS usd
+    FROM first_month
   )
   SELECT CASE WHEN found.gifted OR found.paddle_live THEN 'paying'
               WHEN found.paddled THEN 'ended'
@@ -125,8 +152,10 @@ AS $$
          spent.usd,
          found.paddle_status,
          found.period_ends_at,
-         found.ends_at
-  FROM spent LEFT JOIN plan ON true LEFT JOIN found ON true;
+         found.ends_at,
+         found.first_paid_at,
+         first_spent.usd
+  FROM spent LEFT JOIN plan ON true LEFT JOIN found ON true LEFT JOIN first_spent ON true;
 $$;
 
 REVOKE ALL ON FUNCTION reader_plan_state(UUID, INTEGER, NUMERIC) FROM PUBLIC;

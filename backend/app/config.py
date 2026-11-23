@@ -166,6 +166,11 @@ class Settings(BaseSettings):
     # own chat spend since the start is (about 100 replies at 2.1 cents). Never shown to a reader.
     hosted_free_days: int = Field(default=14, ge=1, le=365)
     hosted_free_usd: float = Field(default=2.10, ge=0, le=10000, allow_inf_nan=False)
+    # ADR 0045 step 3 (section 4, decided 23 November 2026): a subscriber's first paid month,
+    # about 300 replies. For the 30 days after their first Paddle plan began, once per account,
+    # their chat since then is held to this in place of the month above; the day stays. A gift
+    # has none. Never shown to a reader.
+    hosted_first_paid_month_usd: float = Field(default=6.30, ge=0, le=10000, allow_inf_nan=False)
     # ADR 0041 section 6, amended 20 November 2026: a reader's allowance counts only their
     # conversation. Mothli's background work for a reader (their chapter notes, what it remembers
     # of them) is Mothli's cost: the budget of all readers' background work together per UTC day,

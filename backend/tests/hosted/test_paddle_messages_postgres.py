@@ -29,6 +29,7 @@ from psycopg import conninfo, sql
 
 from app.hosted.companion.spend import _DAY, _MONTH, set_spend_limits
 from app.hosted.companion.store import HostedCompanionCatalog
+from app.hosted.limits import update_limits
 from app.hosted.tenant.models import OwnerId
 from tests.hosted import test_companion_read_map_postgres as read_map_gate
 from tests.hosted import test_free_weeks_postgres as free_weeks
@@ -607,10 +608,12 @@ def test_the_tenant_role_cannot_write_a_paddle_plan_or_find_one(tenant_dsn, data
 
 def test_a_paying_readers_month_line_is_todays(paddle, tenant_dsn, database, readers):
     """The break it catches: a reader paying through Paddle held by the free ceiling, or by
-    nothing; they are held by the day and month guards with today's lines."""
+    nothing; past their first paid month they are held by the day and month guards with today's
+    lines."""
     a = readers["a"]
     book = shelve(database, a)
     post(paddle, message(sub_id("a"), reader=a))
+    move_first_paid(database, a, "now() - interval '31 days'")
     set_spend_limits(reader_usd_per_day=Decimal("0.10"), reader_usd_per_month=Decimal("0.20"),
                      platform_usd_per_day=100, free_usd=Decimal("0.01"))
     chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
@@ -620,3 +623,144 @@ def test_a_paying_readers_month_line_is_todays(paddle, tenant_dsn, database, rea
     set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=Decimal("0.10"),
                      platform_usd_per_day=100, free_usd=Decimal("0.01"))
     refused(chat, book, "month", _MONTH)
+
+
+# ---- the first paid month (ADR 0045 section 4) --------------------------------------------------
+
+def caps(*, day="1.00", month="0.20", first="0.50") -> None:
+    set_spend_limits(reader_usd_per_day=Decimal(day), reader_usd_per_month=Decimal(month),
+                     platform_usd_per_day=100, free_usd=Decimal("0.01"),
+                     first_paid_month_usd=Decimal(first))
+
+
+def chat_at(dsn: str, owner: uuid.UUID, usd: str, when: str = "now()") -> None:
+    """One settled chat row of ``usd`` at ``when`` (an SQL time), past row-level security."""
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "INSERT INTO cost_ledger (owner_id, phase, model, usd, idempotency_key, purpose,"
+            f" recorded_at) VALUES (%s, 'synthesis', 'm', %s, %s, 'stream-reply', {when})",
+            (owner, Decimal(usd), f"companion:{uuid.uuid4().hex}"))
+
+
+def first_paid(dsn: str, owner: uuid.UUID):
+    with psycopg.connect(dsn) as conn:
+        found = conn.execute("SELECT first_paid_at FROM reader_plans WHERE owner_id=%s",
+                             (owner,)).fetchone()
+    return None if found is None else found[0]
+
+
+def first_month(dsn: str, owner: uuid.UUID):
+    with psycopg.connect(dsn) as conn:
+        return conn.execute("SELECT first_month_spent_usd FROM reader_plan_state(%s, 14, 2.10)",
+                            (owner,)).fetchone()[0]
+
+
+def move_first_paid(dsn: str, owner: uuid.UUID, when: str) -> None:
+    with psycopg.connect(dsn) as conn:
+        conn.execute(f"UPDATE reader_plans SET first_paid_at = {when} WHERE owner_id=%s", (owner,))
+
+
+def test_the_first_paid_month_holds_chat_since_the_plan_began_to_its_own_ceiling_once(
+        paddle, tenant_dsn, database, readers):
+    """The break it catches: a new subscriber held to the ordinary month in their first 30 days
+    (or charged in it for what they spent before they paid); the larger month given again after a
+    cancel and a new plan, or after the 30 days; the day guard dropped in it; a line other than
+    today's month line at its ceiling; or an operator's own month cap for the reader ignored."""
+    a = readers["a"]
+    book = shelve(database, a)
+    caps()
+    chat_at(database, a, "0.15")                              # this month, before they paid
+    now = datetime.now(UTC)
+    post(paddle, message(sub_id("a1"), reader=a, event_type="subscription.created", at=now))
+    stamped = first_paid(database, a)
+    assert stamped is not None and first_month(database, a) == 0
+    chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
+    spend(chat, book, 0.30)                                   # past the $0.20 calendar month
+    spend(chat, book, 0.19)
+    assert first_month(database, a) == Decimal("0.49")
+    spend(chat, book, 0.01)
+    refused(chat, book, "month", _MONTH)                      # $0.50 since the plan began
+    caps(day="0.10", first="5")
+    refused(chat, book, "day", _DAY)                          # the day is the day
+    caps(first="5")
+    update_limits(database, a, {"max_spend_usd_per_month": Decimal("0.60")})
+    refused(chat, book, "month", _MONTH)                      # their own month cap wins
+    update_limits(database, a, {"max_spend_usd_per_month": None})
+    spend(chat, book, 0.01)
+
+    # A cancel and a new plan: the first paid month is not had again, and its start stays.
+    caps()
+    post(paddle, message(sub_id("a1"), "canceled", reader=a, at=now + timedelta(seconds=1)))
+    assert first_month(database, a) is None
+    post(paddle, message(sub_id("a2"), reader=a, event_type="subscription.created",
+                         at=now + timedelta(seconds=2)))
+    assert first_paid(database, a) == stamped
+    assert first_month(database, a) is not None               # still within its 30 days
+    move_first_paid(database, a, "now() - interval '30 days 1 minute'")
+    assert first_month(database, a) is None
+    refused(chat, book, "month", _MONTH)                      # the calendar month: $0.66 > $0.20
+    moved = first_paid(database, a)
+    post(paddle, message(sub_id("a2"), "past_due", reader=a, at=now + timedelta(seconds=3)))
+    assert first_paid(database, a) == moved
+
+
+def test_the_first_paid_month_is_paddles_alone(paddle, tenant_dsn, database, readers):
+    """The break it catches: a gifted reader given the first paid month (a gift has none), a
+    gift over a new Paddle plan still given it, or a plan Paddle only lists as trialing (nothing
+    paid yet) starting it."""
+    a, b = readers["a"], readers["b"]
+    book = shelve(database, a)
+    caps()
+    with psycopg.connect(database) as conn:
+        conn.execute("SELECT set_gift(%s, '9999-12-31'::date)", (a,))
+    assert first_paid(database, a) is None and first_month(database, a) is None
+    chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
+    spend(chat, book, 0.20)
+    refused(chat, book, "month", _MONTH)
+    post(paddle, message(sub_id("a"), reader=a))
+    assert first_paid(database, a) is not None
+    assert first_month(database, a) is None                   # the gift wins while it lasts
+    refused(chat, book, "month", _MONTH)
+    with psycopg.connect(database) as conn:
+        conn.execute("SELECT set_gift(%s, NULL::date)", (a,))
+    assert first_month(database, a) == Decimal("0")
+    post(paddle, message(sub_id("b"), "trialing", reader=b))
+    assert plan_of(database, b) == ("paying", None, "paddle") and first_paid(database, b) is None
+
+
+def test_the_first_paid_month_across_two_calendar_months_is_bounded(paddle, tenant_dsn,
+                                                                    database, readers):
+    """The bound, for a reader whose first 30 days straddle two calendar months: within those 30
+    days their chat reaches at most the first paid month's ceiling, wherever the days fall; after
+    them the calendar month (which counts what they spent in it, first month or not) holds them
+    as it holds everyone. So the 30 days and the calendar month they end in together reach at
+    most the first paid month plus one ordinary month, and no calendar month more than the first
+    paid month. The break it catches: a rule that swaps the month's ceiling for the larger one
+    for 30 days, which would allow it twice (once in each calendar month)."""
+    if datetime.now(UTC).day > 28:
+        pytest.skip("30 days from last month no longer reach today")
+    a = readers["a"]
+    book = shelve(database, a)
+    caps()
+    post(paddle, message(sub_id("a"), reader=a))
+    month_start = "(date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')"
+    move_first_paid(database, a, f"{month_start} - interval '1 day'")
+    chat_at(database, a, "0.50", f"{month_start} - interval '12 hours'")   # all of it last month
+    chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
+    assert first_month(database, a) == Decimal("0.50")
+    refused(chat, book, "month", _MONTH)                      # nothing this month, still held
+    # The 30 days over: this calendar month alone, from nothing, to the ordinary ceiling.
+    move_first_paid(database, a, f"{month_start} - interval '31 days'")
+    spend(chat, book, 0.19)
+    spend(chat, book, 0.01)
+    refused(chat, book, "month", _MONTH)
+    # What was spent this month within the 30 days counts for this month after them.
+    b = readers["b"]
+    book_b = shelve(database, b)
+    post(paddle, message(sub_id("b"), reader=b))
+    move_first_paid(database, b, f"{month_start} - interval '1 day'")
+    chat_b = HostedCompanionCatalog(tenant_dsn, OwnerId(b))
+    spend(chat_b, book_b, 0.50)
+    refused(chat_b, book_b, "month", _MONTH)
+    move_first_paid(database, b, f"{month_start} - interval '31 days'")
+    refused(chat_b, book_b, "month", _MONTH)                  # $0.50 this month > $0.20

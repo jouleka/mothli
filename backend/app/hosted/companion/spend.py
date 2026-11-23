@@ -135,6 +135,9 @@ class SpendLimits:
     # dollars of their own chat spend since the start (``HOSTED_FREE_USD``).
     free_usd: Decimal = Decimal("2.10")
     free_days: int = 14
+    # ADR 0045 step 3: a subscriber's first paid month (``HOSTED_FIRST_PAID_MONTH_USD``), in place
+    # of the month for the 30 days after their first Paddle plan began, once per account.
+    first_paid_month_usd: Decimal = Decimal("6.30")
 
 
 _limits_guard = threading.Lock()
@@ -153,39 +156,49 @@ def set_spend_limits(*, reader_usd_per_day, reader_usd_per_month, platform_usd_p
                      reader_background_usd_per_day=SpendLimits.reader_background_usd_per_day,
                      reader_background_usd_per_month=SpendLimits.reader_background_usd_per_month,
                      free_usd=SpendLimits.free_usd, free_days=SpendLimits.free_days,
+                     first_paid_month_usd=SpendLimits.first_paid_month_usd,
                      ) -> None:
     """Set this process's caps from settings (startup only, like the connection limit)."""
     global _limits
     values = [_money(value) for value in (
         reader_usd_per_day, reader_usd_per_month, platform_usd_per_day, notes_usd_per_day,
         background_usd_per_day, reader_background_usd_per_day, reader_background_usd_per_month,
-        free_usd)]
+        free_usd, first_paid_month_usd)]
     if any(not value.is_finite() or value < 0 for value in values):
         raise ValueError("spend caps must be finite and non-negative")
     if not isinstance(free_days, int) or isinstance(free_days, bool) or free_days < 1:
         raise ValueError("the free weeks must last at least one day")
     with _limits_guard:
-        _limits = SpendLimits(*values, free_days)
+        *values, first_paid_month = values
+        _limits = SpendLimits(*values, free_days, first_paid_month)
 
 
 def spend_limits() -> SpendLimits:
     return _limits
 
 
-def _reader_cap_reached(used, policy, limits, *, notes: bool = False) -> str | None:
+def _reader_cap_reached(used, policy, limits, *, notes: bool = False,
+                        first_month=None) -> str | None:
     """"day" or "month" when that companion allowance of the owner is used up, else None: the
     owner's own ``owner_limits`` cap, or the process default where it is NULL. For the notes
     account (``notes``) the default day cap is the notes ceiling and there is no default month
-    cap (ADR 0044 section 5): only one its row sets."""
+    cap (ADR 0044 section 5): only one its row sets. In a subscriber's first paid month
+    (``first_month``: their chat spend since their first Paddle plan began, which
+    ``reader_plan_state`` answers only within the 30 days after it) the default month is that
+    spend against the first paid month's ceiling, in place of the calendar month; a month cap of
+    their own still wins, and the day is the day."""
     day_cap = policy["max_spend_usd_per_day"]
     month_cap = policy["max_spend_usd_per_month"]
     if day_cap is None:
         day_cap = limits.notes_usd_per_day if notes else limits.reader_usd_per_day
+    month_used = used["month"]
     if month_cap is None and not notes:
         month_cap = limits.reader_usd_per_month
+        if first_month is not None:
+            month_cap, month_used = limits.first_paid_month_usd, first_month
     if used["day"] >= day_cap:
         return "day"
-    if month_cap is not None and used["month"] >= month_cap:
+    if month_cap is not None and month_used >= month_cap:
         return "month"
     return None
 
@@ -339,22 +352,31 @@ class SpendStore(OwnerBoundAdapter):
         with self._transaction() as conn:
             conn.execute("SELECT public.start_free_weeks()")
 
-    def _free_weeks(self, conn, policy, limits) -> str | None:
-        """"open" while the reader's free weeks last, "used" once their own chat since the start
-        has reached the free ceiling within them, None when the free weeks do not apply and the
-        reader's day and month caps do: before the first question, after the two weeks, while a
-        gift lasts (``paying``), for the notes account, and for a reader whose ``owner_limits``
-        row sets their own day or month
-        cap (an operator's word about one reader wins over the free weeks). Read in the caller's
-        transaction, under the owner's spend lock, from ``reader_plan_state``."""
-        if self._NOTES or policy["max_spend_usd_per_day"] is not None \
+    def _plan(self, conn, policy, limits) -> tuple[str | None, object]:
+        """(free weeks, first paid month), read in the caller's transaction, under the owner's
+        spend lock, from ``reader_plan_state``.
+
+        The free weeks: "open" while the reader's free weeks last, "used" once their own chat
+        since the start has reached the free ceiling within them, None when the free weeks do not
+        apply and the reader's day and month caps do: before the first question, after the two
+        weeks, while they pay (a gift or Paddle), for the notes account, and for a reader whose
+        ``owner_limits`` row sets their own day or month cap (an operator's word about one reader
+        wins over the free weeks).
+
+        The first paid month (ADR 0045 step 3): their chat spend since their first Paddle plan
+        began, within the 30 days after it and while a Paddle plan pays, else None."""
+        if self._NOTES:
+            return None, None
+        plan = conn.execute(
+            "SELECT state,why,first_month_spent_usd FROM public.reader_plan_state(%s,%s,%s)",
+            (self._owner.value, limits.free_days, limits.free_usd)).fetchone()
+        first_month = plan["first_month_spent_usd"]
+        if policy["max_spend_usd_per_day"] is not None \
                 or policy["max_spend_usd_per_month"] is not None:
-            return None
-        plan = conn.execute("SELECT state,why FROM public.reader_plan_state(%s,%s,%s)",
-                            (self._owner.value, limits.free_days, limits.free_usd)).fetchone()
+            return None, first_month
         if plan["state"] == "free":
-            return "open"
-        return "used" if plan["why"] == "ceiling" else None
+            return "open", first_month
+        return ("used" if plan["why"] == "ceiling" else None), first_month
 
     # ---- the four calls the wrappers make ---------------------------------------------------
     def reserve_cost(self, book_id, *, phase, model, input_tokens, output_tokens, usd,
@@ -430,9 +452,11 @@ class SpendStore(OwnerBoundAdapter):
                 reached = None
             else:
                 # In the free weeks one ceiling stands in for the day and the month (ADR 0045).
-                free = self._free_weeks(conn, policy, limits)
+                # A subscriber's first paid month stands in for their calendar month.
+                free, first_month = self._plan(conn, policy, limits)
                 reached = (None if free == "open" else "free" if free == "used"
-                           else _reader_cap_reached(used, policy, limits, notes=self._NOTES))
+                           else _reader_cap_reached(used, policy, limits, notes=self._NOTES,
+                                                    first_month=first_month))
             if under_way or background:
                 pass            # admitted with its first call: it finishes; or not the reader's
             elif reached == "day":

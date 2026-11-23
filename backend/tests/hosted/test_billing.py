@@ -128,3 +128,32 @@ def test_the_paddle_settings_are_checked_like_their_neighbours() -> None:
         assert named in str(refused.value), change
         assert SECRET not in str(refused.value)
     assert paddle_id("pri_", "x") not in PRICES
+
+
+def test_the_first_paid_month_is_the_owners_number_and_reaches_the_spend_check() -> None:
+    """The break it catches: the first paid month's ceiling not the owner's $6.30 (about 300
+    replies at 2.1 cents), not passed to the spend check, or accepting a negative amount."""
+    from decimal import Decimal
+
+    from app.hosted.companion.spend import SpendLimits, set_spend_limits, spend_limits
+
+    assert paddle_settings().hosted_first_paid_month_usd == 6.30
+    assert SpendLimits().first_paid_month_usd == Decimal("6.30")
+    assert round(Decimal("6.30") / Decimal("0.021")) == 300
+    before = spend_limits()
+    try:
+        set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=4, platform_usd_per_day=15,
+                         first_paid_month_usd=Decimal("7.5"))
+        assert spend_limits().first_paid_month_usd == Decimal("7.5")
+        assert spend_limits().free_days == 14
+        with pytest.raises(ValueError):
+            set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=4,
+                             platform_usd_per_day=15, first_paid_month_usd=-1)
+    finally:
+        set_spend_limits(**{name: getattr(before, name) for name in (
+            "reader_usd_per_day", "reader_usd_per_month", "platform_usd_per_day",
+            "notes_usd_per_day", "background_usd_per_day", "reader_background_usd_per_day",
+            "reader_background_usd_per_month", "free_usd", "free_days",
+            "first_paid_month_usd")})
+    with pytest.raises(ValidationError):
+        paddle_settings(hosted_first_paid_month_usd=-0.01)
