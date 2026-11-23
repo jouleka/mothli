@@ -260,18 +260,27 @@ def test_a_message_without_a_good_signature_is_refused_and_writes_nothing(paddle
 
 
 def test_an_old_or_future_timestamp_is_refused_even_with_a_valid_signature(paddle, database,
-                                                                            readers):
+                                                                            readers, monkeypatch):
     """The break it catches: a valid message captured once and replayed later (signed with its
-    old time), or one signed far in the future, accepted. Inside the window it is accepted."""
+    old time), or one signed in the future, accepted; or one just inside the window refused.
+    The route's clock is held still, so each edge of the 300 seconds is exact on any runner."""
+    from types import SimpleNamespace
+
+    from app.hosted import billing
+
+    now = int(time.time())
+    monkeypatch.setattr(billing, "time", SimpleNamespace(time=lambda: float(now)))
     a = readers["a"]
     body = body_of(message(sub_id("a"), reader=a))
-    now = int(time.time())
     before = everything(database)
-    for ts in (now - 301, now - 3600, now - 86400, now + 301):
-        assert post(paddle, body, signature(body, ts=ts)).status_code == 400, ts
+    for ts in (now - 301, now - 3600, now - 86400, now + 301, now + 3600):
+        assert post(paddle, body, signature(body, ts=ts)).status_code == 400, ts - now
     assert everything(database) == before
-    assert post(paddle, body, signature(body, ts=now - 240)).status_code == 200
+    assert post(paddle, body, signature(body, ts=now - 300)).status_code == 200
     assert plan_of(database, a) == ("paying", None, "paddle")
+    # The other edge: the same message again (a repeat, answered and ignored), signed at the
+    # window's future end, still passes the time check.
+    assert post(paddle, body, signature(body, ts=now + 300)).status_code == 200
 
 
 def test_with_no_secret_the_route_does_not_exist_and_nothing_is_written(make_app, database,
