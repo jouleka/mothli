@@ -8,6 +8,7 @@ import { api } from "../api";
 import { PENDING_DELETION_EVENT, SIGNED_OUT_EVENT, type OfflineSession } from "../pwa/offline";
 import { Button } from "../ui/Button";
 import { Moth } from "../ui/Moth";
+import { SIGN_UP_LINE } from "../ui/MothliPlan";
 import { MothliMark } from "../ui/MothliMark";
 import { TakeACopy } from "./TakeACopy";
 import "./shelf-redesign.css";
@@ -130,6 +131,7 @@ export function SignIn({ ended = false }: { ended?: boolean }) {
                 ? "You’ve been signed out. Sign in again and I’ll take you straight back to where you were."
                 : "Bring a book you love. Mothli reads along with you and only knows it as far as you’ve read, so it can never spoil what happens next."}
             </p>
+            {!ended && <p className="ml-spread-lede">{SIGN_UP_LINE}</p>}
             <div className="ml-spread-foot">
               {deleted && (
                 <p className="ml-welcome-note" role="status">

@@ -22,6 +22,7 @@ import { AskTheBook, type AskSession, type CompanionSeed, type CompanionTab } fr
 import { MothCorner, WelcomeBackCard, type CornerNote } from "./MothMoments";
 import { crossedMilestone, milestoneLine, readingStreak, recordReadingDay, unlockCast } from "../journey/journey";
 import { Moth } from "../ui/Moth";
+import { mothliStanding, useMothliEnded } from "../ui/mothliStanding";
 import "./reader.css";
 import "./panels.css";
 import { keptPasses, keptReplyShown, readSavedReplies, writeSavedReplies, type SavedCompanionReply } from "./companionNotes";
@@ -177,6 +178,16 @@ export function bookFileName(title: string): string {
   return `${name.slice(0, 80).trim() || "book"}.epub`;
 }
 
+/** Mothli's offer at the end of the note after a chapter. */
+const NOTICED = " Want to hear what I noticed?";
+
+/** The corner note as shown: for a reader whose free weeks or plan are over, its first part
+ * ("That’s Chapter 3 done!", and a milestone) without the offer, its button or its people. */
+function shownNote(note: CornerNote | null, ended: boolean): CornerNote | null {
+  if (!note || !ended || !note.text.endsWith(NOTICED)) return note;
+  return { id: note.id, text: note.text.slice(0, -NOTICED.length) };
+}
+
 export function ReaderPage({
   bookId,
   onBack,
@@ -214,6 +225,9 @@ export function ReaderPage({
   // selection tools offer only what works (highlight, note), the chat is never about the picked
   // passage, nothing dead is shown and nothing is asked of the server.
   const passageHelp = !hosted;
+  // Hosted: the reader's free weeks or plan are over (ADR 0045). Reading is untouched; Mothli's
+  // own offers on the page are not made.
+  const mothliEnded = useMothliEnded();
   useEffect(() => {
     const owner = activeOfflineOwner();
     const onGone = (event: Event) => {
@@ -1650,9 +1664,11 @@ export function ReaderPage({
       chaptersFinished(manifest.atoms, bookmark), chapterCount(manifest.atoms));
     pushNote({
       id: noteId,
-      text: `${mark ? `${milestoneLine(mark, title || "this book")} ` : ""}That’s ${chapterTitle} done! Want to hear what I noticed?`,
+      text: `${mark ? `${milestoneLine(mark, title || "this book")} ` : ""}That’s ${chapterTitle} done!${NOTICED}`,
       action: tellMe,
     });
+    // Mothli needs the plan: the note keeps its first part (see `shownNote`) and nothing is asked.
+    if (mothliStanding()?.state === "ended") return;
     Promise.resolve()
       .then(() => api.notes(bookId, bookmark))
       .then((notes) => {
@@ -1666,7 +1682,7 @@ export function ReaderPage({
               ? {
                   ...note,
                   people,
-                  text: `That’s ${chapterTitle} done! You met ${people.length === 1 ? "someone new" : `${people.length} new people`}. Want to hear what I noticed?`,
+                  text: `That’s ${chapterTitle} done! You met ${people.length === 1 ? "someone new" : `${people.length} new people`}.${NOTICED}`,
                 }
               : note,
           ),
@@ -1721,7 +1737,8 @@ export function ReaderPage({
   const percent = totalChapters && manifest
     ? Math.round((Math.min(chaptersFinished(manifest.atoms, pos?.bookmark ?? 0), totalChapters) / totalChapters) * 100)
     : 0;
-  const latestNote = cornerNotes[0] ?? null;
+  // Ended (ADR 0045): the note after a chapter keeps its first part and drops Mothli's offer.
+  const latestNote = shownNote(cornerNotes[0] ?? null, mothliEnded);
   // Reading shortcuts: arrows turn the page, "/" opens Mothli, "n" opens the Notebook.
   shortcutRef.current = (event) => {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -1738,8 +1755,9 @@ export function ReaderPage({
   };
   const readerBookmark = Math.max(pos?.bookmark ?? 0, readFrontier?.available_chapter ?? 0);
   useEffect(() => {
-    // Without the chat there is no story memory to name anyone from (see `chat`).
-    if (readerBookmark < 1 || !chat) {
+    // Without the chat there is no story memory to name anyone from (see `chat`). Mothli needing
+    // the plan: no names are looked up, and none kept from before stay in the page.
+    if (readerBookmark < 1 || !chat || mothliEnded) {
       setCast([]);
       return;
     }
@@ -1753,7 +1771,7 @@ export function ReaderPage({
     return () => {
       live = false;
     };
-  }, [bookId, readerBookmark, memoryRefresh, chat]);
+  }, [bookId, readerBookmark, memoryRefresh, chat, mothliEnded]);
   useEffect(() => {
     castRef.current = cast;
     nameMatcherRef.current = buildNameMatcher(nameTapsOn ? cast : []);
@@ -2053,7 +2071,7 @@ export function ReaderPage({
             note={latestNote}
             disabled={!pos}
             welcome={
-              welcomeBack && pos ? (
+              welcomeBack && pos && !mothliEnded ? (
                 <WelcomeBackCard
                   bookId={bookId}
                   bookmark={pos.bookmark}

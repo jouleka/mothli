@@ -4,6 +4,7 @@
  * still being answered. Its message is already written for the reader and says which one (today,
  * this month); the lines here are only for a reply that comes without it. */
 import { ApiError } from "../api";
+import { MOTHLI_PLAN } from "./mothliStanding";
 
 export const ALLOWANCE_LINE =
   "We’ve talked a lot today — let’s pick this up tomorrow. Your book and your place are right here.";
@@ -21,6 +22,12 @@ export function companionPause(reason: unknown): { line: string; final: boolean 
   }
   if (reason.code === "companion_busy") return { line: BUSY_LINE, final: false };
   return null;
+}
+
+/** Mothli needs the plan (ADR 0045): no line at all. The panel shows its invitation instead, from
+ * where the reader stands (`mothliStanding`), which the answer itself has already updated. */
+export function needsPlan(reason: unknown): boolean {
+  return reason instanceof ApiError && reason.code === MOTHLI_PLAN;
 }
 
 /** A line shown at the allowance: no "Retry" beside it, since asking again now cannot work. */

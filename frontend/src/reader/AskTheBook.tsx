@@ -10,9 +10,11 @@ import {
 } from "react";
 import { api, ApiError, type AskAnswer, type AskCitation, type BookTurn, type EntityId, type ReadFrontier, type ReadSkipped } from "../api";
 import { Button } from "../ui/Button";
-import { companionPause, isAllowanceLine } from "../ui/companionPause";
+import { companionPause, isAllowanceLine, needsPlan } from "../ui/companionPause";
 import { Icon } from "../ui/Icon";
 import { Moth, type MothMood } from "../ui/Moth";
+import { MOTHLI_HELLO, MothliEndingNote, MothliInvitation, startMothli } from "../ui/MothliPlan";
+import { mothliStanding, noteMothliUsed, useMothliStanding } from "../ui/mothliStanding";
 import { PeoplePanel, StoryPanel } from "./StoryMemory";
 import { activeOfflineOwner } from "../pwa/offline";
 import { keepTabFocusInside } from "./focusTrap";
@@ -395,6 +397,17 @@ export function AskTheBook({
     setTab(navigate.tab);
     setFocusPerson(navigate.personId);
   }, [navigate?.nonce]);
+  // Where the reader stands with Mothli (ADR 0045). Ended: one invitation in place of each tab's
+  // content, and nothing of the conversation, the cast or the notes is asked for or shown.
+  const standing = useMothliStanding();
+  const ended = standing?.state === "ended";
+  const isNew = standing?.state === "new";
+  const wasEnded = useRef(ended);
+  // The cast and "Story so far" are only ever shown by the reader's own tap (a tab, a name, a
+  // person in a note): a new reader's first use of Mothli, which starts their free weeks.
+  useEffect(() => {
+    if (tab !== "talk") startMothli(bookId);
+  }, [tab]);
   const modal = !embedded || compact;
   const isCurrent = () =>
     retainedSession.current === session && activeOfflineOwner() === owner;
@@ -402,7 +415,7 @@ export function AskTheBook({
   // The conversation shown is the server's: it hides a turn once the text it was written from
   // is no longer read, so no copy kept here may stand in for it. Returns whether it loaded.
   const loadHistory = async (): Promise<boolean> => {
-    if (!isCurrent()) return false;
+    if (!isCurrent() || mothliStanding()?.state === "ended") return false;
     const token = ++session.loadToken;
     const current = () => isCurrent() && session.loadToken === token;
     const started = Date.now();
@@ -410,7 +423,8 @@ export function AskTheBook({
     try {
       if (api.bookConversation) answer = await api.bookConversation(bookId);
     } catch (reason) {
-      if (!current()) return false;
+      // Mothli needs the plan: the invitation stands in the conversation's place.
+      if (!current() || needsPlan(reason)) return false;
       // 404: this server keeps no conversation for a book (hosted mode), so there is none to show.
       if (!(reason instanceof ApiError && reason.status === 404)) {
         // Not reachable: show none of it, even what was on screen a moment ago.
@@ -432,14 +446,25 @@ export function AskTheBook({
     });
     return true;
   };
-  // On open, for a new reading pass, and whenever what counts as read was changed by hand.
+  // On open, for a new reading pass, whenever what counts as read was changed by hand, and when
+  // the reader joins the plan (the conversation comes back).
   useEffect(() => {
     void loadHistory();
-  }, [session, readVersion]);
+  }, [session, readVersion, ended]);
+  // Back from the invitation: the box takes focus if the invitation had it.
+  useEffect(() => {
+    const active = document.activeElement;
+    if (wasEnded.current && !ended && (!active || active === document.body))
+      (inputRef.current ?? rootRef.current?.querySelector<HTMLElement>(".lp-companion-tabs .is-active"))?.focus({ preventScroll: true });
+    wasEnded.current = ended;
+  }, [ended]);
 
   useEffect(() => {
     inputRef.current?.focus({ preventScroll: true });
     const keydown = (event: KeyboardEvent) => {
+      // Another modal sheet over this panel (the plan sheet) owns the keyboard while it is open.
+      const active = document.activeElement;
+      if (active && !rootRef.current?.contains(active) && active.closest("[aria-modal='true']")) return;
       if (
         event.key === "Escape" &&
         (modal || rootRef.current?.contains(document.activeElement))
@@ -487,6 +512,8 @@ export function AskTheBook({
     bookScope = false,
   ) => {
     if (!isCurrent() || value.length < 2 || session.getSnapshot().busy) return;
+    // Mothli needs the plan: nothing is asked (a seed or a shortcut can still call this).
+    if (mothliStanding()?.state === "ended") return;
     const requestToken = session.getSnapshot().requestToken + 1;
     session.update({
       question: value,
@@ -607,6 +634,7 @@ export function AskTheBook({
           );
       }
       if (!isCurrentRequest()) return;
+      noteMothliUsed();
       // An offer to count skipped chapters belongs to this sitting, not to the saved conversation.
       const { offers, ...shown } = result;
       const exchangeId = crypto.randomUUID();
@@ -630,7 +658,9 @@ export function AskTheBook({
       });
       setPeopleOpen(false);
     } catch (reason) {
-      if (isCurrentRequest()) {
+      // Mothli needs the plan: the invitation stands where the reply would be, never an error
+      // line. The question stays in the box for when the reader is back.
+      if (isCurrentRequest() && !needsPlan(reason)) {
         const message =
           companionPause(reason)?.line ??
           (reason instanceof ApiError && reason.status === 413
@@ -662,6 +692,7 @@ export function AskTheBook({
     if (peopleBusy) return;
     let expectedBookmark=bookmark;
     const currentPeople = () => isCurrent() && session.bookmark === expectedBookmark;
+    startMothli(bookId); // the cast, by the reader's own tap
     setPeopleOpen(true);
     setPeopleBusy(true);
     setPeopleError("");
@@ -680,8 +711,9 @@ export function AskTheBook({
           setPeople(result.names.map((name,index)=>({name,entity_id:-(index+1)})));
       } else setPeople([]);
     } catch (reason) {
-      // A 404: this server keeps no names for the book (hosted mode, for now).
-      if (currentPeople())
+      // A 404: this server keeps no names for the book (hosted mode, for now). Mothli needing
+      // the plan: the invitation, no line.
+      if (currentPeople() && !needsPlan(reason))
         setPeopleError(reason instanceof ApiError && reason.status === 404
           ? "I don’t keep a list of names for this book yet. Ask me about anyone in your own words."
           : "Couldn’t find the names. Try again?");
@@ -836,15 +868,17 @@ export function AskTheBook({
           </div>
         </div>
         <div className="lp-companion-head-actions">
-          <Button
-            variant="ghost"
-            className="mothli-menu"
-            aria-label="Conversation options"
-            title="Conversation options"
-            onClick={() => setConfirmClear(!confirmClear)}
-          >
-            <Icon name="more" size={17} />
-          </Button>
+          {!ended && (
+            <Button
+              variant="ghost"
+              className="mothli-menu"
+              aria-label="Conversation options"
+              title="Conversation options"
+              onClick={() => setConfirmClear(!confirmClear)}
+            >
+              <Icon name="more" size={17} />
+            </Button>
+          )}
           <Button
             variant="ghost"
             className="mothli-close"
@@ -879,7 +913,11 @@ export function AskTheBook({
           ))}
         </nav>
       </header>
-      {tab === "people" ? (
+      {ended ? (
+        <div className="lp-companion-body">
+          <MothliInvitation key={tab} why={standing?.why ?? null} scope={rootRef} />
+        </div>
+      ) : tab === "people" ? (
         <div className="lp-companion-body">
           <PeoplePanel
             bookId={bookId}
@@ -915,6 +953,7 @@ export function AskTheBook({
             role="region"
             aria-label="Book conversation"
           >
+            <MothliEndingNote after={inputRef} />
             {confirmClear && (
               <div className="mothli-clear lp-clear">
                 <span>Start a fresh chat? Saved replies stay in Notebook.</span>
@@ -966,10 +1005,14 @@ export function AskTheBook({
                 </Button>
               </div>
             )}
-            {!visibleExchanges.length && !busy && history === "ready" && (
+            {/* A reader who has never used Mothli is greeted with the free weeks, until the first
+                reply arrives (ADR 0045 section 6). */}
+            {!visibleExchanges.length && (!busy || isNew) && history === "ready" && (
               <div className="lp-hello">
                 <p className="lp-voice lp-hello-line">
-                  {selection
+                  {isNew
+                    ? MOTHLI_HELLO
+                    : selection
                     ? "Ooh, good pick. What do you want to know about it?"
                     : bookmark > 0
                       ? "Hi! I’ve been reading along with you. Forgot someone, lost the thread, or spotted something odd? Ask me."

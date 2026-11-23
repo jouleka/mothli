@@ -21,6 +21,9 @@ export type OfflineSession = {
   /** Hosted: whether this server has Mothli's chat (its AI accounts are set up). Without it the
    * app shows no way into a chat and asks the server nothing about one. */
   chat?: boolean;
+  /** Hosted: where the reader stands with Mothli (ADR 0045), or null where the server cannot say.
+   * Never saved for opening offline: offline, the app behaves as it did before. */
+  mothli?: unknown;
 };
 
 /** Whether the app offers Mothli's chat: always in local mode (no session); in hosted mode
