@@ -1,6 +1,6 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
-**Status:** Proposed (2026-11-20). Steps 1 and 2 are built (see below); nothing else is. The
+**Status:** Proposed (2026-11-20). Steps 1, 2 and 3 are built (see below); nothing else is. The
 owner's decisions in "What the owner decided" are settled; the numbers and the choices in "Open
 points for the owner" are his to make, and point 7 is decided (23 November 2026).
 
@@ -58,6 +58,117 @@ so they cannot have them after the gift ends. Choices made in building it:
 - **A paying reader's hidden guards are the owner's numbers**, decided with this step (section 4):
   `HOSTED_READER_USD_PER_DAY` 1.00 and `HOSTED_READER_USD_PER_MONTH` 4.00 by default. Without this,
   a gifted reader, the owner's own account included, would rest at about the sixth question a day.
+
+**Step 3 built (2026-11-23).** Prices decided by the owner: $12.99 a month and $79.99 a year (a
+launch price; later $89.99 as a new Paddle price, readers on the old one keeping it). Migration
+`0039_paddle_events.sql`: on `reader_plans` the columns of section 1 (`paddle_customer_id`,
+`paddle_subscription_id`, unique, `paddle_status`, `period_ends_at`, `ends_at`,
+`paddle_occurred_at`) and `first_paid_at`; `paddle_events` (`event_id`, `event_type`,
+`occurred_at`, `owner_id` or NULL, `outcome`, `received_at`; no payload, no customer, no amount;
+row-level security forced; the only table whose `owner_id` may be NULL, and the purge takes an
+erased account's rows with the rest); `paddle_reader(subscription, named)`, a security definer only
+the billing role may execute, answering the account that holds the subscription, else the named
+account if it exists and is not erased, else NULL; and `reader_plan_state` made again: a gift that
+lasts wins, then a live Paddle plan (`active`, `trialing`, `past_due`, and `active` with a
+scheduled cancel or pause until its date) is `paying` with `paid_by = 'paddle'`; any other Paddle
+plan (`paused`, `canceled`, past its scheduled end) is `ended` with why `plan`, before the free
+weeks are looked at, so a reader who paid and stopped is never back in them. New columns:
+`paddle_status`, `period_ends_at`, `plan_ends_at`, `first_paid_at`, `first_month_spent_usd`.
+
+The `billing` role (`backend/scripts/hosted_roles.py`, lists in `grants.py`, password
+`MOTHLI_DB_BILLING_PASSWORD`, address `HOSTED_BILLING_DSN` given to the web container only):
+`SELECT, INSERT, UPDATE` on `reader_plans`, `SELECT, INSERT` on `paddle_events`, as section 1
+says, and `EXECUTE` on `paddle_reader`, which section 1 does not list. It does not bypass row-level
+security. Why the one function: under row-level security the role sees only the row of the account
+its transaction is set to, so it cannot itself find which account holds a subscription id; the
+function answers that one id and nothing else, which is far narrower than bypassing row-level
+security. The deployment's check verifies the role's table rights and its function both ways.
+
+`POST /api/billing/paddle` (`backend/app/hosted/billing.py`), registered only when
+`PADDLE_WEBHOOK_SECRET` is set; no session and no CSRF. It reads the raw body (at most 256 KiB),
+checks `Paddle-Signature` as section 7 says (any `h1`, constant time) and `ts` within
+`PADDLE_WEBHOOK_TOLERANCE_SECONDS` (300), then applies the message in one transaction on the
+billing role, set to the account, and answers 200. Settings: `PADDLE_ENVIRONMENT`
+(`sandbox`/`production`; read by nothing yet, for step 4's API calls), `PADDLE_WEBHOOK_SECRET`
+(must start `pdl_ntfset_`), `PADDLE_PRICE_MONTHLY` and `PADDLE_PRICE_YEARLY` (each one id or
+several, comma-separated, so an old price stays accepted), `PADDLE_WEBHOOK_TOLERANCE_SECONDS`,
+`HOSTED_BILLING_DSN`, `HOSTED_FIRST_PAID_MONTH_USD`. Choices made in building it:
+
+- **The shared Paddle account.** The owner's Paddle account also sells MySigner, whose messages
+  reach the same address. A message is Mothli's only when its `event_type` is `subscription.*` and
+  every item's `price.id` is one of Mothli's price ids from the settings; anything else is
+  answered 200 and kept nowhere (no row, no id, no log line). Custom data on Paddle's product
+  (`app=mothli`) and prices (`plan=...`) is not read: it can be edited in the dashboard or copied
+  onto another product, the price ids cannot be mistaken. The reader named in a subscription's
+  custom data (`mothli_reader`) is looked at only after the price check passes.
+- **Which account.** The account holding the subscription id wins; the custom data names the
+  account only for a subscription Mothli has not stored. A message naming no account, an unknown
+  one or an erased one is recorded with no account (`no_account`) and ignored.
+- **A second subscription for one reader.** A newer message about a live subscription takes the
+  place of a stored one that is not live (a new plan after a cancel) or of a live one; a message
+  about any other subscription that is not live (the old one's late cancel) is recorded
+  `other_subscription` and changes nothing. Two live subscriptions for one reader are not
+  supported: whichever was written last is the one Mothli follows.
+- **Only subscription messages.** Section 7 recorded `transaction.payment_failed` and
+  `adjustment.*`; they are not read at all (a failed payment arrives as `subscription.past_due`
+  anyway, and adjustments carry no price id to tell Mothli's from MySigner's). The runbook has the
+  destination subscribe to the `subscription.*` events only.
+- **The logs** say only that a message was refused (signature, or a Mothli message that cannot be
+  read); what was done with each message is kept in `paddle_events`.
+- **The first paid month** (section 4), its own commit. Rule: for the 30 days after
+  `first_paid_at` (the first time a Paddle plan applied as `active` or `past_due`, from the database
+  clock, kept once per account and never moved), while a Paddle plan pays and no gift does, the
+  reader's month check is their chat since `first_paid_at` against `HOSTED_FIRST_PAID_MONTH_USD`
+  ($6.30) instead of their calendar month against $4.00. The day guard stays; an operator's own
+  month cap wins; at the ceiling the reader sees today's month line. **The bound**: within the 30
+  days a reader's chat reaches at most $6.30, however the days fall across calendar months (plus,
+  as for every cap, the replies already under way). After them the calendar month counts everything
+  spent in it, first month included, so for a reader whose 30 days straddle two calendar months the
+  30 days and the rest of the second month together reach at most $6.30 + $4.00 = **$10.30**, and
+  no calendar month more than **$6.30**. (Swapping the month's ceiling for $6.30 for 30 days, the
+  simpler-looking rule, would allow $12.60 in those 30 days: $6.30 in each calendar month.) What
+  a reader spent before paying (their free weeks) does not count against it. A reader who spends
+  the $6.30 in the second calendar month rests until the 1st after the 30 days end.
+
+Where Paddle's documentation (read 23 November 2026) differs from this record, or adds to it:
+
+- **Respond first, then work.** [Respond to webhooks](https://developer.paddle.com/webhooks/respond-to-webhooks)
+  says to answer within five seconds and to "Respond before doing any internal processing", with a
+  queue. Not followed: the work is one transaction of a few statements (connection timeout three
+  seconds), and doing it before answering means a failure answers 500, so Paddle delivers again,
+  where a queue would need its own retry. If deliveries ever time out, a queue is the change.
+- **Retries.** The same page: live, up to 60 attempts over about two days; sandbox, 3 within about
+  two minutes. Nothing here depended on it.
+- **Custom data is a JSON object**, not text holding JSON ([custom data](https://developer.paddle.com/build/transactions/custom-data);
+  the `custom_data` field of the [subscription event](https://developer.paddle.com/webhooks/subscriptions/subscription-updated)).
+  "Could not verify" 5 is answered by the docs; still to be seen in the sandbox.
+- **Custom data can be set from the browser**: Paddle.js takes `customData` in
+  `Paddle.Checkout.open()` (same page). Section 7's server-made transaction keeps Mothli's own
+  checkout honest, but anyone with the public client token and a Mothli price id could open a
+  checkout naming any reader. They would pay for that reader's plan; no reader gains access without
+  someone paying for that price. Step 4 may want a server token in the custom data to refuse even
+  that.
+- **Statuses and scheduled changes.** The [subscription event](https://developer.paddle.com/webhooks/subscriptions/subscription-updated)
+  lists `scheduled_change.action` as `cancel`, `pause` or `resume`; a scheduled cancel or pause sets
+  `ends_at`, a resume does not. `current_billing_period` is null for paused and cancelled plans.
+  [Provision access](https://developer.paddle.com/build/subscriptions/provision-access-webhooks):
+  `trialing` "Treat the same as `active`", `past_due` keeps access, `paused` none, `canceled` none
+  unless a scheduled change is pending: as section 1. The same page recommends a periodic
+  reconciliation against Paddle's API; not built (it needs the API key, step 4).
+- **More subscription events** than section 7 lists ([webhooks overview](https://developer.paddle.com/webhooks/overview)):
+  also `subscription.imported`, `.paused`, `.resumed`, `.trialing`. Each carries the whole
+  subscription and is applied the same way.
+- **Signature.** [Signature verification](https://developer.paddle.com/webhooks/signature-verification):
+  the secret key starts `pdl_ntfset_` and is used as it is; more than one `h1` may come "while old
+  secrets are phased out", and the page says rotation support may be added in future. The SDKs'
+  five seconds are the default tolerance; kept at five minutes here, as section 7 recommends.
+- **The dashboard.** Destinations are made under **Events > Notifications**, choosing the events and
+  whether simulated events are delivered ([notification destinations](https://developer.paddle.com/webhooks/about/notification-destinations)).
+
+Not verified without a Paddle sandbox: that a retried delivery carries a fresh `ts` (with five
+seconds as the SDKs' default it must, but no page says so; a stale `ts` on a retry would be refused
+and retried until it fails); the exact payload of a real message; that the simulator's sample is
+for a price that is not Mothli's (the runbook's step 4 assumes so).
 
 File and line references are to `main` at 2475b6f (PR #136). Nothing in this record was run against a
 database, a server, a model or Paddle. Every claim about the code comes from reading the lines cited
