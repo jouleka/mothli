@@ -1,6 +1,7 @@
 /** Hosted mode: Paddle.js, which shows the plan's prices and opens Paddle's checkout over the page
- * (ADR 0045 step 4). It is fetched from Paddle's own address only when the plan sheet asks for it,
- * never on any other screen, and initialised once a page, as Paddle's pages say:
+ * (ADR 0045 step 4). It is fetched from Paddle's own address only when the plan sheet or the
+ * payment-link page (`_ptxn`, below) asks for it, never on any other screen, and initialised once
+ * a page, as Paddle's pages say:
  * developer.paddle.com/paddle-js/about/include-paddlejs (the address; "Always load Paddle.js
  * directly from https://cdn.paddle.com/"), /paddle-js/methods/paddle-environment-set (the sandbox,
  * set "before calling any other Paddle.js methods"), /paddle-js/methods/paddle-initialize (once a
@@ -81,7 +82,7 @@ function addScript(): Promise<PaddleLike> {
 }
 
 /** Paddle.js, fetched and initialised on the first call; a failure can be tried again. */
-export function loadPaddle(setup: PlanCheckout): Promise<PaddleLike> {
+export function loadPaddle(setup: Pick<PlanCheckout, "environment" | "client_token">): Promise<PaddleLike> {
   ready ??= (window.Paddle ? Promise.resolve(window.Paddle) : addScript())
     .then((paddle) => {
       if (setup.environment === "sandbox") paddle.Environment.set("sandbox");
@@ -93,6 +94,29 @@ export function loadPaddle(setup: PlanCheckout): Promise<PaddleLike> {
       throw reason;
     });
   return ready;
+}
+
+/** Mothli's payment-link page (ADR 0045, "One Paddle account, several products"): every checkout
+ * the server makes carries this app's front page as its `checkout.url`, and Paddle's emails about
+ * that checkout link here with `_ptxn` set to the transaction's id
+ * (developer.paddle.com/build/transactions/default-payment-link). The id, when the page was
+ * opened with exactly one well-formed one; anything else is no payment link at all. */
+const TRANSACTION = /^txn_[a-z0-9]{26}$/;
+
+export function paymentLinkTransaction(search = window.location.search): string | null {
+  const found = new URLSearchParams(search).getAll("_ptxn");
+  return found.length === 1 && TRANSACTION.test(found[0]) ? found[0] : null;
+}
+
+/** Takes `_ptxn` out of the address once it has been read, before Paddle.js loads: the app opens
+ * that checkout itself (Paddle.Checkout.open, which "takes priority over the query parameter"),
+ * so Paddle.js never opens a second one, and a reload or a later visit opens none. */
+export function forgetPaymentLink(): void {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has("_ptxn")) return;
+  params.delete("_ptxn");
+  const rest = params.toString();
+  history.replaceState(history.state, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
 }
 
 /** Tests only: as if the page had just loaded. */

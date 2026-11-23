@@ -57,6 +57,8 @@ PRICES = frozenset({MONTHLY, YEARLY, YEARLY_NEW})
 MYSIGNER_SUB = paddle_id("sub_", "mysignerplan")
 MYSIGNER_CUSTOMER = paddle_id("ctm_", "mysignercustomer")
 PORTAL_TOKEN = "portaltokenstandin" * 2
+# Mothli's own page for Paddle's payment links, on the test app's host.
+CHECKOUT_URL = "https://reader.example/"
 
 
 class StandInPaddle:
@@ -136,7 +138,8 @@ class StandInPaddle:
 def shop(make_app, billing_dsn, database):
     """The hosted app with Paddle's messages and API on, Paddle stood in: (client, tokens,
     stand-in). A message ``post`` sends naming a reader comes with that reader's checkout."""
-    client, tokens, app = make_app(**PADDLE, paddle_api_key=KEY, hosted_billing_dsn=billing_dsn)
+    client, tokens, app = make_app(**PADDLE, paddle_api_key=KEY, paddle_checkout_url=CHECKOUT_URL,
+                                   hosted_billing_dsn=billing_dsn)
     standin = StandInPaddle()
     app.state.paddle_api = PaddleApi(KEY, "sandbox", transport=httpx.MockTransport(standin))
     client.checkouts_dsn = database
@@ -208,6 +211,8 @@ def allowed(standin: StandInPaddle, stored: dict[str, str]) -> None:
         if parts == ["transactions"]:
             assert method == "POST"
             assert [item["price_id"] for item in body["items"]] in ([MONTHLY], [YEARLY_NEW])
+            # Mothli's own payment-link page, never the account's default (MySigner's).
+            assert body["checkout"] == {"url": CHECKOUT_URL}
         elif parts[0] == "subscriptions":
             assert parts[1] in stored, path
             assert (method, parts[2:]) in (("GET", []), ("POST", ["cancel"]), ("PATCH", []))
@@ -236,7 +241,9 @@ def test_a_checkout_is_the_server_made_transaction_and_it_alone_makes_its_reader
     [(method, path, body, headers)] = standin.requests
     assert (method, path) == ("POST", "/transactions")
     assert body["items"] == [{"price_id": YEARLY_NEW, "quantity": 1}]
-    assert set(body) == {"items", "custom_data"}               # no customer looked up or set
+    assert set(body) == {"items", "custom_data", "checkout"}   # no customer looked up or set
+    # Mothli's own page, never the shared account's default payment link (the other product's).
+    assert body["checkout"] == {"url": CHECKOUT_URL}
     token = body["custom_data"]["mothli_checkout"]
     assert body["custom_data"] == {"mothli_reader": str(a), "mothli_checkout": token}
     assert len(token) == 43
@@ -318,7 +325,8 @@ def test_checkout_refusals_answer_and_write_nothing(shop, make_app, billing_dsn,
     assert ask(client, tokens, "b", "checkout", {"plan": "monthly"}).status_code == 200
 
     other, other_tokens, app = make_app(**{**PADDLE, "paddle_price_yearly": ""},
-                                        paddle_api_key=KEY, hosted_billing_dsn=billing_dsn)
+                                        paddle_api_key=KEY, paddle_checkout_url=CHECKOUT_URL,
+                                        hosted_billing_dsn=billing_dsn)
     lonely = StandInPaddle()
     app.state.paddle_api = PaddleApi(KEY, "sandbox", transport=httpx.MockTransport(lonely))
     response = ask(other, other_tokens, "b", "checkout", {"plan": "yearly"})
@@ -370,6 +378,29 @@ def test_paddle_down_slow_or_overloaded_gives_a_kind_error_and_writes_nothing(sh
     # Each call was sent once.
     assert len(standin.requests) == 1 + 5 * 3
     assert "stand-in" not in caplog.text
+
+
+def test_a_checkout_address_paddle_has_not_approved_is_said_kindly_and_named_to_the_operator(
+        shop, database, readers, caplog):
+    """The domain of PADDLE_CHECKOUT_URL not yet approved in Paddle (its Website approval). The
+    break it catches: the reader shown Paddle's words, an address or a crash instead of the kind
+    "can't reach our payment service" line; the checkout sent again; the operator's log silent
+    about what to fix, or holding the address, a token or Paddle's words."""
+    client, tokens, standin = shop
+    caplog.set_level(logging.DEBUG)
+    standin.fail = ("refuse", 400, "transaction_checkout_url_domain_is_not_approved")
+    response = ask(client, tokens, "a", "checkout", {"plan": "monthly"})
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["code"] == "paddle_unavailable"
+    assert detail["message"].startswith("I can’t reach our payment service just now")
+    assert len(standin.requests) == 1
+    assert standin.requests[0][2]["checkout"] == {"url": CHECKOUT_URL}
+    assert "approve the domain of PADDLE_CHECKOUT_URL in Paddle under Website approval" \
+        in caplog.text
+    for secret in ("stand-in", KEY, "transaction_checkout_url"):
+        assert secret not in caplog.text, secret
+    assert [used for _o, _d, used, _days in checkouts(database, readers["a"])] == [False]
 
 
 def test_the_checkout_token_is_kept_before_paddle_is_asked(shop, database, readers,

@@ -6,8 +6,9 @@ or search anything. Each method takes one id and acts on it alone, and the calle
 Mothli itself stored for the signed-in reader (``reader_plans``) or a price id from Mothli's own
 settings:
 
-- ``create_transaction``: ``POST /transactions`` with one of Mothli's prices and custom data
-  naming the reader and their checkout (developer.paddle.com/api-reference/transactions/
+- ``create_transaction``: ``POST /transactions`` with one of Mothli's prices, custom data
+  naming the reader and their checkout, and Mothli's own page as ``checkout.url``
+  (developer.paddle.com/api-reference/transactions/
   create-transaction; the browser opens checkout with its id:
   developer.paddle.com/paddlejs/methods/paddle-checkout-open);
 - ``subscription``: ``GET /subscriptions/{id}`` (.../api-reference/subscriptions/get-subscription);
@@ -49,6 +50,7 @@ _CUSTOMER = re.compile(r"ctm_[a-z0-9]{26}")
 _PRICE = re.compile(r"pri_[a-z0-9]{26}")
 _TRANSACTION = re.compile(r"txn_[a-z0-9]{26}")
 _ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,99}")
+DOMAIN_NOT_APPROVED = "transaction_checkout_url_domain_is_not_approved"
 
 
 class PaddleUnavailable(Exception):
@@ -116,13 +118,29 @@ class PaddleApi:
             raise PaddleUnavailable("unreadable")
         return data
 
-    def create_transaction(self, price_id: str, custom_data: dict[str, str]) -> str:
+    def create_transaction(self, price_id: str, custom_data: dict[str, str],
+                           checkout_url: str) -> str:
         """A transaction for one of Mothli's prices, quantity one, with ``custom_data``; its id.
         No customer is set: Paddle's checkout asks for (or is prefilled with) the email, and no
-        customer is ever looked up or made here."""
-        data = self._call("POST", "/transactions", {
-            "items": [{"price_id": _checked(price_id, _PRICE), "quantity": 1}],
-            "custom_data": custom_data})
+        customer is ever looked up or made here. ``checkout_url`` is Mothli's own page
+        (``PADDLE_CHECKOUT_URL``): the account's default payment link belongs to another product,
+        and a transaction's ``checkout.url`` overrides it for that transaction
+        (developer.paddle.com/build/transactions/default-payment-link). Paddle refuses an address
+        whose domain is not approved (``transaction_checkout_url_domain_is_not_approved``,
+        developer.paddle.com/errors/transactions/transaction_checkout_url_domain_is_not_approved);
+        the log then says what the operator must do."""
+        if not isinstance(checkout_url, str) or not checkout_url.startswith("https://"):
+            raise ValueError("not an https address")
+        try:
+            data = self._call("POST", "/transactions", {
+                "items": [{"price_id": _checked(price_id, _PRICE), "quantity": 1}],
+                "custom_data": custom_data,
+                "checkout": {"url": checkout_url}})
+        except PaddleRefused as refused:
+            if refused.code == DOMAIN_NOT_APPROVED:
+                _LOG.warning("paddle refused the checkout address: approve the domain of "
+                             "PADDLE_CHECKOUT_URL in Paddle under Website approval")
+            raise
         transaction = data.get("id")
         if not isinstance(transaction, str) or not _TRANSACTION.fullmatch(transaction):
             _LOG.warning("paddle call failed: unreadable")

@@ -214,6 +214,8 @@ def test_the_first_paid_month_is_the_owners_number_and_reaches_the_spend_check()
 KEY = "_".join(("pdl", "sdbx", "apikey", "teststandin" * 4))
 LIVE_KEY = "_".join(("pdl", "live", "apikey", "teststandin" * 4))
 LIVE = {"paddle_environment": "production"}
+# Mothli's own page for Paddle's payment links, on the test app's host.
+CHECKOUT_URL = "https://reader.example/"
 
 
 class Recorder:
@@ -257,7 +259,7 @@ def test_each_paddle_call_is_sent_as_paddles_documentation_describes_it() -> Non
 
     api, recorder = api_with(answer)
     custom = {"mothli_reader": str(uuid.uuid4()), "mothli_checkout": "t" * 43}
-    assert api.create_transaction(MONTHLY, custom) == paddle_id("txn_", "t")
+    assert api.create_transaction(MONTHLY, custom, CHECKOUT_URL) == paddle_id("txn_", "t")
     assert api.subscription(sub_id("a")) == entity
     assert api.cancel(sub_id("a")) == entity
     assert api.remove_scheduled_change(sub_id("a")) == entity
@@ -267,7 +269,8 @@ def test_each_paddle_call_is_sent_as_paddles_documentation_describes_it() -> Non
     base = "https://sandbox-api.paddle.com"
     assert sent == [
         ("POST", f"{base}/transactions",
-         {"items": [{"price_id": MONTHLY, "quantity": 1}], "custom_data": custom}),
+         {"items": [{"price_id": MONTHLY, "quantity": 1}], "custom_data": custom,
+          "checkout": {"url": CHECKOUT_URL}}),
         ("GET", f"{base}/subscriptions/{sub_id('a')}", None),
         ("POST", f"{base}/subscriptions/{sub_id('a')}/cancel",
          {"effective_from": "next_billing_period"}),
@@ -299,8 +302,10 @@ def test_the_paddle_client_cannot_list_search_or_name_anything_but_one_well_form
                  lambda: api.remove_scheduled_change(paddle_id("txn_", "t")),
                  lambda: api.portal(sub_id("a"), sub_id("a")),
                  lambda: api.portal(paddle_id("ctm_", "c"), "*"),
-                 lambda: api.create_transaction(MYSIGNER + "x", {}),
-                 lambda: api.create_transaction(sub_id("a"), {})):
+                 lambda: api.create_transaction(MYSIGNER + "x", {}, CHECKOUT_URL),
+                 lambda: api.create_transaction(sub_id("a"), {}, CHECKOUT_URL),
+                 lambda: api.create_transaction(MONTHLY, {}, "http://reader.example/"),
+                 lambda: api.create_transaction(MONTHLY, {}, None)):
         with pytest.raises(ValueError):
             call()
     assert recorder.requests == []
@@ -345,7 +350,7 @@ def test_paddle_failures_are_named_by_kind_sent_once_and_logged_without_anything
     # A created transaction whose id is not a transaction's is not trusted.
     api, _recorder = api_with(lambda r: httpx.Response(201, json={"data": {"id": "sub_x"}}))
     with pytest.raises(PaddleUnavailable):
-        api.create_transaction(MONTHLY, {})
+        api.create_transaction(MONTHLY, {}, CHECKOUT_URL)
     for secret in (KEY, sub_id("a"), "secret detail words", "bad gateway", "stand-in",
                    "elsewhere", "Bad Code"):
         assert secret not in caplog.text, secret
@@ -364,6 +369,7 @@ def test_the_api_key_is_checked_loosely_against_its_environment_and_needs_the_me
                 hosted_billing_dsn="postgresql://unused.invalid/b")
     assert paddle_settings(**good).paddle_api_key is None
     assert paddle_settings(**good, paddle_api_key="").paddle_api_key is None
+    good["paddle_checkout_url"] = CHECKOUT_URL
     real_looking = KEY[:-8] + "+/=Ab09_"
     assert paddle_settings(**good, paddle_api_key=real_looking) \
         .paddle_api_key.get_secret_value() == real_looking
@@ -381,6 +387,68 @@ def test_the_api_key_is_checked_loosely_against_its_environment_and_needs_the_me
             paddle_settings(**{**good, **change})
         assert "PADDLE_API_KEY" in str(refused.value), change
         assert KEY not in str(refused.value) and LIVE_KEY not in str(refused.value)
+
+
+def test_the_checkout_address_comes_with_the_key_and_is_this_apps_own_front_page() -> None:
+    """One Paddle account, several products. The break it catches: a server with the API key and
+    no address of its own starting anyway, so every checkout's emails send the buyer to the
+    account's default payment link, the other product's page; an address on another host, over
+    plain http, with a path the proxy does not serve, a query or fragment Paddle's own ``_ptxn``
+    would collide with, a port or user information; a placeholder accepted; the address set with
+    no checkout to use it. A refusal names the setting, never the key."""
+    keyed = dict(paddle_webhook_secret=SECRET, paddle_price_monthly=MONTHLY,
+                 hosted_billing_dsn="postgresql://unused.invalid/b", paddle_api_key=KEY)
+    with pytest.raises(ValidationError) as refused:
+        paddle_settings(**keyed)
+    assert "PADDLE_CHECKOUT_URL" in str(refused.value) and KEY not in str(refused.value)
+    with pytest.raises(ValidationError) as refused:
+        paddle_settings(**{**keyed, "paddle_api_key": None}, paddle_checkout_url=CHECKOUT_URL)
+    assert "PADDLE_CHECKOUT_URL requires PADDLE_API_KEY" in str(refused.value)
+    for address in (CHECKOUT_URL, "https://reader.example", "https://READER.example/"):
+        assert paddle_settings(**keyed, paddle_checkout_url=address).paddle_checkout_url \
+            == address
+    two_hosts = paddle_settings(**keyed, trusted_hosts="reader.example,www.reader.example",
+                                paddle_checkout_url="https://www.reader.example/")
+    assert two_hosts.paddle_checkout_url == "https://www.reader.example/"
+    for address in ("http://reader.example/", "https://elsewhere.example/",
+                    "https://reader.example.elsewhere.example/", "https://reader.example/pay",
+                    "https://reader.example/?pay=1", "https://reader.example/?",
+                    "https://reader.example/#pay", "https://someone@reader.example/",
+                    "https://reader.example:8443/", " https://reader.example/",
+                    "OWNER_MUST_FILL_IN", "https://OWNER_MUST_FILL_IN/", "reader.example"):
+        with pytest.raises(ValidationError) as refused:
+            paddle_settings(**keyed, paddle_checkout_url=address)
+        assert "PADDLE_CHECKOUT_URL" in str(refused.value), address
+        assert KEY not in str(refused.value)
+
+
+def test_paddle_refusing_the_checkout_address_tells_the_operator_in_one_fixed_line(
+        caplog) -> None:
+    """The domain of PADDLE_CHECKOUT_URL not yet approved in Paddle (Website approval). The break
+    it catches: the refusal read as anything but a refusal (the route then answers the reader's
+    kind "can't reach our payment service"), retried, or logged with the address, the key or
+    Paddle's words instead of the one line that says what to do; that line written for any other
+    refusal."""
+    caplog.set_level(logging.DEBUG)
+    api, recorder = api_with(lambda r: httpx.Response(400, json={"error": {
+        "type": "request_error", "code": "transaction_checkout_url_domain_is_not_approved",
+        "detail": "stand-in words about reader.example"}}))
+    with pytest.raises(PaddleRefused) as refused:
+        api.create_transaction(MONTHLY, {}, CHECKOUT_URL)
+    assert (refused.value.status, refused.value.code) == (
+        400, "transaction_checkout_url_domain_is_not_approved")
+    assert len(recorder.requests) == 1
+    lines = [record.getMessage() for record in caplog.records]
+    assert lines == ["paddle call refused", "paddle refused the checkout address: approve the "
+                     "domain of PADDLE_CHECKOUT_URL in Paddle under Website approval"]
+    for secret in (KEY, "reader.example", "stand-in"):
+        assert secret not in caplog.text, secret
+    caplog.clear()
+    api, _recorder = api_with(lambda r: httpx.Response(400, json={"error": {
+        "code": "transaction_price_not_found"}}))
+    with pytest.raises(PaddleRefused):
+        api.create_transaction(MONTHLY, {}, CHECKOUT_URL)
+    assert "checkout address" not in caplog.text
 
 
 def test_a_subscription_from_paddles_api_is_read_as_a_message_is() -> None:

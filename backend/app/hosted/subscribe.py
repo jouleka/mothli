@@ -8,7 +8,8 @@ the reader's own plan, each signed in with the CSRF token, each only for the ses
 only through the billing role:
 
 - ``POST /api/billing/checkout`` ``{"plan": "monthly" | "yearly"}``: keeps the digest of a fresh
-  checkout token for the reader (``paddle_checkouts``, seven days), then creates the Paddle
+  checkout token for the reader (``paddle_checkouts``; it binds until used, however old), then
+  creates the Paddle
   transaction for the plan's current price (the first id in its setting) with custom data naming
   the reader and that token, and answers ``{"transaction_id": "txn_..."}`` for Paddle.js
   to open checkout with. Refused while the reader has a live Paddle plan. A gifted reader may
@@ -17,6 +18,9 @@ only through the billing role:
 - ``POST /api/billing/keep``: removes that scheduled cancel.
 - ``POST /api/billing/portal``: a customer portal session for the reader's own customer and
   subscription; answers ``{"url": ...}``. The link is never stored and never logged.
+
+And one public read, ``GET /api/billing/payment-link``: Paddle's environment and the public
+client token, for Mothli's payment-link page, which a visitor may open signed out.
 
 Cancel and keep apply Paddle's answer at once, through the same code as a message
 (``billing.apply_message``: newer only, Mothli's prices only), and answer the plan as ``GET``
@@ -52,9 +56,9 @@ plan_router = APIRouter(prefix="/api/billing", tags=["hosted-billing"])
 
 _LIVE = ("active", "trialing", "past_due")
 _FOR_GOOD = date(9999, 12, 31)
-# How long a checkout the server made can bind a new subscription to its reader: past the time a
-# reader may take to pay in an open checkout and Paddle's retries of a first message (about two
-# days live: developer.paddle.com/webhooks/respond-to-webhooks).
+# Written to a checkout's ``expires_at`` as a record only. Nothing decides by it: an unused token
+# binds its reader however old it is (``billing._checkout_open``), so a payment made from Paddle's
+# late reminder email is never lost.
 CHECKOUT_DAYS = 7
 # Checkouts one reader may start in a day: each is a call to Paddle, whose limit is per address.
 CHECKOUTS_PER_DAY = 10
@@ -205,6 +209,18 @@ def _checkouts_today(dsn: str, owner: uuid.UUID) -> int:
                             " AND created_at > now() - interval '1 day'", (owner,)).fetchone()[0]
 
 
+@router.get("/payment-link")
+async def payment_link(request: Request) -> JSONResponse:
+    """What Paddle.js needs on Mothli's payment-link page (``PADDLE_CHECKOUT_URL`` with
+    ``_ptxn``), where the visitor may not be signed in on that device: Paddle's environment and
+    the public client token, those two values and nothing else. 404 where no checkout opens."""
+    setup = checkout_setup(request.app.state.settings)
+    if setup is None:
+        return _refused(404, "no_checkout", "The checkout isn’t open here just now.")
+    return JSONResponse({"environment": setup["environment"],
+                         "client_token": setup["client_token"]}, headers=_NO_STORE)
+
+
 @router.post("/checkout")
 async def checkout(body: CheckoutIn, request: Request,
                    owner: OwnerId = Depends(_csrf_owner)) -> JSONResponse:
@@ -222,7 +238,7 @@ async def checkout(body: CheckoutIn, request: Request,
                         "Let’s take a little break from checkouts. Please try again later.")
     # The token is kept before Paddle hears of it: a checkout whose token Mothli never stored
     # could be paid for and bind to no one. If Paddle then fails, the row is never used and
-    # expires (it still counts toward the day's checkouts).
+    # binds nothing, since no transaction carries it (it still counts toward the day's checkouts).
     token = new_token()
     try:
         await run_in_threadpool(_record_checkout, dsn, owner.value, token)
@@ -231,7 +247,8 @@ async def checkout(body: CheckoutIn, request: Request,
     try:
         transaction = await run_in_threadpool(
             paddle_api(request).create_transaction, prices[0],
-            {"mothli_reader": str(owner.value), "mothli_checkout": token})
+            {"mothli_reader": str(owner.value), "mothli_checkout": token},
+            settings.paddle_checkout_url)
     except (PaddleUnavailable, PaddleRefused):
         return _refused(503, *_UNAVAILABLE)
     return JSONResponse({"transaction_id": transaction}, headers=_NO_STORE)

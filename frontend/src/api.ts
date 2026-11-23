@@ -960,6 +960,11 @@ export const api = {
     }).then((r) => j<MothliStanding>(r)),
   /** Hosted: the reader's plan (ADR 0045). */
   plan: () => fetch("/api/billing/plan", { cache: "no-store" }).then((r) => j<Plan>(r)),
+  /** Hosted, signed in or not: Paddle's environment and public client token, for the payment-link
+   * page (`/?_ptxn=…`), and nothing else. */
+  paymentLink: () =>
+    fetch("/api/billing/payment-link", { cache: "no-store" })
+      .then((r) => j<Pick<PlanCheckout, "environment" | "client_token">>(r)),
   /** Hosted: a checkout the server made for this reader, for Paddle.js to open by its id. */
   startCheckout: (plan: "monthly" | "yearly") =>
     fetch("/api/billing/checkout", {
