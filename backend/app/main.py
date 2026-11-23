@@ -28,6 +28,7 @@ from app.hosted.auth import account as account_api
 from app.hosted.auth import api as auth_api
 from app.hosted.auth.oidc import OIDCClient
 from app.hosted import billing as hosted_billing
+from app.hosted import subscribe as hosted_subscribe
 from app.hosted.auth.repository import PostgresAuthRepository
 from app.hosted.companion import routes as companion_routes
 from app.hosted.companion import set_connection_limit
@@ -540,6 +541,11 @@ def create_app(
         # Paddle's messages (ADR 0045 step 3): the route exists only with its secret set.
         if settings.paddle_webhook_secret is not None:
             app.include_router(hosted_billing.router)
+        # A reader's plan through Paddle (ADR 0045 step 4): the plan is always readable; the
+        # routes that call Paddle exist only with its API key set.
+        app.include_router(hosted_subscribe.plan_router)
+        if settings.paddle_api_key is not None:
+            app.include_router(hosted_subscribe.router)
         app.add_middleware(_EpubUploadBodyLimit, max_file_bytes=settings.epub_max_upload_bytes)
         app.add_middleware(_HostedNoStore)
     else:

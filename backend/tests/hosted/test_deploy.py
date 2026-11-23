@@ -115,16 +115,21 @@ def test_the_role_script_matches_every_startup_check_as_written() -> None:
     assert not any("set_gift" in function for function in TENANT_FUNCTION_PRIVILEGES)
     # ADR 0045 step 3: Paddle's messages write a plan through the billing role alone: section 1's
     # rights on its two tables and the one look-up, row-level security not bypassed. No other
-    # role may write a plan's Paddle part or record a message.
+    # role may write a plan's Paddle part or record a message. Step 4: the checkouts the
+    # subscribe route makes (no DELETE), and the list of stored subscriptions the regular check
+    # fetches. No other role touches either.
     assert by_key["billing"].tables == {"reader_plans": {"SELECT", "INSERT", "UPDATE"},
-                                        "paddle_events": {"SELECT", "INSERT"}}
-    assert by_key["billing"].functions == {"paddle_reader(text,uuid)": {"EXECUTE"}}
+                                        "paddle_events": {"SELECT", "INSERT"},
+                                        "paddle_checkouts": {"SELECT", "INSERT", "UPDATE"}}
+    assert by_key["billing"].functions == {"paddle_reader(text,uuid)": {"EXECUTE"},
+                                           "paddle_plans_to_check(integer)": {"EXECUTE"}}
     assert by_key["billing"].password_env == "MOTHLI_DB_BILLING_PASSWORD"
     for role in roles.RUNTIME_ROLES:
         if role.key != "billing":
             assert not ({"INSERT", "UPDATE"} & role.tables.get("reader_plans", frozenset()))
             assert "paddle_events" not in role.tables
-            assert not any("paddle_reader" in function for function in role.functions)
+            assert "paddle_checkouts" not in role.tables
+            assert not any("paddle_" in function for function in role.functions)
     assert [role.bypass_rls for role in roles.RUNTIME_ROLES] == [
         True, False, True, True, True, True, False]
     assert [role.key for role in roles.RUNTIME_ROLES if role.owner_tables] == ["purge"]
@@ -375,10 +380,12 @@ def test_the_billing_role_reaches_the_web_process_and_paddle_stays_off_in_the_te
         DEPLOY / ".env.example").read_text(encoding="utf-8")
     template = (DEPLOY / "app.env.example").read_text(encoding="utf-8")
     for setting in ("PADDLE_ENVIRONMENT", "PADDLE_WEBHOOK_SECRET", "PADDLE_PRICE_MONTHLY",
-                    "PADDLE_PRICE_YEARLY", "PADDLE_WEBHOOK_TOLERANCE_SECONDS"):
+                    "PADDLE_PRICE_YEARLY", "PADDLE_WEBHOOK_TOLERANCE_SECONDS", "PADDLE_API_KEY"):
         assert f"\n# {setting}=" in template, setting
         assert f"\n{setting}=" not in template, setting
+    assert "\n# PADDLE_API_KEY=OWNER_MUST_FILL_IN\n" in template
     assert template_settings(monkeypatch, tmp_path).paddle_webhook_secret is None
+    assert template_settings(monkeypatch, tmp_path).paddle_api_key is None
 
 
 def test_the_real_settings_files_are_never_committed() -> None:

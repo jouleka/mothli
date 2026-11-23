@@ -145,7 +145,8 @@ TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
 }
 
 # ADR 0045 sections 1 and 7, step 3 (migration 0039): the billing role, used only by Paddle's
-# message route (and later the subscribe and cancel routes). It does not bypass row-level
+# message route and, from step 4, the subscribe, cancel, keep and portal routes and the regular
+# check against Paddle (app/hosted/subscribe.py, app/hosted/paddle_check.py). It does not bypass row-level
 # security: each message's transaction is set to the account the message is for, as the tenant
 # role's is set to the session's reader, so it reads and writes that one reader's plan and their
 # recorded messages only. Exactly section 1's rights on its two tables, and one function: which
@@ -154,9 +155,14 @@ TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
 BILLING_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "reader_plans": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "paddle_events": frozenset({"SELECT", "INSERT"}),
+    # Step 4 (migration 0040): the checkouts the subscribe route makes, read and used up when a
+    # new subscription is applied. No DELETE: an erased account's rows go with the purge.
+    "paddle_checkouts": frozenset({"SELECT", "INSERT", "UPDATE"}),
 }
 BILLING_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
     "paddle_reader(text,uuid)": frozenset({"EXECUTE"}),
+    # Step 4: the stored subscriptions the regular check fetches from Paddle, ids only.
+    "paddle_plans_to_check(integer)": frozenset({"EXECUTE"}),
 }
 
 # ADR 0041 part 8: the account purge, run once a day from the command line, never by web or

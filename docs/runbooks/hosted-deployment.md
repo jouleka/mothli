@@ -329,7 +329,8 @@ grants and checks both.
 Paddle tells Mothli about each subscription by calling `https://YOURDOMAIN/api/billing/paddle`
 with a signed message (ADR 0045 step 3). Mothli checks the signature, applies the subscription's
 status, and answers. Until you set it up, the address does not exist and nothing about plans
-changes. Subscribing from the app comes in a later step; this part only listens.
+changes. Subscribing, cancelling and updating a card go through Paddle's API with its own key
+(**The API key**, below); the app's screens for them come in a later step.
 
 **Your Paddle account also sells MySigner.** Its messages arrive here too. Mothli takes a message
 as its own only when it is about a subscription and every item on it is one of the price ids you
@@ -377,7 +378,55 @@ a message that matches the secret it has. Paste the new secret into `deploy/app.
 The web log says only when a message was refused (`paddle message refused: signature` or
 `... malformed`), never a secret, an email address or an id. What was done with each of Mothli's
 messages (`applied`, `older`, `other_subscription`, `no_account`) is kept with its id, type and
-time in the database, never its contents.
+time in the database, never its contents. A message about a new subscription is applied only when
+it came from a checkout Mothli itself made for that reader (ADR 0045 step 4); one that names a
+reader without that is kept as `no_account` and changes nothing.
+
+**The API key** (ADR 0045 step 4). Mothli calls Paddle's API to start a checkout, cancel at the
+end of the period, undo that cancel, open the customer portal ("Update payment details") and run
+the regular check below. Make a key of its own for Mothli, first in the sandbox, later live:
+
+1. In Paddle: **Developer tools > Authentication > API keys > New API key**. Name it "Mothli
+   server". Give it exactly these permissions, nothing else: **Transactions: write** (a checkout
+   is a transaction Mothli makes), **Subscriptions: write** (read, cancel, undo a cancel; write
+   includes read), **Customer portal sessions: write**. Mothli needs nothing on customers,
+   products, prices, notifications or anything else, and makes no customer of its own. Choose an
+   expiry (Paddle's default is 90 days, a year at most) and, if offered, make it rotatable.
+2. Copy the key (Paddle shows it once; a sandbox key starts `pdl_sdbx_apikey_`, a live one
+   `pdl_live_apikey_`) and keep it like a password.
+3. In `deploy/app.env`, remove the `#` from `PADDLE_API_KEY` and paste it. It must come from the
+   same Paddle as `PADDLE_ENVIRONMENT` (the server refuses to start otherwise) and needs
+   `PADDLE_WEBHOOK_SECRET` set: a payment is only ever applied from Paddle's message. Then
+   `docker compose -f deploy/compose.yaml up -d --wait`.
+4. Put the key's expiry date in your calendar, a week early. An expired key cannot be renewed:
+   make a new one the same way, paste it, `up -d --wait`, then revoke the old one in Paddle.
+   Until then, subscribing, cancelling and the portal answer "I can't reach our payment service
+   just now".
+
+**Your Paddle account also sells MySigner, and Paddle's permissions are per kind of thing, not
+per product**: this key could reach MySigner's transactions and subscriptions too. Mothli's code
+only ever names a subscription or customer it stored for the signed-in reader, or makes a
+transaction for one of its own price ids; it never lists or searches anything. Keep the key on
+the server only, and never give MySigner's code this key or Mothli's code MySigner's.
+
+The web log says only `paddle call failed: timeout` (or `unreachable`, `server`, `unreadable`)
+or `paddle call refused`, never the key, an id, an address or what Paddle answered. Readers then
+see a kind line and nothing changes.
+
+**The regular check.** Paddle recommends checking plans against its API now and then, so that a
+message lost, refused or out of order is repaired without waiting for the next renewal. Mothli
+fetches, one at a time with a pause between, up to 100 of the subscriptions it stored that are
+live or changed in the last 30 days, and applies each as a message would (newer only, Mothli's
+prices only). It never lists anything in Paddle. Add it to the crontab (`crontab -e`), every hour:
+
+```
+30 * * * * cd ~/mothli && docker compose -f deploy/compose.yaml exec -T web python -m app.hosted.paddle_check >> deploy/backups/paddle-check.log 2>&1
+```
+
+It runs in the web container, which already holds the key, the billing role's address and the
+prices. Each run prints one line, `checked 12, changed 0, failed 0`; `failed` above 0 means Paddle
+was unreachable or refused (the run stops at the first sign Paddle is down and tries again next
+hour). `--size` (1 to 1000) and `--pause` (seconds, 0.25 to 60) change the page and the pause.
 
 ## 5. Restoring
 
@@ -588,8 +637,9 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
   their $2.10 ceiling (`HOSTED_FREE_DAYS`, `HOSTED_FREE_USD`) are ADR 0045's proposal, to confirm
   or change.
 - Paddle (step 4c): Mothli's product and its two price ids, the notification destination and its
-  secret key, in the sandbox first and then live (`PADDLE_*` in `deploy/app.env`), and the billing
-  role's password (`MOTHLI_DB_BILLING_PASSWORD` in `deploy/.env`).
+  secret key, the API key and its expiry date, in the sandbox first and then live (`PADDLE_*` in
+  `deploy/app.env`), the regular check in the crontab, and the billing role's password
+  (`MOTHLI_DB_BILLING_PASSWORD` in `deploy/.env`).
 - How long backups are kept, and where the off-server copies go. That is also how long a deleted
   account's data lives on in backups (step 4).
 - Where the offline copy of `deploy/.env` and `deploy/app.env` is kept.

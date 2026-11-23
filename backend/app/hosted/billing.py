@@ -21,7 +21,12 @@ the caller; the signature is the only thing that lets a message in. The route ex
 3. The account: the one that holds the message's subscription, else, for a subscription Mothli has
    not seen, the reader named by ``mothli_reader`` in the subscription's custom data (Paddle copies
    it from the transaction that made the subscription:
-   developer.paddle.com/build/transactions/custom-data). An unknown or erased account is recorded
+   developer.paddle.com/build/transactions/custom-data), and only when the same custom data
+   carries ``mothli_checkout``, a checkout token the server made for that same reader when it
+   created the transaction (``app/hosted/subscribe.py``), unused and unexpired; the token is used
+   up when the subscription is first applied (ADR 0045 step 4). Custom data alone proves nothing:
+   anyone with the public client token can open a checkout naming any reader. A message naming an
+   account with no such checkout, an unknown account or an erased one is recorded with no account
    and ignored.
 4. In one transaction on the billing role, with row-level security set to that account: the
    subscription's status and dates are written only if the message is newer than the last one
@@ -72,6 +77,9 @@ _PAID = frozenset({"active", "past_due"})
 # pause (Mothli never offers one; a paused plan is ended).
 _ENDING_CHANGES = frozenset({"cancel", "pause"})
 _PLAN_LOCK = "SELECT pg_advisory_xact_lock(hashtextextended(%s::text, 49))"
+# The checkout token the server puts in a transaction's custom data (``subscribe.py``): 32 random
+# bytes, URL-safe base64 without padding.
+_CHECKOUT_TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")
 
 
 class Malformed(ValueError):
@@ -80,8 +88,11 @@ class Malformed(ValueError):
 
 @dataclass(frozen=True)
 class SubscriptionMessage:
-    event_id: str
-    event_type: str
+    """A subscription about Mothli's prices, as a message brought it, or as Paddle's API answered
+    it (then ``event_id`` and ``event_type`` are None and ``occurred_at`` is the subscription's
+    ``updated_at``)."""
+    event_id: str | None
+    event_type: str | None
     occurred_at: datetime
     subscription_id: str
     customer_id: str
@@ -89,6 +100,12 @@ class SubscriptionMessage:
     period_ends_at: datetime | None
     ends_at: datetime | None
     named_reader: uuid.UUID | None
+    price_id: str
+    checkout: str | None = None
+
+
+def checkout_digest(token: str) -> bytes:
+    return hashlib.sha256(token.encode("ascii")).digest()
 
 
 def verify_signature(header: str | None, body: bytes, secret: str, now: float,
@@ -135,13 +152,18 @@ def _id(value, pattern: re.Pattern) -> str:
     return value
 
 
-def _named_reader(custom_data) -> uuid.UUID | None:
+def _named(custom_data) -> tuple[uuid.UUID | None, str | None]:
+    """The reader and the checkout token the custom data names, each None when absent."""
     if not isinstance(custom_data, dict):
-        return None
+        return None, None
     try:
-        return uuid.UUID(str(custom_data.get("mothli_reader")))
+        reader = uuid.UUID(str(custom_data.get("mothli_reader")))
     except ValueError:
-        return None
+        reader = None
+    token = custom_data.get("mothli_checkout")
+    if not isinstance(token, str) or not _CHECKOUT_TOKEN.fullmatch(token):
+        token = None
+    return reader, token
 
 
 def read_message(payload, prices: frozenset[str]) -> SubscriptionMessage | None:
@@ -155,6 +177,28 @@ def read_message(payload, prices: frozenset[str]) -> SubscriptionMessage | None:
     if not isinstance(event_type, str) or not _EVENT_TYPE.fullmatch(event_type) \
             or not isinstance(data, dict):
         return None
+    fields = _subscription(data, prices)
+    if fields is None:
+        return None
+    return SubscriptionMessage(event_id=_id(payload.get("event_id"), _EVENT_ID),
+                               event_type=event_type,
+                               occurred_at=_time(payload.get("occurred_at")), **fields)
+
+
+def read_subscription(entity, prices: frozenset[str]) -> SubscriptionMessage | None:
+    """A subscription as Paddle's API answers it (``GET /subscriptions/{id}``, or the answer to a
+    cancel), read exactly as a message's ``data`` is, with its ``updated_at`` as the time; None
+    when it is not Mothli's. Raises ``Malformed`` for a Mothli one that cannot be read."""
+    if not isinstance(entity, dict) or not prices:
+        return None
+    fields = _subscription(entity, prices)
+    if fields is None:
+        return None
+    return SubscriptionMessage(event_id=None, event_type=None,
+                               occurred_at=_time(entity.get("updated_at")), **fields)
+
+
+def _subscription(data: dict, prices: frozenset[str]) -> dict | None:
     items = data.get("items")
     if not isinstance(items, list) or not items:
         return None
@@ -162,7 +206,7 @@ def read_message(payload, prices: frozenset[str]) -> SubscriptionMessage | None:
         price = item.get("price") if isinstance(item, dict) else None
         if not isinstance(price, dict) or price.get("id") not in prices:
             return None
-    # Mothli's: from here on, a message that cannot be read is refused.
+    # Mothli's: from here on, a subscription that cannot be read is refused.
     status = data.get("status")
     if status not in _STATUSES:
         raise Malformed("unknown subscription status")
@@ -175,16 +219,16 @@ def read_message(payload, prices: frozenset[str]) -> SubscriptionMessage | None:
     ends_at = None
     if change is not None and change.get("action") in _ENDING_CHANGES:
         ends_at = _time(change.get("effective_at"))
-    return SubscriptionMessage(
-        event_id=_id(payload.get("event_id"), _EVENT_ID),
-        event_type=event_type,
-        occurred_at=_time(payload.get("occurred_at")),
+    reader, token = _named(data.get("custom_data"))
+    return dict(
         subscription_id=_id(data.get("id"), _SUBSCRIPTION_ID),
         customer_id=_id(data.get("customer_id"), _CUSTOMER_ID),
         status=status,
         period_ends_at=None if period is None else _time(period.get("ends_at"), optional=True),
         ends_at=ends_at,
-        named_reader=_named_reader(data.get("custom_data")),
+        named_reader=reader,
+        price_id=items[0]["price"]["id"],
+        checkout=token,
     )
 
 
@@ -210,50 +254,76 @@ def _outcome(row, message: SubscriptionMessage) -> str:
     return "other_subscription"
 
 
+def _checkout_open(conn, reader: uuid.UUID, token: str | None) -> bool:
+    """Whether ``token`` is a checkout the server made for ``reader``, unused and unexpired (the
+    transaction is set to ``reader``, so row-level security shows only theirs)."""
+    if token is None:
+        return False
+    return conn.execute(
+        "SELECT 1 FROM public.paddle_checkouts WHERE owner_id=%s AND token_digest=%s"
+        " AND used_at IS NULL AND now() < expires_at FOR UPDATE",
+        (reader, checkout_digest(token))).fetchone() is not None
+
+
+def _apply(conn, message: SubscriptionMessage) -> tuple[str, uuid.UUID | None]:
+    """Apply one subscription in the open transaction: the outcome and the account, or None."""
+    reader = conn.execute("SELECT public.paddle_reader(%s, %s::uuid)",
+                          (message.subscription_id, message.named_reader)).fetchone()[0]
+    if reader is None:
+        return "no_account", None
+    conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(reader),))
+    conn.execute(_PLAN_LOCK, (reader,))
+    row = conn.execute(
+        "SELECT paddle_subscription_id, paddle_status, paddle_occurred_at,"
+        " paddle_status IN ('active', 'trialing', 'past_due')"
+        " AND (ends_at IS NULL OR now() < ends_at)"
+        " FROM public.reader_plans WHERE owner_id=%s", (reader,)).fetchone()
+    stored = row is not None and row[0] == message.subscription_id
+    # A subscription Mothli has not stored is the named reader's only with their own checkout.
+    if not stored and not _checkout_open(conn, reader, message.checkout):
+        return "no_account", None
+    outcome = _outcome(row, message)
+    if outcome == "applied":
+        conn.execute(
+            """INSERT INTO public.reader_plans AS plan
+                 (owner_id, paddle_customer_id, paddle_subscription_id, paddle_status,
+                  period_ends_at, ends_at, paddle_occurred_at, first_paid_at, paddle_price_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, CASE WHEN %s THEN now() END, %s)
+               ON CONFLICT (owner_id) DO UPDATE SET
+                 paddle_customer_id = EXCLUDED.paddle_customer_id,
+                 paddle_subscription_id = EXCLUDED.paddle_subscription_id,
+                 paddle_status = EXCLUDED.paddle_status,
+                 period_ends_at = EXCLUDED.period_ends_at,
+                 ends_at = EXCLUDED.ends_at,
+                 paddle_occurred_at = EXCLUDED.paddle_occurred_at,
+                 first_paid_at = COALESCE(plan.first_paid_at, EXCLUDED.first_paid_at),
+                 paddle_price_id = EXCLUDED.paddle_price_id,
+                 updated_at = now()""",
+            (reader, message.customer_id, message.subscription_id, message.status,
+             message.period_ends_at, message.ends_at, message.occurred_at,
+             message.status in _PAID, message.price_id))
+        if not stored:
+            conn.execute("UPDATE public.paddle_checkouts SET used_at = now()"
+                         " WHERE owner_id=%s AND token_digest=%s",
+                         (reader, checkout_digest(message.checkout)))
+    return outcome, reader
+
+
 def apply_message(dsn: str, message: SubscriptionMessage) -> str:
-    """Apply one Mothli message on the billing role; the outcome recorded, or "repeat" when its
-    id was already recorded (nothing is written then)."""
+    """Apply one Mothli subscription on the billing role; the outcome. A message is recorded by
+    its id ("repeat" when its id was already recorded: nothing is written then); a subscription
+    read from Paddle's API has no id and is applied the same way, unrecorded."""
     try:
         with psycopg.connect(dsn, connect_timeout=3) as conn, conn.transaction():
-            reader = conn.execute("SELECT public.paddle_reader(%s, %s::uuid)",
-                                  (message.subscription_id, message.named_reader)).fetchone()[0]
-            outcome = "no_account"
-            if reader is not None:
-                conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(reader),))
-                conn.execute(_PLAN_LOCK, (reader,))
-                row = conn.execute(
-                    "SELECT paddle_subscription_id, paddle_status, paddle_occurred_at,"
-                    " paddle_status IN ('active', 'trialing', 'past_due')"
-                    " AND (ends_at IS NULL OR now() < ends_at)"
-                    " FROM public.reader_plans WHERE owner_id=%s", (reader,)).fetchone()
-                outcome = _outcome(row, message)
-                if outcome == "applied":
-                    conn.execute(
-                        """INSERT INTO public.reader_plans AS plan
-                             (owner_id, paddle_customer_id, paddle_subscription_id, paddle_status,
-                              period_ends_at, ends_at, paddle_occurred_at, first_paid_at)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s,
-                                   CASE WHEN %s THEN now() END)
-                           ON CONFLICT (owner_id) DO UPDATE SET
-                             paddle_customer_id = EXCLUDED.paddle_customer_id,
-                             paddle_subscription_id = EXCLUDED.paddle_subscription_id,
-                             paddle_status = EXCLUDED.paddle_status,
-                             period_ends_at = EXCLUDED.period_ends_at,
-                             ends_at = EXCLUDED.ends_at,
-                             paddle_occurred_at = EXCLUDED.paddle_occurred_at,
-                             first_paid_at = COALESCE(plan.first_paid_at,
-                                                      EXCLUDED.first_paid_at),
-                             updated_at = now()""",
-                        (reader, message.customer_id, message.subscription_id, message.status,
-                         message.period_ends_at, message.ends_at, message.occurred_at,
-                         message.status in _PAID))
-            recorded = conn.execute(
-                """INSERT INTO public.paddle_events
-                     (event_id, event_type, occurred_at, owner_id, outcome)
-                   VALUES (%s, %s, %s, %s, %s) ON CONFLICT (event_id) DO NOTHING""",
-                (message.event_id, message.event_type, message.occurred_at, reader, outcome))
-            if recorded.rowcount != 1:
-                raise _Repeat
+            outcome, reader = _apply(conn, message)
+            if message.event_id is not None:
+                recorded = conn.execute(
+                    """INSERT INTO public.paddle_events
+                         (event_id, event_type, occurred_at, owner_id, outcome)
+                       VALUES (%s, %s, %s, %s, %s) ON CONFLICT (event_id) DO NOTHING""",
+                    (message.event_id, message.event_type, message.occurred_at, reader, outcome))
+                if recorded.rowcount != 1:
+                    raise _Repeat
     except _Repeat:
         return "repeat"
     return outcome

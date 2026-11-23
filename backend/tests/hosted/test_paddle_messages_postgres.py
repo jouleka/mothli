@@ -14,6 +14,7 @@ script grants it. Stand-in models only, where a reply is asked for at all.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -76,17 +77,28 @@ def stamp_of(when: datetime) -> str:
     return when.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def checkout_token(reader, sub: str) -> str:
+    """The checkout token a message names ``reader`` with, in the shape the server makes (43
+    URL-safe characters): one per reader and subscription, so a second subscription for the same
+    reader comes from a checkout of its own (ADR 0045 step 4)."""
+    digest = hashlib.sha256(f"{reader}:{sub}".encode()).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
 def message(sub: str, status: str = "active", *, reader=None, event_type="subscription.updated",
             prices=(MONTHLY,), at: datetime | None = None, event: str | None = None,
             scheduled: dict | None = None, customer: str = paddle_id("ctm_", "reader"),
             custom: dict | None = None) -> dict:
-    """A subscription message as Paddle sends it (developer.paddle.com/webhooks/subscriptions)."""
+    """A subscription message as Paddle sends it (developer.paddle.com/webhooks/subscriptions).
+    A ``reader`` is named with the checkout token of their own checkout for ``sub``, which
+    ``post`` makes as the subscribe route would (unless told not to)."""
     at = at or datetime.now(UTC)
     data = {
         "id": sub, "status": status, "customer_id": customer, "address_id": "add_x",
         "currency_code": "USD", "collection_mode": "automatic",
         "custom_data": custom if custom is not None else (
-            None if reader is None else {"mothli_reader": str(reader)}),
+            None if reader is None else {"mothli_reader": str(reader),
+                                         "mothli_checkout": checkout_token(reader, sub)}),
         "items": [{"status": "active", "quantity": 1,
                    "price": {"id": price, "product_id": paddle_id("pro_", "x"),
                              "custom_data": {"plan": "monthly"}},
@@ -113,8 +125,36 @@ def body_of(payload: dict) -> bytes:
     return json.dumps(payload, indent=2).encode()
 
 
-def post(client, payload: dict | bytes, header: str | None = "sign"):
+def seed_checkout(dsn: str, owner, token: str, *, used: bool = False,
+                  expired: bool = False) -> None:
+    """A checkout the subscribe route would have made for ``owner`` (written past row-level
+    security); kept once, so a token used by a first subscription stays used."""
+    created = "now() - interval '8 days'" if expired else "now()"
+    expires = "now() - interval '1 day'" if expired else "now() + interval '7 days'"
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            "INSERT INTO paddle_checkouts (owner_id, token_digest, created_at, expires_at,"
+            f" used_at) VALUES (%s, %s, {created}, {expires}, CASE WHEN %s THEN now() END)"
+            " ON CONFLICT DO NOTHING",
+            (owner, hashlib.sha256(token.encode("ascii")).digest(), used))
+
+
+def _seed_from(dsn: str, body: bytes) -> None:
+    try:
+        custom = json.loads(body)["data"]["custom_data"]
+        owner = uuid.UUID(custom["mothli_reader"])
+        token = custom["mothli_checkout"]
+    except (ValueError, KeyError, TypeError):
+        return
+    if isinstance(token, str) and len(token) == 43:
+        seed_checkout(dsn, owner, token)
+
+
+def post(client, payload: dict | bytes, header: str | None = "sign", *, seed: bool = True):
     body = payload if isinstance(payload, bytes) else body_of(payload)
+    # The checkout behind a message naming a reader, as the subscribe route makes it.
+    if seed and getattr(client, "checkouts_dsn", None):
+        _seed_from(client.checkouts_dsn, body)
     headers = {"Content-Type": "application/json"}
     if header == "sign":
         headers["Paddle-Signature"] = signature(body)
@@ -150,9 +190,11 @@ def billing_dsn(database: str, admin_dsn: str):
 
 
 @pytest.fixture()
-def paddle(make_app, billing_dsn):
-    """The hosted app with Paddle's messages on; its client."""
+def paddle(make_app, billing_dsn, database):
+    """The hosted app with Paddle's messages on; its client. A message ``post`` sends naming a
+    reader comes with that reader's checkout, unless ``seed=False``."""
     client, _tokens, _app = make_app(**PADDLE, hosted_billing_dsn=billing_dsn)
+    client.checkouts_dsn = database
     return client
 
 
@@ -369,13 +411,14 @@ def test_a_cancelled_subscription_then_a_new_one_for_the_same_reader(paddle, dat
                          at=now + timedelta(seconds=2)))
     assert plan_of(database, a) == ("paying", None, "paddle")
     assert row_of(database, a)["paddle_subscription_id"] == sub_id("new")
-    # The old one's messages, late or repeated in another form, change nothing.
+    # The old one's messages, late or repeated in another form, change nothing: it is no longer
+    # stored, and the checkout it came from was used (ADR 0045 step 4), so it names no account.
     post(paddle, message(sub_id("old"), "canceled", reader=a, at=now + timedelta(seconds=3)))
     post(paddle, message(sub_id("old"), "active", reader=a, at=now + timedelta(seconds=1, )))
     assert plan_of(database, a) == ("paying", None, "paddle")
     assert row_of(database, a)["paddle_subscription_id"] == sub_id("new")
     assert [event[3] for event in events(database)] == [
-        "applied", "applied", "applied", "other_subscription", "older"]
+        "applied", "applied", "applied", "no_account", "no_account"]
     # A plan cancelled to the end of what was paid, past that end, with Paddle's cancel message
     # not yet arrived: a new subscription takes its place at once.
     b = readers["b"]
@@ -434,6 +477,67 @@ def test_an_unknown_or_erased_account_is_recorded_and_ignored(paddle, database, 
     recorded = events(database)
     assert len(recorded) == 6
     assert {(event[2], event[3]) for event in recorded} == {(None, "no_account")}
+
+
+def checkout_row(dsn: str, owner, token: str):
+    with psycopg.connect(dsn) as conn:
+        return conn.execute("SELECT used_at FROM paddle_checkouts WHERE owner_id=%s"
+                            " AND token_digest=%s",
+                            (owner, hashlib.sha256(token.encode()).digest())).fetchone()
+
+
+def test_a_new_subscription_is_a_readers_only_through_their_own_open_checkout(paddle, database,
+                                                                              readers):
+    """ADR 0045 step 4. The break it catches: anyone with Paddle's public client token opening a
+    checkout whose custom data names a reader, and the payment binding to that reader, so they
+    can make a reader paying, or later end a plan the reader made, without the server having
+    made that checkout. A subscription Mothli has not stored is the named reader's only with a
+    checkout token kept for that same reader, unused and unexpired; each case below is recorded
+    with no account and changes nothing: no token, a token never made, another reader's token,
+    a used token, an expired one. The reader's own open checkout makes them paying and is used
+    up: the same token on another subscription later changes nothing."""
+    a, b = readers["a"], readers["b"]
+    now = datetime.now(UTC)
+    before = everything(database)[0]
+    b_token, used, expired, never = (checkout_token(b, "b"), checkout_token(a, "used"),
+                                     checkout_token(a, "expired"), checkout_token(a, "never"))
+    seed_checkout(database, b, b_token)
+    seed_checkout(database, a, used, used=True)
+    seed_checkout(database, a, expired, expired=True)
+    for step, custom in enumerate(({"mothli_reader": str(a)},
+                                   {"mothli_reader": str(a), "mothli_checkout": never},
+                                   {"mothli_reader": str(a), "mothli_checkout": b_token},
+                                   {"mothli_reader": str(a), "mothli_checkout": used},
+                                   {"mothli_reader": str(a), "mothli_checkout": expired},
+                                   {"mothli_reader": str(a), "mothli_checkout": "short"})):
+        payload = message(sub_id("forged"), custom=custom, event_type="subscription.created",
+                          at=now + timedelta(seconds=step))
+        assert post(paddle, payload, seed=False).status_code == 200
+    assert everything(database)[0] == before
+    assert plan_of(database, a)[0] == "new" and plan_of(database, b)[0] == "new"
+    assert {(event[2], event[3]) for event in events(database)} == {(None, "no_account")}
+    assert checkout_row(database, b, b_token) == (None,)          # B's token is still B's
+
+    own = checkout_token(a, "own")
+    seed_checkout(database, a, own)
+    custom = {"mothli_reader": str(a), "mothli_checkout": own}
+    post(paddle, message(sub_id("own"), custom=custom, event_type="subscription.created",
+                         at=now + timedelta(seconds=10)), seed=False)
+    assert plan_of(database, a) == ("paying", None, "paddle")
+    assert checkout_row(database, a, own)[0] is not None
+    # Its own later messages are found by the stored subscription, the token aside.
+    post(paddle, message(sub_id("own"), "past_due", custom={},
+                         at=now + timedelta(seconds=11)), seed=False)
+    assert row_of(database, a)["paddle_status"] == "past_due"
+    # Cancelled, then the used token on another subscription: nothing.
+    post(paddle, message(sub_id("own"), "canceled", custom={},
+                         at=now + timedelta(seconds=12)), seed=False)
+    post(paddle, message(sub_id("again"), custom=custom, event_type="subscription.created",
+                         at=now + timedelta(seconds=13)), seed=False)
+    assert row_of(database, a)["paddle_subscription_id"] == sub_id("own")
+    assert plan_of(database, a) == ("ended", "plan", None)
+    assert [event[3] for event in events(database)][-4:] == [
+        "applied", "applied", "applied", "no_account"]
 
 
 def test_a_message_for_reader_a_never_changes_reader_b(paddle, billing_dsn, database, readers):
@@ -570,16 +674,18 @@ def test_the_logs_never_hold_the_secret_the_signature_an_id_or_the_payload(paddl
     paddle.post(PATH, content=body, headers={"Paddle-Signature": header.replace("ts=", "ts=1")})
     text = caplog.text
     for secret in (SECRET, header.split("h1=")[1], payload["event_id"], sub_id("a"), str(a),
-                   paddle_id("ctm_", "secretcustomer"), "mothli_reader"):
+                   paddle_id("ctm_", "secretcustomer"), "mothli_reader", "mothli_checkout",
+                   checkout_token(a, sub_id("a"))):
         assert secret not in text, secret
 
 
 # ---- the billing role -------------------------------------------------------------------------
 
-def test_the_billing_role_reads_and_writes_only_its_two_tables(billing_dsn, database, readers):
+def test_the_billing_role_reads_and_writes_only_its_three_tables(billing_dsn, database, readers):
     """The break it catches: the role used by an unauthenticated route able to read any reader's
-    books, conversations, spend or account, write anything but a plan and a recorded message,
-    delete or rewrite a recorded message, give a gift, or bypass row-level security."""
+    books, conversations, spend or account, write anything but a plan, a recorded message and a
+    checkout (step 4), delete or rewrite a recorded message, delete a checkout, give a gift, or
+    bypass row-level security."""
     a = readers["a"]
     with psycopg.connect(database) as conn:
         tables = [row[0] for row in conn.execute(
@@ -591,20 +697,22 @@ def test_the_billing_role_reads_and_writes_only_its_two_tables(billing_dsn, data
                               " WHERE rolname = %s", (conninfo.conninfo_to_dict(
                                   billing_dsn)["user"],)).fetchone()[0]
     assert not bypass
-    assert {"reader_plans", "paddle_events", "users", "books", "cost_ledger"} <= set(tables)
+    assert {"reader_plans", "paddle_events", "paddle_checkouts", "users", "books",
+            "cost_ledger"} <= set(tables)
+    own = ("reader_plans", "paddle_events", "paddle_checkouts")
     with psycopg.connect(billing_dsn, autocommit=True) as conn:
         conn.execute("SELECT set_config('app.owner_id', %s, false)", (str(a),))
         for table in tables:
             name = sql.Identifier("public", table)
-            if table not in ("reader_plans", "paddle_events"):
+            if table not in own:
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
                     conn.execute(sql.SQL("SELECT 1 FROM {} LIMIT 1").format(name))
             statements = [sql.SQL("DELETE FROM {}").format(name),
                           sql.SQL("TRUNCATE {}").format(name)]
-            if table != "reader_plans":
+            if table not in ("reader_plans", "paddle_checkouts"):
                 column = sql.Identifier(first_column[table])
                 statements.append(sql.SQL("UPDATE {} SET {} = {}").format(name, column, column))
-            if table not in ("reader_plans", "paddle_events"):
+            if table not in own:
                 statements.append(sql.SQL("INSERT INTO {} DEFAULT VALUES").format(name))
             for statement in statements:
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
@@ -630,6 +738,10 @@ def test_the_tenant_role_cannot_write_a_paddle_plan_or_find_one(tenant_dsn, data
                 ("UPDATE reader_plans SET paddle_subscription_id = %s, paddle_status = 'active',"
                  " paddle_occurred_at = now()", (sub_id("a"),)),
                 ("SELECT * FROM paddle_events", ()),
+                ("SELECT * FROM paddle_checkouts", ()),
+                ("INSERT INTO paddle_checkouts (owner_id, token_digest, expires_at)"
+                 " VALUES (%s, %s, now() + interval '1 day')", (a, b"x" * 32)),
+                ("SELECT * FROM paddle_plans_to_check(10)", ()),
                 ("INSERT INTO paddle_events (event_id, event_type, occurred_at, owner_id, outcome)"
                  " VALUES (%s, 'subscription.created', now(), %s, 'applied')",
                  (paddle_id("evt_", "t"), a)),
