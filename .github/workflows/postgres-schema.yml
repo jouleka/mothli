@@ -25,6 +25,9 @@ jobs:
           --health-retries 30
     env:
       TEST_POSTGRES_DSN: postgresql://postgres@127.0.0.1:5432/postgres
+      # The backup round trip runs the server's own pg_dump and pg_restore, inside the database
+      # container, as deploy/backup.sh does.
+      TEST_PG_TOOLS: docker exec -i ${{ job.services.postgres.id }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

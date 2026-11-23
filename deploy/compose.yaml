@@ -181,6 +181,28 @@ services:
     depends_on:
       db: {condition: service_healthy}
 
+  # The daily backup's uploader (runbook step 4), started by deploy/backup.sh from the server's
+  # crontab: it uploads each night's backup file to Cloudflare R2, keeps the newest 14 there, and
+  # reads the book files (read-only) into the backup. It holds the four R2 settings and nothing
+  # else: no database role at all (the dump is taken inside `db` by the superuser over its own
+  # socket, so no database password leaves that container), no app.env, no data network. Never
+  # given to web or worker.
+  backup:
+    <<: *backend
+    profiles: [tools]
+    restart: "no"
+    read_only: true
+    tmpfs: [/tmp]
+    command: ["python", "-m", "app.hosted.backups", "list"]
+    environment:
+      MOTHLI_BACKUP_S3_ENDPOINT: ${MOTHLI_BACKUP_S3_ENDPOINT:-}
+      MOTHLI_BACKUP_BUCKET: ${MOTHLI_BACKUP_BUCKET:-mothli-protected-backups}
+      MOTHLI_BACKUP_ACCESS_KEY_ID: ${MOTHLI_BACKUP_ACCESS_KEY_ID:-}
+      MOTHLI_BACKUP_SECRET_ACCESS_KEY: ${MOTHLI_BACKUP_SECRET_ACCESS_KEY:-}
+    volumes:
+      - books:/var/lib/mothli/books:ro
+    networks: [egress]
+
   # Serves the built app and passes /api to web, unbuffered (deploy/Caddyfile).
   proxy:
     image: ${MOTHLI_IMAGE_PREFIX:-mothli}-proxy:${MOTHLI_RELEASE:-local}
