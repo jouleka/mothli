@@ -33,6 +33,9 @@ APPROVED_SECURITY_LOG_MESSAGES = frozenset(
         "paddle call failed: server",
         "paddle call failed: unreadable",
         "paddle call refused",
+        # Paddle refused PADDLE_CHECKOUT_URL: its domain is not approved yet.
+        "paddle refused the checkout address: approve the domain of PADDLE_CHECKOUT_URL in "
+        "Paddle under Website approval",
     }
 )
 

@@ -18,6 +18,9 @@ only through the billing role:
 - ``POST /api/billing/portal``: a customer portal session for the reader's own customer and
   subscription; answers ``{"url": ...}``. The link is never stored and never logged.
 
+And one public read, ``GET /api/billing/payment-link``: Paddle's environment and the public
+client token, for Mothli's payment-link page, which a visitor may open signed out.
+
 Cancel and keep apply Paddle's answer at once, through the same code as a message
 (``billing.apply_message``: newer only, Mothli's prices only), and answer the plan as ``GET``
 does. Paddle unreachable, slow or failing answers 503 ``paddle_unavailable`` and nothing is
@@ -205,6 +208,18 @@ def _checkouts_today(dsn: str, owner: uuid.UUID) -> int:
                             " AND created_at > now() - interval '1 day'", (owner,)).fetchone()[0]
 
 
+@router.get("/payment-link")
+async def payment_link(request: Request) -> JSONResponse:
+    """What Paddle.js needs on Mothli's payment-link page (``PADDLE_CHECKOUT_URL`` with
+    ``_ptxn``), where the visitor may not be signed in on that device: Paddle's environment and
+    the public client token, those two values and nothing else. 404 where no checkout opens."""
+    setup = checkout_setup(request.app.state.settings)
+    if setup is None:
+        return _refused(404, "no_checkout", "The checkout isn’t open here just now.")
+    return JSONResponse({"environment": setup["environment"],
+                         "client_token": setup["client_token"]}, headers=_NO_STORE)
+
+
 @router.post("/checkout")
 async def checkout(body: CheckoutIn, request: Request,
                    owner: OwnerId = Depends(_csrf_owner)) -> JSONResponse:
@@ -231,7 +246,8 @@ async def checkout(body: CheckoutIn, request: Request,
     try:
         transaction = await run_in_threadpool(
             paddle_api(request).create_transaction, prices[0],
-            {"mothli_reader": str(owner.value), "mothli_checkout": token})
+            {"mothli_reader": str(owner.value), "mothli_checkout": token},
+            settings.paddle_checkout_url)
     except (PaddleUnavailable, PaddleRefused):
         return _refused(503, *_UNAVAILABLE)
     return JSONResponse({"transaction_id": transaction}, headers=_NO_STORE)

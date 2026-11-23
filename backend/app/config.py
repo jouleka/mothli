@@ -243,6 +243,13 @@ class Settings(BaseSettings):
     # developer.paddle.com/paddle-js/about/client-side-tokens), so not a secret, but still the
     # owner's setting. With none, the plan sheet offers no checkout.
     paddle_client_token: str = ""
+    # Mothli's own page for Paddle's payment links (ADR 0045, "One Paddle account, several
+    # products"): every transaction the server makes carries it as ``checkout.url``, so Paddle's
+    # emails about a checkout send the buyer here and not to the account's default payment link,
+    # which is the other product's page. This app's own address: https, a host in TRUSTED_HOSTS,
+    # the app's front page (no path, query or fragment). Paddle refuses it until its domain is
+    # approved under Website approval. Required with PADDLE_API_KEY.
+    paddle_checkout_url: str = ""
 
     @model_validator(mode="after")
     def validate_hosted_auth(self):
@@ -356,12 +363,29 @@ class Settings(BaseSettings):
                 raise ValueError("PADDLE_CLIENT_TOKEN must be a client-side token from Paddle's "
                                  f"{self.paddle_environment} (PADDLE_ENVIRONMENT), as Paddle "
                                  "shows it")
+        if self.paddle_checkout_url and self.paddle_api_key is None:
+            raise ValueError("PADDLE_CHECKOUT_URL requires PADDLE_API_KEY (the server makes "
+                             "every checkout)")
+        if self.paddle_api_key is not None and not self.paddle_checkout_url:
+            raise ValueError("PADDLE_API_KEY requires PADDLE_CHECKOUT_URL (Mothli's own page for "
+                             "Paddle's payment links; without it they go to the account's "
+                             "default page)")
         if self.deployment_mode != "hosted":
             return self
 
         hosts = self.trusted_host_values()
         if not hosts or "*" in hosts:
             raise ValueError("hosted mode requires an explicit TRUSTED_HOSTS allowlist")
+        if self.paddle_checkout_url:
+            page = urlsplit(self.paddle_checkout_url)
+            if (page.scheme != "https" or not page.hostname or page.username or page.password
+                    or page.port is not None or page.path not in ("", "/") or page.query
+                    or page.fragment or "?" in self.paddle_checkout_url
+                    or "#" in self.paddle_checkout_url
+                    or any(character.isspace() for character in self.paddle_checkout_url)
+                    or page.hostname not in {host.casefold() for host in hosts}):
+                raise ValueError("PADDLE_CHECKOUT_URL must be this app's own front page: "
+                                 "https://, a host in TRUSTED_HOSTS, no path, query or fragment")
 
         required = {
             "HOSTED_AUTH_DSN": self.hosted_auth_dsn,
