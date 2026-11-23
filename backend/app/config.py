@@ -17,9 +17,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # app/config.py -> app -> backend -> repo root (D-A7: parents[2], verified against the layout)
 ENV_FILE = str(Path(__file__).resolve().parents[2] / ".env")
 # Paddle's ids are a prefix and 26 lowercase letters or digits; its notification destination's
-# secret key starts pdl_ntfset_ (developer.paddle.com/webhooks/signature-verification).
+# secret key starts pdl_ntfset_ (developer.paddle.com/webhooks/signature-verification). Nothing
+# more is required of the key than is certain: its second part is base64-like (Paddle's own SDK
+# example holds a "+"), so any characters but whitespace, at a sane length.
 _PADDLE_PRICE = re.compile(r"pri_[a-z0-9]{26}")
-_PADDLE_SECRET = re.compile(r"pdl_ntfset_[A-Za-z0-9_]{16,200}")
+_PADDLE_SECRET = re.compile(r"pdl_ntfset_\S{16,500}")
 
 
 def _items(value: str) -> tuple[str, ...]:
