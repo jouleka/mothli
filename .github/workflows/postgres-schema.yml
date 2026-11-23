@@ -40,6 +40,10 @@ jobs:
         working-directory: backend
         run: uv sync --extra dev --frozen
       - name: Apply migrations and validate constraints plus spoiler parity
+        env:
+          # The backup round trip runs the server's own pg_dump and pg_restore, inside the
+          # database container, as deploy/backup.sh does.
+          TEST_PG_TOOLS: docker exec -i ${{ job.services.postgres.id }}
         run: >-
           backend/.venv/bin/python -m pytest
           backend/tests/hosted backend/tests/parity -q -p no:cacheprovider

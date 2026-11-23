@@ -116,36 +116,95 @@ The `migrate` step runs first on every start: it updates the database and resets
 database permission to exactly what the code expects. If it fails, the new web process does not
 start; see "When something is wrong".
 
-## 4. Backups
+## 4. Backups (every night, to Cloudflare R2)
 
-Make a backup (the app keeps running):
+Every night at 03:00 the server makes one backup file and puts it in a private Cloudflare R2
+bucket, `mothli-protected-backups`. The newest 14 are kept there; older ones are removed, but only
+after the new one has arrived whole. The app keeps running while it happens.
+
+**What is in a backup:** the whole database (accounts, everything readers keep in their books,
+their conversations with Mothli, Mothli's chapter notes and story memory, spend records, the
+audit log) and the readers' book files. Story memory is in it on purpose: making it again would
+cost about $2.60 for every 30 chapters.
+
+**What is not, on purpose:** the two settings files `deploy/.env` and `deploy/app.env` (they hold
+the keys; keep your offline copy from step 2.6), the database passwords and roles (made again from
+`deploy/.env` when you restore), the app itself (it is in git) and the logs.
+
+**The book files are still encrypted** inside the backup, with `HOSTED_STORAGE_FILESYSTEM_KEY`
+from `deploy/app.env`. Without your offline copy of that file no backed-up book can be read again.
+**The database part is not encrypted by Mothli**: it holds readers' emails and conversations, and
+it is protected by R2's own encryption, the bucket being private, and the key below working for
+this one bucket only. Anyone who has that key, or gets into your Cloudflare account, can read it:
+turn on two-step sign-in for your Cloudflare account.
+
+### 4.1 Once: the bucket and its key, in Cloudflare
+
+1. Cloudflare dashboard > **R2 Object Storage** > **Create bucket**. Name it
+   `mothli-protected-backups`, leave the location on Automatic, and create it. Leave "Public
+   access" off (it is off unless you turn it on).
+2. Back on the R2 page: **Manage API tokens** (the "API" button) > **Create Account API token**.
+   - Name: `mothli-backups`
+   - Permissions: **Object Read & Write**
+   - Specify bucket(s): **Apply to specific buckets only** > `mothli-protected-backups`
+   - TTL: Forever
+   Then **Create Account API Token**.
+3. Cloudflare now shows the token's values **once**. Keep that page open, and on the server open
+   the settings file:
+   ```
+   nano deploy/.env
+   ```
+   Paste, after the `=` of each line (no spaces, no quotes):
+   - **Access Key ID** into `MOTHLI_BACKUP_ACCESS_KEY_ID=`
+   - **Secret Access Key** into `MOTHLI_BACKUP_SECRET_ACCESS_KEY=`
+   - the address under **Use jurisdiction-specific endpoints for S3 clients** (it looks like
+     `https://` + a long code + `.r2.cloudflarestorage.com`) into `MOTHLI_BACKUP_S3_ENDPOINT=`
+
+   The first value shown, "Token value", is not needed. If your `deploy/.env` was made before
+   these lines existed, copy the "Backups to Cloudflare R2" block from `deploy/.env.example` into
+   it first. Save with Ctrl+O, Enter, Ctrl+X.
+4. Check that the server can reach the bucket:
+   ```
+   docker compose -f deploy/compose.yaml run --rm backup
+   ```
+   It ends with `0 backups in mothli-protected-backups`. A line starting `backup failed:` names
+   what is wrong (`... is not set in deploy/.env` means a value is missing).
+5. Make the first backup by hand:
+   ```
+   cd ~/mothli
+   deploy/backup.sh
+   ```
+   The last line says `backup ok: mothli-backup-<date and time>.tar, ... MB, in ... s`.
+6. Make it run every night at 03:00 (before the 04:00 erasing of step 4a): run `crontab -e` and
+   add this line:
+   ```
+   0 3 * * * cd ~/mothli && deploy/backup.sh >> deploy/backups/backup.log 2>&1
+   ```
+
+### 4.2 Did last night's backup run?
 
 ```
-cd ~/mothli
-deploy/backup.sh
+tail -n 4 deploy/backups/backup.log
+docker compose -f deploy/compose.yaml run --rm backup
 ```
 
-It writes a folder `deploy/backups/<date and time>/` with the database, the book files (still
-encrypted) and checksums. **Copy that folder off the server** every time, for example to your
-computer:
+The log's last line should be `backup ok: ...` with last night's date; the second command lists
+what is in the bucket, newest first, with sizes. Look once a week; nothing warns you on its own.
 
-```
-scp -r YOURUSER@YOURSERVER:mothli/deploy/backups/FOLDERNAME .
-```
+If the log's last line starts `BACKUP FAILED while ...`, the backup did not happen and **nothing
+in R2 was removed**. The words after `while` say which step failed, and the line above it often
+says why. Run `deploy/backup.sh` by hand to see it again. Usual causes: the R2 lines in
+`deploy/.env` are wrong or the token was deleted (`backup failed: ... talking to the bucket`), the
+server's disk is full (`df -h`), or Mothli is not running
+(`docker compose -f deploy/compose.yaml ps`). If the upload failed, the backup file is kept in
+`deploy/backups/` and removed by the next backup that works.
 
-To make one every night at 03:00, run `crontab -e` and add this line:
+### 4.3 Erased accounts stay in the backups for up to 14 days
 
-```
-0 3 * * * cd ~/mothli && deploy/backup.sh >> deploy/backups/backup.log 2>&1
-```
-
-How many to keep, and where the copies live, is your decision (see the list at the end).
-Delete old ones with `rm -r deploy/backups/FOLDERNAME`.
-
-**Backups still hold deleted accounts.** When a reader's account is erased (next section), it is
-gone from the server, but every backup made before that day still holds it, books included,
-until that backup is deleted. So a reader's data really disappears only once the last backup
-holding it is gone. The privacy text has to say this, with how long backups are kept.
+When a reader's account is erased (next section), it is gone from the server, but the backups made
+before that day still hold it, books included, until they are removed: at most 14 days later. So
+a reader's data really disappears 14 days after it is erased. **The privacy page has to say
+this.** If you ever restore an older backup, run the erasing step right after it (step 5.2).
 
 ## 4a. Erasing deleted accounts (every day)
 
@@ -223,23 +282,63 @@ beside story memory ($10) and this budget ($3).
 
 ## 5. Restoring
 
-Only into an empty Mothli (a new server, or after removing everything). You need the backup
-folder and the **same** `deploy/.env` and `deploy/app.env` it was made with.
+### 5.1 Test a backup (once a month, on the live server)
 
-1. Put the code, the two settings files and the backup folder on the server (steps 2.1 and 2.2,
-   then copy your saved files over the new ones).
-2. Only if this server already ran Mothli and you mean to replace everything on it:
+```
+cd ~/mothli
+deploy/restore.sh --test latest
+```
+
+It downloads the newest backup, checks its checksums, restores it into a scratch database
+(`mothli_restore_test`) beside the live one, checks that every table has the backup's row count
+and which migration the database is at, counts the book files, then deletes the scratch database.
+Readers notice nothing, and the live database is not touched. It needs free disk of about twice
+the backup's size (`df -h`). The last line says `TEST RESTORE OK: ...`. Anything else ends with
+`TEST RESTORE FAILED while ...`: keep that output and look at the backups before you need one.
+
+To test an older one, name it instead of `latest` (the names come from
+`docker compose -f deploy/compose.yaml run --rm backup`).
+
+### 5.2 Restore for real
+
+Only into an empty Mothli: a new server, or this one after removing everything. Restoring an
+older backup loses everything readers did after it was made. You need the **same** `deploy/app.env`
+the backup was made with (the book files' key) and a `deploy/.env` with the R2 lines filled in.
+
+1. On a new server: steps 1.2, 2.1 and 2.2, then put your offline copies of `deploy/.env` and
+   `deploy/app.env` over the new ones (`chmod 600 deploy/.env deploy/app.env` again).
+2. Only if this server already runs Mothli and you mean to replace everything on it:
    ```
    docker compose -f deploy/compose.yaml down --volumes
    ```
    This deletes the database and all book files on this server.
-3. Build, then restore:
+3. Build, then restore the newest backup:
    ```
    docker compose -f deploy/compose.yaml build
-   deploy/restore.sh deploy/backups/FOLDERNAME
+   deploy/restore.sh latest
    ```
-   It refuses if the database or the book folder is not empty. At the end it compares every
-   table's row count with the backup's and says so.
+   (or a backup's name instead of `latest`). It prints six numbered steps:
+   1. downloads the backup and checks its checksums;
+   2. checks that the database and the book folder are empty (it refuses otherwise);
+   3. makes the database roles from `deploy/.env` and restores the database in one go;
+   4. puts the book files back;
+   5. checks every table's row count against the backup's, and prints the migration the
+      database is at beside this code's newest (`... at migration 0037; this code's newest is
+      0037`). A backup made by older code is fine (the next step updates it); one made by newer
+      code is refused: run `git pull` and start again;
+   6. starts everything: the deployment step resets every permission and runs the app's own
+      checks, and it waits until the web process answers "ready".
+
+   The last line says `RESTORE OK: ...`. Anything else ends with `RESTORE FAILED while ...` or
+   `RESTORE REFUSED: ...`, naming the step.
+4. Check it: step 6 below (`curl https://YOURDOMAIN/api/health/ready` answers `{"status":"ready"}`),
+   then open the site and sign in.
+5. Erase again what was erased after the backup was made (the requests are in the restored
+   database, so the same step finds them):
+   ```
+   docker compose -f deploy/compose.yaml run --rm purge
+   ```
+6. Make sure the nightly backup is in your crontab on this server (step 4.1, point 6).
 
 ## 6. Is it healthy?
 
@@ -330,7 +429,8 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
   ```
   docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.audit show --owner READER_ID --limit 50
   ```
-- **The server is out of disk.** `df -h`, then delete old backup folders (after copying them off).
+- **The server is out of disk.** `df -h`. Backup files left in `deploy/backups/` by a failed upload
+  (step 4.2) can go once a later backup has worked: `rm deploy/backups/mothli-backup-*.tar`.
 - Anything else: save the output of `docker compose -f deploy/compose.yaml logs --tail 300 > problem.txt`
   and hand it to whoever looks after the code. It holds no reader content and no password.
 
