@@ -39,6 +39,7 @@ from tests.hosted.test_account_deletion_postgres import _role
 from tests.hosted.test_companion_stream_postgres import (
     restore_caps,  # noqa: F401  (autouse: the hosted app sets this process's caps)
 )
+from tests.hosted.test_billing import OPERATOR
 from tests.hosted.test_paddle_messages_postgres import PADDLE, message, paddle_id, post, sub_id
 from tests.hosted.test_paddle_subscribe_postgres import (
     CHECKOUT_URL,
@@ -120,7 +121,7 @@ def desk(make_app, billing_dsn, database):
     """The hosted app with Paddle's messages and API on, Paddle stood in, and accounts that can
     be deleted and kept: (client, tokens, stand-in, app)."""
     client, tokens, app = make_app(**PADDLE, paddle_api_key=KEY, paddle_checkout_url=CHECKOUT_URL,
-                                   hosted_billing_dsn=billing_dsn)
+                                   hosted_billing_dsn=billing_dsn, **OPERATOR)
     standin = StandInPaddle()
     app.state.paddle_api = PaddleApi(KEY, "sandbox", transport=httpx.MockTransport(standin))
     client.checkouts_dsn = database
