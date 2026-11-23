@@ -136,12 +136,19 @@ cost about $2.60 for every 30 chapters.
 the keys; keep your offline copy from step 2.6), the database passwords and roles (made again from
 `deploy/.env` when you restore), the app itself (it is in git) and the logs.
 
-**The book files are still encrypted** inside the backup, with `HOSTED_STORAGE_FILESYSTEM_KEY`
-from `deploy/app.env`. Without your offline copy of that file no backed-up book can be read again.
-**The database part is not encrypted by Mothli**: it holds readers' emails and conversations, and
-it is protected by R2's own encryption, the bucket being private, and the key below working for
-this one bucket only. Anyone who has that key, or gets into your Cloudflare account, can read it:
-turn on two-step sign-in for your Cloudflare account.
+**Every backup is encrypted on the server before it leaves it**, with the backup key,
+`MOTHLI_BACKUP_ENCRYPTION_KEY` in `deploy/.env` (you make it once, in step 4.1). What sits in R2
+is unreadable without that key, and the key is never sent to R2 and never in git: anyone who gets
+the R2 token, or into your Cloudflare account, gets files they cannot open. Inside the backup the
+book files are encrypted a second time, as on the server, with `HOSTED_STORAGE_FILESYSTEM_KEY`
+from `deploy/app.env`.
+
+**So two keys open a backup, and both are in your offline copy of the settings files** (step 2.6):
+the backup key in `deploy/.env` and the book files' key in `deploy/app.env`. **If you lose the
+backup key, every backup is lost with it**: nobody, not Cloudflare and not whoever looks after the
+code, can open them. There is nothing new to keep somewhere else: keep your offline copy of
+`deploy/.env` up to date (step 4.1 tells you when) and it holds the key. Never make a new backup key
+over the old one: the new one cannot open the backups made before it.
 
 ### 4.1 Once: the bucket and its key, in Cloudflare
 
@@ -174,13 +181,28 @@ turn on two-step sign-in for your Cloudflare account.
    ```
    It ends with `0 backups in mothli-protected-backups`. A line starting `backup failed:` names
    what is wrong (`... is not set in deploy/.env` means a value is missing).
-5. Make the first backup by hand:
+5. Make the backup key (once, ever). This prints one new key, a line starting `AGE-SECRET-KEY-1`:
+   ```
+   docker compose -f deploy/compose.yaml run --rm backup python -m app.hosted.backups new-key
+   ```
+   Open the settings file again (`nano deploy/.env`) and paste the whole line after the `=` of
+   `MOTHLI_BACKUP_ENCRYPTION_KEY=`, in place of the placeholder there (no spaces, no quotes). If
+   your `deploy/.env` has no such line, copy it from `deploy/.env.example` first. Save with Ctrl+O,
+   Enter, Ctrl+X, then wipe the key off the screen with `clear`. Check it:
+   ```
+   docker compose -f deploy/compose.yaml run --rm backup python -m app.hosted.backups check-key
+   ```
+   It says `the backup key in deploy/.env is set`. If making the key said `... is already set`,
+   you made one before: keep it and do not make another.
+6. **Copy `deploy/.env` to your offline place again now**, over the old copy: it holds the backup
+   key now, and without the key no backup can ever be opened.
+7. Make the first backup by hand:
    ```
    cd ~/mothli
    deploy/backup.sh
    ```
-   The last line says `backup ok: mothli-backup-<date and time>.tar, ... MB, in ... s`.
-6. Make it run every night at 03:00 (before the 04:00 erasing of step 4a): run `crontab -e` and
+   The last line says `backup ok: mothli-backup-<date and time>.tar.age, ... MB, in ... s`.
+8. Make it run every night at 03:00 (before the 04:00 erasing of step 4a): run `crontab -e` and
    add this line:
    ```
    0 3 * * * cd ~/mothli && deploy/backup.sh >> deploy/backups/backup.log 2>&1
@@ -198,7 +220,11 @@ what is in the bucket, newest first, with sizes. Look once a week; nothing warns
 
 If the log's last line starts `BACKUP FAILED while ...`, the backup did not happen and **nothing
 in R2 was removed**. The words after `while` say which step failed, and the line above it often
-says why. Run `deploy/backup.sh` by hand to see it again. Usual causes: the R2 lines in
+says why. Run `deploy/backup.sh` by hand to see it again. Usual causes: the backup key is missing
+or damaged (`BACKUP FAILED while checking the backup key`, with
+`MOTHLI_BACKUP_ENCRYPTION_KEY ... is not set` or `... is damaged` above it: nothing was dumped;
+copy the line back from your offline copy of `deploy/.env`, and make a new key with step 4.1
+point 5 only if there never was one), the R2 lines in
 `deploy/.env` are wrong or the token was deleted (`backup failed: ... talking to the bucket`), the
 server's disk is full (`df -h`), or Mothli is not running
 (`docker compose -f deploy/compose.yaml ps`). If the upload failed, the backup file is kept in
@@ -349,12 +375,16 @@ cd ~/mothli
 deploy/restore.sh --test latest
 ```
 
-It downloads the newest backup, checks its checksums, restores it into a scratch database
-(`mothli_restore_test`) beside the live one, checks that every table has the backup's row count
-and which migration the database is at, counts the book files, then deletes the scratch database.
-Readers notice nothing, and the live database is not touched. It needs free disk of about twice
-the backup's size (`df -h`). The last line says `TEST RESTORE OK: ...`. Anything else ends with
-`TEST RESTORE FAILED while ...`: keep that output and look at the backups before you need one.
+It downloads the newest backup, decrypts it with the backup key in `deploy/.env`, checks its
+checksums, restores it into a scratch database (`mothli_restore_test`) beside the live one, checks
+that every table has the backup's row count and which migration the database is at, counts the
+book files, then deletes the scratch database. Readers notice nothing, and the live database is
+not touched. It needs free disk of about twice the backup's size (`df -h`). The last line says
+`TEST RESTORE OK: ...`, which also proves your backup key opens your backups. Anything else ends
+with `TEST RESTORE FAILED while ...`: keep that output and look at the backups before you need one.
+`... while decrypting the backup` with `... does not open this backup` above it means the key in
+`deploy/.env` is not the one the backup was made with; `... damaged or cut short` means the file
+itself is broken (try the backup before it, by name). Either way nothing was restored.
 
 To test an older one, name it instead of `latest` (the names come from
 `docker compose -f deploy/compose.yaml run --rm backup`).
@@ -363,7 +393,8 @@ To test an older one, name it instead of `latest` (the names come from
 
 Only into an empty Mothli: a new server, or this one after removing everything. Restoring an
 older backup loses everything readers did after it was made. You need the **same** `deploy/app.env`
-the backup was made with (the book files' key) and a `deploy/.env` with the R2 lines filled in.
+the backup was made with (the book files' key) and the **same** `deploy/.env` (the backup key and
+the R2 lines): your offline copies.
 
 1. On a new server: steps 1.2, 2.1 and 2.2, then put your offline copies of `deploy/.env` and
    `deploy/app.env` over the new ones (`chmod 600 deploy/.env deploy/app.env` again).
@@ -378,7 +409,7 @@ the backup was made with (the book files' key) and a `deploy/.env` with the R2 l
    deploy/restore.sh latest
    ```
    (or a backup's name instead of `latest`). It prints six numbered steps:
-   1. downloads the backup and checks its checksums;
+   1. downloads the backup, decrypts it with the backup key and checks its checksums;
    2. checks that the database and the book folder are empty (it refuses otherwise);
    3. makes the database roles from `deploy/.env` and restores the database in one go;
    4. puts the book files back;
@@ -398,7 +429,42 @@ the backup was made with (the book files' key) and a `deploy/.env` with the R2 l
    ```
    docker compose -f deploy/compose.yaml run --rm purge
    ```
-6. Make sure the nightly backup is in your crontab on this server (step 4.1, point 6).
+6. Make sure the nightly backup is in your crontab on this server (step 4.1, point 8).
+
+### 5.3 Opening a backup by hand, without Mothli's code
+
+You should never need this: `deploy/restore.sh` does it all. It is here so that your backups stay
+yours even if Mothli's code were gone. A backup file (`mothli-backup-<date and time>.tar.age`) is a
+standard **age** file (<https://age-encryption.org>; the format is age v1, encrypted to the X25519
+key that `MOTHLI_BACKUP_ENCRYPTION_KEY` holds). Inside is an ordinary tar. On any Linux or Mac
+computer:
+
+1. Install the `age` tool: `sudo apt install age` (Ubuntu, Debian) or `brew install age` (Mac).
+2. Get the backup file: from the server's `deploy/backups/` folder after a restore downloaded it,
+   or from the Cloudflare dashboard (R2 > `mothli-protected-backups` > the file > Download).
+3. Put the backup key in a file only you can read, from your offline copy of `deploy/.env`:
+   ```
+   (umask 077; grep '^MOTHLI_BACKUP_ENCRYPTION_KEY=' deploy/.env | cut -d= -f2- > backup-key.txt)
+   ```
+4. Decrypt and unpack it, then check its checksums:
+   ```
+   age --decrypt -i backup-key.txt -o backup.tar mothli-backup-DATE.tar.age
+   mkdir backup && tar -C backup -xf backup.tar
+   (cd backup && sha256sum -c SHA256SUMS)
+   rm backup-key.txt backup.tar
+   ```
+   If the key is wrong, or the file was changed or cut short, `age` stops with an error: then
+   stop too, and delete whatever it wrote (`rm -f backup.tar`). The `sha256sum` line prints `OK`
+   for each of `database.dump`, `counts.txt` and `books.tar`.
+5. The folder `backup` now holds the database (`database.dump`, for PostgreSQL's `pg_restore`),
+   the row counts and the book files (`books.tar`, still encrypted with
+   `HOSTED_STORAGE_FILESYSTEM_KEY`). On a Mothli server, `deploy/restore.sh` takes that folder's
+   full path (for example `/root/backup`) in place of `latest`: it checks the checksums again and
+   restores from it as from a download.
+   The folder holds readers' emails and conversations: delete it (`rm -rf backup`) when done.
+
+`deploy/restore.sh` takes only an encrypted backup file or such an unpacked folder: it refuses a
+plain `.tar`, since Mothli never makes an unencrypted backup.
 
 ## 6. Is it healthy?
 
@@ -490,7 +556,7 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
   docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.audit show --owner READER_ID --limit 50
   ```
 - **The server is out of disk.** `df -h`. Backup files left in `deploy/backups/` by a failed upload
-  (step 4.2) can go once a later backup has worked: `rm deploy/backups/mothli-backup-*.tar`.
+  (step 4.2) can go once a later backup has worked: `rm deploy/backups/mothli-backup-*.tar.age`.
 - Anything else: save the output of `docker compose -f deploy/compose.yaml logs --tail 300 > problem.txt`
   and hand it to whoever looks after the code. It holds no reader content and no password.
 
