@@ -163,7 +163,7 @@ export function PublicPage({ page }: { page: PublicPageName }) {
           ) : operator ? (
             <>
               {page !== "contact" && <p className="pp-updated">Last updated {UPDATED}</p>}
-              <Body operator={operator} />
+              <Body operator={operator} writer={site.writer} />
             </>
           ) : (
             <p className="pp-not-open">{NOT_OPEN}</p>

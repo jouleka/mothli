@@ -5,12 +5,14 @@
  * sign-ups here. `plan`: the two prices as Paddle's catalog has them (`currency`, and `monthly`
  * and `yearly` in the currency's smallest unit), or null where they could not be read: the page
  * then shows the plan without figures. Nothing here is written in the app, and no script from
- * anywhere else is loaded for it. */
+ * anywhere else is loaded for it. `writer`: the name of the AI company this server's chat uses
+ * ("OpenAI", "Anthropic", or the host of another OpenAI-compatible service), or null where the
+ * chat is not open here. */
 import { formatMinor, perMonthOf, savingOf } from "../ui/planFigures";
 
 export type Operator = { legal_name: string; country: string; contact_email: string };
 export type CatalogPlan = { currency: string; monthly: string; yearly: string };
-export type Site = { operator: Operator | null; plan: CatalogPlan | null };
+export type Site = { operator: Operator | null; plan: CatalogPlan | null; writer: string | null };
 
 const WHOLE = /^[1-9]\d{0,14}$/;
 const TEXT = (value: unknown): value is string => typeof value === "string" && value.trim() !== "";
@@ -33,8 +35,10 @@ function readPlan(value: unknown): CatalogPlan | null {
 export async function fetchSite(): Promise<Site> {
   const response = await fetch("/api/site", { credentials: "same-origin", headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error(`site ${response.status}`);
-  const body = (await response.json()) as { operator?: unknown; plan?: unknown };
-  return { operator: readOperator(body?.operator), plan: readPlan(body?.plan) };
+  const body = (await response.json()) as { operator?: unknown; plan?: unknown; writer?: unknown };
+  const named = body?.writer;
+  const writer = TEXT(named) && named.length <= 100 ? named : null;
+  return { operator: readOperator(body?.operator), plan: readPlan(body?.plan), writer };
 }
 
 /** The figures the front page shows, worked out from the two catalog prices alone, the same way

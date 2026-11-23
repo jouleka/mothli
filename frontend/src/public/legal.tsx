@@ -20,6 +20,13 @@ export const PADDLE_LINKS = {
 export const SHARED_NOTES =
   "Mothli’s notes on a book’s story (who’s who and what has happened, chapter by chapter) are made once for each exact book file and used for everyone who has that same file, whether they uploaded it or took it from the free library. Each reader is shown them only up to where they have read. Nothing of yours is shared: not your highlights, notes, conversations or reading position, and not your copy of the book. When nobody has the file any more, its notes are deleted 30 days later.";
 
+/** What each page is given: who runs Mothli, and the AI company this server's chat uses
+ * (`writer`, a name from the server's settings), or null where the chat is not open here. */
+export type PageProps = { operator: Operator; writer?: string | null };
+
+export const CHAT_NOT_OPEN =
+  "Mothli’s chat isn’t open on this server yet, so no AI company receives anything from your reading here.";
+
 function Out({ href, children }: { href: string; children: ReactNode }) {
   return <a href={href} rel="noopener noreferrer">{children}</a>;
 }
@@ -37,7 +44,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-export function Terms({ operator }: { operator: Operator }) {
+export function Terms({ operator }: PageProps) {
   return (
     <>
       <p className="pp-lede">
@@ -146,8 +153,13 @@ export function Terms({ operator }: { operator: Operator }) {
         <p>
           You can delete your account any time in Your account. We keep it for 30 days in case you
           change your mind, then erase it, as our <a href={PAGE_PATHS.privacy}>privacy page</a>{" "}
-          explains. If you’re on the plan, cancel it in Your account before you delete your account,
-          so you won’t be charged again.
+          explains.
+        </p>
+        <p>
+          If you’re on the plan, asking to delete your account stops it from renewing, so you won’t
+          be charged again. You keep Mothli until the end of the month or year you have paid for,
+          or until your account is erased, whichever comes first. If you come back within the 30
+          days, your plan still ends unless you choose “Keep my plan”.
         </p>
         <p>We may close an account that breaks these terms.</p>
       </Section>
@@ -176,7 +188,7 @@ export function Terms({ operator }: { operator: Operator }) {
   );
 }
 
-export function Privacy({ operator }: { operator: Operator }) {
+export function Privacy({ operator, writer = null }: PageProps) {
   return (
     <>
       <p className="pp-lede">
@@ -242,16 +254,19 @@ export function Privacy({ operator }: { operator: Operator }) {
             <strong>The sign-in service</strong> signs you in, and tells us your name and email
             address.
           </li>
-          <li>
-            <strong>The AI company that writes Mothli’s replies and notes</strong>: OpenAI, or
-            Anthropic if our server is set up with it instead. <strong>TypeSafe</strong>, which checks
-            every sentence Mothli writes against what you have read before you see it. To answer
-            you, both receive passages from pages you have read, your question, recent messages of
-            your conversation, Mothli’s notes on the book up to where you are, and, on your home
-            page, what Mothli remembers about you. To make notes on a book, they receive the text of
-            its chapters as readers reach them. They never receive your name, your email address or
-            your book files.
-          </li>
+          {writer ? (
+            <li>
+              <strong>{writer}</strong>, whose AI model writes Mothli’s replies and notes, and{" "}
+              <strong>TypeSafe</strong>, which checks every sentence Mothli writes against what you
+              have read before you see it. To answer you, both receive passages from pages you have
+              read, your question, recent messages of your conversation, Mothli’s notes on the book
+              up to where you are, and, on your home page, what Mothli remembers about you. To make
+              notes on a book, they receive the text of its chapters as readers reach them. They
+              never receive your name, your email address or your book files.
+            </li>
+          ) : (
+            <li>{CHAT_NOT_OPEN}</li>
+          )}
           <li>
             <strong>Paddle</strong>, when you join the plan. You buy the plan from Paddle, and
             Paddle collects what it needs for the payment (such as your email address, your country
@@ -293,16 +308,22 @@ export function Privacy({ operator }: { operator: Operator }) {
           was erased for up to two weeks after that, and then it’s gone from them too.
         </p>
         <p>
-          Paddle is the seller of the plan, so it keeps its own records of your payments, even after
-          we erase your account.
+          If you’re on the plan, deleting your account stops it from renewing, and after the 30 days
+          we erase your plan’s details with everything else. Paddle is the seller of the plan, so it
+          keeps its own records of your purchases and payments, even after we erase your account. We
+          don’t ask Paddle to delete them.
         </p>
       </Section>
       <Section title="Your copy, and your choices">
         <ul>
           <li>
-            <strong>Take a copy of your data</strong> in Your account: one file with your shelf,
-            your place in each book, your highlights, notes and bookmarks, your conversations and
-            what Mothli remembers. Each book can be downloaded from its notebook.
+            <strong>Take a copy of your data</strong> in Your account: one file with your name,
+            email address and when you joined; the books on your shelf and where you are in each;
+            your highlights, notes and bookmarks; your conversations with Mothli; Mothli’s notes on
+            the chapters you finished, and who you have met and the story so far, up to where you
+            are; how you like the page to look; what Mothli remembers about you; and your plan (when
+            your free weeks began, any gift, and your plan’s status and dates). The books themselves
+            aren’t in it: open a book, press Notebook, and choose “Download the book”.
           </li>
           <li>
             <strong>Forget things</strong>: clear a conversation, or forget anything Mothli
@@ -340,7 +361,7 @@ export function Privacy({ operator }: { operator: Operator }) {
   );
 }
 
-export function Refunds({ operator }: { operator: Operator }) {
+export function Refunds({ operator }: PageProps) {
   return (
     <>
       <p className="pp-lede">
@@ -386,7 +407,7 @@ export function Refunds({ operator }: { operator: Operator }) {
   );
 }
 
-export function Contact({ operator }: { operator: Operator }) {
+export function Contact({ operator }: PageProps) {
   return (
     <>
       <p className="pp-lede">
