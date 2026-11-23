@@ -396,7 +396,10 @@ the regular check below. Make a key of its own for Mothli, first in the sandbox,
    `pdl_live_apikey_`) and keep it like a password.
 3. In `deploy/app.env`, remove the `#` from `PADDLE_API_KEY` and paste it. It must come from the
    same Paddle as `PADDLE_ENVIRONMENT` (the server refuses to start otherwise) and needs
-   `PADDLE_WEBHOOK_SECRET` set: a payment is only ever applied from Paddle's message. Then
+   `PADDLE_WEBHOOK_SECRET` set: a payment is only ever applied from Paddle's message. Remove the
+   `#` from `PADDLE_CHECKOUT_URL` too and put Mothli's own front page there, `https://YOURDOMAIN/`
+   with nothing after the slash (**One Paddle account, several products**, below, says why). The
+   server refuses to start with the key and without it. Then
    `docker compose -f deploy/compose.yaml up -d --wait`.
 4. Put the key's expiry date in your calendar, a week early. An expired key cannot be renewed:
    make a new one the same way, paste it, `up -d --wait`, then revoke the old one in Paddle.
@@ -440,11 +443,52 @@ set here, never written in the app:
    `docker compose -f deploy/compose.yaml up -d --wait`.
 3. Live only: in Paddle's dashboard, under **Website approval**, add your domain. Paddle's live
    checkout opens only on an approved domain; the sandbox approves domains by itself
-   ([go-live checklist](https://developer.paddle.com/build/go-live-checklist/)).
+   ([go-live checklist](https://developer.paddle.com/build/go-live-checklist/)). The next part
+   says more.
 
 Without it, Your account still shows where each reader stands, with no "See the plan". The
 browser's security policy allows Paddle's own addresses for its script, its checkout window and
 its prices (`backend/app/main.py`, `deploy/Caddyfile`); nothing to set for that.
+
+**One Paddle account, several products.** Mothli is sold from the same Paddle account as MySigner,
+and that stays so. Paddle supports it ([one account, several
+products](https://www.paddle.com/help/start/set-up-paddle/can-i-have-multiple-paddle-accounts)),
+but some things exist once per account and belong to both products:
+
+- the **statement descriptor** (what a buyer's bank statement says), the **display name** and the
+  legal name;
+- the **default payment link** (**Checkout > Checkout configuration**), which is MySigner's
+  pricing page. (Paddle's help page names the first three; the default payment link is one
+  setting of the account too.)
+
+Do not change any of these for Mothli. Mothli does not need the default payment link: every
+checkout Mothli makes carries its own page, `PADDLE_CHECKOUT_URL`, as the transaction's
+`checkout.url`, which Paddle uses instead of the default for that checkout ([default payment
+link](https://developer.paddle.com/build/transactions/default-payment-link)). Paddle's emails
+about a checkout (the reminder after one left unpaid, for example) then bring the buyer to
+Mothli's front page with `?_ptxn=...`, and Mothli opens that checkout there, signed in or not.
+
+- **Approve Mothli's domain first.** In Paddle: **My account > Settings > Website approval**, add
+  `mothli.com`, and every other host Mothli is served from (`www.mothli.com` if readers use it;
+  the host in `PADDLE_CHECKOUT_URL` must be one of them), and wait until Paddle shows each as
+  approved. Until then, Paddle refuses every live checkout: readers see "I can't reach our payment
+  service just now, so nothing has changed", and the web log says `paddle refused the checkout
+  address: approve the domain of PADDLE_CHECKOUT_URL in Paddle under Website approval`. The
+  sandbox approves domains by itself (if one stays pending there, remove it and add it again).
+- **One thing still goes to MySigner's page.** Paddle's own emails to a subscriber about updating
+  their payment method link to the account's default payment link, not to the transaction's page
+  (the default payment link page above: "The link to update a payment method redirects to your
+  default payment URL"). Mothli cannot change that without changing the account's default, which
+  it must not. Mothli's own screens send readers to **Your account > Update payment details**,
+  which opens Paddle's customer portal for their own plan. If a Mothli reader writes in about a
+  card update that landed on MySigner's page, point them there.
+- **Each product has its own notification destination and secret.** Mothli's destination points
+  at `https://YOURDOMAIN/api/billing/paddle` with its own secret in `PADDLE_WEBHOOK_SECRET`;
+  MySigner keeps its own destination and secret. Never share one between them.
+- **Each product's server receives the other's subscription messages** (Paddle sends every
+  subscription event to every destination that asks for it) **and must ignore them.** Mothli does:
+  it takes a message as its own only when every item is one of its price ids, and answers every
+  other one "OK" without keeping it. MySigner's server must do the same with Mothli's.
 
 ## 5. Restoring
 

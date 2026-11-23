@@ -1187,3 +1187,63 @@ Each is a question with choices; the recommendation is first.
    the life of the account (see "Step 6 built").
 10. Every money figure: 2.1 cents a reply, 0.7 cents a chapter of notes and 7 to 9 cents a chapter of story
     memory come from earlier measurements and records, not from a run for this record.
+
+**One Paddle account, several products: Mothli's own payment link (2026-11-23).** The owner sells
+Mothli and MySigner from one Paddle account, and it stays so (settled). Paddle supports it ([one
+account](https://www.paddle.com/help/start/set-up-paddle/can-i-have-multiple-paddle-accounts):
+"You can sell all your products and services from one Paddle account"; one legal name, display
+name and statement descriptor per account). The account's default payment link (**Checkout >
+Checkout configuration**) is MySigner's pricing page, and its only approved website MySigner's;
+neither is changed for Mothli. Nothing was run against Paddle: it is stood in for in every test.
+
+- **Every transaction carries Mothli's page.** `POST /transactions` now sends
+  `checkout: {url: PADDLE_CHECKOUT_URL}`. A transaction's `checkout.url` overrides the default
+  payment link for that transaction ([default payment
+  link](https://developer.paddle.com/build/transactions/default-payment-link): "You can pass any
+  of your other approved websites as checkout.url when creating or updating a transaction to
+  override the default checkout link"); writable on create and update, approved domains only,
+  sandbox domains approved by themselves ([checkout domains,
+  2023](https://developer.paddle.com/changelog/2023/checkout-domains/)). New setting
+  `PADDLE_CHECKOUT_URL`: `https://`, a host in `TRUSTED_HOSTS`, the front page only (no path,
+  query, fragment, port or user information: the proxy serves the app at `/`, and Paddle adds
+  its own `?_ptxn=`); required with `PADDLE_API_KEY`, so a deployment cannot fall back to the
+  other product's page; refused without it. Paddle's refusal of an unapproved domain
+  (`transaction_checkout_url_domain_is_not_approved`, 400,
+  [error](https://developer.paddle.com/errors/transactions/transaction_checkout_url_domain_is_not_approved))
+  is a refusal like any other for the reader (503 `paddle_unavailable`, "I can’t reach our payment
+  service just now…") and one fixed log line for the operator: `paddle refused the checkout
+  address: approve the domain of PADDLE_CHECKOUT_URL in Paddle under Website approval`.
+- **The page.** Paddle's emails about a checkout link to `checkout.url` with `_ptxn` set to the
+  transaction id. Opened with exactly one well-formed id (`txn_` and 26 lowercase letters or
+  digits), the app reads it once, takes it out of the address before Paddle.js loads (so
+  Paddle.js never opens a second checkout of its own, and a reload opens none), and opens that
+  checkout with `Paddle.Checkout.open({transactionId})`, which "takes priority over the query
+  parameter". Anything else in `_ptxn` is ignored: nothing read, nothing loaded. Paddle.js still
+  loads on no other screen.
+  - *Signed in:* the plan sheet opens on top of the shelf ("One moment, I’m opening your
+    checkout…"), asks the plan first (a reader already on it is told so and no checkout opens),
+    opens the checkout with their email, then the same wait-and-confirm as from "Choose yearly".
+  - *Signed out:* the checkout opens anyway over the welcome, with a calm line; once paid, "Thank
+    you! Sign in and you’ll find your plan waiting in Your account."; once closed unpaid, "No
+    worries, nothing has changed. Sign in and I’ll open your checkout again." (signing in comes
+    back to it). Chosen over signing in first because it cannot lose a payment: the transaction
+    already names the reader who started it and that checkout's token (custom data, made by the
+    server), so whoever is or is not signed in on this device, the payment binds to the reader it
+    was made for. Signing in first can stand between a willing reader and their checkout (a
+    sign-in that fails, or another account). The page reads only `GET /api/billing/payment-link`,
+    public, answering exactly the environment and the client token (404 where no checkout opens).
+- **Paddle's "update your payment method" email.** The default payment link page says "The link
+  to update a payment method redirects to your default payment URL to open a checkout to update
+  a payment method", and the subscription update-payment-method transaction's example
+  `checkout.url` is the default link ([update payment
+  details](https://developer.paddle.com/build/subscriptions/update-payment-details)); neither page
+  says a transaction's own `checkout.url` carries over. So in this shared account that email
+  sends a Mothli subscriber to MySigner's page. Not changed here (it is an account setting).
+  Mothli's screens point readers to **Your account > Update payment details** (the customer
+  portal for their own subscription, built in step 4), and the runbook says so.
+- **The content security policy is unchanged**: the same outside addresses as before.
+- **Still to be seen in the sandbox:** the transaction accepting `checkout.url` on the sandbox
+  domain, Paddle's abandoned-checkout email linking to `https://<domain>/?_ptxn=…`, the checkout
+  opening from it signed in and signed out, and the payment binding to the reader. A checkout
+  token lasts seven days (`CHECKOUT_DAYS`): a payment made from a reminder after that binds to no
+  one and is kept as `no_account`; whether Paddle's reminders ever come that late was not found.
