@@ -1,6 +1,7 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
-**Status:** Proposed (2026-11-20). Steps 1, 2 and 3 are built (see below); nothing else is. The
+**Status:** Proposed (2026-11-20). Steps 1, 2 and 3 and the server half of step 4 are built (see
+below); nothing else is. The
 owner's decisions in "What the owner decided" are settled; the numbers and the choices in "Open
 points for the owner" are his to make, and point 7 is decided (23 November 2026).
 
@@ -180,6 +181,110 @@ Not verified without a Paddle sandbox: that a retried delivery carries a fresh `
 seconds as the SDKs' default it must, but no page says so; a stale `ts` on a retry would be refused
 and retried until it fails); the exact payload of a real message; that the simulator's sample is
 for a price that is not Mothli's (the runbook's step 4 assumes so).
+
+**Step 4, server half, built (2026-11-23).** The routes and the regular check; no screen changes
+(the plan sheet and the account sheet's part come next). Nothing here was run against Paddle: no
+sandbox account exists yet, and every Paddle call in the tests goes to a stand-in behind the real
+client.
+
+- **Migration `0040_paddle_checkouts.sql`.** `paddle_checkouts` (`owner_id`, `token_digest`,
+  `created_at`, `expires_at`, `used_at`; key `(owner_id, token_digest)`; row-level security
+  forced): a checkout the server made, by the SHA-256 digest of its token, never the token.
+  `reader_plans.paddle_price_id`, written with the rest of the plan, so the account sheet can say
+  monthly or yearly (nothing else told them apart; a plan applied before it has NULL until its
+  next message or the regular check). `paddle_plans_to_check(size)`, a security definer only the
+  billing role may execute: up to `size` stored subscription ids of accounts not erased, live or
+  changed in the last 30 days, in random order. The billing role gains `SELECT, INSERT, UPDATE`
+  on `paddle_checkouts` (no `DELETE`; the purge takes an erased account's rows) and `EXECUTE` on
+  the function; the deployment's check holds it to that both ways.
+- **The binding: a checkout token.** `POST /api/billing/checkout` makes 32 random bytes, keeps
+  their digest for the reader for seven days, and puts the token beside the reader's id in the
+  transaction's custom data (`mothli_reader`, `mothli_checkout`). Paddle copies it to the
+  subscription ([custom data](https://developer.paddle.com/build/transactions/custom-data)), so
+  every message and every `GET` of it carries it. A subscription Mothli has not stored becomes the
+  named reader's only with a token kept for that same reader, unused and unexpired; it is used up
+  in the transaction that first applies the subscription. Not chosen: binding by the stored
+  transaction id, because Paddle puts `transaction_id` only on `subscription.created`; the page
+  says no other subscription event carries it and the API's subscription entity does not either
+  ([subscription.created](https://developer.paddle.com/webhooks/subscriptions/subscription-created)).
+  Paddle does not keep the order of delivery, so `subscription.activated` or `.updated` can come
+  first, and the regular check could never repair a binding it cannot see. Step 3's path by custom
+  data alone no longer makes anyone paying: such a message is recorded `no_account` and changes
+  nothing. One consequence: a late message about a reader's old, replaced subscription (its token
+  used) is now `no_account` where step 3 recorded `other_subscription` or `older`; it changes
+  nothing either way. Seven days covers a checkout left open overnight and Paddle's retries of a
+  first message (about two days live). A reader's own browser may see their token (Paddle.js
+  shows the checkout's custom data); it binds to them alone.
+- **No customer is set on the transaction.** Section 7 said "with the reader's email as the
+  customer"; [create a transaction](https://developer.paddle.com/api-reference/transactions/create-transaction)
+  takes no email, only a `customer_id`, and making or finding a customer by email could reach a
+  MySigner customer in the shared account. So the transaction is a draft with Mothli's price and
+  the custom data; Paddle's checkout asks for the email, and the next pull request can prefill it
+  in the browser with Paddle.js `customer.email`
+  ([prefill](https://developer.paddle.com/build/checkout/prefill-checkout-properties)). A reader
+  who is also a MySigner customer under the same email is matched to that customer by Paddle; the
+  portal for that customer then shows both products' subscriptions, to the same person.
+- **The routes** (`backend/app/hosted/subscribe.py`), each signed in, each for the session's reader
+  only (no route takes an account, subscription or customer id), each writing through the billing
+  role: `GET /api/billing/plan` (always there in hosted mode; not folded into the session, which
+  gains `mothli` in step 5) answers `state`, `why`, `plan` (`monthly`, `yearly`, `gift` or null),
+  `next_date`, `subscribed`, `cancel_scheduled`, `payment_retrying`; no amount, no count.
+  `POST /api/billing/checkout` (`{"plan": "monthly" | "yearly"}`, the plan's first price id),
+  `/cancel`, `/keep`, `/portal`, with the CSRF token, exist only with `PADDLE_API_KEY`. Checkout is
+  refused while the reader has a live Paddle plan (`409 already_subscribed`), and past ten a day
+  (`429 checkout_busy`; each is a call to Paddle). A gifted reader may subscribe; the gift still
+  wins while it lasts and the Paddle plan pays from that day (open point 9, choice a: no trial).
+  Cancel and keep apply Paddle's answer at once through the message code (newer only, Mothli's
+  prices only), so the sheet need not wait for the message. Paddle unreachable, slow (3 seconds to
+  connect, 10 to answer), overloaded or refusing: `503 paddle_unavailable` with a kind line, and
+  nothing written. The 30-minute rule: Paddle answers `409 subscription_locked_renewal`
+  ([error](https://developer.paddle.com/errors/subscriptions/subscription_locked_renewal)); Mothli
+  answers `409 try_again_soon` ("Your plan is renewing right now. Please try again in a few
+  minutes."), for any `subscription_locked_*`. The portal link is answered once, never stored or
+  logged ([portal sessions](https://developer.paddle.com/api-reference/customer-portals/create-customer-portal-session)):
+  the card update link for a live plan, the overview otherwise.
+- **The client** (`backend/app/hosted/paddle_api.py`): `httpx`, no SDK, no retries (a request that
+  may have reached Paddle is never sent twice), five methods and no way to list or search; every
+  id checked against Paddle's format before it goes in a path. `PADDLE_API_KEY` (a secret; prefix
+  `pdl_sdbx_apikey_` or `pdl_live_apikey_` matching `PADDLE_ENVIRONMENT`, no whitespace, nothing
+  more) requires `PADDLE_WEBHOOK_SECRET`. The logs hold one fixed line per failure.
+- **The regular check** (`python -m app.hosted.paddle_check`), from the crontab in the web
+  container, hourly in the runbook: the simpler choice, because that container already holds the
+  key, the billing address and the prices, it needs no new service, and the worker's files belong
+  to step 6. A page of 100 by default, a second between calls, stops at the first sign Paddle is
+  down; it fetches only ids `paddle_plans_to_check` hands it and applies them as messages.
+
+Where Paddle's documentation (read 23 November 2026) differs from this record, or adds to it:
+
+- **Reconciliation lists by customer** in Paddle's guide ("lists subscriptions for active
+  customers via the API",
+  [provision access](https://developer.paddle.com/build/subscriptions/provision-access-webhooks)).
+  Not followed: the shared account. The check fetches stored subscription ids one by one instead;
+  section 11's "and the reader's customer's other subscriptions" is dropped for the same reason.
+- **The key's permissions are per kind of entity, not per product**
+  ([permissions](https://developer.paddle.com/api-reference/about/permissions)): a Mothli key can
+  reach MySigner's transactions and subscriptions. The code is the guard, and the tests check
+  every request. Needed: `transaction.write`, `subscription.write` (includes read),
+  `customer_portal_session.write`; section 7's list, with no customer permission.
+- **Keys expire**: 90 days by default, a year at most, and cannot be renewed
+  ([authentication](https://developer.paddle.com/api-reference/about/authentication)). Section 7
+  did not say; the runbook has the owner note the date.
+- **Undoing a cancel** is `PATCH /subscriptions/{id}` with `scheduled_change: null`, as section 7
+  says ([cancel subscriptions](https://developer.paddle.com/build/subscriptions/cancel-subscriptions));
+  the 30-minute rule's answer is the error page above (the cancel pages do not name it).
+- **Rate limits**: 240 requests a minute for each address, 429 `too_many_requests` with
+  `Retry-After` ([rate limiting](https://developer.paddle.com/api-reference/about/rate-limiting)).
+  Mothli answers a 429 as Paddle unavailable and does not retry.
+- **`Paddle-Version: 1`** is sent ([versioning](https://developer.paddle.com/api-reference/about/versioning));
+  the addresses are `https://sandbox-api.paddle.com` and `https://api.paddle.com` (same page).
+
+Unproven until a sandbox run: that a draft transaction with no customer opens in Paddle.js with
+its id and becomes a subscription carrying the custom data; whether Paddle.js lets the browser
+change a server-made transaction's custom data (it cannot learn another reader's token either
+way); the exact error Paddle gives a cancel inside the 30 minutes, and for a cancel of a
+`past_due` plan; the portal answer's real shape and how long its link lasts; that a cancel's and
+an undo's answers carry an `updated_at` newer than the message they cause; the dashboard's names
+for the key's permissions; and the walk with test cards that section 11 asks for.
 
 File and line references are to `main` at 2475b6f (PR #136). Nothing in this record was run against a
 database, a server, a model or Paddle. Every claim about the code comes from reading the lines cited
