@@ -90,7 +90,15 @@ def test_the_role_script_matches_every_startup_check_as_written() -> None:
     for key in ("auth", "worker", "audit", "operator"):
         tables, functions = granted(roles.render(roles.grant_statements("mothli", by_key[key])))
         assert tables == by_key[key].tables
-        assert functions == {}
+        assert functions == by_key[key].functions
+    # Only the operator's gift command may give a gift (ADR 0045 step 2); no role but the tenant
+    # and the operator executes any function.
+    assert by_key["operator"].functions == {
+        "set_gift(uuid,date)": {"EXECUTE"},
+        "reader_plan_state(uuid,integer,numeric)": {"EXECUTE"}}
+    assert by_key["operator"].tables["reader_plans"] == {"SELECT"}
+    assert [role.key for role in roles.RUNTIME_ROLES if role.functions] == ["tenant", "operator"]
+    assert not any("set_gift" in function for function in TENANT_FUNCTION_PRIVILEGES)
     assert [role.bypass_rls for role in roles.RUNTIME_ROLES] == [
         True, False, True, True, True, True]
     assert [role.key for role in roles.RUNTIME_ROLES if role.owner_tables] == ["purge"]
@@ -330,3 +338,17 @@ def test_the_real_settings_files_are_never_committed() -> None:
     # The image build sees nothing it is not allowed to see, and never an environment file.
     assert "**" in docker_ignored
     assert "**/.env" in docker_ignored and "**/.env.*" in docker_ignored
+
+
+def test_the_web_process_has_no_path_that_gives_a_gift() -> None:
+    """The break it catches (ADR 0045 step 2): a route, the worker or any module the web process
+    loads that could give a gift. Only the operator's command names ``set_gift`` or loads it, and
+    the tenant role is not granted it (its refusal is tested on PostgreSQL in test_plans)."""
+    app = BACKEND / "app"
+    sources = {path.relative_to(app).as_posix(): path.read_text(encoding="utf-8")
+               for path in app.rglob("*.py")}
+    assert sorted(name for name, text in sources.items() if "set_gift" in text) == [
+        "hosted/plans.py"]
+    assert sorted(name for name, text in sources.items()
+                  if re.search(r"hosted\.plans|hosted import plans", text)) == ["hosted/plans.py"]
+    assert not any("set_gift" in function for function in TENANT_FUNCTION_PRIVILEGES)
