@@ -11,12 +11,13 @@ import { Moth } from "../ui/Moth";
 import { SIGN_UP_LINE } from "../ui/MothliPlan";
 import { MothliMark } from "../ui/MothliMark";
 import { noteMothliJoined } from "../ui/mothliStanding";
+import { readerDay } from "../ui/readerDay";
 import { AboutMothli, SiteFooter, useSite } from "../public/PublicPage";
 import { forgetPaymentLink, paymentLinkTransaction } from "./paddle";
 import { PaymentLink } from "./PaymentLink";
 import { PlanSheet } from "./PlanSheet";
 import { TakeACopy } from "./TakeACopy";
-import { ACCOUNT_PLAN_LINES, KEEP_PLAN_FAILED, planDay, waitingPlanLine } from "./YourPlan";
+import { ACCOUNT_PLAN_LINES, planDay, waitingPlanLine } from "./YourPlan";
 import "./shelf-redesign.css";
 import "./account.css";
 
@@ -78,20 +79,53 @@ function forgetDeleted(): void {
   }
 }
 
-/** When an account will be erased, as a person would say it: "on Thursday 17 December" (with the
- * year when it is not this year). The server's moment is the start of a UTC day and the daily
- * erasure runs after it; the day named is the one before, so wherever the reader lives the
- * erasure never comes before the day they were told. */
-export function erasureDay(eraseAfter: string, now = new Date()): string {
+/** Set when "Keep my plan" on the waiting screen kept the account but not the plan, so the shelf
+ * the reader lands on says so once: the plan's end as an ISO moment, or "" when it has none. */
+const KEPT_WITHOUT_PLAN_KEY = "mothli.kept-without-plan";
+
+/** The shelf's one calm line after that, with the day the plan still ends where it is known. */
+export const keptWithoutPlan = (day: string | null) =>
+  `Your account is back! I couldn’t keep your plan just now, so it still ${
+    day ? `ends on ${day}` : "won’t renew"}. You can keep it from Your account in a little while.`;
+
+function noteKeptWithoutPlan(ends: string | null): void {
+  try {
+    sessionStorage.setItem(KEPT_WITHOUT_PLAN_KEY, ends ?? "");
+  } catch {
+    /* optional: the shelf says nothing */
+  }
+}
+
+/** The line, if there is one to say (read without forgetting it). */
+export function keptWithoutPlanNote(): string | null {
+  try {
+    const ends = sessionStorage.getItem(KEPT_WITHOUT_PLAN_KEY);
+    return ends === null ? null : keptWithoutPlan(ends ? planDay(ends) || null : null);
+  } catch {
+    return null;
+  }
+}
+
+/** The line, once: read and forgotten. */
+export function takeKeptWithoutPlan(): string | null {
+  const said = keptWithoutPlanNote();
+  try {
+    sessionStorage.removeItem(KEPT_WITHOUT_PLAN_KEY);
+  } catch {
+    /* optional */
+  }
+  return said;
+}
+
+/** When an account will be erased, as a person would say it and as every plan screen writes a
+ * day: "on Thursday 17 December" (with the year when it is not this year), in the reader's own
+ * time zone like the plan's day beside it. The server's moment is the start of a UTC day and the
+ * daily erasure runs after it; the day named is the one the last moment before it falls on where
+ * the reader is, so the erasure never comes before the day they were told. */
+export function erasureDay(eraseAfter: string, now = new Date(), timeZone?: string): string {
   const at = new Date(eraseAfter);
   if (Number.isNaN(at.getTime())) return "in 30 days";
-  const day = new Date(at.getTime() - 1);
-  const part = (options: Intl.DateTimeFormatOptions) =>
-    day.toLocaleDateString("en-GB", { ...options, timeZone: "UTC" });
-  const sameYear = day.getUTCFullYear() === now.getUTCFullYear();
-  // Put together by hand: browsers disagree on the comma after the weekday.
-  const said = `${part({ weekday: "long" })} ${day.getUTCDate()} ${part({ month: "long" })}`;
-  return `on ${said}${sameYear ? "" : ` ${day.getUTCFullYear()}`}`;
+  return `on ${readerDay(new Date(at.getTime() - 1), { weekday: true, now, timeZone })}`;
 }
 
 /** The sign-in service's door, asked to bring the reader back to `path` (this app's own path and
@@ -122,6 +156,21 @@ export function SignIn({ ended = false, paymentLink = null }: { ended?: boolean;
     };
   }, []);
 
+  // The way in: on the welcome, and again beside the prices further down the front page.
+  const door = (
+    <a
+      className="ui-button ui-button--primary ml-spread-cta ml-welcome-cta"
+      href={paymentLink ? signInHref(returnLink ? `/?_ptxn=${returnLink}` : "/") : signInHref()}
+      aria-describedby="welcome-door"
+      onClick={() => {
+        noteAttempt();
+        forgetDeleted();
+      }}
+    >
+      {ended ? "Sign in again" : "Sign in to start reading"}
+    </a>
+  );
+
   return (
     <div className="mothli-library ml-welcome">
       <header className="ml-top">
@@ -142,8 +191,10 @@ export function SignIn({ ended = false, paymentLink = null }: { ended?: boolean;
                 ? "You’ve been signed out. Sign in again and I’ll take you straight back to where you were."
                 : "Bring a book you love. Mothli reads along with you and only knows it as far as you’ve read, so it can never spoil what happens next."}
             </p>
-            {/* Not beside a payment link's checkout: that reader has used Mothli and is joining. */}
-            {!ended && !paymentLink && <p className="ml-spread-lede">{SIGN_UP_LINE}</p>}
+            {/* Not beside a payment link's checkout: that reader has used Mothli and is joining.
+                Nor on the goodbye after deleting an account: that reader may have had their free
+                weeks or been paying, so it would not be true for them. */}
+            {!ended && !paymentLink && !deleted && <p className="ml-spread-lede">{SIGN_UP_LINE}</p>}
             <div className="ml-spread-foot">
               {deleted && (
                 <p className="ml-welcome-note" role="status">
@@ -162,17 +213,7 @@ export function SignIn({ ended = false, paymentLink = null }: { ended?: boolean;
                 </p>
               )}
               {paymentLink && <PaymentLink transaction={paymentLink} onPaid={() => setReturnLink(null)} />}
-              <a
-                className="ui-button ui-button--primary ml-spread-cta ml-welcome-cta"
-                href={paymentLink ? signInHref(returnLink ? `/?_ptxn=${returnLink}` : "/") : signInHref()}
-                aria-describedby="welcome-door"
-                onClick={() => {
-                  noteAttempt();
-                  forgetDeleted();
-                }}
-              >
-                {ended ? "Sign in again" : "Sign in to start reading"}
-              </a>
+              {door}
               <p id="welcome-door" className="ml-progress-where">
                 You’ll sign in on a secure page of its own. Mothli never sees your password.
               </p>
@@ -190,8 +231,9 @@ export function SignIn({ ended = false, paymentLink = null }: { ended?: boolean;
           </div>
         </section>
         {/* What Mothli is and what the plan costs, for a visitor (and Paddle's reviewers); not
-            on the welcome-back, nor beside a payment link's checkout. */}
-        {!ended && !paymentLink && <AboutMothli site={site} />}
+            on the welcome-back, nor beside a payment link's checkout, nor on the goodbye after
+            deleting an account (its free weeks are not that reader's to promise). */}
+        {!ended && !paymentLink && !deleted && <AboutMothli site={site} action={door} />}
       </main>
       <SiteFooter site={site} />
     </div>
@@ -247,10 +289,12 @@ export function PendingDeletion({ eraseAfter }: { eraseAfter: string }) {
     try {
       await api.keepPlan();
     } catch (reason) {
-      // A plan that ended meanwhile has nothing to keep.
+      // A plan that ended meanwhile has nothing to keep. Otherwise the account is back but the
+      // plan is not: this screen no longer says anything true, so the reader goes to the shelf,
+      // which says so in one calm line (the plan can be kept from Your account).
       if (!(reason instanceof ApiError && reason.code === "no_plan")) {
-        setProblem(KEEP_PLAN_FAILED);
-        setWorking(null);
+        noteKeptWithoutPlan(ending?.ends ?? null);
+        window.location.assign("/");
         return;
       }
     }

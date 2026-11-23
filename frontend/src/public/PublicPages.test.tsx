@@ -235,7 +235,11 @@ describe("the front page", () => {
     expect(total.compareDocumentPosition(monthly) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(container.textContent).toContain("Two free weeks with Mothli, no card needed.");
     expect(container.textContent).toContain("Payments are handled by Paddle, who sells Mothli on our behalf.");
-    expect(screen.getByRole("link", { name: "Sign in to start reading" })).toBeTruthy();
+    // A way in right beside the prices too (L9 of the plan walk), the same as the welcome's.
+    const [door, again] = screen.getAllByRole("link", { name: "Sign in to start reading" });
+    expect(again.getAttribute("href")).toBe(door.getAttribute("href"));
+    expect(monthly.compareDocumentPosition(again) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(again.closest(".pp-about")).toBeTruthy();
     expect(calls).toEqual(["/api/site"]);
     expect(await axeAA(container)).toHaveNoViolations();
   });

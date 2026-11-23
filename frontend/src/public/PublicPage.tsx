@@ -3,7 +3,7 @@
  * the footer every signed-out page carries, and the front page's part about Mothli and the plan.
  * Everything comes from this app and its server: no script, font or image from anywhere else,
  * and Paddle's script never loads here. */
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { Button } from "../ui/Button";
 import { MothliMark } from "../ui/MothliMark";
 import { monthlyTotal, yearlyMonth, yearlyTotal } from "../ui/planFigures";
@@ -82,7 +82,7 @@ export function SiteFooter({ operator, site }: { operator?: Operator | null; sit
 /** The front page's part about Mothli: what it is, what is free, the plan and its two prices
  * (the yearly one first, as a month, with its saving), or the plan without figures when the
  * server could not read them from Paddle. */
-export function AboutMothli({ site }: { site: Site | null }) {
+export function AboutMothli({ site, action }: { site: Site | null; action?: ReactNode }) {
   const shown = planShown(site?.plan ?? null);
   return (
     <section className="pp-about" aria-labelledby="about-title">
@@ -123,6 +123,8 @@ export function AboutMothli({ site }: { site: Site | null }) {
       ) : (
         <p>After that, the plan is paid monthly or yearly. You’ll see the prices when you choose.</p>
       )}
+      {/* The way in, again beside the prices (the welcome's own door, the same action). */}
+      {action && <div className="pp-cta">{action}</div>}
       <p className="pp-quiet">
         Cancel any time from Your account, and keep reading for free either way. Payments are
         handled by Paddle, who sells Mothli on our behalf.

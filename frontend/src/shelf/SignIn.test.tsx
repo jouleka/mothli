@@ -13,8 +13,11 @@ vi.mock("../api", async (importOriginal) => ({
   api: mocks,
 }));
 import { ApiError } from "../api";
-import { SignIn, SignInGate, erasureDay, noteAccountDeleted, signInHref } from "./SignIn";
-import { KEEP_PLAN_FAILED, planDay } from "./YourPlan";
+import { noCounter } from "./plan-fakes";
+import {
+  SignIn, SignInGate, erasureDay, keptWithoutPlan, noteAccountDeleted, signInHref, takeKeptWithoutPlan,
+} from "./SignIn";
+import { planDay } from "./YourPlan";
 
 const signedIn: OfflineSession = {
   user: { id: "05dbebd1-e9e8-4be8-8172-eb65ca8d2a67", display_name: "Wren Example" },
@@ -48,11 +51,16 @@ describe("SignInGate", () => {
     const { container } = render(<SignInGate session={null}>{theApp()}</SignInGate>);
     expect(screen.queryByText("The shelf")).toBeNull();
     expect(screen.getByRole("heading", { level: 1, name: "Read with a friend in the margin." })).toBeTruthy();
-    const door = screen.getByRole("link", { name: "Sign in to start reading" });
+    // One way in, offered on the welcome and again beside the prices (L9 of the plan walk):
+    // the same door; every other link is the footer's (the public pages, ADR 0045 step 8).
+    const doors = screen.getAllByRole("link", { name: "Sign in to start reading" });
+    expect(doors).toHaveLength(2);
+    const [door, again] = doors;
     expect(door.getAttribute("href")).toBe("/api/auth/login?return_to=%2F%3Fbook%3Db1");
-    // One way in; every other link is the footer's (the public pages, ADR 0045 step 8).
+    expect(again.getAttribute("href")).toBe(door.getAttribute("href"));
+    expect(again.closest(".pp-about")).toBeTruthy();
     const footer = screen.getByRole("navigation", { name: "About Mothli" });
-    expect(screen.getAllByRole("link").filter((link) => !footer.contains(link))).toEqual([door]);
+    expect(screen.getAllByRole("link").filter((link) => !footer.contains(link))).toEqual(doors);
     expect(container.querySelector("form, input")).toBeNull();
     expect(await axeAA(container)).toHaveNoViolations();
   });
@@ -92,7 +100,8 @@ describe("SignInGate", () => {
     // jsdom cannot follow the link; only the click itself matters here.
     const stay = (event: Event) => event.preventDefault();
     window.addEventListener("click", stay);
-    fireEvent.click(screen.getByRole("link", { name: "Sign in to start reading" }));
+    // The door beside the prices does the same as the welcome's.
+    fireEvent.click(screen.getAllByRole("link", { name: "Sign in to start reading" })[1]);
     window.removeEventListener("click", stay);
     first.unmount();
     render(<SignInGate session={null}>{theApp()}</SignInGate>);
@@ -131,7 +140,9 @@ describe("waiting to be erased", () => {
     const { container } = render(<SignInGate session={pending}>{theApp()}</SignInGate>);
     expect(screen.queryByText("The shelf")).toBeNull();
     const heading = screen.getByRole("heading", { level: 1 });
-    expect(heading.textContent).toBe("Your account is set to be erased on Thursday 17 December 2099.");
+    // The day where the reader is: the last moment before the erasure, in their own zone.
+    expect(heading.textContent).toBe(`Your account is set to be erased ${erasureDay(pending.erase_after!)}.`);
+    expect(heading.textContent).toMatch(/^Your account is set to be erased on (Thursday 17|Friday 18) December 2099\.$/);
     expect(document.activeElement).toBe(heading);
     expect(screen.getByRole("button", { name: "Keep my account" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
@@ -214,8 +225,11 @@ describe("waiting to be erased", () => {
     noteAccountDeleted("2099-12-18T00:00:00+00:00");
     render(<SignInGate session={null}>{theApp()}</SignInGate>);
     expect(screen.getByRole("status").textContent).toBe(
-      "Done. You’re signed out everywhere, and your account will be erased on Thursday 17 December 2099 "
+      `Done. You’re signed out everywhere, and your account will be erased ${erasureDay("2099-12-18T00:00:00+00:00")} `
       + "unless you sign in again before then.");
+    // The goodbye promises no free weeks: that reader may have had them, or been paying (L4).
+    expect(document.body.textContent).not.toMatch(/free for your first two weeks|Two free weeks/);
+    expect(screen.queryByText(/Talking with me is free/)).toBeNull();
     const stay = (event: Event) => event.preventDefault();
     window.addEventListener("click", stay);
     fireEvent.click(screen.getByRole("link", { name: "Sign in to start reading" }));
@@ -257,16 +271,32 @@ describe("waiting to be erased", () => {
       expect(order).toEqual(["account", "plan"]);
     });
 
-    test("a plan that could not be kept says so, and trying again works", async () => {
+    // Catches: a reader whose account is back kept on a screen that still says it is set to be
+    // erased and still offers "Keep my account" (M1 of the plan walk, 23 November 2026).
+    test("a plan that could not be kept: the account is back, so the shelf, with one calm line", async () => {
+      mocks.keepPlan.mockRejectedValueOnce(new ApiError("busy", 503, "paddle_unavailable"));
+      render(<SignInGate session={pending}>{theApp()}</SignInGate>);
+      fireEvent.click(await screen.findByRole("button", { name: "Keep my plan" }));
+      await waitFor(() => expect(assign).toHaveBeenCalledWith("/"));
+      expect(mocks.keepAccount).toHaveBeenCalledTimes(1);
+      expect(mocks.keepPlan).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alert")).toBeNull();
+      // The shelf, after the page opens again, says it once.
+      const said = `Your account is back! I couldn’t keep your plan just now, so it still ends on ${planDay(ENDS)}. You can keep it from Your account in a little while.`;
+      expect(keptWithoutPlan(planDay(ENDS))).toBe(said);
+      expect(takeKeptWithoutPlan()).toBe(said);
+      expect(takeKeptWithoutPlan()).toBeNull();
+      noCounter(document.body);
+    });
+
+    test("without a day, the line says the plan still won't renew", async () => {
+      mocks.planEnding.mockResolvedValue({ wont_renew: true, ends: null });
       mocks.keepPlan.mockRejectedValueOnce(new ApiError("busy", 409, "try_again_soon"));
       render(<SignInGate session={pending}>{theApp()}</SignInGate>);
       fireEvent.click(await screen.findByRole("button", { name: "Keep my plan" }));
-      expect((await screen.findByRole("alert")).textContent).toBe(KEEP_PLAN_FAILED);
-      expect(assign).not.toHaveBeenCalled();
-      fireEvent.click(screen.getByRole("button", { name: "Keep my plan" }));
-      await waitFor(() => expect(assign).toHaveBeenCalledWith("/?book=b1"));
-      expect(mocks.keepAccount).toHaveBeenCalledTimes(2);
-      expect(mocks.keepPlan).toHaveBeenCalledTimes(2);
+      await waitFor(() => expect(assign).toHaveBeenCalledWith("/"));
+      expect(takeKeptWithoutPlan()).toBe(
+        "Your account is back! I couldn’t keep your plan just now, so it still won’t renew. You can keep it from Your account in a little while.");
     });
 
     test("an account that could not be kept leaves the plan alone", async () => {
@@ -302,11 +332,25 @@ describe("waiting to be erased", () => {
     }
   });
 
-  test("the day is read in UTC and carries the year only when it is not this year", () => {
+  // Catches: the erasure's day worked out in UTC beside a plan day in the reader's own zone (M3
+  // of the plan walk), or a day named that comes after the erasure where the reader lives.
+  test("the day is the reader's own, written as every plan screen writes one", () => {
     const now = new Date("2026-11-17T12:00:00Z");
-    expect(erasureDay("2026-12-19T00:00:00+00:00", now)).toBe("on Friday 18 December");
-    expect(erasureDay("2027-01-03T00:00:00+00:00", now)).toBe("on Saturday 2 January 2027");
+    expect(erasureDay("2026-12-19T00:00:00+00:00", now, "UTC")).toBe("on Friday 18 December");
+    expect(erasureDay("2027-01-03T00:00:00+00:00", now, "UTC")).toBe("on Saturday 2 January 2027");
+    // East of UTC the erasure's first moment already falls on the 19th; west of it, the 18th.
+    expect(erasureDay("2026-12-19T00:00:00+00:00", now, "Europe/Berlin")).toBe("on Saturday 19 December");
+    expect(erasureDay("2026-12-19T00:00:00+00:00", now, "America/New_York")).toBe("on Friday 18 December");
     expect(erasureDay("not a date", now)).toBe("in 30 days");
+  });
+
+  test("the waiting screen writes both its days the same way, in the same zone", async () => {
+    mocks.planEnding.mockResolvedValue({ wont_renew: true, ends: "2099-12-03T10:00:00+00:00" });
+    render(<SignInGate session={pending}>{theApp()}</SignInGate>);
+    const plan = await screen.findByText(/^Your plan won’t renew\. It’s paid for until /);
+    expect(plan.textContent).toBe(`Your plan won’t renew. It’s paid for until ${planDay("2099-12-03T10:00:00+00:00")}.`);
+    expect(plan.textContent).toMatch(/until \d{1,2} December 2099\.$/);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/on [A-Z][a-z]+day \d{1,2} December 2099\.$/);
   });
 });
 

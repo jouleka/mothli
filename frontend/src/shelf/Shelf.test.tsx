@@ -37,7 +37,11 @@ vi.mock("../api", () => ({
 }));
 
 import { api } from "../api";
+import { streakName } from "../journey/journey";
+import { setMothliStanding } from "../ui/mothliStanding";
 import { Shelf } from "./Shelf";
+import { keptWithoutPlan } from "./SignIn";
+import { planDay } from "./YourPlan";
 
 beforeEach(() => {
   localStorage.clear();
@@ -115,6 +119,94 @@ describe("a server without Mothli's chat", () => {
     } finally {
       delete (api as Record<string, unknown>).homeConversation;
     }
+  });
+});
+
+// The plan walk of 23 November 2026.
+describe("what the shelf offers, by where the reader stands", () => {
+  const signedIn = {
+    user: { id: "05dbebd1-e9e8-4be8-8172-eb65ca8d2a67", display_name: "Wren Example" },
+    expires_at: "2099-01-01T00:00:00+00:00",
+    chat: true,
+  };
+  const ASK_A_NAME = "Ask me about a name or a scene and I’ll answer from the pages you’ve read.";
+  const ASK_WHO = "Ask me “wait, who was that?” whenever you like. I’ll write back in the margin.";
+  beforeEach(() => {
+    (api as Record<string, unknown>).homeConversation = vi.fn(async () => ({ turns: [] }));
+  });
+  afterEach(() => {
+    delete (api as Record<string, unknown>).homeConversation;
+    setMothliStanding(null);
+    sessionStorage.clear();
+  });
+
+  // Catches: a chat promised beside the invitation to a reader who cannot have one (M2).
+  test("an ended reader is not offered a chat by the book card, the empty shelf or Meet Mothli", async () => {
+    for (const why of ["time", "ceiling", "plan"] as const) {
+      setMothliStanding({ state: "ended", why, ending_note: false });
+      mocks.books.mockResolvedValue([{ book_id: "b1", title: "The Lantern", author: "Ada Example" }]);
+      const withBook = render(<Shelf onOpen={() => {}} session={signedIn} />);
+      expect(await screen.findByText("This one is ready when you are.")).toBeTruthy();
+      expect(screen.queryByText(ASK_A_NAME)).toBeNull();
+      withBook.unmount();
+      mocks.books.mockResolvedValue([]);
+      const empty = render(<Shelf onOpen={() => {}} session={signedIn} />);
+      expect(await screen.findByText("Make yourself at home.")).toBeTruthy();
+      expect(screen.queryByText(ASK_WHO)).toBeNull();
+      expect(screen.getByText("I only ever know the pages you’ve read, so I can’t spoil anything.")).toBeTruthy();
+      const guide = document.getElementById("companion-guide")!;
+      expect(Array.from(guide.querySelectorAll("li")).map((item) => item.textContent)).toEqual([
+        "Read your book, at your pace.", "Keep the good bits in your notebook."]);
+      empty.unmount();
+    }
+  });
+
+  test("a reader who can talk is still offered it, as before", async () => {
+    setMothliStanding({ state: "free", why: null, ending_note: false });
+    mocks.books.mockResolvedValue([{ book_id: "b1", title: "The Lantern", author: "Ada Example" }]);
+    const withBook = render(<Shelf onOpen={() => {}} session={signedIn} />);
+    expect(await screen.findByText(ASK_A_NAME)).toBeTruthy();
+    withBook.unmount();
+    mocks.books.mockResolvedValue([]);
+    render(<Shelf onOpen={() => {}} session={signedIn} />);
+    expect(await screen.findByText(ASK_WHO)).toBeTruthy();
+    expect(Array.from(document.getElementById("companion-guide")!.querySelectorAll("li")).map((item) => item.textContent))
+      .toEqual(["Read your book, at your pace.", "Ask me “wait, who was that?”", "Keep the good bits in your notebook."]);
+  });
+
+  // Catches: the account kept but not the plan, and the reader told nothing on the shelf (M1).
+  test("after Keep my plan kept only the account, the shelf says so once", async () => {
+    sessionStorage.setItem("mothli.kept-without-plan", "2099-12-03T10:00:00+00:00");
+    const first = render(<Shelf onOpen={() => {}} session={signedIn} />);
+    const said = keptWithoutPlan(planDay("2099-12-03T10:00:00+00:00"));
+    expect((await screen.findByText(said)).closest("[role=status]")?.textContent).toBe(said);
+    expect(said).toMatch(/^Your account is back! I couldn’t keep your plan just now, so it still ends on \d{1,2} December 2099\. You can keep it from Your account in a little while\.$/);
+    first.unmount();
+    render(<Shelf onOpen={() => {}} session={signedIn} />);
+    await screen.findByText("Make yourself at home.");
+    expect(screen.queryByText(said)).toBeNull();
+  });
+
+  // Catches: the shelf asking a hosted server for cover pictures it has no route for, a 404 in
+  // the console for every book (L7).
+  test("a hosted shelf asks for no cover picture; cloth covers only", async () => {
+    mocks.books.mockResolvedValue([{ book_id: "b1", title: "The Lantern", author: "Ada Example" }]);
+    const { container } = render(<Shelf onOpen={() => {}} session={signedIn} />);
+    await screen.findByRole("button", { name: "The Lantern, Ada Example" });
+    expect(container.querySelector(".cover-art")).toBeNull();
+    expect(container.querySelector(".ml-book .cover-title")?.textContent).toBe("The Lantern");
+  });
+
+  // Catches: the streak said one way here and another on the reading page (L8).
+  test("the streak is said in the same words as on the reading page", async () => {
+    const today = new Date();
+    const key = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    localStorage.setItem("mothli.journey.days", JSON.stringify([key]));
+    mocks.books.mockResolvedValue([{ book_id: "b1", title: "The Lantern", author: "Ada Example" }]);
+    render(<Shelf onOpen={() => {}} session={signedIn} />);
+    expect(await screen.findByText(streakName(1))).toBeTruthy();
+    expect(streakName(1)).toBe("1-day streak");
+    expect(streakName(3)).toBe("3-day streak");
   });
 });
 
