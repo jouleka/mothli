@@ -239,9 +239,12 @@ def test_cron_show_prints_the_three_lines_with_this_checkouts_path(checkout: Pat
     assert lines[0].startswith("0 3 * * * cd '") and "deploy/backup.sh" in lines[0]
     assert lines[1].startswith("0 4 * * * cd '") and "run --rm purge" in lines[1]
     assert lines[2].startswith("30 * * * * cd '") and "app.hosted.paddle_check" in lines[2]
-    for line, mark in zip(lines, ("backup", "purge", "paddle-check"), strict=True):
-        assert line.endswith(f"# mothli-setup:{mark}")
+    for line, job in zip(lines, ("backup", "purge", "paddle-check"), strict=True):
+        assert line.endswith(f"# mothli-setup:{job}")
         assert "~/mothli" not in line and checkout.name in line
+        # Each job runs through report.sh, and its output still goes to its own log.
+        assert f"&& deploy/report.sh {job} -- " in line
+        assert f">> deploy/backups/{job}.log 2>&1 #" in line
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in crontab is a shell script")
@@ -263,3 +266,61 @@ if [ "$1" = -l ]; then cat '{table}'; elif [ "$1" = - ]; then cat > '{table}'; e
     assert lines[0] == "15 2 * * * /usr/local/bin/other-product-job"
     assert lines[1:] == cron_lines(checkout)
     assert (checkout / "deploy" / "backups").is_dir()
+
+
+def test_the_watchers_two_settings_are_set_checked_and_never_shown(checkout: Path) -> None:
+    assert run(checkout, *ARGS).returncode == 0
+    later = run(checkout, "check").stdout.split("Needed later", 1)[1]
+    assert "MOTHLI_WATCH_URL" in later and "MOTHLI_WATCH_TOKEN" in later
+    assert "step 6a" in later
+
+    token = "watch-stand-in-" + "k3" * 16
+    piped = run(checkout, "set", "MOTHLI_WATCH_TOKEN", stdin=f"{token}\n")
+    assert piped.returncode == 0 and "looks right" in piped.stdout
+    url = run(checkout, "set", "MOTHLI_WATCH_URL", stdin="https://mothli-watch.example.workers.dev\n")
+    assert url.returncode == 0 and "looks right" in url.stdout
+    env = values(checkout / "deploy" / ".env")
+    assert env["MOTHLI_WATCH_TOKEN"] == token
+    assert env["MOTHLI_WATCH_URL"] == "https://mothli-watch.example.workers.dev"
+    after = run(checkout, "check").stdout
+    assert "MOTHLI_WATCH_URL" not in after and "MOTHLI_WATCH_TOKEN" not in after
+    assert_no_secret_in(piped.stdout + piped.stderr + after, checkout, token)
+
+    # Their rules: a long token of plain characters; an https:// address with no path.
+    short = run(checkout, "set", "MOTHLI_WATCH_TOKEN", "--replace", stdin="too-short\n")
+    assert short.returncode == 1 and "32 or more" in short.stdout
+    for bad in ("http://mothli-watch.example.workers.dev", "https://watch.example.org/report"):
+        wrong = run(checkout, "set", "MOTHLI_WATCH_URL", "--replace", stdin=bad)
+        assert wrong.returncode == 1 and "does not look right" in wrong.stdout
+
+
+def env_text(checkout: Path) -> str:
+    return (checkout / "deploy" / ".env").read_text(encoding="utf-8")
+
+
+def test_worker_on_needs_both_ai_keys_and_changes_only_its_line(checkout: Path) -> None:
+    assert run(checkout, *ARGS).returncode == 0
+    before = env_text(checkout)
+    assert "\n# COMPOSE_PROFILES=worker\n" in before
+
+    refused = run(checkout, "worker", "on")
+    assert refused.returncode == 1 and "needs both AI keys" in refused.stderr
+    assert run(checkout, "set", "TYPESAFE_API_KEY", stdin="checker-stand-in-value\n").returncode == 0
+    assert run(checkout, "worker", "on").returncode == 1
+    assert env_text(checkout) == before
+    assert run(checkout, "set", "OPENAI_API_KEY", stdin="writer-stand-in-value\n").returncode == 0
+
+    on = run(checkout, "worker", "on")
+    assert on.returncode == 0, on.stderr
+    assert "is on" in on.stdout
+    assert env_text(checkout) == before.replace("\n# COMPOSE_PROFILES=worker\n",
+                                                "\nCOMPOSE_PROFILES=worker\n")
+    assert "already on" in run(checkout, "worker", "on").stdout
+    assert "COMPOSE_PROFILES" not in run(checkout, "check").stdout
+
+    off = run(checkout, "worker", "off")
+    assert off.returncode == 0 and "is off" in off.stdout
+    assert env_text(checkout) == before
+    assert "already off" in run(checkout, "worker", "off").stdout
+    assert "deploy/setup.sh worker on" in run(checkout, "check").stdout
+    assert run(checkout, "worker", "maybe").returncode == 1

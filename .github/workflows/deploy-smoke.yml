@@ -61,6 +61,14 @@ jobs:
           sha256sum -c --quiet before.sum
           deploy/setup.sh cron --show
           rm -f check.txt before.sum
+          # The crontab's wrapper, with the watch settings still empty: the job's exit status
+          # passes through and nothing is reported.
+          deploy/report.sh backup -- true
+          set +e
+          deploy/report.sh backup -- false
+          code=$?
+          set -e
+          test "$code" = 1
 
       - name: Build both images
         run: docker compose build
@@ -109,11 +117,11 @@ jobs:
       - name: The command-line tools, the purge and the Paddle check
         run: |
           docker compose run --rm --no-deps -T tools
-          docker compose run --rm --no-deps -T purge | tee purge.txt
+          deploy/report.sh purge -- docker compose run --rm --no-deps -T purge | tee purge.txt
           grep -q '^erased 0, unfinished 0, held 0, waiting 0; editions erased 0, unfinished 0, waiting 0$' purge.txt
           # The crontab's hourly line, before Paddle is set up: it stops at once and says why.
           set +e
-          docker compose exec -T web python -m app.hosted.paddle_check > paddle.txt 2>&1
+          deploy/report.sh paddle-check -- docker compose exec -T web python -m app.hosted.paddle_check > paddle.txt 2>&1
           code=$?
           set -e
           cat paddle.txt
