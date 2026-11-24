@@ -45,6 +45,39 @@ def test_hosted_mode_rejects_a_wildcard_host_allowlist() -> None:
         Settings(_env_file=None, **values)
 
 
+_HOSTED = {
+    "deployment_mode": "hosted",
+    "hosted_auth_dsn": "postgresql://runtime@db/litlet",
+    "hosted_tenant_dsn": "postgresql://tenant@db/litlet",
+    "oidc_issuer": "https://issuer.example",
+    "oidc_client_id": "litlet",
+    "oidc_client_secret": "not-a-real-secret",
+    "oidc_redirect_uri": "https://reader.example/api/auth/callback",
+}
+DAY = 24 * 60 * 60
+
+
+def test_a_reader_stays_signed_in_30_days_and_14_untouched_by_default() -> None:
+    settings = Settings(_env_file=None, **_HOSTED)
+    assert settings.session_absolute_ttl_seconds == 30 * DAY
+    assert settings.session_idle_ttl_seconds == 14 * DAY
+
+
+def test_idle_may_reach_but_not_exceed_the_absolute_life() -> None:
+    assert Settings(
+        _env_file=None, **_HOSTED,
+        session_absolute_ttl_seconds=30 * DAY, session_idle_ttl_seconds=30 * DAY,
+    ).session_idle_ttl_seconds == 30 * DAY
+    with pytest.raises(ValidationError, match="may not exceed absolute"):
+        Settings(
+            _env_file=None, **_HOSTED,
+            session_absolute_ttl_seconds=7 * DAY, session_idle_ttl_seconds=14 * DAY,
+        )
+    for field in ("session_absolute_ttl_seconds", "session_idle_ttl_seconds"):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, **_HOSTED, **{field: 30 * DAY + 1})
+
+
 def test_pkce_uses_rfc7636_s256_and_tokens_are_high_entropy() -> None:
     verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
     assert pkce_challenge(verifier) == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"

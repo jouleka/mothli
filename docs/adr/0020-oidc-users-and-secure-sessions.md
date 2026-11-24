@@ -44,7 +44,8 @@ its SHA-256 digest and a separate CSRF-token digest. The session cookie is alway
 `__Host-litlet-csrf` cookie has the same Secure/Path/SameSite policy; a state-changing request must
 also send it as `X-CSRF-Token`, and both raw values plus the session-bound digest must match.
 
-Sessions have an eight-hour absolute lifetime and a thirty-minute idle lifetime by default. Each
+Sessions have a thirty-day absolute lifetime and a fourteen-day idle lifetime by default (they
+were eight hours and thirty minutes until 2026-11-24; see the note at the end). Each
 successful lookup checks account state, deletion, revocation, absolute expiry, and idle expiry, then
 advances `last_seen_at`. Invalid/expired sessions are revoked. A successful login revokes the old
 browser session before issuing a new identifier. `POST /api/auth/logout` requires CSRF, revokes the
@@ -104,3 +105,16 @@ LIT-41 owns authenticated owner-scoped feature repositories and route dependenci
 object storage, workers, encrypted BYOK, distributed quotas, cross-tenant endpoint coverage, account
 deletion/export, deployment headers/TLS, and operational rollout. The accepted local SQLite library
 is neither read nor migrated by this work.
+
+## Staying signed in (2026-11-24)
+
+The owner's decision: readers should not come back signed out. A reader now stays signed in on their
+own device for 30 days at most, and is signed out after 14 days without touching Mothli; until now
+it was 8 hours at most and 30 minutes untouched, and the settings refused more than one day
+untouched. Mothli is hosted-only (ADR 0043), so these are the defaults rather than settings the
+server must carry. The idle lifetime may now be set up to 30 days, and still never above the absolute
+lifetime. Nothing else changes: the cookies were already persistent (`Max-Age` is the absolute
+lifetime, so they outlive a closed browser) and keep their `Secure`, `HttpOnly` and `SameSite=Lax`
+flags; each login still rotates the session; CSRF is still bound to the session row; signing out
+and asking to delete the account still revoke at once. The sign-in service's own session may be
+shorter than Mothli's; Mothli does not depend on it once a reader is signed in.
