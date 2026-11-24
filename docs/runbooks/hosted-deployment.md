@@ -261,7 +261,8 @@ docker compose -f deploy/compose.yaml run --rm backup
 ```
 
 The log's last line should be `backup ok: ...` with last night's date; the second command lists
-what is in the bucket, newest first, with sizes. Look once a week; nothing warns you on its own.
+what is in the bucket, newest first, with sizes. A failed or missing backup also emails you (step
+6a); look here once a month anyway.
 
 If the log's last line starts `BACKUP FAILED while ...`, the backup did not happen and **nothing
 in R2 was removed**. The words after `while` say which step failed, and the line above it often
@@ -768,6 +769,85 @@ Recent messages from a service:
 ```
 docker compose -f deploy/compose.yaml logs --tail 100 web
 ```
+
+## 6a. Alerts: how Mothli tells you something is wrong
+
+A small program in your Cloudflare account, the watcher (`deploy/watch/`), emails you through your
+domain's Email Routing when:
+
+- **the site is down**: every 5 minutes it asks `https://YOURDOMAIN/api/health/ready`; after two
+  bad answers in a row (not `ready`, or nothing within 10 seconds) you get one email, and one more
+  when it is back;
+- **a scheduled job failed**: the backup (03:00), the erasing of deleted accounts (04:00) or the
+  hourly Paddle check tell it how they went; a failure emails you at once, again at most every 6
+  hours while it keeps failing, and once when it works again;
+- **a job went quiet**: no word from the backup or the erasing for 26 hours, or from the Paddle
+  check for 3 hours: once a day until it reports again (the job did not run, or the server cannot
+  reach the watcher).
+
+Each email says what happened and when, the first command to type, and the step of this runbook
+to read. It is quiet until it has something to watch: the site until it has answered `ready` once,
+each job until it has reported a success once. It costs nothing on Cloudflare's free plan.
+
+The jobs report through `deploy/report.sh`, which runs a job exactly as before and then tells the
+watcher `ok` or `fail` with one short line (for example the backup's `BACKUP FAILED while ...`
+words; never anything of a reader). A crontab line uses it by putting `deploy/report.sh JOB --`
+in front of the command, JOB being `backup`, `purge` or `paddle-check`. If the watcher cannot be
+reached, the job is not affected. Without the two `MOTHLI_WATCH_` lines in `deploy/.env` it
+reports nothing.
+
+**Once: setting it up.** Your domain's Email Routing must be on, with your inbox listed and
+**Verified** under Email Routing > Destination addresses: the watcher can send only to such an
+address.
+
+1. On the server, make the watcher's token, and keep it for step 4:
+   ```
+   openssl rand -hex 32
+   ```
+   In `deploy/.env`, add the line `MOTHLI_WATCH_TOKEN=` followed by it. Copy `deploy/.env` to your
+   offline place again.
+2. On your computer (it needs Node.js), in the Mothli folder, sign Wrangler, Cloudflare's tool,
+   in to your account. A browser page opens; check the account and choose Allow:
+   ```
+   npx wrangler@4 login --scopes account:read user:read workers:write workers_scripts:write workers_kv:write
+   ```
+   This lets Wrangler on this computer see your account and change your Workers and their storage,
+   nothing else (without `--scopes` it would ask for everything Wrangler can do, billing included).
+3. Put the watcher in place:
+   ```
+   cd deploy/watch
+   npx wrangler@4 deploy
+   ```
+   The last lines show its address, `https://mothli-watch.SOMETHING.workers.dev`: keep it for
+   step 5. If Wrangler asks for a workers.dev subdomain, any short name will do. If it wrote an
+   `"id"` into `wrangler.jsonc`, leave that change out of git (`git checkout wrangler.jsonc`).
+4. Give it its settings, one at a time, still in `deploy/watch`; each asks for the value:
+   ```
+   npx wrangler@4 secret put WATCH_TOKEN
+   npx wrangler@4 secret put SITE_URL
+   npx wrangler@4 secret put MAIL_FROM
+   npx wrangler@4 secret put MAIL_TO
+   ```
+   `WATCH_TOKEN`: the token of step 1. `SITE_URL`: `https://YOURDOMAIN`. `MAIL_FROM`: any address
+   at your domain, for example `alerts@YOURDOMAIN` (it needs no mailbox). `MAIL_TO`: your verified
+   inbox. While Paddle is not set up yet, also `npx wrangler@4 secret put JOBS_OFF` with the value
+   `paddle-check` (later: Cloudflare > Workers & Pages > mothli-watch > Settings > Variables and
+   Secrets, and delete `JOBS_OFF`). Then `npx wrangler@4 logout`.
+5. On the server, in `deploy/.env`, add `MOTHLI_WATCH_URL=` followed by the address of step 3.
+6. Try it, on the server:
+   ```
+   deploy/report.sh backup -- false
+   deploy/report.sh backup -- true
+   ```
+   Within a minute: "Mothli: last night's backup failed", then "Mothli: the nightly backup works
+   again". This counts as the backup's first success, so from now on a night without a backup
+   report emails you: the backup's crontab line must use `deploy/report.sh`. Nothing came? Check
+   the spam folder, then the two `MOTHLI_WATCH_` lines; `report.sh` says
+   `could not tell the watcher` when it cannot reach it.
+
+**Turning one watch off** (for example the Paddle check before Paddle is set up): the watcher's
+setting `JOBS_OFF`, the jobs not to watch separated by commas, as in step 4. To stop everything,
+Cloudflare > Workers & Pages > mothli-watch > Settings > Trigger events: delete the cron trigger.
 
 ## 7. When something is wrong
 

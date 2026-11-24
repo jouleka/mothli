@@ -1,0 +1,24 @@
+// Mothli's watcher (runbook, "Alerts: how Mothli tells you something is wrong").
+// Deployed from this folder with `npx wrangler@4 deploy`. No address, id or name of the owner is
+// written here: the settings are set on the Worker itself (see the top of watch.mjs).
+{
+  "name": "mothli-watch",
+  "main": "watch.mjs",
+  "compatibility_date": "2026-06-01",
+  // Its own address, https://mothli-watch.<account subdomain>.workers.dev, is all it needs.
+  "workers_dev": true,
+  "preview_urls": false,
+  // Settings added in the dashboard stay when it is deployed again.
+  "keep_vars": true,
+  // Every 5 minutes (UTC): the site check and the quiet-jobs check.
+  "triggers": { "crons": ["*/5 * * * *"] },
+  // No id: wrangler makes the namespace on the first deploy and keeps it linked afterwards. If it
+  // writes the id into this file, do not commit that line.
+  "kv_namespaces": [{ "binding": "STATE" }],
+  // No address here: the sender and recipient are the MAIL_FROM and MAIL_TO settings. Without a
+  // sending domain onboarded, Cloudflare sends only to verified destination addresses.
+  "send_email": [{ "name": "EMAIL" }],
+  // No stored logs: nothing of a request (its token included) is kept. `npx wrangler tail` still
+  // shows the Worker live when needed.
+  "observability": { "enabled": false }
+}
