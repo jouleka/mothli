@@ -143,7 +143,9 @@ class Settings(BaseSettings):
     oidc_signing_algorithms: str = "RS256"
     oidc_request_timeout_seconds: float = Field(default=10.0, gt=0, le=30)
     oidc_clock_skew_seconds: int = Field(default=60, ge=0, le=300)
-    oidc_attempt_ttl_seconds: int = Field(default=600, ge=60, le=1800)
+    # How long a reader may spend at the sign-in service (resetting a password by email, finding
+    # a phone for a code) before coming back: 30 minutes (ADR 0020, 2026-11-24).
+    oidc_attempt_ttl_seconds: int = Field(default=1800, ge=60, le=1800)
     # A reader stays signed in on their own device for 30 days at most, and is signed out after
     # 14 days without touching Mothli (ADR 0020, 2026-11-24). Idle may not exceed absolute.
     session_absolute_ttl_seconds: int = Field(

@@ -16,7 +16,8 @@ the tenant-owned feature routes assigned to LIT-41.
 Hosted login uses OIDC Authorization Code with a fresh 256-bit `state`, `nonce`, PKCE verifier, and
 independent browser-binding cookie for every attempt. PKCE is always S256. A short-lived PostgreSQL
 row stores only digests of state/browser tokens plus the verifier, nonce, exact configured issuer,
-safe relative return path, and ten-minute expiry. Callback consumption is one atomic `DELETE`, so
+safe relative return path, and thirty-minute expiry (ten minutes until 2026-11-24; see the
+note at the end). Callback consumption is one atomic `DELETE`, so
 success, provider refusal, and validation failure all make an attempt non-replayable.
 
 Discovery must exactly repeat the configured HTTPS issuer and advertise code flow, S256, an HTTPS
@@ -24,7 +25,8 @@ authorization/token/JWKS endpoint, and a pinned signed ID-token algorithm. The d
 `RS256`; `none` is forbidden. Token exchange uses `client_secret_basic`. ID tokens are verified with
 `joserfc`, with one bounded JWKS refresh for key rotation, before issuer, subject, audience/`azp`,
 expiry, issued-at, optional not-before, and constant-time nonce checks. Invalid cases return one
-generic response and never create an identity or session. Provider access/refresh tokens are not
+generic response (since 2026-11-24 a redirect to the front page, see the note at the end) and never
+create an identity or session. Provider access/refresh tokens are not
 persisted.
 
 ### Internal identity is `(issuer, subject) -> UUID`
@@ -118,3 +120,27 @@ lifetime, so they outlive a closed browser) and keep their `Secure`, `HttpOnly` 
 flags; each login still rotates the session; CSRF is still bound to the session row; signing out
 and asking to delete the account still revoke at once. The sign-in service's own session may be
 shorter than Mothli's; Mothli does not depend on it once a reader is signed in.
+
+## Time at the sign-in service, and a failed return (2026-11-24)
+
+On launch day the owner pressed sign in, came back from the sign-in service after more than ten
+minutes, and got a bare page of JSON (`Login could not be completed`, HTTP 400): the attempt had
+expired, and nothing was logged, so finding why took a database query. Three changes:
+
+- A reader now has 30 minutes (`OIDC_ATTEMPT_TTL_SECONDS` defaults to 1800, the most the setting
+  allows; the browser-binding cookie's `Max-Age` follows it). Resetting a password by email or
+  finding a phone for a code easily takes more than ten minutes. The longer window weakens
+  nothing that matters: the attempt is still one use only, bound to the browser by its own cookie,
+  protected by PKCE and the nonce, and checked against the exact issuer.
+- Every failed return (no state or cookie, attempt missing or expired, the provider's `error`, no
+  code, exchange or validation failure, inactive account) is a `303` with `no-store` to the fixed
+  path `/?signin=again`, still clearing the browser-binding cookie and creating no session. The
+  path is a literal, never built from the request, and does not say which step failed. The front
+  page sees the marker, says kindly that the sign-in did not finish with the button right there,
+  and takes the marker out of the address (it says nothing to a reader already signed in).
+- Each failed return writes one static warning naming only the stage, from a fixed table checked by
+  the ADR 0029 log gate: no state, code, cookie, email, subject or address. A provider's `error` is
+  logged only as one of a few standard OAuth codes, or `other`.
+
+Expired attempts nobody returned for were already removed whenever a new sign-in starts (the same
+transaction that adds the new attempt, with the auth role's existing `DELETE`); a test now holds it.

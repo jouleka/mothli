@@ -82,13 +82,15 @@ at any time: it never changes a value that is already there.
    asks for each one it is missing (press Enter to skip one). `deploy/setup.sh --help` lists the
    values it can take later: who runs Mothli (step 4d), Paddle's ids (step 4c) and the R2 address
    (step 4.1).
-3. Paste the two values only you have. Each command asks for one value and hides what you paste:
+3. Paste the two values only you have. Copy the value first, then run the command and paste.
+   Each command asks for one value and hides what you paste:
    ```
    deploy/setup.sh set CLOUDFLARE_TUNNEL_TOKEN
    deploy/setup.sh set OIDC_CLIENT_SECRET
    ```
-   The token is the one from step 1.4; the client secret is from your sign-in service. Each
-   command answers `... looks right`, or says what kind of value it expected. To change a value
+   The token is the one from step 1.4 (copying Cloudflare's whole install command is fine: the
+   token is kept from it); the client secret is from your sign-in service. Each command answers
+   `... looks right`, or writes nothing and says what kind of value it expected. To change a value
    later, run the same command: it asks before it replaces anything.
 
    **For Mothli's chat**, paste the two AI keys the same way, the writer's last:

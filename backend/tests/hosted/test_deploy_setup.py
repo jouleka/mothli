@@ -27,7 +27,11 @@ ARGS = ["--no-prompt", "--domain", "reader.example.org",
         "--operator-email", "contact@example.org", "--paddle-environment", "sandbox",
         "--paddle-price-monthly", PRICE_MONTHLY, "--paddle-price-yearly", PRICE_YEARLY,
         "--r2-endpoint", "https://r2.example.org"]
-PUBLIC_PREFIX = re.compile(r"^(pdl_[a-z]+_(apikey_)?|test_|live_|AGE-SECRET-KEY-1)")
+PUBLIC_PREFIX = re.compile(r"^(pdl_[a-z]+_(apikey_)?|test_|live_|AGE-SECRET-KEY-1|eyJ)")
+# Shaped like a Cloudflare tunnel token (base64 of JSON, so it starts eyJ); not a real one.
+TUNNEL = "eyJhIjoi" + "Q7xT2mPz9" * 14 + "fQ=="
+# What the owner pasted twice on 2026-11-24 instead of the secret.
+THE_COMMAND = 'ssh -t server "cd ~/mothli && deploy/setup.sh set OIDC_CLIENT_SECRET"'
 SECRET_NAMES = ("PASSWORD", "HOSTED_STORAGE_FILESYSTEM_KEY", "TOKEN", "SECRET", "API_KEY",
                 "ACCESS_KEY_ID", "ENCRYPTION_KEY")
 
@@ -169,7 +173,7 @@ def test_check_names_what_is_missing_and_prints_no_value(checkout: Path) -> None
     assert_no_secret_in(result.stdout + result.stderr, checkout)
 
     # The owner pastes the two it named, and Mothli can start (both AI keys empty: no chat).
-    assert run(checkout, "set", "CLOUDFLARE_TUNNEL_TOKEN", stdin="tunnel-stand-in-value\n").returncode == 0
+    assert run(checkout, "set", "CLOUDFLARE_TUNNEL_TOKEN", stdin=f"{TUNNEL}\n").returncode == 0
     assert run(checkout, "set", "OIDC_CLIENT_SECRET", stdin="client-stand-in-value\n").returncode == 0
     ready = run(checkout, "check")
     assert ready.returncode == 0, ready.stdout
@@ -204,12 +208,16 @@ def test_set_takes_a_piped_value_and_never_shows_it(checkout: Path) -> None:
     assert_no_secret_in(kept.stdout + kept.stderr + replaced.stdout + replaced.stderr,
                         checkout, secret, other)
 
-    # A key of the wrong kind is written but named as not looking right, by its kind only.
+    # A key of the wrong kind is not written, and is named by its kind only.
     wrong = "pdl_live_apikey_" + "w4" * 10
     refused = run(checkout, "set", "PADDLE_API_KEY", stdin=wrong)
     assert refused.returncode == 1
-    assert "does not look right" in refused.stdout and "sandbox" in refused.stdout
+    assert "PADDLE_API_KEY was not written" in refused.stderr and "sandbox" in refused.stderr
     assert_no_secret_in(refused.stdout + refused.stderr, checkout, wrong)
+    assert values(checkout / "deploy" / "app.env")["PADDLE_API_KEY"] == ""
+    assert "PADDLE_CHECKOUT_URL" not in values(checkout / "deploy" / "app.env")
+    right = "pdl_sdbx_apikey_" + "r5" * 10
+    assert run(checkout, "set", "PADDLE_API_KEY", stdin=right).returncode == 0
     # With the key in, Paddle's checkout page is turned on.
     assert values(checkout / "deploy" / "app.env")["PADDLE_CHECKOUT_URL"] == (
         "https://reader.example.org/")
@@ -288,7 +296,8 @@ def test_the_watchers_two_settings_are_set_checked_and_never_shown(checkout: Pat
 
     # Their rules: a long token of plain characters; an https:// address with no path.
     short = run(checkout, "set", "MOTHLI_WATCH_TOKEN", "--replace", stdin="too-short\n")
-    assert short.returncode == 1 and "32 or more" in short.stdout
+    assert short.returncode == 1 and "32 or more" in short.stderr
+    assert values(checkout / "deploy" / ".env")["MOTHLI_WATCH_TOKEN"] == token
     for bad in ("http://mothli-watch.example.workers.dev", "https://watch.example.org/report"):
         wrong = run(checkout, "set", "MOTHLI_WATCH_URL", "--replace", stdin=bad)
         assert wrong.returncode == 1 and "does not look right" in wrong.stdout
@@ -324,3 +333,82 @@ def test_worker_on_needs_both_ai_keys_and_changes_only_its_line(checkout: Path) 
     assert "already off" in run(checkout, "worker", "off").stdout
     assert "deploy/setup.sh worker on" in run(checkout, "check").stdout
     assert run(checkout, "worker", "maybe").returncode == 1
+
+
+# 2026-11-24: twice the owner pasted the command itself into the hidden prompt, `set` wrote it and
+# said "looks right", and sign-in then failed at the code exchange with nothing to say why.
+def test_set_refuses_the_command_pasted_in_place_of_a_secret(checkout: Path) -> None:
+    assert run(checkout, *ARGS).returncode == 0
+    before = [(checkout / "deploy" / name).read_bytes() for name in (".env", "app.env")]
+    for name in ("OIDC_CLIENT_SECRET", "CLOUDFLARE_TUNNEL_TOKEN", "PADDLE_API_KEY"):
+        pasted = THE_COMMAND.replace("OIDC_CLIENT_SECRET", name)
+        result = run(checkout, "set", name, stdin=f"{pasted}\n")
+        assert result.returncode == 1
+        assert f"{name} was not written" in result.stderr
+        assert "that looks like the command, not the value: copy the value first, then run " \
+            "the command and paste" in result.stderr
+        assert "looks right" not in result.stdout
+        assert "mothli &&" not in result.stdout + result.stderr
+    assert [(checkout / "deploy" / name).read_bytes() for name in (".env", "app.env")] == before
+
+
+@pytest.mark.parametrize("name", ["OIDC_CLIENT_SECRET", "TYPESAFE_API_KEY",
+                                  "MOTHLI_BACKUP_SECRET_ACCESS_KEY", "MOTHLI_BACKUP_ACCESS_KEY_ID"])
+def test_a_pasted_secret_must_be_one_word(checkout: Path, name: str) -> None:
+    assert run(checkout, *ARGS).returncode == 0
+    file = checkout / "deploy" / ("app.env" if name in ("OIDC_CLIENT_SECRET", "TYPESAFE_API_KEY")
+                                  else ".env")
+    before = file.read_bytes()
+    two_words = "first-half-of-it\tsecond-half-of-it"
+    result = run(checkout, "set", name, stdin=f"{two_words}\n")
+    assert result.returncode == 1
+    assert f"{name} was not written: expected one word, with no spaces inside" in result.stderr
+    assert file.read_bytes() == before
+    assert_no_secret_in(result.stdout + result.stderr, checkout, "first-half-of-it",
+                        "second-half-of-it")
+    # Settings that are not secrets keep today's behaviour (written, then named if they look odd).
+    plain = run(checkout, "set", "OPERATOR_COUNTRY", "--replace", stdin="Two Words\n")
+    assert plain.returncode == 0 and "looks right" in plain.stdout
+
+
+def test_the_tunnel_token_is_kept_from_cloudflares_install_command(checkout: Path) -> None:
+    assert run(checkout, *ARGS).returncode == 0
+    command = f"sudo cloudflared service install {TUNNEL}"
+    result = run(checkout, "set", "CLOUDFLARE_TUNNEL_TOKEN", stdin=f"{command}\n")
+    assert result.returncode == 0, result.stderr
+    assert "kept the token from the command you pasted" in result.stdout
+    assert "looks right" in result.stdout
+    assert values(checkout / "deploy" / ".env")["CLOUDFLARE_TUNNEL_TOKEN"] == TUNNEL
+    assert_no_secret_in(result.stdout + result.stderr, checkout, TUNNEL)
+
+    # Two token-shaped words, or none: nothing is guessed, and nothing is written.
+    for pasted in (f"cloudflared tunnel run --token {TUNNEL} {TUNNEL[:-4]}AAAA",
+                   "cloudflared tunnel run --token not-a-token", "eyJshort"):
+        refused = run(checkout, "set", "CLOUDFLARE_TUNNEL_TOKEN", "--replace", stdin=pasted)
+        assert refused.returncode == 1
+        assert "CLOUDFLARE_TUNNEL_TOKEN was not written: expected the tunnel's token" \
+            in refused.stderr
+        assert values(checkout / "deploy" / ".env")["CLOUDFLARE_TUNNEL_TOKEN"] == TUNNEL
+        assert_no_secret_in(refused.stdout + refused.stderr, checkout, TUNNEL)
+
+
+def test_check_names_a_secret_that_breaks_its_rule(checkout: Path) -> None:
+    """A file written before these rules (or by hand): check says so, and starts nothing."""
+    assert run(checkout, *ARGS).returncode == 0
+    assert run(checkout, "set", "CLOUDFLARE_TUNNEL_TOKEN", stdin=TUNNEL).returncode == 0
+    app_file = checkout / "deploy" / "app.env"
+    text = app_file.read_text(encoding="utf-8")
+    text = text.replace("\nOIDC_CLIENT_SECRET=OWNER_MUST_FILL_IN\n",
+                        f"\nOIDC_CLIENT_SECRET={THE_COMMAND}\n", 1)
+    text = text.replace("\nTYPESAFE_API_KEY=\n", "\nTYPESAFE_API_KEY=two words\n", 1)
+    app_file.write_text(text, encoding="utf-8", newline="\n")
+    result = run(checkout, "check")
+    assert result.returncode == 1
+    start = result.stdout.split("Needed later", 1)[0]
+    assert "Still needed before Mothli can start" in start
+    oidc = next(line for line in start.splitlines() if "OIDC_CLIENT_SECRET" in line)
+    assert "that looks like the command, not the value: copy the value first" in oidc
+    typesafe = next(line for line in start.splitlines() if "TYPESAFE_API_KEY" in line)
+    assert "one word, with no spaces inside" in typesafe
+    assert "mothli &&" not in result.stdout + result.stderr
+    assert "two words" not in result.stdout + result.stderr

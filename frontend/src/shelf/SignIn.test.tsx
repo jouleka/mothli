@@ -15,7 +15,7 @@ vi.mock("../api", async (importOriginal) => ({
 import { ApiError } from "../api";
 import { noCounter } from "./plan-fakes";
 import {
-  SignIn, SignInGate, erasureDay, keptWithoutPlan, noteAccountDeleted, signInHref, takeKeptWithoutPlan,
+  SIGN_IN_AGAIN_LINE, SignIn, SignInGate, erasureDay, keptWithoutPlan, noteAccountDeleted, signInHref, takeKeptWithoutPlan,
 } from "./SignIn";
 import { planDay } from "./YourPlan";
 
@@ -106,6 +106,41 @@ describe("SignInGate", () => {
     first.unmount();
     render(<SignInGate session={null}>{theApp()}</SignInGate>);
     expect(screen.getByRole("status").textContent).toBe("Hmm, that didn’t quite work. Let’s try once more.");
+  });
+
+  // Catches (2026-11-24): a reader back from the sign-in service too late seeing a page of code,
+  // or a cold line, or the line again on every reload.
+  test("back from signing in without a session: one kind line, the button, and a clean address", async () => {
+    history.replaceState(null, "", "/?signin=again");
+    // An attempt noted too: only the one line is said.
+    sessionStorage.setItem("mothli.sign-in-attempt", String(Date.now()));
+    const { container } = render(<SignInGate session={null}>{theApp()}</SignInGate>);
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe(SIGN_IN_AGAIN_LINE);
+    expect(SIGN_IN_AGAIN_LINE).not.toMatch(/error|session|expired|token/i);
+    expect(screen.queryByText(/didn’t quite work/)).toBeNull();
+    const [door] = screen.getAllByRole("link", { name: "Sign in to start reading" });
+    expect(door.getAttribute("href")).toBe("/api/auth/login?return_to=%2F");
+    expect(window.location.search).toBe("");
+    expect(await axeAA(container)).toHaveNoViolations();
+  });
+
+  test("the marker leaves the rest of the address alone, and a reload says nothing", () => {
+    history.replaceState(null, "", "/?book=b1&signin=again");
+    const first = render(<SignInGate session={null}>{theApp()}</SignInGate>);
+    expect(screen.getByText(SIGN_IN_AGAIN_LINE)).toBeTruthy();
+    expect(`${window.location.pathname}${window.location.search}`).toBe("/?book=b1");
+    first.unmount();
+    render(<SignInGate session={null}>{theApp()}</SignInGate>);
+    expect(screen.queryByText(SIGN_IN_AGAIN_LINE)).toBeNull();
+  });
+
+  test("already signed in: the marker says nothing and is taken out of the address", () => {
+    history.replaceState(null, "", "/?signin=again");
+    render(<SignInGate session={signedIn}>{theApp()}</SignInGate>);
+    expect(screen.getByText("The shelf")).toBeTruthy();
+    expect(screen.queryByText(SIGN_IN_AGAIN_LINE)).toBeNull();
+    expect(window.location.search).toBe("");
   });
 
   test("a successful sign-in forgets the earlier attempt", () => {

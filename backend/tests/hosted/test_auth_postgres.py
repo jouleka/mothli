@@ -17,7 +17,13 @@ from joserfc.jwk import RSAKey
 from psycopg import conninfo, sql
 
 from app.config import Settings
-from app.hosted.auth.api import CSRF_COOKIE, CSRF_HEADER, OIDC_COOKIE, SESSION_COOKIE
+from app.hosted.auth.api import (
+    CSRF_COOKIE,
+    CSRF_HEADER,
+    OIDC_COOKIE,
+    SESSION_COOKIE,
+    SIGN_IN_AGAIN,
+)
 from app.hosted.auth.repository import AuthConfigurationError, PostgresAuthRepository
 from app.hosted.auth.tokens import pkce_challenge
 from app.hosted.migrations import apply_migrations
@@ -295,9 +301,10 @@ def test_signed_oidc_login_creates_opaque_secure_session_and_csrf(auth_app, data
 
     # State is one-time even though the provider code was not modeled as consumed.
     replay = client.get(
-        "/api/auth/callback", params={"state": query["state"], "code": "one-time-code"}
+        "/api/auth/callback", params={"state": query["state"], "code": "one-time-code"},
+        follow_redirects=False,
     )
-    assert replay.status_code == 400
+    assert (replay.status_code, replay.headers["location"]) == (303, SIGN_IN_AGAIN)
 
     _, second = _login(client, provider)
     assert second.status_code == 303
@@ -333,8 +340,9 @@ def test_oidc_state_is_bound_to_the_browser_cookie(auth_app) -> None:
     query = provider.observe_authorization_url(login.headers["location"])
     attacker = TestClient(client.app, base_url="https://reader.example")
     assert attacker.get(
-        "/api/auth/callback", params={"state": query["state"], "code": "stolen-code"}
-    ).status_code == 400
+        "/api/auth/callback", params={"state": query["state"], "code": "stolen-code"},
+        follow_redirects=False,
+    ).headers["location"] == SIGN_IN_AGAIN
     assert provider.token_exchanges == 0
 
     legitimate = client.get(
@@ -345,19 +353,65 @@ def test_oidc_state_is_bound_to_the_browser_cookie(auth_app) -> None:
     assert provider.token_exchanges == 1
 
 
+def test_a_reader_has_30_minutes_at_the_sign_in_service(auth_app, database: str) -> None:
+    """2026-11-24: back after more than ten minutes, the attempt had expired and the reader got a
+    page of JSON. Now: 30 minutes, and past that the front page asks them to sign in again."""
+    client, provider, clock = auth_app
+    login = client.get("/api/auth/login", follow_redirects=False)
+    query = provider.observe_authorization_url(login.headers["location"])
+    clock.value += timedelta(minutes=29)
+    good = client.get(
+        "/api/auth/callback", params={"state": query["state"], "code": "a-code"},
+        follow_redirects=False,
+    )
+    assert (good.status_code, good.headers["location"]) == (303, "/")
+
+    login = client.get("/api/auth/login", follow_redirects=False)
+    query = provider.observe_authorization_url(login.headers["location"])
+    clock.value += timedelta(minutes=30)
+    late = client.get(
+        "/api/auth/callback", params={"state": query["state"], "code": "a-code"},
+        follow_redirects=False,
+    )
+    assert (late.status_code, late.headers["location"]) == (303, SIGN_IN_AGAIN)
+    assert provider.token_exchanges == 1
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT count(*) FROM oidc_login_attempts").fetchone()[0] == 1
+
+
+def test_starting_a_sign_in_removes_attempts_that_have_expired(auth_app, database: str) -> None:
+    """Attempts nobody came back for do not pile up: the next sign-in clears every expired one,
+    in the same transaction that adds its own, with the role that already writes the table."""
+    client, _provider, clock = auth_app
+    for _ in range(3):
+        TestClient(client.app, base_url="https://reader.example").get(
+            "/api/auth/login", follow_redirects=False
+        )
+    clock.value += timedelta(minutes=10)
+    client.get("/api/auth/login", follow_redirects=False)
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT count(*) FROM oidc_login_attempts").fetchone()[0] == 4
+    clock.value += timedelta(minutes=25)  # the first three are past 30 minutes, the fourth not
+    client.get("/api/auth/login", follow_redirects=False)
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT count(*) FROM oidc_login_attempts").fetchone()[0] == 2
+
+
 def test_nonce_mismatch_is_rejected_and_attempt_cannot_be_replayed(auth_app) -> None:
     client, provider, _clock = auth_app
     login = client.get("/api/auth/login", follow_redirects=False)
     query = provider.observe_authorization_url(login.headers["location"])
     provider.claim_overrides = {"nonce": "attacker-nonce"}
     response = client.get(
-        "/api/auth/callback", params={"state": query["state"], "code": "injected-code"}
+        "/api/auth/callback", params={"state": query["state"], "code": "injected-code"},
+        follow_redirects=False,
     )
-    assert response.status_code == 400
+    assert response.headers["location"] == SIGN_IN_AGAIN
     assert client.get("/api/auth/session").status_code == 401
     assert client.get(
-        "/api/auth/callback", params={"state": query["state"], "code": "injected-code"}
-    ).status_code == 400
+        "/api/auth/callback", params={"state": query["state"], "code": "injected-code"},
+        follow_redirects=False,
+    ).headers["location"] == SIGN_IN_AGAIN
 
 
 @pytest.mark.parametrize(
@@ -374,7 +428,7 @@ def test_invalid_id_token_claims_are_rejected(auth_app, claim_overrides: dict) -
     client, provider, _clock = auth_app
     provider.claim_overrides = claim_overrides
     _query, response = _login(client, provider)
-    assert response.status_code == 400
+    assert (response.status_code, response.headers["location"]) == (303, SIGN_IN_AGAIN)
     assert client.get("/api/auth/session").status_code == 401
 
 
@@ -382,7 +436,7 @@ def test_invalid_id_token_signature_is_rejected(auth_app) -> None:
     client, provider, _clock = auth_app
     provider.tamper_signature = True
     _query, response = _login(client, provider)
-    assert response.status_code == 400
+    assert (response.status_code, response.headers["location"]) == (303, SIGN_IN_AGAIN)
     assert client.get("/api/auth/session").status_code == 401
 
 

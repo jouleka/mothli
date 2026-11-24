@@ -6,6 +6,7 @@ identity mappings, sessions, expiry, and revocation remain server-side.
 
 from __future__ import annotations
 
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -25,6 +26,36 @@ CSRF_COOKIE = "__Host-litlet-csrf"
 OIDC_COOKIE = "__Host-litlet-oidc"
 CSRF_HEADER = "X-CSRF-Token"
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+# Where a return from the sign-in service that cannot become a session lands: the front page, with
+# one fixed marker the app turns into a kind line and a sign-in button. A literal, never built from
+# the request, so nothing is reflected and nothing can point elsewhere; it never says which step
+# failed. The server's log does, in one content-free line (_RETURN_FAILED).
+SIGN_IN_AGAIN = "/?signin=again"
+_LOG = logging.getLogger(__name__)
+# The standard OAuth error codes a provider may send back; anything else is logged as "other".
+_PROVIDER_ERRORS = (
+    "access_denied", "login_required", "consent_required", "interaction_required",
+    "server_error", "temporarily_unavailable",
+)
+# One static line per failed return (ADR 0029: only reviewed static messages are logged; this
+# table is checked by the same gate). No state, code, cookie, email, subject or address.
+_RETURN_FAILED = {
+    "no state or cookie": "sign-in return failed: no state or cookie",
+    "attempt missing or expired": "sign-in return failed: attempt missing or expired",
+    "provider said access_denied": "sign-in return failed: provider said error access_denied",
+    "provider said login_required": "sign-in return failed: provider said error login_required",
+    "provider said consent_required":
+        "sign-in return failed: provider said error consent_required",
+    "provider said interaction_required":
+        "sign-in return failed: provider said error interaction_required",
+    "provider said server_error": "sign-in return failed: provider said error server_error",
+    "provider said temporarily_unavailable":
+        "sign-in return failed: provider said error temporarily_unavailable",
+    "provider said other": "sign-in return failed: provider said error other",
+    "no code": "sign-in return failed: no code",
+    "exchange or validation failed": "sign-in return failed: exchange or validation failed",
+    "account inactive": "sign-in return failed: account inactive",
+}
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 
@@ -73,10 +104,16 @@ def _clear_cookie(response: Response, name: str, *, http_only: bool) -> None:
     )
 
 
-def _error(status_code: int, detail: str, *, clear_oidc: bool = False) -> JSONResponse:
-    response = JSONResponse({"detail": detail}, status_code=status_code, headers=_NO_STORE)
-    if clear_oidc:
-        _clear_cookie(response, OIDC_COOKIE, http_only=True)
+def _error(status_code: int, detail: str) -> JSONResponse:
+    return JSONResponse({"detail": detail}, status_code=status_code, headers=_NO_STORE)
+
+
+def _sign_in_again(stage: str) -> RedirectResponse:
+    """A return that cannot become a session: one log line naming the stage, then the front page
+    with the fixed marker, the one-time sign-in cookie cleared and no session made."""
+    _LOG.warning(_RETURN_FAILED[stage])
+    response = RedirectResponse(SIGN_IN_AGAIN, status_code=303, headers=_NO_STORE)
+    _clear_cookie(response, OIDC_COOKIE, http_only=True)
     return response
 
 
@@ -132,8 +169,10 @@ async def callback(
     oidc = request.app.state.oidc_client
     state_digest = _digest_cookie(state)
     browser_digest = _digest_cookie(request.cookies.get(OIDC_COOKIE))
+    # Always a browser's top-level navigation back from the sign-in service: a failure lands on
+    # the front page, which says so kindly (SIGN_IN_AGAIN), never on a page of JSON.
     if state_digest is None or browser_digest is None:
-        return _error(400, "Login could not be completed", clear_oidc=True)
+        return _sign_in_again("no state or cookie")
     now = _now(request)
     attempt = await repository.consume_login_attempt(
         state_digest=state_digest,
@@ -141,8 +180,13 @@ async def callback(
         issuer=settings.oidc_issuer,
         now=now,
     )
-    if attempt is None or error is not None or code is None:
-        return _error(400, "Login could not be completed", clear_oidc=True)
+    if attempt is None:
+        return _sign_in_again("attempt missing or expired")
+    if error is not None:
+        known = error if error in _PROVIDER_ERRORS else "other"
+        return _sign_in_again(f"provider said {known}")
+    if code is None:
+        return _sign_in_again("no code")
 
     try:
         claims = await oidc.exchange_and_validate(
@@ -164,8 +208,10 @@ async def callback(
             now=now,
             expires_at=now + timedelta(seconds=settings.session_absolute_ttl_seconds),
         )
-    except (OIDCError, InactiveUserError):
-        return _error(400, "Login could not be completed", clear_oidc=True)
+    except OIDCError:
+        return _sign_in_again("exchange or validation failed")
+    except InactiveUserError:
+        return _sign_in_again("account inactive")
 
     response = RedirectResponse(attempt.return_to, status_code=303, headers=_NO_STORE)
     _clear_cookie(response, OIDC_COOKIE, http_only=True)
