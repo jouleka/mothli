@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 from psycopg import conninfo, sql
 
 from app.config import Settings
-from app.hosted.auth.api import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE
+from app.hosted.auth.api import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE, SIGN_IN_AGAIN
 from app.hosted.migrations import apply_migrations
 from app.hosted.purge import PostgresAccountPurge, owner_tables, purge_due_accounts
 from app.hosted.storage import EPUB_MEDIA_TYPE, ObjectStorageUnavailableError
@@ -537,7 +537,9 @@ def test_an_interrupted_purge_finishes_when_run_again(world: World) -> None:
     assert _files(world, a["owner"])
     # Being erased: it can no longer be signed into, so nothing of it is served, nor kept.
     a["client"].cookies.clear()
-    assert world.sign_in("a").status_code == 400
+    refused = world.sign_in("a")
+    assert (refused.status_code, refused.headers["location"]) == (303, SIGN_IN_AGAIN)
+    assert SESSION_COOKIE not in a["client"].cookies
 
     class CrashAfterFiles(PostgresAccountPurge):
         def erase_rows(self, owner_id):
@@ -548,7 +550,9 @@ def test_an_interrupted_purge_finishes_when_run_again(world: World) -> None:
     assert _files(world, a["owner"]) == {}
     with psycopg.connect(world.database) as conn:
         assert _rows(conn, a["owner"])["books"]  # rows outlive the files...
-    assert world.sign_in("a").status_code == 400  # ...and are never served
+    refused = world.sign_in("a")  # ...and are never served
+    assert (refused.status_code, refused.headers["location"]) == (303, SIGN_IN_AGAIN)
+    assert SESSION_COOKIE not in a["client"].cookies
 
     result = _purge(world)
     assert (result.erased, result.unfinished) == (1, 0)

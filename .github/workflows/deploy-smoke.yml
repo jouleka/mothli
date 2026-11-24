@@ -51,8 +51,8 @@ jobs:
           # No value the script made, nor any 12 characters of one, is in what it printed.
           grep -hE '^[A-Z_]*(PASSWORD|FILESYSTEM_KEY)=' deploy/.env deploy/app.env | cut -d= -f2- \
             | while IFS= read -r v; do if grep -qF "${v:8:12}" check.txt; then echo "a value was printed"; exit 1; fi; done
-          # The owner's pasting, with stand-ins.
-          echo "smoke-tunnel-stand-in" | deploy/setup.sh set CLOUDFLARE_TUNNEL_TOKEN
+          # The owner's pasting, with stand-ins (the tunnel's shaped like Cloudflare's token).
+          echo "eyJhIjoi$(printf 'smoke%.0s' $(seq 1 20))fQ==" | deploy/setup.sh set CLOUDFLARE_TUNNEL_TOKEN
           echo "smoke-client-stand-in" | deploy/setup.sh set OIDC_CLIENT_SECRET
           deploy/setup.sh check
           # Running it again changes nothing.

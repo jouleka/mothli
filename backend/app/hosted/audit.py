@@ -45,6 +45,20 @@ APPROVED_SECURITY_LOG_MESSAGES = frozenset(
         "purge held an account whose Paddle plan still renews: it is not erased until Paddle "
         "confirms the cancel (the regular check asks for it hourly); see the runbook, "
         "'Deleting an account while paying'",
+        # A return from the sign-in service that could not become a session
+        # (app/hosted/auth/api.py ``_RETURN_FAILED``): the stage only, never who or which values.
+        "sign-in return failed: no state or cookie",
+        "sign-in return failed: attempt missing or expired",
+        "sign-in return failed: provider said error access_denied",
+        "sign-in return failed: provider said error login_required",
+        "sign-in return failed: provider said error consent_required",
+        "sign-in return failed: provider said error interaction_required",
+        "sign-in return failed: provider said error server_error",
+        "sign-in return failed: provider said error temporarily_unavailable",
+        "sign-in return failed: provider said error other",
+        "sign-in return failed: no code",
+        "sign-in return failed: exchange or validation failed",
+        "sign-in return failed: account inactive",
     }
 )
 

@@ -51,6 +51,34 @@ function forgetAttempt(): void {
   }
 }
 
+/** The server's one marker for a return from the sign-in service that did not finish (it took
+ * too long, or the service said no): `/?signin=again`. It never says why. */
+const AGAIN_PARAM = "signin";
+const AGAIN_VALUE = "again";
+
+/** The kind line the welcome says then, with the sign-in button right below it. */
+export const SIGN_IN_AGAIN_LINE =
+  "Oops, I lost you on the way back from signing in. That can happen when it takes a while. Press sign in and we’ll go again.";
+
+export function signInAgainMarked(search = window.location.search): boolean {
+  return new URLSearchParams(search).getAll(AGAIN_PARAM).includes(AGAIN_VALUE);
+}
+
+/** The address without the marker, so a reload (or the way back after signing in) says nothing. */
+function withoutMarker(search: string): string {
+  const params = new URLSearchParams(search);
+  if (!params.has(AGAIN_PARAM)) return search;
+  params.delete(AGAIN_PARAM);
+  const rest = params.toString();
+  return rest ? `?${rest}` : "";
+}
+
+function forgetSignInAgain(): void {
+  const search = withoutMarker(window.location.search);
+  if (search === window.location.search) return;
+  history.replaceState(history.state, "", `${window.location.pathname}${search}${window.location.hash}`);
+}
+
 /** Set when the reader has just asked to delete their account, so the welcome they land on
  * says it is done and names the day. Kept on this tab only; gone once they sign in again. */
 const DELETED_KEY = "mothli.account-deleted";
@@ -130,14 +158,19 @@ export function erasureDay(eraseAfter: string, now = new Date(), timeZone?: stri
 
 /** The sign-in service's door, asked to bring the reader back to `path` (this app's own path and
  * query only, as the server also insists; anything else comes back to the shelf). */
-export function signInHref(path = `${window.location.pathname}${window.location.search}`): string {
+export function signInHref(path = `${window.location.pathname}${withoutMarker(window.location.search)}`): string {
   const safe = path.startsWith("/") && !path.startsWith("//") && !path.includes("\\") && path.length <= 1024
     ? path
     : "/";
   return `/api/auth/login?return_to=${encodeURIComponent(safe)}`;
 }
 
-export function SignIn({ ended = false, paymentLink = null }: { ended?: boolean; paymentLink?: string | null }) {
+export function SignIn({ ended = false, paymentLink = null, again = false }: {
+  ended?: boolean;
+  paymentLink?: string | null;
+  /** Back from the sign-in service without being signed in (the server's marker). */
+  again?: boolean;
+}) {
   const [retried] = useState(recentAttempt);
   const [deleted] = useState(deletedNote);
   // A payment link's checkout (PaymentLink.tsx): signing in comes back to it until it is paid,
@@ -202,7 +235,10 @@ export function SignIn({ ended = false, paymentLink = null }: { ended?: boolean;
                   {erasureDay(deleted)} unless you sign in again before then.
                 </p>
               )}
-              {retried && !offline && !deleted && (
+              {again && !offline && !deleted && (
+                <p className="ml-welcome-note" role="status">{SIGN_IN_AGAIN_LINE}</p>
+              )}
+              {retried && !again && !offline && !deleted && (
                 <p className="ml-welcome-note" role="status">
                   Hmm, that didn’t quite work. Let’s try once more.
                 </p>
@@ -400,6 +436,12 @@ export function SignInGate({ session, children }: { session?: OfflineSession | n
   useEffect(() => {
     if (paymentLink) forgetPaymentLink();
   }, [paymentLink]);
+  // The server's "sign in again" marker: read once, then taken out of the address so a reload
+  // does not say it again. Said only to a reader who is still signed out.
+  const [again] = useState(() => hosted && signInAgainMarked());
+  useEffect(() => {
+    if (again) forgetSignInAgain();
+  }, [again]);
   useEffect(() => {
     if (!hosted) return;
     const signedOut = () => setEnded(true);
@@ -421,7 +463,7 @@ export function SignInGate({ session, children }: { session?: OfflineSession | n
     }
   }, [session]);
   if (!hosted) return <>{children}</>;
-  if (session === null) return <SignIn paymentLink={paymentLink} />;
+  if (session === null) return <SignIn paymentLink={paymentLink} again={again} />;
   if (ended) return <SignIn ended />;
   const eraseAfter = session.erase_after ?? pending;
   if (eraseAfter) return <PendingDeletion eraseAfter={eraseAfter} />;

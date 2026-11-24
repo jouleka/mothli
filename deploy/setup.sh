@@ -156,10 +156,47 @@ paddle_env() {
   [ "$e" = production ] && say production || say sandbox
 }
 
+# The settings the owner pastes as secrets: each must be one word, and `set` never writes one that
+# breaks its rule (pasting the command itself into the hidden prompt is easy to do, twice).
+is_pasted_secret() {
+  case $1 in
+    *_PASSWORD) return 1 ;;
+    OIDC_CLIENT_SECRET|CLOUDFLARE_TUNNEL_TOKEN|MOTHLI_WATCH_TOKEN) return 0 ;;
+    *_SECRET|*_TOKEN|*_API_KEY|*_ACCESS_KEY|*_ACCESS_KEY_ID|*_SECRET_ACCESS_KEY|*_CLIENT_TOKEN) return 0 ;;
+  esac
+  return 1
+}
+
+TUNNEL_TOKEN_RE='^eyJ[A-Za-z0-9_=-]{97,}$'
+
+# What is wrong with VALUE for NAME, as one plain phrase after "was not written:" or "does not
+# look right:"; nothing when it is fine. Never the value.
+problem_of() {
+  local name=$1 v=$2 rule
+  if is_pasted_secret "$name" && [[ $v == *setup.sh* ]]; then
+    say "that looks like the command, not the value: copy the value first, then run the command and paste"
+    return
+  fi
+  rule=$(expected "$name" "$v")
+  [ -z "$rule" ] || say "expected $rule"
+}
+
 # Prints what was expected when VALUE does not fit NAME's rule; prints nothing when it does.
 expected() {
+  local rule
+  rule=$(expected_rule "$@")
+  if [ -z "$rule" ] && is_pasted_secret "$1" && [[ $2 == *[[:space:]]* ]]; then
+    rule="one word, with no spaces inside (just the value, nothing around it)"
+  fi
+  [ -z "$rule" ] || say "$rule"
+}
+
+expected_rule() {
   local name=$1 v=$2 env
   case $name in
+    CLOUDFLARE_TUNNEL_TOKEN)
+      [[ $v =~ $TUNNEL_TOKEN_RE ]] \
+        || say "the tunnel's token as Cloudflare shows it: one word starting eyJ, 100 or more letters, digits, - _ or =" ;;
     *_PASSWORD)
       [[ $v =~ ^[A-Za-z0-9_-]{32,128}$ ]] || say "32 to 128 letters, digits, - or _" ;;
     HOSTED_STORAGE_FILESYSTEM_KEY)
@@ -408,12 +445,33 @@ cmd_set() {
     *$'\n'*|*$'\r'*) fail "$name was not written: the value has more than one line" ;;
   esac
   [ -n "$value" ] || fail "$name was not written: nothing was pasted"
-  problem=$(expected "$name" "$value")
+  # Cloudflare's page shows the token inside an install command: copying that whole command is
+  # natural, so exactly one token-shaped word in it is kept.
+  if [ "$name" = CLOUDFLARE_TUNNEL_TOKEN ] && [[ $value == *[[:space:]]* ]] \
+      && [[ $value != *setup.sh* ]]; then
+    local word found="" count=0
+    set -f  # split into words only: never expand a * in the pasted text into file names
+    for word in $value; do
+      if [[ $word =~ $TUNNEL_TOKEN_RE ]]; then found=$word; count=$((count + 1)); fi
+    done
+    set +f
+    word=
+    if [ "$count" -eq 1 ]; then
+      value=$found
+      say "kept the token from the command you pasted"
+    fi
+    found=
+  fi
+  problem=$(problem_of "$name" "$value")
+  if [ -n "$problem" ] && is_pasted_secret "$name"; then
+    value=
+    fail "$name was not written: $problem"
+  fi
   write_line "$file" "$name" "$value"
   value=
   say "$name written to $file"
   if [ -n "$problem" ]; then
-    say "$name does not look right: expected $problem"
+    say "$name does not look right: $problem"
   else
     say "$name looks right"
   fi
@@ -461,9 +519,9 @@ look() {
   case $state in
     set)
       value=$(value_of "$file" "$name")
-      problem=$(expected "$name" "$value")
+      problem=$(problem_of "$name" "$value")
       value=
-      if [ -n "$problem" ]; then blocking+=("$name|$file|does not look right: expected $problem"); fi ;;
+      if [ -n "$problem" ]; then blocking+=("$name|$file|does not look right: $problem"); fi ;;
     *)
       if [ "$group" = start ]; then blocking+=("$name|$file|$(who "$name")")
       else later+=("$name|$file|$(who "$name")"); fi ;;
@@ -501,7 +559,11 @@ cmd_check() {
   look "$APP_FILE" OIDC_CLIENT_ID start
   look "$APP_FILE" OIDC_CLIENT_SECRET start
 
-  # The chat: both keys, or neither (then Mothli starts without a chat).
+  # The chat: both keys, or neither (then Mothli starts without a chat). A key that is in must be
+  # one word, like every pasted secret.
+  for name in TYPESAFE_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY; do
+    if is_set "$APP_FILE" "$name"; then look "$APP_FILE" "$name" start; fi
+  done
   keys=$(chat_keys)
   if [ "$keys" = writer ]; then
     blocking+=("TYPESAFE_API_KEY|$APP_FILE|$(who TYPESAFE_API_KEY); the writer key is in, so the chat needs this one too")
