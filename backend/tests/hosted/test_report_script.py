@@ -11,8 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.hosted.test_deploy_setup import BASH  # a real bash, never Windows' WSL launcher
+
 DEPLOY = Path(__file__).resolve().parents[3] / "deploy"
-BASH = shutil.which("bash")
 CURL = shutil.which("curl")
 TOKEN = "test-token-" + "0" * 40  # a stand-in, never a real one
 

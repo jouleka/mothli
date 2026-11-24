@@ -8,6 +8,7 @@
 #   deploy/setup.sh check                 name what is still to fill in, and who fills it in
 #   deploy/setup.sh backup-key            make the backup key with Mothli's own image (once, ever)
 #   deploy/setup.sh cron [--show]         put the three scheduled lines in this user's crontab
+#   deploy/setup.sh worker on|off         turn the job worker on or off (COMPOSE_PROFILES=worker)
 #
 # It never prints a value, a part of one or its length, and never replaces a value that is
 # already there unless `set` is told to. Running it twice changes nothing. It touches only the two
@@ -40,6 +41,7 @@ Usage:
   deploy/setup.sh check
   deploy/setup.sh backup-key
   deploy/setup.sh cron [--show]
+  deploy/setup.sh worker on|off
 
 Options for the first form (each is asked for when left out and this is a terminal; Enter skips):
   --domain NAME                 MOTHLI_DOMAIN, without https://
@@ -206,6 +208,10 @@ expected() {
       fi ;;
     MOTHLI_BACKUP_S3_ENDPOINT)
       [[ $v =~ ^https://[A-Za-z0-9.-]+/?$ ]] || say "the https:// address Cloudflare shows, with no bucket name after it" ;;
+    MOTHLI_WATCH_URL)
+      [[ $v =~ ^https://[A-Za-z0-9.-]+/?$ ]] || say "the watcher's https:// address, with nothing after the name (step 6a)" ;;
+    MOTHLI_WATCH_TOKEN)
+      [[ $v =~ ^[A-Za-z0-9_-]{32,}$ ]] || say "32 or more letters, digits, - or _ (step 6a makes it)" ;;
     MOTHLI_BACKUP_BUCKET)
       [[ $v =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || say "a bucket name in small letters, digits and -" ;;
   esac
@@ -440,6 +446,8 @@ who() {
     OIDC_CLIENT_SECRET) say "you paste it: deploy/setup.sh set OIDC_CLIENT_SECRET (your sign-in service)" ;;
     MOTHLI_BACKUP_ACCESS_KEY_ID|MOTHLI_BACKUP_SECRET_ACCESS_KEY) say "you paste it: deploy/setup.sh set $1 (Cloudflare R2 token)" ;;
     PADDLE_*) say "you paste it: deploy/setup.sh set $1 (Paddle)" ;;
+    MOTHLI_WATCH_URL) say "you paste it: deploy/setup.sh set MOTHLI_WATCH_URL (the watcher's address, step 6a)" ;;
+    MOTHLI_WATCH_TOKEN) say "sent from the computer that puts the watcher in place, unseen (step 6a)" ;;
     TYPESAFE_API_KEY) say "you paste it: deploy/setup.sh set TYPESAFE_API_KEY (TypeSafe, for Mothli's chat)" ;;
     OPENAI_API_KEY) say "you paste it, last of all: deploy/setup.sh set OPENAI_API_KEY (or ANTHROPIC_API_KEY)" ;;
     *) say "you fill it in: deploy/setup.sh set $1" ;;
@@ -464,8 +472,21 @@ look() {
 
 is_set() { [ "$(state_of "$1" "$2")" = set ]; }
 
+# The chat's two keys: the writer's (OpenAI or Anthropic) and the checker's. Prints none, one or both.
+chat_keys() {
+  local writer=no checker=no
+  if is_set "$APP_FILE" OPENAI_API_KEY || is_set "$APP_FILE" ANTHROPIC_API_KEY; then writer=yes; fi
+  is_set "$APP_FILE" TYPESAFE_API_KEY && checker=yes
+  case $writer$checker in
+    yesyes) say both ;;
+    nono) say none ;;
+    yesno) say writer ;;
+    *) say checker ;;
+  esac
+}
+
 cmd_check() {
-  local name writer=no checker=no
+  local name keys
   local chat=()
   for f in "$ENV_FILE" "$APP_FILE"; do
     [ -f "$f" ] || { say "$f does not exist yet: run deploy/setup.sh first"; exit 1; }
@@ -481,17 +502,16 @@ cmd_check() {
   look "$APP_FILE" OIDC_CLIENT_SECRET start
 
   # The chat: both keys, or neither (then Mothli starts without a chat).
-  if is_set "$APP_FILE" OPENAI_API_KEY || is_set "$APP_FILE" ANTHROPIC_API_KEY; then writer=yes; fi
-  is_set "$APP_FILE" TYPESAFE_API_KEY && checker=yes
-  if [ $writer = yes ] && [ $checker = no ]; then
+  keys=$(chat_keys)
+  if [ "$keys" = writer ]; then
     blocking+=("TYPESAFE_API_KEY|$APP_FILE|$(who TYPESAFE_API_KEY); the writer key is in, so the chat needs this one too")
-  elif [ $writer = no ] && [ $checker = yes ]; then
+  elif [ "$keys" = checker ]; then
     blocking+=("OPENAI_API_KEY|$APP_FILE|$(who OPENAI_API_KEY); TYPESAFE_API_KEY is in, so the chat needs this one too")
-  elif [ $writer = no ]; then
+  elif [ "$keys" = none ]; then
     chat=("TYPESAFE_API_KEY|$APP_FILE|$(who TYPESAFE_API_KEY)"
           "OPENAI_API_KEY|$APP_FILE|$(who OPENAI_API_KEY)")
   elif ! grep -Eq '^COMPOSE_PROFILES=.*worker' "$ENV_FILE"; then
-    later+=("COMPOSE_PROFILES|$ENV_FILE|both AI keys are in: remove the # in front of COMPOSE_PROFILES=worker")
+    later+=("COMPOSE_PROFILES|$ENV_FILE|both AI keys are in: deploy/setup.sh worker on")
   fi
 
   # Any other line switched on in app.env must be a real value: the app refuses a placeholder.
@@ -529,6 +549,9 @@ cmd_check() {
               MOTHLI_BACKUP_SECRET_ACCESS_KEY MOTHLI_BACKUP_ENCRYPTION_KEY; do
     look "$ENV_FILE" "$name" later
   done
+  # The alerts (step 6a): the scheduled jobs report to the watcher once both are in.
+  look "$ENV_FILE" MOTHLI_WATCH_URL later
+  look "$ENV_FILE" MOTHLI_WATCH_TOKEN later
   # The chat's two keys come last, the writer last of all.
   later+=("${chat[@]+"${chat[@]}"}")
 
@@ -586,10 +609,12 @@ cron_lines() {
   case $ROOT in
     *"'"*|*%*) fail "the checkout's path has ' or % in it, which a crontab line cannot hold: move it" ;;
   esac
+  # Each job runs through deploy/report.sh, which passes its output to the log unchanged and tells
+  # the watcher how it went (step 6a); without the two MOTHLI_WATCH_ settings it reports nothing.
   local compose="docker compose -f deploy/compose.yaml"
-  say "0 3 * * * cd '$ROOT' && deploy/backup.sh >> deploy/backups/backup.log 2>&1 ${MARK}backup"
-  say "0 4 * * * cd '$ROOT' && $compose run --rm purge >> deploy/backups/purge.log 2>&1 ${MARK}purge"
-  say "30 * * * * cd '$ROOT' && $compose exec -T web python -m app.hosted.paddle_check >> deploy/backups/paddle-check.log 2>&1 ${MARK}paddle-check"
+  say "0 3 * * * cd '$ROOT' && deploy/report.sh backup -- deploy/backup.sh >> deploy/backups/backup.log 2>&1 ${MARK}backup"
+  say "0 4 * * * cd '$ROOT' && deploy/report.sh purge -- $compose run --rm purge >> deploy/backups/purge.log 2>&1 ${MARK}purge"
+  say "30 * * * * cd '$ROOT' && deploy/report.sh paddle-check -- $compose exec -T web python -m app.hosted.paddle_check >> deploy/backups/paddle-check.log 2>&1 ${MARK}paddle-check"
 }
 
 cmd_cron() {
@@ -615,8 +640,36 @@ cmd_cron() {
   fi
 }
 
+# ---- worker on|off: the one COMPOSE_PROFILES=worker line ----------------------------------------
+
+cmd_worker() {
+  local want=${1:-} state value tmp
+  case $want in on|off) ;; *) fail "deploy/setup.sh worker on, or deploy/setup.sh worker off" ;; esac
+  [ $# -le 1 ] || fail "deploy/setup.sh worker on, or deploy/setup.sh worker off"
+  [ -f "$ENV_FILE" ] || fail "$ENV_FILE does not exist yet: run deploy/setup.sh first"
+  state=$(state_of "$ENV_FILE" COMPOSE_PROFILES)
+  value=$(value_of "$ENV_FILE" COMPOSE_PROFILES)
+  if [ "$state" = set ] && [ "$value" != worker ]; then
+    fail "COMPOSE_PROFILES in $ENV_FILE is set to something other than worker: change that line by hand"
+  fi
+  if [ "$want" = on ]; then
+    if [ "$state" = set ]; then say "the job worker is already on"; return 0; fi
+    [ "$(chat_keys)" = both ] || fail "the job worker needs both AI keys first: deploy/setup.sh set TYPESAFE_API_KEY, then deploy/setup.sh set OPENAI_API_KEY (or ANTHROPIC_API_KEY)"
+    write_line "$ENV_FILE" COMPOSE_PROFILES worker
+    say "the job worker is on; start it with: docker compose -f deploy/compose.yaml up -d --wait"
+  else
+    if [ "$state" != set ]; then say "the job worker is already off"; return 0; fi
+    tmp=$(mktemp "$ENV_FILE.XXXXXX")
+    awk '!done && /^COMPOSE_PROFILES=/ { print "# " $0; done = 1; next } { print }' "$ENV_FILE" > "$tmp"
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$ENV_FILE"
+    say "the job worker is off; stop it with: docker compose -f deploy/compose.yaml stop worker"
+  fi
+}
+
 case ${1:-} in
   set) shift; cmd_set "$@" ;;
+  worker) shift; cmd_worker "$@" ;;
   check) shift; cmd_check "$@" ;;
   backup-key) shift; cmd_backup_key "$@" ;;
   cron) shift; cmd_cron "$@" ;;

@@ -99,12 +99,12 @@ at any time: it never changes a value that is already there.
    (or `deploy/setup.sh set ANTHROPIC_API_KEY` in place of the OpenAI key). Everything else the
    chat needs is already set. Then turn on the job worker, which writes Mothli's notes on
    finished chapters, what it remembers about readers and its notes on every book's story (step
-   4b): open `nano deploy/.env`, remove the `#` in front of this line, and save with Ctrl+O,
-   Enter, Ctrl+X:
+   4b):
    ```
-   COMPOSE_PROFILES=worker
+   deploy/setup.sh worker on
    ```
-   Leave both keys empty and the server starts without a chat (and without the worker line).
+   It refuses, saying why, until both keys are in; `deploy/setup.sh worker off` turns it off
+   again. Leave both keys empty and the server starts without a chat (and without the worker line).
    Fill in only one and the web process stops at startup with a line naming the missing one
    (step 7 below).
 4. Check what is still missing:
@@ -137,7 +137,9 @@ at any time: it never changes a value that is already there.
    whole crontab. Until step 4.1 is done, `deploy/backups/backup.log` says
    `BACKUP FAILED while checking the backup key` every night, and until Paddle's API key is in
    (step 4c), `deploy/backups/paddle-check.log` says `PADDLE_API_KEY and HOSTED_BILLING_DSN are
-   required` every hour. Both are expected then and change nothing.
+   required` every hour. Both are expected then and change nothing. Each line runs its job
+   through `deploy/report.sh`, which leaves the job and its log as they are and, once the alerts
+   are set up (step 6a, after the first backup works), emails you when a job fails or goes quiet.
 8. Check it (step 6 below), then open `https://YOURDOMAIN` and sign in.
 
 **By hand, if you ever need to** (to repair a file, say): every password is
@@ -262,9 +264,10 @@ docker compose -f deploy/compose.yaml run --rm backup
 
 The log's last line should be `backup ok: ...` with last night's date; the second command lists
 what is in the bucket, newest first, with sizes. A failed or missing backup also emails you (step
-6a); look here once a month anyway.
+6a); look here once a month anyway. A line `report.sh: could not tell the watcher ...` after it
+is about the alerts only: the backup itself is the line above.
 
-If the log's last line starts `BACKUP FAILED while ...`, the backup did not happen and **nothing
+If the log's last backup line starts `BACKUP FAILED while ...`, the backup did not happen and **nothing
 in R2 was removed**. The words after `while` say which step failed, and the line above it often
 says why. Run `deploy/backup.sh` by hand to see it again. Usual causes: the backup key is missing
 or damaged (`BACKUP FAILED while checking the backup key`, with
@@ -308,7 +311,8 @@ them built again, paid again.
 `erased 1, unfinished 0, held 0, waiting 3; editions erased 0, unfinished 0, waiting 2`: accounts
 erased in this run, accounts it could not finish (it ends with an error then), accounts held back
 because their Paddle plan still renews (next part; it ends with an error then too), and accounts
-still inside their 30 days; then the same for book files' notes. `tail deploy/backups/purge.log` shows the last runs. An
+still inside their 30 days; then the same for book files' notes. `tail deploy/backups/purge.log` shows the last runs
+(a line `report.sh: could not tell the watcher ...` is about the alerts only, step 6a). An
 account it could not finish (book storage unreachable, the database restarted) is finished by the
 next run; nothing of it is shown to anyone meanwhile. The audit log of an erased account ends with
 `account.purge`:
@@ -526,7 +530,9 @@ that `deploy/setup.sh cron` added in step 2.7 (before the API key is in, each ru
 It runs in the web container, which already holds the key, the billing role's address and the
 prices. Each run prints one line, `checked 12, changed 0, failed 0`; `failed` above 0 means Paddle
 was unreachable or refused (the run stops at the first sign Paddle is down and tries again next
-hour). `--size` (1 to 1000) and `--pause` (seconds, 0.25 to 60) change the page and the pause.
+hour). `tail -n 5 deploy/backups/paddle-check.log` shows the last runs (a line
+`report.sh: could not tell the watcher ...` is about the alerts only, step 6a). `--size` (1 to
+1000) and `--pause` (seconds, 0.25 to 60) change the page and the pause.
 It is also what guarantees the cancel owed to a reader who deleted their account while paying
 (part 4a, "Deleting an account while paying"): those plans come first, and each that Paddle still
 shows renewing is asked for its cancel, counted in `changed` when Paddle confirms.
@@ -789,31 +795,27 @@ Each email says what happened and when, the first command to type, and the step 
 to read. It is quiet until it has something to watch: the site until it has answered `ready` once,
 each job until it has reported a success once. It costs nothing on Cloudflare's free plan.
 
-The jobs report through `deploy/report.sh`, which runs a job exactly as before and then tells the
-watcher `ok` or `fail` with one short line (for example the backup's `BACKUP FAILED while ...`
-words; never anything of a reader). A crontab line uses it by putting `deploy/report.sh JOB --`
-in front of the command, JOB being `backup`, `purge` or `paddle-check`. If the watcher cannot be
-reached, the job is not affected. Without the two `MOTHLI_WATCH_` lines in `deploy/.env` it
-reports nothing.
+The jobs report through `deploy/report.sh`: the three crontab lines of step 2.7 run each job
+through it. It runs the job exactly as before, its output still going to the job's log, and then
+tells the watcher `ok` or `fail` with one short line (for example the backup's
+`BACKUP FAILED while ...` words; never anything of a reader). If the watcher cannot be reached,
+the job is not affected and its log ends with `report.sh: could not tell the watcher ...`. Until
+the two `MOTHLI_WATCH_` settings are in `deploy/.env`, it reports nothing.
 
-**Once: setting it up.** Your domain's Email Routing must be on, with your inbox listed and
-**Verified** under Email Routing > Destination addresses: the watcher can send only to such an
-address.
+**Once: setting it up**, after the first backup has worked (step 4.1; before that every night's
+backup fails, and would email you). Your domain's Email Routing must be on, with your inbox
+listed and **Verified** under Email Routing > Destination addresses: the watcher can send only to
+such an address. Steps 1 to 4 are done on the computer that puts the watcher in place (it needs
+Node.js and a bash terminal: on Windows, Git Bash), in the Mothli folder.
 
-1. On the server, make the watcher's token, and keep it for step 4:
-   ```
-   openssl rand -hex 32
-   ```
-   In `deploy/.env`, add the line `MOTHLI_WATCH_TOKEN=` followed by it. Copy `deploy/.env` to your
-   offline place again.
-2. On your computer (it needs Node.js), in the Mothli folder, sign Wrangler, Cloudflare's tool,
-   in to your account. A browser page opens; check the account and choose Allow:
+1. Sign Wrangler, Cloudflare's tool, in to your account. A browser page opens; check the account
+   and choose Allow:
    ```
    npx wrangler@4 login --scopes account:read user:read workers:write workers_scripts:write workers_kv:write
    ```
    This lets Wrangler on this computer see your account and change your Workers and their storage,
    nothing else (without `--scopes` it would ask for everything Wrangler can do, billing included).
-3. Put the watcher in place:
+2. Put the watcher in place:
    ```
    cd deploy/watch
    npx wrangler@4 deploy
@@ -821,19 +823,34 @@ address.
    The last lines show its address, `https://mothli-watch.SOMETHING.workers.dev`: keep it for
    step 5. If Wrangler asks for a workers.dev subdomain, any short name will do. If it wrote an
    `"id"` into `wrangler.jsonc`, leave that change out of git (`git checkout wrangler.jsonc`).
-4. Give it its settings, one at a time, still in `deploy/watch`; each asks for the value:
+3. Make the watcher's token and send it to both places without it ever being shown: to the
+   watcher, and over SSH into the server's `deploy/.env` (SERVER is how you reach the server with
+   `ssh`; `~/mothli` is where Mothli is checked out there):
    ```
-   npx wrangler@4 secret put WATCH_TOKEN
+   token=$(openssl rand -hex 32)
+   printf '%s' "$token" | npx wrangler@4 secret put WATCH_TOKEN
+   printf '%s\n' "$token" | ssh SERVER '~/mothli/deploy/setup.sh set MOTHLI_WATCH_TOKEN'
+   unset token
+   ```
+   The server answers `MOTHLI_WATCH_TOKEN ... looks right`. Nobody needs to keep a copy: to make a
+   new one, run the same four lines with `set MOTHLI_WATCH_TOKEN --replace`.
+4. Give the watcher its other settings, one at a time, still in `deploy/watch`; each asks for the
+   value:
+   ```
    npx wrangler@4 secret put SITE_URL
    npx wrangler@4 secret put MAIL_FROM
    npx wrangler@4 secret put MAIL_TO
    ```
-   `WATCH_TOKEN`: the token of step 1. `SITE_URL`: `https://YOURDOMAIN`. `MAIL_FROM`: any address
-   at your domain, for example `alerts@YOURDOMAIN` (it needs no mailbox). `MAIL_TO`: your verified
-   inbox. While Paddle is not set up yet, also `npx wrangler@4 secret put JOBS_OFF` with the value
+   `SITE_URL`: `https://YOURDOMAIN`. `MAIL_FROM`: any address at your domain, for example
+   `alerts@YOURDOMAIN` (it needs no mailbox). `MAIL_TO`: your verified inbox. While Paddle's API
+   key is not in yet (step 4c), also `npx wrangler@4 secret put JOBS_OFF` with the value
    `paddle-check` (later: Cloudflare > Workers & Pages > mothli-watch > Settings > Variables and
    Secrets, and delete `JOBS_OFF`). Then `npx wrangler@4 logout`.
-5. On the server, in `deploy/.env`, add `MOTHLI_WATCH_URL=` followed by the address of step 3.
+5. On the server, give it the watcher's address of step 2 (it asks for it):
+   ```
+   deploy/setup.sh set MOTHLI_WATCH_URL
+   ```
+   `deploy/setup.sh check` no longer lists the two `MOTHLI_WATCH_` settings under "Needed later".
 6. Try it, on the server:
    ```
    deploy/report.sh backup -- false
@@ -841,9 +858,8 @@ address.
    ```
    Within a minute: "Mothli: last night's backup failed", then "Mothli: the nightly backup works
    again". This counts as the backup's first success, so from now on a night without a backup
-   report emails you: the backup's crontab line must use `deploy/report.sh`. Nothing came? Check
-   the spam folder, then the two `MOTHLI_WATCH_` lines; `report.sh` says
-   `could not tell the watcher` when it cannot reach it.
+   report emails you. Nothing came? Check the spam folder, then run `deploy/setup.sh check`;
+   `report.sh` says `could not tell the watcher` when it cannot reach it.
 
 **Turning one watch off** (for example the Paddle check before Paddle is set up): the watcher's
 setting `JOBS_OFF`, the jobs not to watch separated by commas, as in step 4. To stop everything,
