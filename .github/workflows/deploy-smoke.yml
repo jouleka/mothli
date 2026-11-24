@@ -1,0 +1,144 @@
+name: Deployment
+
+# Builds both images from deploy/Dockerfile and starts the real deploy/compose.yaml, as the
+# runbook does on the server, with deploy/compose.local.yaml in place of the Cloudflare tunnel and
+# both AI keys empty. The settings are made by deploy/setup.sh with made-up values that are not
+# secret. Nothing here can reach a real sign-in service, Paddle, R2 or Cloudflare.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      COMPOSE_FILE: deploy/compose.yaml:deploy/compose.local.yaml
+      COMPOSE_PROJECT_NAME: mothli-smoke
+      DOMAIN: reader.example.org
+      PROXY: http://127.0.0.1:18741
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Make the settings with deploy/setup.sh
+        run: |
+          deploy/setup.sh --no-prompt --domain "$DOMAIN" \
+            --oidc-issuer https://issuer.example.org/ --oidc-client-id smoke-client \
+            --operator-name "Smoke Test Operator" --operator-country Testland \
+            --operator-email contact@example.org --paddle-environment sandbox \
+            --paddle-price-monthly pri_aaaaaaaaaaaaaaaaaaaaaaaaaa \
+            --paddle-price-yearly pri_bbbbbbbbbbbbbbbbbbbbbbbbbb \
+            --r2-endpoint https://r2.example.org
+          test "$(stat -c %a deploy/.env)" = 600 && test "$(stat -c %a deploy/app.env)" = 600
+          # The two values the owner pastes are named, and nothing may start yet.
+          if deploy/setup.sh check > check.txt; then echo "check passed too early"; exit 1; fi
+          grep -q CLOUDFLARE_TUNNEL_TOKEN check.txt && grep -q OIDC_CLIENT_SECRET check.txt
+          # No value the script made, nor any 12 characters of one, is in what it printed.
+          grep -hE '^[A-Z_]*(PASSWORD|FILESYSTEM_KEY)=' deploy/.env deploy/app.env | cut -d= -f2- \
+            | while IFS= read -r v; do if grep -qF "${v:8:12}" check.txt; then echo "a value was printed"; exit 1; fi; done
+          # The owner's pasting, with stand-ins.
+          echo "smoke-tunnel-stand-in" | deploy/setup.sh set CLOUDFLARE_TUNNEL_TOKEN
+          echo "smoke-client-stand-in" | deploy/setup.sh set OIDC_CLIENT_SECRET
+          deploy/setup.sh check
+          # Running it again changes nothing.
+          sha256sum deploy/.env deploy/app.env > before.sum
+          deploy/setup.sh --no-prompt
+          sha256sum -c --quiet before.sum
+          deploy/setup.sh cron --show
+          rm -f check.txt before.sum
+
+      - name: Build both images
+        run: docker compose build
+
+      - name: Start the stack (no tunnel, no AI keys)
+        run: docker compose up -d --wait --wait-timeout 300
+
+      - name: Check it through the proxy
+        run: |
+          get() { curl -sS --max-time 20 -H "Host: $DOMAIN" "$@"; }
+          echo "ready:"; get --fail "$PROXY/api/health/ready" | tee ready.json; echo
+          grep -q '"status":"ready"' ready.json
+          get --fail -o home.html "$PROXY/"
+          grep -qi '<!doctype html' home.html && grep -q 'id="root"' home.html
+          for page in terms privacy refunds contact; do
+            code=$(get -o "$page.html" -w '%{http_code}' "$PROXY/$page")
+            echo "/$page: $code"
+            test "$code" = 200
+            cmp -s home.html "$page.html" || { echo "/$page is not the app's page"; exit 1; }
+          done
+          echo "site:"; get --fail "$PROXY/api/site"; echo
+          # The proxy's own security headers on a static response.
+          get -D headers.txt -o /dev/null "$PROXY/"
+          cat headers.txt
+          for header in "content-security-policy: default-src 'self'" \
+                        "x-content-type-options: nosniff" "referrer-policy: no-referrer" \
+                        "x-frame-options: DENY" "permissions-policy: camera=()"; do
+            grep -qiF "$header" headers.txt || { echo "missing: $header"; exit 1; }
+          done
+          if grep -qi '^server:' headers.txt; then echo "the Server header is shown"; exit 1; fi
+          # An unknown API address is the backend's JSON 404, never the app's page.
+          code=$(get -D api404.txt -o api404.json -w '%{http_code}' "$PROXY/api/no-such-thing")
+          echo "/api/no-such-thing: $code"; cat api404.json; echo
+          test "$code" = 404
+          grep -qi '^content-type: application/json' api404.txt
+          if grep -qi '<html' api404.json; then echo "the app's page, not the backend's 404"; exit 1; fi
+
+      - name: The worker refuses to start without the AI keys
+        run: |
+          if timeout 180 docker compose run --rm --no-deps -T worker > worker.txt 2>&1; then
+            cat worker.txt; echo "the worker started without AI keys"; exit 1
+          fi
+          tail -n 5 worker.txt
+          grep -q "the companion dispatcher needs READER_CONVERSATION_JEV" worker.txt
+
+      - name: The command-line tools, the purge and the Paddle check
+        run: |
+          docker compose run --rm --no-deps -T tools
+          docker compose run --rm --no-deps -T purge | tee purge.txt
+          grep -q '^erased 0, unfinished 0, held 0, waiting 0; editions erased 0, unfinished 0, waiting 0$' purge.txt
+          # The crontab's hourly line, before Paddle is set up: it stops at once and says why.
+          set +e
+          docker compose exec -T web python -m app.hosted.paddle_check > paddle.txt 2>&1
+          code=$?
+          set -e
+          cat paddle.txt
+          test "$code" = 2
+          grep -q "PADDLE_API_KEY and HOSTED_BILLING_DSN are required" paddle.txt
+
+      - name: The backup key and a backup up to the upload
+        run: |
+          deploy/setup.sh backup-key
+          deploy/setup.sh backup-key > again.txt
+          grep -q "already set" again.txt
+          # R2 is a made-up address here: everything before the upload must work, the upload not.
+          set +e
+          MOTHLI_COMPOSE="docker compose" deploy/backup.sh > backup.txt 2>&1
+          code=$?
+          set -e
+          cat backup.txt
+          test "$code" != 0
+          grep -q "BACKUP FAILED while uploading to R2" backup.txt
+          ls deploy/backups/mothli-backup-*.tar.age
+
+      - name: Show what went wrong
+        if: failure()
+        run: |
+          docker compose ps -a
+          for service in $(docker compose config --services); do
+            echo "==== $service"
+            docker compose logs --no-color --tail 200 "$service" || true
+          done
+
+      - name: Stop and remove everything
+        if: always()
+        run: docker compose down --volumes --remove-orphans
