@@ -33,11 +33,17 @@ step 2, never into an email, a chat or a document.
    `--token`). Under "Public hostname", add your domain with service **HTTP** and URL
    **`proxy:8080`**.
 5. **Cloudflare settings** for the domain:
-   - SSL/TLS > Overview: **Full (strict)**.
+   - SSL/TLS > Overview > Configure: **Full (strict)**.
    - SSL/TLS > Edge Certificates: **Always Use HTTPS** on.
-   - Caching > Cache Rules: a rule "URI Path starts with `/api/`" > **Bypass cache**.
-   - Security > WAF > Rate limiting rules: a rule "URI Path starts with `/api/auth/`", for
-     example 20 requests per minute per IP, action **Block**.
+   - Caching > Cache Rules: one rule with the expression
+     `(starts_with(http.request.uri.path, "/api/"))`, action **Bypass cache**.
+   - Security > Security rules > Rate limiting rules: one rule for the two sign-in addresses
+     only, with the expression
+     `(http.request.uri.path eq "/api/auth/login") or (http.request.uri.path eq "/api/auth/callback")`,
+     5 requests per 10 seconds per IP address, action **Block** for 10 seconds. (The free plan
+     offers only a 10 second window and one rule.) Not all of `/api/auth/`: the app asks
+     `/api/auth/session` on every page load, so a limit there could block a household or an
+     office whose readers share one address.
 6. **The sign-in service** (any OpenID Connect provider). Create a "web application" there with:
    - redirect (callback) address `https://YOURDOMAIN/api/auth/callback`
    - scopes `openid profile email`
@@ -56,53 +62,89 @@ step 2, never into an email, a chat or a document.
 
 ## 2. First deployment
 
-1. Get the code:
+`deploy/setup.sh` writes the two settings files for you: it makes every password and key, writes
+the values you give it, and never shows a password or a key on the screen. You can run it again
+at any time: it never changes a value that is already there.
+
+1. Get the code (the folder can be anywhere; `~/mothli` is only the example used here):
    ```
    git clone https://github.com/jouleka/mothli.git ~/mothli
    cd ~/mothli
    ```
-2. Create the two settings files from the templates and make them private:
+2. Make the two settings files, `deploy/.env` and `deploy/app.env`. Put your own values in place
+   of the words in capitals:
    ```
-   cp deploy/.env.example deploy/.env
-   cp deploy/app.env.example deploy/app.env
-   chmod 600 deploy/.env deploy/app.env
+   deploy/setup.sh --domain YOURDOMAIN --oidc-issuer ISSUER --oidc-client-id CLIENT_ID
    ```
-3. Make one password for each `..._PASSWORD` line in `deploy/.env` (run this once per line and
-   paste each result after the `=`):
+   It makes both files readable by you alone, makes the nine database passwords and the key that
+   encrypts every book file (`HOSTED_STORAGE_FILESYSTEM_KEY`), and writes your domain and the
+   sign-in service's issuer and client ID (step 1.6). Leave out a value you do not have yet: it
+   asks for each one it is missing (press Enter to skip one). `deploy/setup.sh --help` lists the
+   values it can take later: who runs Mothli (step 4d), Paddle's ids (step 4c) and the R2 address
+   (step 4.1).
+3. Paste the two values only you have. Each command asks for one value and hides what you paste:
    ```
-   openssl rand -hex 32
+   deploy/setup.sh set CLOUDFLARE_TUNNEL_TOKEN
+   deploy/setup.sh set OIDC_CLIENT_SECRET
    ```
-4. Make the key in `deploy/app.env` for `HOSTED_STORAGE_FILESYSTEM_KEY`, which encrypts every
-   book file:
+   The token is the one from step 1.4; the client secret is from your sign-in service. Each
+   command answers `... looks right`, or says what kind of value it expected. To change a value
+   later, run the same command: it asks before it replaces anything.
+
+   **For Mothli's chat**, paste the two AI keys the same way, the writer's last:
    ```
-   openssl rand -base64 32
+   deploy/setup.sh set TYPESAFE_API_KEY
+   deploy/setup.sh set OPENAI_API_KEY
    ```
-5. Fill in the rest: in `deploy/.env` your domain and the tunnel token; in `deploy/app.env` the
-   sign-in issuer, client ID and client secret. Edit with:
-   ```
-   nano deploy/.env
-   nano deploy/app.env
-   ```
-   **For Mothli's chat**, also fill in the two AI keys in `deploy/app.env`: `OPENAI_API_KEY` (or
-   `ANTHROPIC_API_KEY` instead) and `TYPESAFE_API_KEY`. Everything else the chat needs is already
-   set there; leave it as it is. Then turn on the job worker, which writes Mothli's notes on
+   (or `deploy/setup.sh set ANTHROPIC_API_KEY` in place of the OpenAI key). Everything else the
+   chat needs is already set. Then turn on the job worker, which writes Mothli's notes on
    finished chapters, what it remembers about readers and its notes on every book's story (step
-   4b): in `deploy/.env`, remove the `#` in front of this line:
+   4b): open `nano deploy/.env`, remove the `#` in front of this line, and save with Ctrl+O,
+   Enter, Ctrl+X:
    ```
    COMPOSE_PROFILES=worker
    ```
    Leave both keys empty and the server starts without a chat (and without the worker line).
    Fill in only one and the web process stops at startup with a line naming the missing one
    (step 7 below).
-6. **Copy both files somewhere safe and offline now** (a password manager or an encrypted USB
+4. Check what is still missing:
+   ```
+   deploy/setup.sh check
+   ```
+   It lists settings by name only, never a value, in two lists, each with what to do. The first
+   list, "Still needed before Mothli can start", must be gone: then it says
+   `Ready to start: nothing needed to start is missing.` The second list, "Needed later", is for
+   the backups, Paddle and the chat, in steps 4 and 4c.
+5. **Copy both files somewhere safe and offline now** (a password manager or an encrypted USB
    stick). Without `HOSTED_STORAGE_FILESYSTEM_KEY` no book can ever be read again, backups
    included.
-7. Build and start:
+6. Build and start:
    ```
    docker compose -f deploy/compose.yaml up -d --build --wait
    ```
-   The first build takes several minutes. `--wait` returns when everything is healthy.
-8. Check it (step 5 below), then open `https://YOURDOMAIN` and sign in.
+   The first build takes several minutes. `--wait` returns when everything is healthy. This
+   starts only Mothli's own containers (the project is called `mothli`); nothing else on the
+   server is touched.
+7. Put Mothli's three scheduled jobs in the server's crontab: the nightly backup at 03:00 (step
+   4), the daily erasing of deleted accounts at 04:00 (step 4a) and the hourly check of plans with
+   Paddle at :30 (step 4c):
+   ```
+   deploy/setup.sh cron
+   ```
+   It adds three lines, each marked `# mothli-setup:...`, with this folder's real path, and leaves
+   every other line of the crontab alone. Running it again replaces those three and nothing else.
+   `deploy/setup.sh cron --show` prints them without changing anything; `crontab -l` shows the
+   whole crontab. Until step 4.1 is done, `deploy/backups/backup.log` says
+   `BACKUP FAILED while checking the backup key` every night, and until Paddle's API key is in
+   (step 4c), `deploy/backups/paddle-check.log` says `PADDLE_API_KEY and HOSTED_BILLING_DSN are
+   required` every hour. Both are expected then and change nothing.
+8. Check it (step 6 below), then open `https://YOURDOMAIN` and sign in.
+
+**By hand, if you ever need to** (to repair a file, say): every password is
+`openssl rand -hex 32`, the book files' key is `openssl rand -base64 32`, and both files are
+edited with `nano deploy/.env` and `nano deploy/app.env` (then `chmod 600 deploy/.env
+deploy/app.env`). Never make a new `HOSTED_STORAGE_FILESYSTEM_KEY` for a server that has books:
+take it from your offline copy.
 
 ## 3. Updating
 
@@ -116,10 +158,17 @@ The `migrate` step runs first on every start: it updates the database and resets
 database permission to exactly what the code expects. If it fails, the new web process does not
 start; see "When something is wrong".
 
-An update can need a new line in `deploy/.env`: compare it with `deploy/.env.example` after
-`git pull`. The update that brings Paddle's messages (ADR 0045 step 3) needs
-`MOTHLI_DB_BILLING_PASSWORD` (generate it with `openssl rand -hex 32`); without it Compose stops
-with `set MOTHLI_DB_BILLING_PASSWORD in deploy/.env` and nothing changes.
+An update can need a new line in the settings files. After `git pull`, and before `up`, run:
+
+```
+deploy/setup.sh
+deploy/setup.sh check
+```
+
+The first adds any new password the update needs (the update that brought Paddle's messages
+needed `MOTHLI_DB_BILLING_PASSWORD`, for example) and changes nothing else; the second names
+anything left for you. Without a needed line Compose stops with `set ... in deploy/.env` and
+nothing changes.
 
 ## 4. Backups (every night, to Cloudflare R2)
 
@@ -133,7 +182,7 @@ audit log) and the readers' book files. Story memory is in it on purpose: making
 cost about $2.60 for every 30 chapters.
 
 **What is not, on purpose:** the two settings files `deploy/.env` and `deploy/app.env` (they hold
-the keys; keep your offline copy from step 2.6), the database passwords and roles (made again from
+the keys; keep your offline copy from step 2.5), the database passwords and roles (made again from
 `deploy/.env` when you restore), the app itself (it is in git) and the logs.
 
 **Every backup is encrypted on the server before it leaves it**, with the backup key,
@@ -143,7 +192,7 @@ the R2 token, or into your Cloudflare account, gets files they cannot open. Insi
 book files are encrypted a second time, as on the server, with `HOSTED_STORAGE_FILESYSTEM_KEY`
 from `deploy/app.env`.
 
-**So two keys open a backup, and both are in your offline copy of the settings files** (step 2.6):
+**So two keys open a backup, and both are in your offline copy of the settings files** (step 2.5):
 the backup key in `deploy/.env` and the book files' key in `deploy/app.env`. **If you lose the
 backup key, every backup is lost with it**: nobody, not Cloudflare and not whoever looks after the
 code, can open them. There is nothing new to keep somewhere else: keep your offline copy of
@@ -161,39 +210,38 @@ over the old one: the new one cannot open the backups made before it.
    - Specify bucket(s): **Apply to specific buckets only** > `mothli-protected-backups`
    - TTL: Forever
    Then **Create Account API Token**.
-3. Cloudflare now shows the token's values **once**. Keep that page open, and on the server open
-   the settings file:
+3. Cloudflare now shows the token's values **once**. Keep that page open, and on the server paste
+   each one (each command asks for its value and hides what you paste):
    ```
-   nano deploy/.env
+   deploy/setup.sh set MOTHLI_BACKUP_ACCESS_KEY_ID
+   deploy/setup.sh set MOTHLI_BACKUP_SECRET_ACCESS_KEY
+   deploy/setup.sh set MOTHLI_BACKUP_S3_ENDPOINT
    ```
-   Paste, after the `=` of each line (no spaces, no quotes):
-   - **Access Key ID** into `MOTHLI_BACKUP_ACCESS_KEY_ID=`
-   - **Secret Access Key** into `MOTHLI_BACKUP_SECRET_ACCESS_KEY=`
-   - the address under **Use jurisdiction-specific endpoints for S3 clients** (it looks like
-     `https://` + a long code + `.r2.cloudflarestorage.com`) into `MOTHLI_BACKUP_S3_ENDPOINT=`
+   - `MOTHLI_BACKUP_ACCESS_KEY_ID`: the **Access Key ID**;
+   - `MOTHLI_BACKUP_SECRET_ACCESS_KEY`: the **Secret Access Key**;
+   - `MOTHLI_BACKUP_S3_ENDPOINT`: the address under **Use jurisdiction-specific endpoints for S3
+     clients** (it looks like `https://` + a long code + `.r2.cloudflarestorage.com`). If you gave
+     it to `deploy/setup.sh --r2-endpoint` in step 2, it says it is already there.
 
-   The first value shown, "Token value", is not needed. If your `deploy/.env` was made before
-   these lines existed, copy the "Backups to Cloudflare R2" block from `deploy/.env.example` into
-   it first. Save with Ctrl+O, Enter, Ctrl+X.
+   The first value shown, "Token value", is not needed.
 4. Check that the server can reach the bucket:
    ```
    docker compose -f deploy/compose.yaml run --rm backup
    ```
    It ends with `0 backups in mothli-protected-backups`. A line starting `backup failed:` names
    what is wrong (`... is not set in deploy/.env` means a value is missing).
-5. Make the backup key (once, ever). This prints one new key, a line starting `AGE-SECRET-KEY-1`:
+5. Make the backup key (once, ever). It is made by Mothli's own image, so the images must be
+   built (step 2.6):
    ```
-   docker compose -f deploy/compose.yaml run --rm backup python -m app.hosted.backups new-key
+   deploy/setup.sh backup-key
    ```
-   Open the settings file again (`nano deploy/.env`) and paste the whole line after the `=` of
-   `MOTHLI_BACKUP_ENCRYPTION_KEY=`, in place of the placeholder there (no spaces, no quotes). If
-   your `deploy/.env` has no such line, copy it from `deploy/.env.example` first. Save with Ctrl+O,
-   Enter, Ctrl+X, then wipe the key off the screen with `clear`. Check it:
-   ```
-   docker compose -f deploy/compose.yaml run --rm backup python -m app.hosted.backups check-key
-   ```
-   It says `the backup key in deploy/.env is set`. If making the key said `... is already set`,
-   you made one before: keep it and do not make another.
+   It writes the key into `deploy/.env` without showing it, then checks it: the last lines say
+   `the backup key in deploy/.env is set`. If it says `... is already set: kept`, you made one
+   before: keep it and do not make another.
+
+   By hand, only to repair a file: `docker compose -f deploy/compose.yaml run --rm backup python
+   -m app.hosted.backups new-key` prints a new key (a line starting `AGE-SECRET-KEY-1`); paste it
+   with `deploy/setup.sh set MOTHLI_BACKUP_ENCRYPTION_KEY`, then `clear` the screen.
 6. **Copy `deploy/.env` to your offline place again now**, over the old copy: it holds the backup
    key now, and without the key no backup can ever be opened.
 7. Make the first backup by hand:
@@ -202,11 +250,8 @@ over the old one: the new one cannot open the backups made before it.
    deploy/backup.sh
    ```
    The last line says `backup ok: mothli-backup-<date and time>.tar.age, ... MB, in ... s`.
-8. Make it run every night at 03:00 (before the 04:00 erasing of step 4a): run `crontab -e` and
-   add this line:
-   ```
-   0 3 * * * cd ~/mothli && deploy/backup.sh >> deploy/backups/backup.log 2>&1
-   ```
+8. It runs every night at 03:00 (before the 04:00 erasing of step 4a) from the crontab line that
+   `deploy/setup.sh cron` added in step 2.7. If you skipped that step, run it now.
 
 ### 4.2 Did last night's backup run?
 
@@ -245,12 +290,7 @@ After that a daily step erases it: their book files, then every row of theirs. W
 the account's bare id and a few audit lines saying when it was asked for and when it was erased,
 with no name, no email and no content.
 
-Run it every day at 04:00 with `crontab -e`:
-
-```
-0 4 * * * cd ~/mothli && docker compose -f deploy/compose.yaml run --rm purge >> deploy/backups/purge.log 2>&1
-```
-
+It runs every day at 04:00 from the crontab line that `deploy/setup.sh cron` added in step 2.7.
 It uses its own database role (`MOTHLI_DB_PURGE_PASSWORD` in `deploy/.env`), which only this step
 has. Run it by hand the same way:
 
@@ -328,7 +368,7 @@ story so far. They are made once for each exact book file, a chapter at a time, 
 the chapters (one chapter ahead of the reader furthest on), and each reader is handed them only
 up to where they are (ADR 0044). There is nothing to run and no title to choose: it is on in
 `deploy/app.env` (`HOSTED_STORY_MEMORY=true`, as the template sets it) and is done by the job
-worker, so the worker must be on (`COMPOSE_PROFILES=worker` in `deploy/.env`, step 2.5). With no
+worker, so the worker must be on (`COMPOSE_PROFILES=worker` in `deploy/.env`, step 2.3). With no
 AI keys it is off, like the chat. Keep it on: with it off the story panels keep telling readers
 "No one yet. Keep reading and I'll keep track of who's who.", which would never come true.
 
@@ -395,20 +435,27 @@ same in the live account:
    Usage type: real and simulated events while you test (platform only afterwards). Save, then
    copy the destination's secret key (`pdl_ntfset_...`) and keep it like a password; Paddle may
    not show it again.
-3. On the server, in `deploy/app.env`, remove the `#` from the Paddle lines and fill them in:
-   - `PADDLE_ENVIRONMENT`: `sandbox` or `production`;
-   - `PADDLE_WEBHOOK_SECRET`: the destination's secret key from step 2;
-   - `PADDLE_PRICE_MONTHLY` and `PADDLE_PRICE_YEARLY`: the price ids from step 1.
+3. On the server, write which Paddle and the two price ids from step 1, then paste the
+   destination's secret key from step 2:
+   ```
+   deploy/setup.sh --paddle-environment sandbox --paddle-price-monthly MONTHLY_ID --paddle-price-yearly YEARLY_ID
+   deploy/setup.sh set PADDLE_WEBHOOK_SECRET
+   ```
+   (`production` in place of `sandbox` for the live account.) Then
+   `docker compose -f deploy/compose.yaml up -d --wait`.
 
-   Then `docker compose -f deploy/compose.yaml up -d --wait`.
+   **Moving from the sandbox to live** changes values that are already there, so use `set` for
+   each one, which asks before it replaces: `deploy/setup.sh set PADDLE_ENVIRONMENT` (type
+   `production`), then `PADDLE_PRICE_MONTHLY`, `PADDLE_PRICE_YEARLY`, `PADDLE_WEBHOOK_SECRET`,
+   `PADDLE_API_KEY` and `PADDLE_CLIENT_TOKEN` the same way.
 4. In Paddle, send a simulated `subscription.created` to the destination (Paddle's webhook
    simulator). Its sample is for a price that is not Mothli's, so Mothli answers OK and keeps
    nothing: Paddle shows the delivery as successful. A delivery Paddle shows as failed with 400
    means the secret does not match: copy it again.
 
 **A new price later** (the yearly launch price becoming $89.99, a new price in Paddle): put the
-new id first and keep the old one, separated by a comma, for example
-`PADDLE_PRICE_YEARLY=pri_new...,pri_old...`, then `up -d --wait`. Readers on the old price stay
+new id first and keep the old one, separated by a comma, with `deploy/setup.sh set
+PADDLE_PRICE_YEARLY` (for example `pri_new...,pri_old...`), then `up -d --wait`. Readers on the old price stay
 paying for as long as it is in the line.
 
 **Where a reader stands.** `python -m app.hosted.plans show ACCOUNT_ID` (step 7) shows `paying`
@@ -418,8 +465,8 @@ with `paid_by` `paddle` while their plan is live: active, or a payment Paddle is
 lasts.
 
 **Rotating the secret.** Paddle may sign with an old and a new secret for a while; Mothli accepts
-a message that matches the secret it has. Paste the new secret into `deploy/app.env` and
-`up -d --wait` as soon as Paddle shows it.
+a message that matches the secret it has. Paste the new secret with `deploy/setup.sh set
+PADDLE_WEBHOOK_SECRET` and `up -d --wait` as soon as Paddle shows it.
 
 The web log says only when a message was refused (`paddle message refused: signature` or
 `... malformed`), never a secret, an email address or an id. What was done with each of Mothli's
@@ -441,16 +488,18 @@ the regular check below. Make a key of its own for Mothli, first in the sandbox,
    expiry (Paddle's default is 90 days, a year at most) and, if offered, make it rotatable.
 2. Copy the key (Paddle shows it once; a sandbox key starts `pdl_sdbx_apikey_`, a live one
    `pdl_live_apikey_`) and keep it like a password.
-3. In `deploy/app.env`, remove the `#` from `PADDLE_API_KEY` and paste it. It must come from the
-   same Paddle as `PADDLE_ENVIRONMENT` (the server refuses to start otherwise) and needs
-   `PADDLE_WEBHOOK_SECRET` set: a payment is only ever applied from Paddle's message. Remove the
-   `#` from `PADDLE_CHECKOUT_URL` too and put Mothli's own front page there, `https://YOURDOMAIN/`
-   with nothing after the slash (**One Paddle account, several products**, below, says why). The
-   server refuses to start with the key and without it, and without the three `OPERATOR_` lines
-   of step 4d (who runs Mothli, printed on its terms). Then
+3. Paste it with `deploy/setup.sh set PADDLE_API_KEY`. It must come from the same Paddle as
+   `PADDLE_ENVIRONMENT` (the command says so if it does not, and the server refuses to start) and
+   needs `PADDLE_WEBHOOK_SECRET` set: a payment is only ever applied from Paddle's message. The
+   same command turns on `PADDLE_CHECKOUT_URL`, Mothli's own front page `https://YOURDOMAIN/`,
+   which `deploy/setup.sh` made from your domain and kept off until the key was in (the server
+   refuses one without the other; **One Paddle account, several products**, below, says why).
+   The server also refuses the key without the three `OPERATOR_` lines of step 4d (who runs
+   Mothli, printed on its terms). Run `deploy/setup.sh check`, then
    `docker compose -f deploy/compose.yaml up -d --wait`.
 4. Put the key's expiry date in your calendar, a week early. An expired key cannot be renewed:
-   make a new one the same way, paste it, `up -d --wait`, then revoke the old one in Paddle.
+   make a new one the same way, paste it with `deploy/setup.sh set PADDLE_API_KEY` (it asks
+   before replacing the old one), `up -d --wait`, then revoke the old one in Paddle.
    Until then, subscribing, cancelling and the portal answer "I can't reach our payment service
    just now".
 
@@ -468,11 +517,10 @@ see a kind line and nothing changes.
 message lost, refused or out of order is repaired without waiting for the next renewal. Mothli
 fetches, one at a time with a pause between, up to 100 of the subscriptions it stored that are
 live or changed in the last 30 days, and applies each as a message would (newer only, Mothli's
-prices only). It never lists anything in Paddle. Add it to the crontab (`crontab -e`), every hour:
-
-```
-30 * * * * cd ~/mothli && docker compose -f deploy/compose.yaml exec -T web python -m app.hosted.paddle_check >> deploy/backups/paddle-check.log 2>&1
-```
+prices only). It never lists anything in Paddle. It runs every hour at :30 from the crontab line
+that `deploy/setup.sh cron` added in step 2.7 (before the API key is in, each run only says
+`PADDLE_API_KEY and HOSTED_BILLING_DSN are required`). By hand:
+`docker compose -f deploy/compose.yaml exec -T web python -m app.hosted.paddle_check`.
 
 It runs in the web container, which already holds the key, the billing role's address and the
 prices. Each run prints one line, `checked 12, changed 0, failed 0`; `failed` above 0 means Paddle
@@ -488,9 +536,9 @@ set here, never written in the app:
 
 1. In Paddle: **Developer tools > Authentication > Client-side tokens > New client-side token**.
    Name it "Mothli web". A sandbox token starts `test_`, a live one `live_`.
-2. In `deploy/app.env`, remove the `#` from `PADDLE_CLIENT_TOKEN` and paste it. It must come from
-   the same Paddle as `PADDLE_ENVIRONMENT` (the server refuses to start otherwise) and needs
-   `PADDLE_API_KEY` set (the server makes every checkout). Then
+2. Paste it with `deploy/setup.sh set PADDLE_CLIENT_TOKEN`. It must come from the same Paddle as
+   `PADDLE_ENVIRONMENT` (the command says so if it does not, and the server refuses to start) and
+   needs `PADDLE_API_KEY` set (the server makes every checkout). Then
    `docker compose -f deploy/compose.yaml up -d --wait`.
 3. Live only: in Paddle's dashboard, under **Website approval**, add your domain. Paddle's live
    checkout opens only on an approved domain; the sandbox approves domains by itself
@@ -553,8 +601,14 @@ Mothli has them at these addresses, with a footer linking all four on every sign
 - `https://YOURDOMAIN/` the front page: what Mothli is, what is free, the plan and its prices;
 - `https://YOURDOMAIN/terms`, `/privacy`, `/refunds` and `/contact`.
 
-**Your details.** The pages print who runs Mothli from three lines in `deploy/app.env`. Remove the
-`#` from each and fill them in:
+**Your details.** The pages print who runs Mothli from three lines in `deploy/app.env`. Write them
+with one command (the quotes keep a name with spaces together):
+
+```
+deploy/setup.sh --operator-name "YOUR LEGAL NAME" --operator-country "YOUR COUNTRY" --operator-email YOUR@ADDRESS
+```
+
+What each one is:
 
 - `OPERATOR_LEGAL_NAME`: your legal name, or your company's, exactly as it should appear in the
   terms (Paddle's account holds the same legal name for both your products);
@@ -621,8 +675,9 @@ older backup loses everything readers did after it was made. You need the **same
 the backup was made with (the book files' key) and the **same** `deploy/.env` (the backup key and
 the R2 lines): your offline copies.
 
-1. On a new server: steps 1.2, 2.1 and 2.2, then put your offline copies of `deploy/.env` and
-   `deploy/app.env` over the new ones (`chmod 600 deploy/.env deploy/app.env` again).
+1. On a new server: steps 1.2 and 2.1, then put your offline copies of `deploy/.env` and
+   `deploy/app.env` in `deploy/` (`chmod 600 deploy/.env deploy/app.env`). Do not run
+   `deploy/setup.sh` before that: it would make new passwords and a new book files' key.
 2. Only if this server already runs Mothli and you mean to replace everything on it:
    ```
    docker compose -f deploy/compose.yaml down --volumes
@@ -654,7 +709,7 @@ the R2 lines): your offline copies.
    ```
    docker compose -f deploy/compose.yaml run --rm purge
    ```
-6. Make sure the nightly backup is in your crontab on this server (step 4.1, point 8).
+6. Put the scheduled jobs in this server's crontab: `deploy/setup.sh cron` (step 2.7).
 
 ### 5.3 Opening a backup by hand, without Mothli's code
 
@@ -786,6 +841,8 @@ docker compose -f deploy/compose.yaml logs --tail 100 web
   and hand it to whoever looks after the code. It holds no reader content and no password.
 
 ## 8. Only you can fill in
+
+`deploy/setup.sh check` lists, by name, whichever of these the settings files still lack.
 
 - The domain name (`MOTHLI_DOMAIN`), and adding it to Cloudflare.
 - The Cloudflare tunnel and its token (`CLOUDFLARE_TUNNEL_TOKEN`), the rate-limit rule and the
