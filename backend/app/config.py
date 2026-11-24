@@ -144,8 +144,12 @@ class Settings(BaseSettings):
     oidc_request_timeout_seconds: float = Field(default=10.0, gt=0, le=30)
     oidc_clock_skew_seconds: int = Field(default=60, ge=0, le=300)
     oidc_attempt_ttl_seconds: int = Field(default=600, ge=60, le=1800)
-    session_absolute_ttl_seconds: int = Field(default=8 * 60 * 60, ge=300, le=30 * 24 * 60 * 60)
-    session_idle_ttl_seconds: int = Field(default=30 * 60, ge=60, le=24 * 60 * 60)
+    # A reader stays signed in on their own device for 30 days at most, and is signed out after
+    # 14 days without touching Mothli (ADR 0020, 2026-11-24). Idle may not exceed absolute.
+    session_absolute_ttl_seconds: int = Field(
+        default=30 * 24 * 60 * 60, ge=300, le=30 * 24 * 60 * 60
+    )
+    session_idle_ttl_seconds: int = Field(default=14 * 24 * 60 * 60, ge=60, le=30 * 24 * 60 * 60)
     hosted_runtime_cache_max_entries: int = Field(default=256, ge=1, le=100_000)
     hosted_runtime_lock_max_entries: int = Field(default=256, ge=1, le=100_000)
     hosted_runtime_shutdown_timeout_seconds: float = Field(default=5.0, gt=0, le=30)

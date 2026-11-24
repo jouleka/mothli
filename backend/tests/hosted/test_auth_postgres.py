@@ -195,7 +195,8 @@ def _settings(auth_dsn: str, **overrides) -> Settings:
         "session_idle_ttl_seconds": 300,
     }
     values.update(overrides)
-    return Settings(_env_file=None, **values)
+    # None leaves a setting at its default.
+    return Settings(_env_file=None, **{k: v for k, v in values.items() if v is not None})
 
 
 @pytest.fixture()
@@ -405,6 +406,71 @@ def test_absolute_expiry_wins_even_when_idle_activity_is_fresh(auth_app) -> None
         clock.value += timedelta(seconds=299)
         assert client.get("/api/auth/session").status_code == 200
     clock.value += timedelta(seconds=13)
+    assert client.get("/api/auth/session").status_code == 401
+
+
+@pytest.fixture()
+def default_life_app(auth_dsn: str):
+    """The app with the session lifetimes left at their defaults: 30 days, 14 untouched."""
+    clock = Clock()
+    provider = SignedOIDCProvider(clock)
+    app = create_app(
+        _settings(auth_dsn, session_absolute_ttl_seconds=None, session_idle_ttl_seconds=None),
+        oidc_http_transport=httpx.MockTransport(provider.handle),
+        auth_clock=clock,
+        tenant_repository=UnusedTenantRepository(),
+        object_storage=UnusedObjectStorage(),
+    )
+    with TestClient(app, base_url="https://reader.example") as client:
+        yield client, provider, clock
+
+
+def test_the_sign_in_cookies_last_30_days_past_a_closed_browser(default_life_app) -> None:
+    client, provider, _clock = default_life_app
+    _, response = _login(client, provider)
+    cookie_headers = response.headers.get_list("set-cookie")
+    for name, http_only in ((SESSION_COOKIE, True), (CSRF_COOKIE, False)):
+        header = next(item for item in cookie_headers if item.startswith(f"{name}="))
+        assert "Max-Age=2592000" in header
+        assert "Secure" in header and "SameSite=lax" in header and "Path=/" in header
+        assert ("HttpOnly" in header) is http_only
+
+
+def test_a_session_used_on_day_13_is_still_good_on_day_20(default_life_app) -> None:
+    client, provider, clock = default_life_app
+    _login(client, provider)
+    start = clock.value
+    clock.value = start + timedelta(days=13)
+    assert client.get("/api/auth/session").status_code == 200
+    clock.value = start + timedelta(days=20)
+    assert client.get("/api/auth/session").status_code == 200
+    # Signing out still ends it at once, with the same CSRF protection as ever.
+    assert client.post("/api/auth/logout").status_code == 403
+    csrf = client.cookies.get(CSRF_COOKIE)
+    assert client.post("/api/auth/logout", headers={CSRF_HEADER: csrf}).status_code == 204
+    assert client.get("/api/auth/session").status_code == 401
+
+
+def test_a_session_untouched_for_a_little_over_14_days_is_refused(default_life_app) -> None:
+    client, provider, clock = default_life_app
+    _login(client, provider)
+    clock.value += timedelta(days=14, minutes=1)
+    assert client.get("/api/auth/session").status_code == 401
+    # Refused for good: the row is revoked, so going back in time does not bring it back.
+    clock.value -= timedelta(days=1)
+    assert client.get("/api/auth/session").status_code == 401
+
+
+def test_at_30_days_a_session_is_refused_however_recently_used(default_life_app) -> None:
+    client, provider, clock = default_life_app
+    _login(client, provider)
+    start = clock.value
+    for day in (10, 20, 29):
+        clock.value = start + timedelta(days=day)
+        assert client.get("/api/auth/session").status_code == 200
+    clock.value = start + timedelta(days=30) - timedelta(minutes=1)
+    assert client.get("/api/auth/session").status_code == 200
+    clock.value = start + timedelta(days=30)
     assert client.get("/api/auth/session").status_code == 401
 
 
