@@ -55,6 +55,8 @@ _RETURN_FAILED = {
     "no code": "sign-in return failed: no code",
     "exchange or validation failed": "sign-in return failed: exchange or validation failed",
     "account inactive": "sign-in return failed: account inactive",
+    # Before the sign-in service is reached: the sign-in button's own navigation lands the same.
+    "provider unreachable": "sign-in start failed: provider unreachable",
 }
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
@@ -144,7 +146,8 @@ async def login(request: Request, return_to: str | None = None):
             expires_at=now + timedelta(seconds=settings.oidc_attempt_ttl_seconds),
         )
     except OIDCError:
-        return _error(503, "Login is temporarily unavailable")
+        # A top-level navigation (the sign-in button): the front page's kind line, not JSON.
+        return _sign_in_again("provider unreachable")
 
     response = RedirectResponse(authorization_url, status_code=302, headers=_NO_STORE)
     _set_cookie(

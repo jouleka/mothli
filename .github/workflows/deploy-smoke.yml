@@ -1,8 +1,9 @@
 name: Deployment
 
 # Builds both images from deploy/Dockerfile and starts the real deploy/compose.yaml, as the
-# runbook does on the server, with deploy/compose.local.yaml in place of the Cloudflare tunnel and
-# both AI keys empty. The settings are made by deploy/setup.sh with made-up values that are not
+# runbook does on the server, with deploy/compose.local.yaml in place of the Cloudflare tunnel:
+# first with both AI keys empty and Paddle off, then with Paddle on, then with the AI keys in and
+# the worker on. The settings are made by deploy/setup.sh with made-up values that are not
 # secret. Nothing here can reach a real sign-in service, Paddle, R2 or Cloudflare.
 
 on:
@@ -142,6 +143,73 @@ jobs:
           test "$code" != 0
           grep -q "BACKUP FAILED while uploading to R2" backup.txt
           ls deploy/backups/mothli-backup-*.tar.age
+
+      # The live server on 25 November 2026: Paddle switched on in app.env, and the 04:00 purge
+      # stopped on "Paddle's messages require HOSTED_BILLING_DSN". From here every service and
+      # scheduled command runs again with Paddle on, pasted as the owner pastes it. The values are
+      # made up, shaped like sandbox ones (never a live key), and nothing here reaches Paddle.
+      - name: Turn Paddle on, as the owner did, and restart
+        run: |
+          repeat() { printf "$1%.0s" $(seq 1 "$2"); }
+          echo "pdl_ntfset_$(repeat smokestandin 3)" | deploy/setup.sh set PADDLE_WEBHOOK_SECRET
+          echo "pdl_sdbx_apikey_$(repeat smokestandin 4)" | deploy/setup.sh set PADDLE_API_KEY
+          echo "test_$(repeat smokestandin 2)" | deploy/setup.sh set PADDLE_CLIENT_TOKEN
+          deploy/setup.sh check
+          grep -q '^PADDLE_CHECKOUT_URL=https://reader.example.org/$' deploy/app.env
+          docker compose up -d --wait --wait-timeout 300
+          get() { curl -sS --max-time 20 -H "Host: $DOMAIN" "$@"; }
+          get --fail "$PROXY/api/health/ready"; echo
+          # Paddle's messages now have their address on the web process: an unsigned one is refused.
+          code=$(get -o /dev/null -w '%{http_code}' -X POST --data '{}' "$PROXY/api/billing/paddle")
+          echo "/api/billing/paddle: $code"
+          test "$code" = 400
+
+      - name: With Paddle on, every service and scheduled command starts
+        run: |
+          # The worker, before the AI keys: it stops only for the documented reason.
+          if timeout 180 docker compose run --rm --no-deps -T worker > worker.txt 2>&1; then
+            cat worker.txt; echo "the worker started without AI keys"; exit 1
+          fi
+          tail -n 5 worker.txt
+          grep -q "the companion dispatcher needs READER_CONVERSATION_JEV" worker.txt
+          if grep -q "ValidationError" worker.txt; then echo "the worker refused its settings"; exit 1; fi
+          docker compose run --rm --no-deps -T tools
+          # The crontab's three lines, through deploy/report.sh as the crontab runs them.
+          deploy/report.sh purge -- docker compose run --rm --no-deps -T purge | tee purge.txt
+          grep -q '^erased 0, unfinished 0, held 0, waiting 0; editions erased 0, unfinished 0, waiting 0$' purge.txt
+          # No plan is stored, so it asks Paddle nothing: past its settings, it checks none.
+          deploy/report.sh paddle-check -- docker compose exec -T web python -m app.hosted.paddle_check | tee paddle.txt
+          grep -q '^checked 0, changed 0, failed 0$' paddle.txt
+          deploy/setup.sh backup-key > again.txt
+          grep -q "already set" again.txt
+          set +e
+          deploy/report.sh backup -- env MOTHLI_COMPOSE="docker compose" deploy/backup.sh > backup.txt 2>&1
+          code=$?
+          set -e
+          cat backup.txt
+          test "$code" != 0
+          grep -q "BACKUP FAILED while uploading to R2" backup.txt
+          # The database step, as every start runs it.
+          docker compose run --rm -T migrate
+
+      - name: With Paddle on and the AI keys in, the worker runs
+        run: |
+          # The owner's next step: both AI keys, then deploy/setup.sh worker on. Stand-ins; with
+          # no reader there is no job, so nothing is sent to any AI provider.
+          echo "sk-smoke-stand-in" | deploy/setup.sh set OPENAI_API_KEY
+          echo "ts-smoke-stand-in" | deploy/setup.sh set TYPESAFE_API_KEY
+          deploy/setup.sh worker on
+          deploy/setup.sh check
+          docker compose run --rm --no-deps -T worker python -m app.hosted.worker --once
+          docker compose up -d --wait --wait-timeout 300
+          sleep 20
+          docker compose logs --no-color worker | tail -n 20
+          test "$(docker compose ps --format '{{.State}}' worker)" = running
+          if docker compose logs --no-color worker | grep -qE "Traceback|ValidationError"; then
+            echo "the worker stopped"; exit 1
+          fi
+          get() { curl -sS --max-time 20 -H "Host: $DOMAIN" "$@"; }
+          get --fail "$PROXY/api/health/ready"; echo
 
       - name: Show what went wrong
         if: failure()
