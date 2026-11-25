@@ -92,13 +92,16 @@ function once(text: string, part: string): void {
   if (at < 0 || text.indexOf(part, at + 1) >= 0) throw new Error(`index.html must hold ${part} once`);
 }
 
-/** A paragraph's text, from markup that is already escaped for HTML, for an attribute: its tags
- * taken out, and any "<" or ">" left over escaped, so nothing of it can be read as markup. */
+const attribute = (text: string) =>
+  text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** The text of a page's first paragraph with this class, as the browser reads it (the markup
+ * parsed by the document's own parser, not taken apart by hand), escaped for an attribute. */
 function textOf(markup: string, className: string): string | null {
-  const found = new RegExp(`<p class="${className}">([\\s\\S]*?)</p>`).exec(markup);
-  if (!found) return null;
-  return found[1].replace(/<[^>]*>/g, "").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;").replace(/\s+/g, " ").trim();
+  const holder = document.createElement("div");
+  holder.innerHTML = markup;
+  const text = holder.querySelector(`p.${className}`)?.textContent;
+  return text ? attribute(text.replace(/\s+/g, " ").trim()) : null;
 }
 
 /** The built index.html with a page's markup in its root, and the page's own title, description
