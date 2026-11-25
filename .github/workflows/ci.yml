@@ -34,8 +34,20 @@ jobs:
       - name: Lint
         working-directory: backend
         run: uv run ruff check .
+      # The public pages the backend fills in are written by the frontend's build.
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build the frontend's public pages
+        working-directory: frontend
+        run: npm ci --ignore-scripts && npm run build
       - name: Test
         working-directory: backend
+        env:
+          MOTHLI_PUBLIC_PAGES_REQUIRED: "1"
         run: uv run pytest
       - name: Audit dependencies
         working-directory: backend

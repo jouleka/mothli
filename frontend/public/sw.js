@@ -1,7 +1,8 @@
 const SHELL_CACHE = "litlet-shell-v3-mothli";
 // Existing offline libraries keep their owner-scoped cache identity across the rename.
 const OWNER_CACHE_PREFIX = "litlet-reader-owner-";
-const SHELL_ASSETS = ["/", "/index.html", "/manifest.webmanifest", "/mothli-icon.svg", "/mothli-icon-192.png", "/mothli-icon-512.png", "/mothli-icon-180.png"];
+// Not "/": for a visitor, that address is the front page written out by the server.
+const SHELL_ASSETS = ["/index.html", "/manifest.webmanifest", "/mothli-icon.svg", "/mothli-icon-192.png", "/mothli-icon-512.png", "/mothli-icon-180.png"];
 let activeOwner = null;
 const OWNER = /^(local|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
 
@@ -45,7 +46,10 @@ async function navigationResponse(request) {
   const cache = await caches.open(SHELL_CACHE);
   try {
     const response = await fetch(request);
-    if (response.ok && response.headers.get("content-type")?.includes("text/html")) {
+    // Kept for opening offline only when it is the app's own page, never a public page the
+    // server wrote out for a visitor (its words would show before the app's own).
+    if (response.ok && response.headers.get("content-type")?.includes("text/html")
+        && (await response.clone().text()).includes('<div id="root"></div>')) {
       await cache.put("/", response.clone()).catch(() => false);
     }
     return response;

@@ -82,14 +82,32 @@ jobs:
           get() { curl -sS --max-time 20 -H "Host: $DOMAIN" "$@"; }
           echo "ready:"; get --fail "$PROXY/api/health/ready" | tee ready.json; echo
           grep -q '"status":"ready"' ready.json
-          get --fail -o home.html "$PROXY/"
-          grep -qi '<!doctype html' home.html && grep -q 'id="root"' home.html
-          for page in terms privacy refunds contact; do
-            code=$(get -o "$page.html" -w '%{http_code}' "$PROXY/$page")
+          # The five public addresses as a program reads them (no JavaScript): real words, the
+          # links to the policies, and the operator's name in the terms; no prices without Paddle.
+          has() { grep -qF "$2" "$1" || { echo "$1 lacks: $2"; exit 1; }; }
+          for page in "" terms privacy refunds contact; do
+            code=$(get -o "page-$page.html" -w '%{http_code}' "$PROXY/$page")
             echo "/$page: $code"
             test "$code" = 200
-            cmp -s home.html "$page.html" || { echo "/$page is not the app's page"; exit 1; }
+            has "page-$page.html" 'id="root"><div class="mothli-library'
+            for link in terms privacy refunds contact; do has "page-$page.html" "<a href=\"/$link\">"; done
+            if grep -q '@@' "page-$page.html"; then echo "/$page has a placeholder"; exit 1; fi
           done
+          has page-.html 'Read with a friend in the margin.'
+          has page-.html 'so it can never spoil what happens next.'
+          has page-.html 'You’ll see the prices when you choose.'
+          has page-.html 'who sells Mothli on our behalf.'
+          has page-.html 'Mothli is run by Smoke Test Operator.'
+          if grep -q 'billed yearly' page-.html; then echo "a price without Paddle"; exit 1; fi
+          has page-terms.html 'Mothli is run by Smoke Test Operator, based in Testland'
+          has page-terms.html '<h2>Paying for the plan</h2>'
+          has page-terms.html 'mailto:contact@example.org'
+          has page-privacy.html '<h2>How long we keep it</h2>'
+          has page-refunds.html 'Refunds are decided by Paddle'
+          has page-contact.html 'Smoke Test Operator, based in Testland.'
+          # A signed-in reader's request is the app's own page, from the proxy, as before.
+          get --fail -o home.html -H "Cookie: __Host-litlet-session=smoke" "$PROXY/"
+          grep -qi '<!doctype html' home.html && grep -q '<div id="root"></div>' home.html
           echo "site:"; get --fail "$PROXY/api/site"; echo
           # The proxy's own security headers on a static response.
           get -D headers.txt -o /dev/null "$PROXY/"
@@ -210,6 +228,14 @@ jobs:
           fi
           get() { curl -sS --max-time 20 -H "Host: $DOMAIN" "$@"; }
           get --fail "$PROXY/api/health/ready"; echo
+
+      - name: Without the backend, the public pages are the app's own page
+        run: |
+          docker compose stop web
+          for page in "" terms; do
+            curl -sS --max-time 20 -H "Host: $DOMAIN" -o fallback.html "$PROXY/$page"
+            grep -q '<div id="root"></div>' fallback.html || { echo "/$page: no fallback"; exit 1; }
+          done
 
       - name: Show what went wrong
         if: failure()

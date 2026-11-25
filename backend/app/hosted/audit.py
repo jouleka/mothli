@@ -23,6 +23,9 @@ _REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 APPROVED_SECURITY_LOG_MESSAGES = frozenset(
     {
         "hosted runtime shutdown timed out with %d active operations",
+        # ADR 0045 step 8: the public pages' HTML (app/hosted/public_pages.py).
+        "public pages not written out: the built file is missing or not as expected",
+        "public pages show no prices: the server's figures disagree with the app's",
         "source object compensation failed after metadata transaction error",
         # ADR 0045 step 3: a message to Paddle's route refused (app/hosted/billing.py).
         "paddle message refused: signature",

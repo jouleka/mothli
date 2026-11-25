@@ -143,10 +143,10 @@ class PlanFigures:
             self._lock.release()
 
 
-@router.get("/site")
-async def site(request: Request) -> JSONResponse:
-    """Public, no session: the operator's details, the plan's two prices and the chat's AI
-    company, each or null."""
+async def site_answer(request: Request) -> dict:
+    """The operator's details, the plan's two prices and the chat's AI company, each or None:
+    what ``GET /api/site`` answers and what the public pages' HTML is filled with
+    (``public_pages``), from the same prices kept."""
     settings = request.app.state.settings
     plan = None
     ids = sold_prices(settings)
@@ -155,5 +155,11 @@ async def site(request: Request) -> JSONResponse:
         if figures is None:
             figures = request.app.state.plan_figures = PlanFigures()
         plan = await run_in_threadpool(figures.get, ids, lambda: paddle_api(request))
-    return JSONResponse({"operator": operator(settings), "plan": plan,
-                         "writer": writer(settings)}, headers=_NO_STORE)
+    return {"operator": operator(settings), "plan": plan, "writer": writer(settings)}
+
+
+@router.get("/site")
+async def site(request: Request) -> JSONResponse:
+    """Public, no session: the operator's details, the plan's two prices and the chat's AI
+    company, each or null."""
+    return JSONResponse(await site_answer(request), headers=_NO_STORE)
