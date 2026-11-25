@@ -92,10 +92,13 @@ function once(text: string, part: string): void {
   if (at < 0 || text.indexOf(part, at + 1) >= 0) throw new Error(`index.html must hold ${part} once`);
 }
 
-/** A paragraph's text, from markup that is already escaped for HTML. */
+/** A paragraph's text, from markup that is already escaped for HTML, for an attribute: its tags
+ * taken out, and any "<" or ">" left over escaped, so nothing of it can be read as markup. */
 function textOf(markup: string, className: string): string | null {
   const found = new RegExp(`<p class="${className}">([\\s\\S]*?)</p>`).exec(markup);
-  return found ? found[1].replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim() : null;
+  if (!found) return null;
+  return found[1].replace(/<[^>]*>/g, "").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/\s+/g, " ").trim();
 }
 
 /** The built index.html with a page's markup in its root, and the page's own title, description

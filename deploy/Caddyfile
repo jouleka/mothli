@@ -93,8 +93,8 @@
 
 	# The backend not reachable at all: the readable pages fall back to the app's own page.
 	handle_errors 502 503 504 {
-		@readable path / /terms /privacy /refunds /contact
-		handle @readable {
+		@unanswered path / /terms /privacy /refunds /contact
+		handle @unanswered {
 			root * /srv/mothli
 			rewrite * /index.html
 			header Cache-Control "no-cache"

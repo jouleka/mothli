@@ -274,7 +274,7 @@ def test_the_proxy_sends_only_requests_without_a_session_here() -> None:
     assert "reverse_proxy web:8000" in proxied
     assert "handle_response @failed" in proxied and "rewrite * /index.html" in proxied
     errors = caddyfile.split("\thandle_errors 502 503 504 {\n", 1)[1].split("\n\t}\n", 1)[0]
-    assert set(re.findall(r"@readable path (.+)$", errors, flags=re.M)[0].split()) == set(PATHS)
+    assert set(re.findall(r"@unanswered path (.+)$", errors, flags=re.M)[0].split()) == set(PATHS)
     compose = (ROOT / "deploy" / "compose.yaml").read_text(encoding="utf-8")
     assert '"http://127.0.0.1:8080/index.html"' in compose
     dockerfile = (ROOT / "deploy" / "Dockerfile").read_text(encoding="utf-8")
