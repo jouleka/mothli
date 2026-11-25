@@ -12,6 +12,7 @@
 !frontend/vite.config.ts
 !frontend/public/**
 !frontend/src/**
+!frontend/scripts/prerender.mjs
 !deploy/Caddyfile
 
 # Re-excluded inside the allowed folders.

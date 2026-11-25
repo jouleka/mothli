@@ -44,6 +44,8 @@ WORKDIR /app/backend
 # Only the application package and the one deployment script: no tests, no fixtures, no .env.
 COPY backend/app ./app
 COPY backend/scripts/hosted_roles.py ./scripts/hosted_roles.py
+# The public pages written out at build time, filled in at each request (app/hosted/public_pages.py).
+COPY --from=frontend /build/prerendered/public-pages.json ./public/public-pages.json
 USER mothli:mothli
 EXPOSE 8000
 # The compose file sets the command per process; this default is the web process.

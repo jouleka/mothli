@@ -28,6 +28,7 @@ from app.hosted.auth import account as account_api
 from app.hosted.auth import api as auth_api
 from app.hosted.auth.oidc import OIDCClient
 from app.hosted import billing as hosted_billing
+from app.hosted import public_pages as hosted_public_pages
 from app.hosted import site as hosted_site
 from app.hosted import subscribe as hosted_subscribe
 from app.hosted.auth.repository import PostgresAuthRepository
@@ -551,6 +552,8 @@ def create_app(
         # The public pages' one read (ADR 0045 step 8): who runs Mothli and the plan's prices,
         # signed out; always there in hosted mode.
         app.include_router(hosted_site.router)
+        # The same, written into the public pages' HTML for a visitor without a session.
+        app.include_router(hosted_public_pages.router)
         if settings.paddle_api_key is not None:
             app.include_router(hosted_subscribe.router)
         app.add_middleware(_EpubUploadBodyLimit, max_file_bytes=settings.epub_max_upload_bytes)

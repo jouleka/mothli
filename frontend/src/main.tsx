@@ -15,7 +15,7 @@ import { initializeOfflineSupport, offersChat, type OfflineSession } from "./pwa
 import { ReadingHistory } from "./history/ReadingHistory";
 import { FreeLibrary } from "./library/FreeLibrary";
 import { routedPublicPage } from "./public/pages";
-import { PublicPage } from "./public/PublicPage";
+import { PublicPage, preloadSite } from "./public/PublicPage";
 import { ReaderPage } from "./reader/ReaderPage";
 import { Shelf } from "./shelf/Shelf";
 import { SignInGate } from "./shelf/SignIn";
@@ -90,21 +90,31 @@ function App({ session }: { session?: OfflineSession | null }) {
   );
 }
 
-function Boot() {
-  const [initialization, setInitialization] = useState<
-    | { ready: false; failed: boolean }
-    | { ready: true; session?: OfflineSession | null }
-  >({ ready: false, failed: false });
+type Initialization =
+  | { ready: false; failed: boolean }
+  | { ready: true; session?: OfflineSession | null };
+
+async function initialize(): Promise<OfflineSession | null | undefined> {
+  const session = await initializeOfflineSupport();
+  // Where the reader stands with Mothli; every chat, the cast and "Story so far" follow it.
+  setMothliStanding(session?.mothli ?? null, session?.user?.email ?? null, session?.user?.id ?? null);
+  return session;
+}
+
+function Boot({ initial }: { initial?: Initialization }) {
+  const [initialization, setInitialization] = useState<Initialization>(
+    initial ?? { ready: false, failed: false },
+  );
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    // Already done before the first draw (a page the server wrote out, below).
+    if (initial && attempt === 0) return;
     let active = true;
     setInitialization({ ready: false, failed: false });
-    void initializeOfflineSupport()
+    void initialize()
       .then((session) => {
         if (!active) return;
-        // Where the reader stands with Mothli; every chat, the cast and "Story so far" follow it.
-        setMothliStanding(session?.mothli ?? null, session?.user?.email ?? null, session?.user?.id ?? null);
         setInitialization({ ready: true, session });
       })
       .catch(() => {
@@ -113,7 +123,7 @@ function Boot() {
     return () => {
       active = false;
     };
-  }, [attempt]);
+  }, [attempt, initial]);
 
   // Session resolution establishes the offline owner. Keep book requests behind that boundary,
   // while painting an account-neutral shell immediately on slow connections.
@@ -163,4 +173,16 @@ function Boot() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")!).render(<Boot />);
+const container = document.getElementById("root")!;
+const root = ReactDOM.createRoot(container);
+if (container.firstElementChild) {
+  // A public page the server wrote out to be read without JavaScript (ADR 0045 step 8;
+  // public/prerender.tsx). It stays on screen until the app can draw the same page, prices and
+  // all, and the app's first draw then replaces it with the same thing: nothing flashes.
+  void Promise.all([initialize(), preloadSite(2_500)]).then(
+    ([session]) => root.render(<Boot initial={{ ready: true, session }} />),
+    () => root.render(<Boot initial={{ ready: false, failed: true }} />),
+  );
+} else {
+  root.render(<Boot />);
+}

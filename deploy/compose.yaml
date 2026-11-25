@@ -241,7 +241,8 @@ services:
         ipv4_address: ${MOTHLI_PROXY_ADDRESS:-10.88.88.6}
       tunnel: {}
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      # The app's own page (the front page itself is written by web, for the domain only).
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/index.html"]
       interval: 30s
       timeout: 5s
       retries: 3

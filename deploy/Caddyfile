@@ -52,6 +52,32 @@
 		}
 	}
 
+	# The front page and the public pages (ADR 0045 step 8), for a request with no session cookie:
+	# the backend writes them out as readable HTML (app/hosted/public_pages.py), for visitors and
+	# programs that run no JavaScript; the app then takes over in the browser. A signed-in reader's
+	# request never goes there: the app's own page below, as before. If the backend cannot answer,
+	# the app's own page all the same.
+	@readable {
+		path / /terms /privacy /refunds /contact
+		not header_regexp Cookie (^|;\s*)__Host-litlet-session=
+	}
+	handle @readable {
+		encode zstd gzip
+		reverse_proxy web:8000 {
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 30s
+			}
+			@failed status 5xx
+			handle_response @failed {
+				root * /srv/mothli
+				rewrite * /index.html
+				header Cache-Control "no-cache"
+				file_server
+			}
+		}
+	}
+
 	handle {
 		root * /srv/mothli
 		# The public pages (ADR 0045 step 8) are the app's own page, at addresses of their own.
@@ -63,5 +89,16 @@
 		@unhashed not path /assets/*
 		header @unhashed Cache-Control "no-cache"
 		file_server
+	}
+
+	# The backend not reachable at all: the readable pages fall back to the app's own page.
+	handle_errors 502 503 504 {
+		@readable path / /terms /privacy /refunds /contact
+		handle @readable {
+			root * /srv/mothli
+			rewrite * /index.html
+			header Cache-Control "no-cache"
+			file_server
+		}
 	}
 }

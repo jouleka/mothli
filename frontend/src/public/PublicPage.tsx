@@ -3,13 +3,13 @@
  * the footer every signed-out page carries, and the front page's part about Mothli and the plan.
  * Everything comes from this app and its server: no script, font or image from anywhere else,
  * and Paddle's script never loads here. */
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, createContext, useCallback, useContext, useEffect, useState } from "react";
 import { Button } from "../ui/Button";
 import { MothliMark } from "../ui/MothliMark";
 import { monthlyTotal, yearlyMonth, yearlyTotal } from "../ui/planFigures";
 import { Contact, Privacy, Refunds, Terms, UPDATED } from "./legal";
 import { PAGE_PATHS, type PublicPageName } from "./pages";
-import { fetchSite, planShown, type Operator, type Site } from "./site";
+import { fetchSite, planShown, type Operator, type PlanShown, type Site } from "./site";
 import "../shelf/shelf-redesign.css";
 import "./public.css";
 
@@ -25,23 +25,52 @@ export const TITLES: Record<PublicPageName, string> = {
 };
 
 let pending: Promise<Site> | null = null;
+/** The read's answer once it has come, so a page drawn after it starts from it. */
+let known: Site | null = null;
 
 /** The public read, once a page load (a failure is asked again on retry). */
 function loadSite(): Promise<Site> {
-  pending ??= fetchSite().catch((error: unknown) => {
-    pending = null;
-    throw error;
-  });
+  pending ??= fetchSite().then(
+    (found) => {
+      known = found;
+      return found;
+    },
+    (error: unknown) => {
+      pending = null;
+      throw error;
+    },
+  );
   return pending;
+}
+
+/** The read started before the app draws anything, waited for at most `waitMs`. When the server
+ * has already written the page out (prerender.tsx), the app then draws the same page at once,
+ * prices and all, instead of drawing it without them first. Never rejects. */
+export function preloadSite(waitMs: number): Promise<void> {
+  return Promise.race([
+    loadSite().then(() => undefined, () => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, waitMs)),
+  ]);
+}
+
+/** The answer given, as if read (prerender.tsx draws each page with its placeholders this way). */
+export function knowSite(site: Site): void {
+  known = site;
+  pending = Promise.resolve(site);
 }
 
 /** For tests: forget the read, so the next render asks again. */
 export function forgetSite(): void {
   pending = null;
+  known = null;
 }
 
+/** The front page's figures given ready-made instead of worked out from `site.plan`: only
+ * prerender.tsx gives them, as placeholders the server fills in. */
+export const ShownPlan = createContext<PlanShown | null | undefined>(undefined);
+
 export function useSite(): { site: Site | null; failed: boolean; retry: () => void } {
-  const [site, setSite] = useState<Site | null>(null);
+  const [site, setSite] = useState<Site | null>(() => known);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
@@ -83,7 +112,8 @@ export function SiteFooter({ operator, site }: { operator?: Operator | null; sit
  * (the yearly one first, as a month, with its saving), or the plan without figures when the
  * server could not read them from Paddle. */
 export function AboutMothli({ site, action }: { site: Site | null; action?: ReactNode }) {
-  const shown = planShown(site?.plan ?? null);
+  const given = useContext(ShownPlan);
+  const shown = given === undefined ? planShown(site?.plan ?? null) : given;
   return (
     <section className="pp-about" aria-labelledby="about-title">
       <h2 id="about-title">A reading friend who never spoils the ending</h2>
