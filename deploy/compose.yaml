@@ -132,6 +132,14 @@ services:
       HOSTED_TENANT_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_tenant:${MOTHLI_DB_TENANT_PASSWORD:?set MOTHLI_DB_TENANT_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
       HOSTED_STORAGE_BACKEND: filesystem
       HOSTED_STORAGE_FILESYSTEM_ROOT: /var/lib/mothli/books
+      # Paddle is the web process's alone: the worker never talks to Paddle or applies its
+      # messages (where a reader stands it reads from the database). Emptied here, app.env's
+      # Paddle secrets never reach it, and the app's "Paddle needs the billing role" check, which
+      # only the web process can pass, is not asked of it. The price ids stay: they are not secret.
+      PADDLE_WEBHOOK_SECRET: ""
+      PADDLE_API_KEY: ""
+      PADDLE_CLIENT_TOKEN: ""
+      PADDLE_CHECKOUT_URL: ""
     volumes:
       - books:/var/lib/mothli/books
     networks: [data, egress]
@@ -178,6 +186,12 @@ services:
       HOSTED_PURGE_DSN: postgresql://${MOTHLI_DB_ROLE_PREFIX:-mothli}_purge:${MOTHLI_DB_PURGE_PASSWORD:?set MOTHLI_DB_PURGE_PASSWORD in deploy/.env}@db:5432/${MOTHLI_DB_NAME:-mothli}
       HOSTED_STORAGE_BACKEND: filesystem
       HOSTED_STORAGE_FILESYSTEM_ROOT: /var/lib/mothli/books
+      # As for the worker: Paddle is the web process's alone (an account whose plan still renews
+      # is held by what the database says, not by asking Paddle).
+      PADDLE_WEBHOOK_SECRET: ""
+      PADDLE_API_KEY: ""
+      PADDLE_CLIENT_TOKEN: ""
+      PADDLE_CHECKOUT_URL: ""
     volumes:
       - books:/var/lib/mothli/books
     networks: [data]

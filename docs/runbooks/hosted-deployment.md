@@ -882,6 +882,13 @@ Cloudflare > Workers & Pages > mothli-watch > Settings > Trigger events: delete 
   --tail 50 web`. A line `hosted mode requires NAME` names a missing setting in
   `deploy/app.env`; `the streamed chat in hosted mode requires NAME` means one AI key is filled in
   and the other is not (fill in both, or empty both).
+- **A scheduled job's log (`deploy/backups/purge.log`, for example) or the worker's ends in
+  `ValidationError ... requires ...`.** The job read `deploy/app.env` and stopped before doing
+  anything, so nothing was changed. The line names what is missing. If it names a `PADDLE_` setting or
+  `HOSTED_BILLING_DSN`, the server's code is older than the one that keeps Paddle's settings to
+  the web process: `git pull` and `docker compose -f deploy/compose.yaml up -d --build --wait`
+  (step 3), then run the job by hand once (`docker compose -f deploy/compose.yaml run --rm
+  purge`). Otherwise fill in what it names, as for the web process above.
 - **Readers see no chat.** Both AI keys in `deploy/app.env` are empty (or the file was made from
   an older template whose chat lines were commented out: copy the chat section from
   `deploy/app.env.example`). Fill them in, then

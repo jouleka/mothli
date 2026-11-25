@@ -59,6 +59,8 @@ APPROVED_SECURITY_LOG_MESSAGES = frozenset(
         "sign-in return failed: no code",
         "sign-in return failed: exchange or validation failed",
         "sign-in return failed: account inactive",
+        # The sign-in service could not be reached to start a sign-in (the same table).
+        "sign-in start failed: provider unreachable",
     }
 )
 

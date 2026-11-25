@@ -8,7 +8,9 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.hosted.tenant.grants import (
     TENANT_FUNCTION_PRIVILEGES,
@@ -391,6 +393,138 @@ def test_the_billing_role_reaches_the_web_process_and_paddle_stays_off_in_the_te
     assert template_settings(monkeypatch, tmp_path).paddle_client_token == ""
     assert template_settings(monkeypatch, tmp_path).paddle_webhook_secret is None
     assert template_settings(monkeypatch, tmp_path).paddle_api_key is None
+
+
+def compose_services() -> dict[str, str]:
+    """Each service of deploy/compose.yaml, its block as written."""
+    compose = (DEPLOY / "compose.yaml").read_text(encoding="utf-8")
+    return dict(re.findall(r"\n  ([a-z]+):\n(.*?)(?=\n  [a-z]+:\n|\nnetworks:)", compose,
+                           flags=re.S))
+
+
+def compose_environment(block: str) -> dict[str, str]:
+    """A service's ``environment:`` lines as Compose hands them over, ``${...}`` filled in from
+    a stand-in deploy/.env (the domain ``reader.example``; a default where the file gives one)."""
+    if "\n    environment:\n" not in block:
+        return {}
+    lines = block.split("\n    environment:\n", 1)[1].split("\n")
+    section = []
+    for line in lines:
+        if line.strip() and not line.startswith("      "):
+            break
+        section.append(line)
+
+    def fill(match: re.Match) -> str:
+        name, kind, default = match.group(1), match.group(2), match.group(3)
+        if name == "MOTHLI_DOMAIN":
+            return "reader.example"
+        return default if kind == "-" else "stand-in"
+
+    environment = {}
+    for name, value in re.findall(r"^      ([A-Z0-9_]+): (.*)$", "\n".join(section), flags=re.M):
+        value = value.strip()
+        if value[:1] == value[-1:] == '"' and len(value) >= 2:
+            value = value[1:-1]
+        environment[name] = re.sub(r"\$\{([A-Z0-9_]+)(?::([-?])([^}]*))?\}", fill, value)
+    return environment
+
+
+# deploy/app.env as the owner has it with Paddle on: the template, the sign-in and storage lines
+# filled in, the operator's three lines, and Paddle's sandbox values (made-up stand-ins).
+PADDLE_ON = {
+    "OIDC_ISSUER": "https://idp.example/", "OIDC_CLIENT_ID": "mothli",
+    "OIDC_CLIENT_SECRET": "stand-in-secret",
+    "OPERATOR_LEGAL_NAME": "Stand-in Operator", "OPERATOR_COUNTRY": "Testland",
+    "OPERATOR_CONTACT_EMAIL": "contact@reader.example",
+    "PADDLE_ENVIRONMENT": "sandbox",
+    "PADDLE_WEBHOOK_SECRET": "pdl_ntfset_" + "teststandin" * 3,
+    "PADDLE_PRICE_MONTHLY": "pri_" + "a" * 26, "PADDLE_PRICE_YEARLY": "pri_" + "b" * 26,
+    "PADDLE_API_KEY": "_".join(("pdl", "sdbx", "apikey", "teststandin" * 4)),
+    "PADDLE_CLIENT_TOKEN": "test_" + "teststandin" * 2,
+    "PADDLE_CHECKOUT_URL": "https://reader.example/",
+}
+
+
+def service_settings(monkeypatch, app_env: dict[str, str], environment: dict[str, str]):
+    """``Settings`` as one container builds them: app.env, then compose's ``environment:`` over it
+    (Compose gives ``environment`` precedence over ``env_file``)."""
+    from app.config import Settings
+
+    for name in [*Settings.model_fields]:
+        monkeypatch.delenv(name.upper(), raising=False)
+    for name, value in {**app_env, **environment}.items():
+        monkeypatch.setenv(name, value)
+    return Settings(_env_file=None)
+
+
+def paddle_app_env(**filled) -> dict[str, str]:
+    import base64
+
+    return {**template_values(), **PADDLE_ON,
+            "HOSTED_STORAGE_FILESYSTEM_KEY": base64.b64encode(b"k" * 32).decode("ascii"),
+            **filled}
+
+
+def test_every_process_that_reads_app_env_starts_with_paddle_on(monkeypatch) -> None:
+    """The break it catches (the 4:00 purge on 25 November 2026): Paddle switched on in app.env,
+    and every container that reads app.env but is not the web process stopping at startup on
+    "Paddle's messages require HOSTED_BILLING_DSN", an address only the web process may hold.
+    Each such container is built here from compose.yaml's own lines, with both AI keys empty and
+    filled in. The worker and the purge get none of Paddle's secrets, nor the billing role, and
+    read every other number (free weeks, caps, warm-up) exactly as the web process does."""
+    from app.hosted.companion.jobs import companion_kinds
+
+    services = compose_services()
+    readers = sorted(name for name, block in services.items() if "env_file:" in block)
+    # A new container that reads app.env must be added here, and so to this check.
+    assert readers == ["purge", "web", "worker"]
+    secrets = ("PADDLE_WEBHOOK_SECRET", "PADDLE_API_KEY", "PADDLE_CLIENT_TOKEN",
+               "PADDLE_CHECKOUT_URL")
+    for keys in ({}, {"OPENAI_API_KEY": "sk-stand-in", "TYPESAFE_API_KEY": "ts-stand-in"}):
+        app_env = paddle_app_env(**keys)
+        web_env = compose_environment(services["web"])
+        web = service_settings(monkeypatch, app_env, web_env)
+        assert web.paddle_webhook_secret is not None and web.paddle_api_key is not None
+        assert web.hosted_billing_dsn is not None and web.paddle_client_token
+        assert web.paddle_checkout_url == "https://reader.example/"
+        for name in ("worker", "purge"):
+            environment = compose_environment(services[name])
+            assert "HOSTED_BILLING_DSN" not in environment, name
+            assert {secret: environment.get(secret) for secret in secrets} == dict.fromkeys(
+                secrets, ""), name
+            settings = service_settings(monkeypatch, app_env, environment)
+            assert settings.paddle_webhook_secret is None and settings.paddle_api_key is None
+            assert settings.paddle_client_token == "" and settings.paddle_checkout_url == ""
+            assert settings.hosted_billing_dsn is None
+            # The same prices, plans, caps and switches as the web process.
+            assert settings.paddle_prices() == web.paddle_prices()
+            for field in type(settings).model_fields:
+                upper = field.upper()
+                if upper in web_env or upper in environment:
+                    continue
+                assert getattr(settings, field) == getattr(web, field), (name, field)
+            if name == "worker" and keys:
+                assert companion_kinds(settings) == {"chapter_notes", "recollect",
+                                                     "story_memory"}
+
+
+def test_paddle_half_set_up_still_stops_the_web_process_and_would_stop_the_jobs(
+        monkeypatch) -> None:
+    """The web process keeps refusing a half-done Paddle, exactly as before; and without the
+    lines compose.yaml empties, the worker and the purge would stop as the purge did on the
+    server, so the check above is what keeps them starting."""
+    services = compose_services()
+    web_env = compose_environment(services["web"])
+    with pytest.raises(ValidationError, match="PADDLE_API_KEY requires PADDLE_WEBHOOK_SECRET"):
+        service_settings(monkeypatch, paddle_app_env(PADDLE_WEBHOOK_SECRET=""), web_env)
+    with pytest.raises(ValidationError, match="Paddle's messages require PADDLE_PRICE_MONTHLY"):
+        service_settings(monkeypatch, paddle_app_env(PADDLE_PRICE_MONTHLY="",
+                                                     PADDLE_PRICE_YEARLY=""), web_env)
+    for name in ("worker", "purge"):
+        kept = {key: value for key, value in compose_environment(services[name]).items()
+                if not key.startswith("PADDLE_")}
+        with pytest.raises(ValidationError, match="Paddle's messages require HOSTED_BILLING_DSN"):
+            service_settings(monkeypatch, paddle_app_env(), kept)
 
 
 def test_the_real_settings_files_are_never_committed() -> None:

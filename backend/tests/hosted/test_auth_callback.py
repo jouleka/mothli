@@ -70,8 +70,11 @@ class Repository:
 class Provider:
     def __init__(self) -> None:
         self.refuse = False
+        self.unreachable = False
 
     async def authorization_url(self, *, state, nonce, code_challenge) -> str:
+        if self.unreachable:
+            raise OIDCError("discovery failed")
         return f"{ISSUER}/authorize?state={state}"
 
     async def exchange_and_validate(self, *, code, code_verifier, nonce, now) -> IdentityClaims:
@@ -105,7 +108,8 @@ def _start(client: TestClient) -> str:
     return parse_qs(urlsplit(login.headers["location"]).query)["state"][0]
 
 
-def _assert_sent_back(response, caplog, stage: str, *secrets: str) -> None:
+def _assert_sent_back(response, caplog, stage: str, *secrets: str,
+                      line: str = "sign-in return failed") -> None:
     assert response.status_code == 303
     assert response.headers["location"] == SIGN_IN_AGAIN == "/?signin=again"
     assert "no-store" in response.headers["cache-control"]
@@ -115,7 +119,7 @@ def _assert_sent_back(response, caplog, stage: str, *secrets: str) -> None:
     assert not any(item.startswith((f"{SESSION_COOKIE}=", f"{CSRF_COOKIE}=")) for item in cookies)
     assert "Login could not be completed" not in response.text
     lines = [record.getMessage() for record in caplog.records if record.name == "app.hosted.auth.api"]
-    assert lines == [f"sign-in return failed: {stage}"]
+    assert lines == [f"{line}: {stage}"]
     for secret in (CODE, EMAIL, SUBJECT, "testclient", *secrets):
         assert secret not in caplog.text
 
@@ -221,6 +225,20 @@ def test_an_inactive_account(hosted, caplog) -> None:
     response = hosted.client.get("/api/auth/callback", params={"state": state, "code": CODE},
                                  follow_redirects=False)
     _assert_sent_back(response, caplog, "account inactive", state)
+
+
+def test_a_sign_in_service_that_cannot_be_reached_lands_on_the_front_page(hosted,
+                                                                          caplog) -> None:
+    """The sign-in button's own navigation, before the sign-in service is reached: the same
+    kind line as a failed return, never a page of JSON, and no attempt kept."""
+    caplog.set_level(logging.INFO)
+    hosted.provider.unreachable = True
+    response = hosted.client.get("/api/auth/login", params={"return_to": "/library"},
+                                 follow_redirects=False)
+    _assert_sent_back(response, caplog, "provider unreachable", "/library",
+                      line="sign-in start failed")
+    assert "Login is temporarily unavailable" not in response.text
+    assert not hosted.repository.attempts and hosted.repository.sessions == 0
 
 
 def test_the_marker_never_takes_anything_from_the_request(hosted, caplog) -> None:
