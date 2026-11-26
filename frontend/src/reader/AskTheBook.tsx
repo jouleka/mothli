@@ -749,23 +749,45 @@ export function AskTheBook({
       if (!session.getSnapshot().busy) void send("Catch me up");
     }
   }, [initialAction, session]);
-  // On a phone Mothli is a sheet over the page. It must sit exactly in what's visible above the
-  // keyboard: the page behind is held still (iOS otherwise scrolls it as the keyboard rises), and
-  // the sheet follows the keyboard frame by frame while it slides, instead of snapping to a size
-  // read halfway through. The latest words stay in view as the sheet gets shorter.
+  // On a phone Mothli is a sheet over the page, and it should feel like an app's own screen:
+  // - the page behind can't move: the body is pinned, and a swipe anywhere that isn't the
+  //   conversation (or another list that can still scroll that way) is held, so iOS never pans the
+  //   page under the keyboard and the sheet never has to chase it;
+  // - the sheet fills exactly what's visible above the keyboard, following it frame by frame while
+  //   it slides, moved with a transform (no relayout) rather than a new top;
+  // - the canvas behind Safari's floating bars takes the sheet's colour, so no strip of page shows.
+  // The latest words stay in view as the sheet gets shorter.
   useEffect(() => {
     if (!compact) return;
+    const root = rootRef.current;
     const html = document.documentElement;
     const body = document.body;
-    const held = { htmlOverflow: html.style.overflow, bodyOverflow: body.style.overflow, overscroll: body.style.overscrollBehavior };
+    const pageY = window.scrollY;
+    const held = {
+      htmlOverflow: html.style.overflow, htmlBackground: html.style.backgroundColor,
+      bodyOverflow: body.style.overflow, bodyBackground: body.style.backgroundColor,
+      bodyPosition: body.style.position, bodyTop: body.style.top, bodyWidth: body.style.width,
+      overscroll: body.style.overscrollBehavior,
+    };
+    const surface = root ? getComputedStyle(root).backgroundColor : "";
     html.style.overflow = "hidden";
     body.style.overflow = "hidden";
     body.style.overscrollBehavior = "none";
+    body.style.position = "fixed";
+    body.style.top = `-${pageY}px`;
+    body.style.width = "100%";
+    if (surface) {
+      html.style.backgroundColor = surface;
+      body.style.backgroundColor = surface;
+    }
+    const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    const heldTheme = themeColor?.content;
+    if (themeColor && surface) themeColor.content = surface;
+
     const viewport = window.visualViewport;
     let lastHeight = -1;
     let lastTop = -1;
     const fit = () => {
-      const root = rootRef.current;
       if (!root || !viewport) return;
       const height = Math.round(viewport.height);
       const top = Math.round(Math.max(0, viewport.offsetTop));
@@ -773,36 +795,84 @@ export function AskTheBook({
       const thread = conversationRef.current;
       const atEnd = thread ? thread.scrollHeight - thread.scrollTop - thread.clientHeight < 24 : false;
       root.style.setProperty("--mothli-viewport-height", `${height}px`);
-      root.style.setProperty("--mothli-viewport-top", `${top}px`);
+      root.style.setProperty("--mothli-viewport-top", "0px");
+      root.style.transform = top ? `translate3d(0, ${top}px, 0)` : "";
       if (thread && atEnd && height < lastHeight) thread.scrollTop = thread.scrollHeight;
       lastHeight = height;
       lastTop = top;
     };
-    let following = 0;
+    let frame = 0;
     let until = 0;
     const follow = () => {
       fit();
-      if (performance.now() < until) following = requestAnimationFrame(follow);
-      else following = 0;
+      frame = performance.now() < until ? requestAnimationFrame(follow) : 0;
     };
-    const followKeyboard = () => {
-      until = performance.now() + 800;
-      if (!following) following = requestAnimationFrame(follow);
+    const followFor = (ms: number) => {
+      until = Math.max(until, performance.now() + ms);
+      if (!frame) frame = requestAnimationFrame(follow);
     };
+    const followKeyboard = () => followFor(900);
+    const nextFrame = () => followFor(0);
+
+    // A swipe is held unless something under the finger can still scroll that way.
+    let lastX = 0;
+    let lastY = 0;
+    const canScroll = (from: EventTarget | null, dx: number, dy: number) => {
+      for (let node = from instanceof Element ? from : null; node && node !== root?.parentElement; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (Math.abs(dy) >= Math.abs(dx) && /(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1) {
+          if (dy > 0 && node.scrollTop > 0) return true;
+          if (dy < 0 && node.scrollTop + node.clientHeight < node.scrollHeight - 1) return true;
+        }
+        if (Math.abs(dx) > Math.abs(dy) && /(auto|scroll)/.test(style.overflowX) && node.scrollWidth > node.clientWidth + 1) {
+          if (dx > 0 && node.scrollLeft > 0) return true;
+          if (dx < 0 && node.scrollLeft + node.clientWidth < node.scrollWidth - 1) return true;
+        }
+      }
+      return false;
+    };
+    const touchStart = (event: TouchEvent) => {
+      lastX = event.touches[0]?.clientX ?? 0;
+      lastY = event.touches[0]?.clientY ?? 0;
+    };
+    const touchMove = (event: TouchEvent) => {
+      if (event.touches.length !== 1) return; // pinch-to-zoom stays the reader's
+      const x = event.touches[0].clientX;
+      const y = event.touches[0].clientY;
+      const dx = x - lastX;
+      const dy = y - lastY;
+      lastX = x;
+      lastY = y;
+      if (!dx && !dy) return;
+      if (!canScroll(event.target, dx, dy) && event.cancelable) event.preventDefault();
+    };
+
     fit();
     viewport?.addEventListener("resize", followKeyboard);
-    viewport?.addEventListener("scroll", fit);
+    viewport?.addEventListener("scroll", nextFrame);
     document.addEventListener("focusin", followKeyboard);
     document.addEventListener("focusout", followKeyboard);
+    document.addEventListener("touchstart", touchStart, { passive: true });
+    document.addEventListener("touchmove", touchMove, { passive: false });
     return () => {
-      cancelAnimationFrame(following);
+      cancelAnimationFrame(frame);
       viewport?.removeEventListener("resize", followKeyboard);
-      viewport?.removeEventListener("scroll", fit);
+      viewport?.removeEventListener("scroll", nextFrame);
       document.removeEventListener("focusin", followKeyboard);
       document.removeEventListener("focusout", followKeyboard);
+      document.removeEventListener("touchstart", touchStart);
+      document.removeEventListener("touchmove", touchMove);
+      if (root) root.style.transform = "";
+      if (themeColor && heldTheme != null) themeColor.content = heldTheme;
       html.style.overflow = held.htmlOverflow;
+      html.style.backgroundColor = held.htmlBackground;
       body.style.overflow = held.bodyOverflow;
+      body.style.backgroundColor = held.bodyBackground;
+      body.style.position = held.bodyPosition;
+      body.style.top = held.bodyTop;
+      body.style.width = held.bodyWidth;
       body.style.overscrollBehavior = held.overscroll;
+      if (pageY) window.scrollTo(0, pageY);
     };
   }, [compact]);
   // Mothli speaks first: a recap already in hand, or a chapter closeout fetched once on open.
