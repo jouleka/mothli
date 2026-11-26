@@ -11,6 +11,7 @@ repaired. Nothing unchecked is shown; doubt costs about a second on that sentenc
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy
+from datetime import UTC, datetime
 import json
 import logging
 from queue import Empty, Queue
@@ -23,7 +24,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from app.ask import (AskRetrievalLimit, ConversationMessage, ask_prompt, book_names_in, conversation_question,
-                     conversation_retrieval_question, retrieve_ask_sources, source_facts)
+                     conversation_retrieval_question, recap_request, retrieve_ask_sources, source_facts)
 from app.ask_context import complete_ask_context
 from app.ask_evidence import AskEvidenceError
 from app.chapter_notes import note_passages, notes_block, select_notes, usable_notes
@@ -87,6 +88,10 @@ STREAM_SYSTEM = (
     "plainly that the two of you haven't got there yet. Never confirm, deny, hint or guess, and "
     "never repeat as fact something the reader's message assumes but the passages do not state.\n"
     "If you cannot tell which person or moment they mean, ask.\n"
+    "ASKED AGAIN: when the reader asks something you already answered earlier in this "
+    "conversation, don't recite your earlier reply. Answer again in fresh words and add something "
+    "you didn't say, if the passages have it. An ASKED BEFORE note, when given, is a true account "
+    "of what was said between you, not of the book.\n"
     "WHERE THE READER IS and HOW THIS APP WORKS, when given, are facts you may use and tell "
     "the reader.\n"
     + SPEAK_AS_A_FRIEND +
@@ -162,6 +167,88 @@ def take_sentences(buffer, *, final=False):
             sentences.append(last)
         rest = ""
     return sentences, rest
+
+
+def _folded(text):
+    return " ".join(re.sub(r"[^\w\s]", "", text.casefold()).split())
+
+
+def _ago(then, now):
+    try:
+        when = datetime.fromisoformat(str(then).replace("Z", "+00:00"))
+    except ValueError:
+        return "earlier"
+    minutes = (now - (when if when.tzinfo else when.replace(tzinfo=UTC))).total_seconds() / 60
+    if minutes < 10:
+        return "a few minutes ago"
+    if minutes < 90:
+        return "earlier in this sitting"
+    if minutes < 24 * 60:
+        return "a few hours ago"
+    days = round(minutes / (24 * 60))
+    return "yesterday" if days <= 1 else f"{days} days ago"
+
+
+REPEAT_MIN_WORDS = 3        # "ok", "thanks", "lol" said twice are chat, not a question asked again
+REPEAT_REPLY_CHARS = 1200   # of the earlier reply quoted back, cut at a sentence end
+
+
+def _quoted(reply):
+    said = " ".join(reply.split())
+    if len(said) <= REPEAT_REPLY_CHARS:
+        return said
+    cut = said[:REPEAT_REPLY_CHARS]
+    ends = [m.end() for m in re.finditer(r"[.!?…][\"'”’)]*(?=\s)", cut)]
+    return cut[:ends[-1]] if ends else cut
+
+
+def asked_before(question, turns, point, now=None):
+    """A note for the writer when the reader sends again a message Mothli has already answered in
+    this conversation. Without it the same pages give the same reply, near word for word, which
+    no friend would do. Two kinds:
+
+    - a catch-up ("Catch me up", "what's happened so far", any of ``recap_request``), whenever it
+      was asked: a catch-up asked again wants a new angle, not the same summary;
+    - the same message word for word, within the conversation the writer is shown
+      (``HISTORY_TURNS``): it is answered again in fresh words. Older or shorter matches are left
+      alone, since "what do you think?" or "ok" say nothing on their own about what is meant.
+
+    Matching words are not always the same question ("who is he?" can mean someone new), so the
+    writer is told the words matched and decides from the conversation. The note is Mothli's own
+    earlier words and adds nothing a sentence may rest on: every sentence is still checked against
+    the passages alone. Repeats in other words or languages are left to the ASKED AGAIN rule.
+    """
+    recap = recap_request(question)
+    folded = _folded(question)
+    if not recap and len(folded.split()) < REPEAT_MIN_WORDS:
+        return None
+    for at in range(len(turns) - 2, -1, -1):
+        turn, reply = turns[at], turns[at + 1]
+        if turn["role"] != "user" or reply["role"] != "assistant":
+            continue
+        if recap and recap_request(turn["content"]):
+            pass
+        elif _folded(turn["content"]) != folded or at < len(turns) - HISTORY_TURNS:
+            continue
+        now_at = (point["atom"], point["offset"])
+        then_at = (turn["atom"], turn["source_offset"])
+        where = ("They are further on in the book than then, so favour what is new in the passages. "
+                 if now_at > then_at else
+                 "They are at the same place in the book as then. " if now_at == then_at else "")
+        ask = ("A catch-up asked again still catches them up, but not with the same summary: go "
+               "through different moments and details than last time, and you may add how you read "
+               "one of them. "
+               if recap else
+               "If it is the same question, answer it again in fresh words rather than reciting that "
+               "reply, adding a detail you didn't mention if the passages have one. If the same words "
+               "now mean something else, just answer what they mean now. ")
+        return ("ASKED BEFORE (your own earlier words, not evidence): the reader sent this same "
+                f"message {_ago(turn['created_at'], now or datetime.now(UTC))}, and you replied: "
+                f"\"{_quoted(reply['content'])}\"\n" + where + ask +
+                "You may say once, lightly, that you remember going over this together, in a short "
+                "sentence of its own that carries no book facts. If the passages don't cover it, say "
+                "so again in fresh words.")
+    return None
 
 
 def said_before(turns):
@@ -724,6 +811,9 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
             note_names = names_note(identities)
             if note_names:
                 prompt += "\n\n" + note_names
+            again = asked_before(body.question, earlier, point)
+            if again:
+                prompt += "\n\n" + again
             prompt += "\n\nReply to the reader now."
             for event in write_and_gate(catalog=catalog, settings=settings, writer=writer, book_id=book_id,
                                         system=STREAM_SYSTEM_REMEMBERING if remembered else STREAM_SYSTEM,

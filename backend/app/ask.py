@@ -34,6 +34,16 @@ class ConversationMessage(BaseModel):
     as_of_chapter: StrictInt = Field(ge=0, le=2**31 - 1)
 
 
+def recap_request(question: str) -> bool:
+    """Whether the message only asks to be caught up ("Catch me up", "what's happened so far")."""
+    value = re.sub(r"[^\w\s]", "", question.casefold()).strip()
+    return bool(re.fullmatch(
+        r"(?:please )?(?:catch me up|(?:give me |can you give me )?(?:a |the )?(?:quick |brief )?recap|"
+        r"what(?:s| has)? happened (?:so far|up to now)|what should i remember so far|"
+        r"remind me what happened|summari[sz]e (?:what ive read|the story so far))"
+        r"(?: please)?", value))
+
+
 def conversation_question(question: str, history: list[ConversationMessage], frontier: int) -> str:
     permitted = [message.model_dump(mode="json") for message in history
                  if message.as_of_chapter <= frontier]
