@@ -69,7 +69,7 @@ export function MothCorner({
         disabled={disabled}
         onClick={onOpen}
       >
-        <Moth mood={speaking ? "curious" : mood} size={54} glow={false} />
+        <Moth mood={speaking ? "curious" : mood} size={54} glow={false} still />
       </button>
     </div>
   );

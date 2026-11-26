@@ -24,6 +24,7 @@ import {
 } from "../api";
 import { BookCover } from "../shelf/Shelf";
 import { Button } from "../ui/Button";
+import { Errand } from "../ui/Errand";
 import { Icon } from "../ui/Icon";
 import { Moth } from "../ui/Moth";
 import { MothliMark } from "../ui/MothliMark";
@@ -428,9 +429,11 @@ function BookSheet({
                   On your shelf
                 </span>
               </>
+            ) : adding ? (
+              <Errand kind="library" title={book.title} />
             ) : (
-              <Button variant="primary" aria-busy={adding} disabled={adding} onClick={() => void add()}>
-                {adding ? "Adding to your books…" : "Add to my books"}
+              <Button variant="primary" onClick={() => void add()}>
+                Add to my books
               </Button>
             )}
           </div>

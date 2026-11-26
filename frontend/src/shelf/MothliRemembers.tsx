@@ -155,13 +155,13 @@ export function MothliRemembers({ onClose }: { onClose: () => void }) {
           </p>
 
           {loadError && <p className="fl-error" role="alert">{loadError}</p>}
-          {items === null && !loadError && <p className="ml-mem-quiet" role="status">Looking…</p>}
+          {items === null && !loadError && <p className="ml-mem-quiet" role="status">Leafing through my notebook…</p>}
           {items !== null && items.length === 0 && <p className="ml-mem-empty">{EMPTY}</p>}
 
           {items !== null && items.length > 0 && (
             <ol className="ml-mem-list" ref={listRef}>
               {items.map((item, at) => (
-                <li key={item.id} className="ml-mem-item">
+                <li key={item.id} className={`ml-mem-item${forgetting === item.id ? " is-forgetting" : ""}`}>
                   {item.book && <p className="ml-mem-book">About {item.book.title}</p>}
                   <p className="ml-mem-text" id={`${noteId}-${item.id}`}>{item.text}</p>
                   {item.message && <blockquote className="ml-mem-said">“{item.message}”</blockquote>}
@@ -226,6 +226,12 @@ export function MothliRemembers({ onClose }: { onClose: () => void }) {
               )}
             </div>
           )}
+          {/* The one place the app says what writes Mothli's words (the owner's choice,
+              2026-11-26: a friend in its own voice, with the legal duty kept quietly here). */}
+          <p className="ml-mem-fine">
+            A quiet word: Mothli’s replies are written by an AI model, so now and then it can get
+            something wrong.
+          </p>
         </div>
       </div>
     </div>,

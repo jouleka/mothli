@@ -5,25 +5,29 @@ export type MothMood = "idle" | "curious" | "thinking" | "happy" | "sleepy";
 /** Mothli, drawn as a bookplate stamp: a line moth whose wings read as an open book.
  * It takes the colour of the text around it (Mothli's blue pencil by default).
  * Decorative by default; pass `label` when the moth is the only thing conveying a state.
- * `glow` is accepted for older call sites; the stamp never glows. */
+ * `glow` is accepted for older call sites; the stamp never glows.
+ * Alive by default: now and then it twitches its wings, and it flutters when a pointer comes
+ * near. `still` keeps it quiet (beside the page being read). */
 export function Moth({
   mood = "idle",
   size = 48,
   label,
   className = "",
+  still = false,
 }: {
   mood?: MothMood;
   size?: number;
   glow?: boolean;
   label?: string;
   className?: string;
+  still?: boolean;
 }) {
   const a11y = label
     ? { role: "img" as const, "aria-label": label }
     : { "aria-hidden": true as const };
   return (
     <svg
-      className={`moth moth--${mood} ${className}`}
+      className={`moth moth--${mood}${still ? "" : " moth--alive"} ${className}`}
       viewBox="0 0 76 60"
       width={size}
       height={Math.round((size * 60) / 76)}

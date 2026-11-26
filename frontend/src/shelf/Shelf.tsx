@@ -11,6 +11,7 @@ import {
 } from "../pwa/offline";
 import { AiStatus } from "../ui/AiStatus";
 import { Button } from "../ui/Button";
+import { Errand } from "../ui/Errand";
 import { Icon } from "../ui/Icon";
 import { Moth } from "../ui/Moth";
 import { MothliMark } from "../ui/MothliMark";
@@ -198,11 +199,26 @@ export function Shelf({
   const mounted = useRef(true);
   const msg = (error: unknown) =>
     error instanceof Error ? error.message : String(error);
+  // Books seen on the shelf so far: one that appears after the first look has just been added
+  // (an upload, the free library, or one of Mothli's suggestions) and lands with a little drop.
+  // Mothli's notes write themselves in pencil the first time the shelf is seen in a visit.
+  const [pencil] = useState(() => (seenThisVisit(SHELF_WRITTEN) ? "" : " ml-note-text--writing"));
+  useEffect(() => noteSeenThisVisit(SHELF_WRITTEN), []);
+  const seen = useRef<Set<string> | null>(null);
+  const [arriving, setArriving] = useState<ReadonlySet<string>>(() => new Set());
   const refresh = useCallback(async () => {
     setErr(null);
     try {
       const result = await api.books();
-      if (mounted.current) setBooks(result);
+      if (!mounted.current) return;
+      const before = seen.current;
+      seen.current = new Set(result.map((book) => book.book_id));
+      const landed = before ? result.filter((book) => !before.has(book.book_id)).map((book) => book.book_id) : [];
+      if (landed.length) {
+        setArriving(new Set(landed));
+        window.setTimeout(() => mounted.current && setArriving(new Set()), 3200);
+      }
+      setBooks(result);
     } catch (error) {
       if (mounted.current) setErr(msg(error));
     }
@@ -545,7 +561,7 @@ export function Shelf({
               <Icon name="close" size={16} />
             </button>
           </div>
-          <p className="m-hand">Hi, I’m Mothli. I’m an AI that reads along with you, and I only know the pages you’ve already read.</p>
+          <p className="m-hand">Hi, I’m Mothli. I read along with you, and I only know the pages you’ve already read.</p>
           <ul>
             <li><strong>Read</strong> your book, at your pace.</li>
             {!mothliEnded && <li><strong>Ask me</strong> “wait, who was that?”</li>}
@@ -619,7 +635,7 @@ export function Shelf({
                   <p className="ml-stopped">{stopped.text}</p>
                   <div className="ml-note">
                     <Moth size={44} />
-                    <div className="m-hand ml-note-text">
+                    <div className={`m-hand ml-note-text${pencil}`}>
                       <p>You stopped here, {sinceLabel(stopped.at)}.</p>
                     </div>
                   </div>
@@ -627,7 +643,7 @@ export function Shelf({
               ) : (
                 <div className="ml-note">
                   <Moth size={44} />
-                  <div className="m-hand ml-note-text">
+                  <div className={`m-hand ml-note-text${pencil}`}>
                     <p>{resuming ? "I remember where you stopped." : "This one is ready when you are."}</p>
                     {offersTalk && <p>Ask me about a name or a scene and I’ll answer from the pages you’ve read.</p>}
                   </div>
@@ -666,8 +682,8 @@ export function Shelf({
             <div className="ml-page ml-page--right">
               <div className="ml-note ml-note--stacked">
                 <Moth size={64} />
-                <div className="m-hand ml-note-text ml-note-text--large">
-                  <p>Hi, I’m Mothli. I’m an AI that reads along with you.</p>
+                <div className={`m-hand ml-note-text ml-note-text--large${pencil}`}>
+                  <p>Hi, I’m Mothli. I read along with you, one page at a time.</p>
                   <p>I only ever know the pages you’ve read, so I can’t spoil anything.</p>
                   {offersTalk && <p>Ask me “wait, who was that?” whenever you like. I’ll write back in the margin.</p>}
                 </div>
@@ -803,7 +819,7 @@ export function Shelf({
                   <div className="ml-shelves">
                     {filtered.map((book) => (
                       <article
-                        className={`ml-book ${book.book_id === recent[0] ? "is-current" : ""}`}
+                        className={`ml-book ${book.book_id === recent[0] ? "is-current" : ""}${arriving.has(book.book_id) ? " is-arriving" : ""}`}
                         key={book.book_id}
                       >
                         <button
@@ -850,7 +866,7 @@ export function Shelf({
                   <ul className="ml-list">
                     {filtered.map((book) => (
                       <li key={book.book_id}>
-                        <article className="ml-row">
+                        <article className={`ml-row${arriving.has(book.book_id) ? " is-arriving" : ""}`}>
                           <button
                             className="ml-row-open"
                             aria-label={bookName(book)}
@@ -946,6 +962,7 @@ export function Shelf({
       <div role="status" className="sr-only">
         {busy ? "adding a book…" : ""}
       </div>
+      {busy && <Errand kind="upload" className="errand-card" announce={false} />}
       {dragging && (
         <div className="import-drop-overlay ml-drop" aria-hidden="true">
           <Moth size={72} />
@@ -967,4 +984,23 @@ export function Shelf({
       />
     </div>
   );
+}
+
+const SHELF_WRITTEN = "mothli.shelf-written";
+
+/** Whether `key` was noted earlier in this tab's visit (kept for the visit only). */
+function seenThisVisit(key: string): boolean {
+  try {
+    return sessionStorage.getItem(key) !== null;
+  } catch {
+    return true;
+  }
+}
+
+function noteSeenThisVisit(key: string): void {
+  try {
+    sessionStorage.setItem(key, "1");
+  } catch {
+    /* optional: the notes just write themselves again next time */
+  }
 }
