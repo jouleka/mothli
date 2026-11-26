@@ -34,6 +34,8 @@ export function ReaderMarks({
   onNavigateReply,
   onDeleteReply,
   openRequest = 0,
+  openTo = "all",
+  chapterName,
   onSourceJump,
 }: {
   marks: ReaderMark[];
@@ -59,6 +61,10 @@ export function ReaderMarks({
   onNavigateReply?: (reply: SavedCompanionReply) => void;
   onDeleteReply?: (id: string) => void;
   openRequest?: number;
+  /** The part of the Notebook an open request shows. */
+  openTo?: "all" | "mothli";
+  /** The book's own chapter name for a piece ("Chapter 2"), as the footer counts them. */
+  chapterName?: (ordinal: number) => string | null;
   onSourceJump?: () => void;
 }) {
   const { open, closing, id, triggerRef, panelRef, toggle, close } =
@@ -83,6 +89,7 @@ export function ReaderMarks({
       : `${keptBackReplies === 1 ? "1 saved reply is" : `${keptBackReplies} saved replies are`} kept back until you’ve read those pages again.`;
 
   useEffect(() => {
+    if (openRequest > 0) setFilter(openTo);
     if (openRequest > 0 && !open) toggle();
     // Only an explicit source-return request reopens the retained notebook view.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -148,7 +155,7 @@ export function ReaderMarks({
             ><span className="selection-highlight-icon" aria-hidden="true">H</span>Highlight</Button>
             <Button
               variant="ghost"
-              icon="bookmark"
+              icon="list"
               aria-expanded={selectionTool === "note"}
               aria-controls={`${id}-note-editor`}
               disabled={busy}
@@ -191,6 +198,7 @@ export function ReaderMarks({
           </div>}
           {selectionTool === "note" && <form id={`${id}-note-editor`} className="selection-note-editor" onSubmit={saveNote}>
             <label htmlFor={`${id}-note`}>Add a note</label>
+            <p className="selection-note-help" id={`${id}-note-help`}>It goes in your Notebook, next to this passage.</p>
             <textarea
               ref={noteRef}
               id={`${id}-note`}
@@ -198,6 +206,7 @@ export function ReaderMarks({
               maxLength={10000}
               rows={3}
               placeholder="A thought to keep…"
+              aria-describedby={`${id}-note-help`}
               onChange={(event) => setNote(event.currentTarget.value)}
             />
             <Button
@@ -205,7 +214,7 @@ export function ReaderMarks({
               variant="primary"
               disabled={!note.trim() || busy}
             >
-              save note
+              Keep note
             </Button>
           </form>}
           {!open && (
@@ -281,14 +290,14 @@ export function ReaderMarks({
               {visibleMarks.map(mark => <li key={`${mark.kind}-${mark.id}`} data-mark-kind={mark.kind} data-mark-color={mark.kind === "highlight" ? mark.color : undefined}>
                 <button type="button" className="plain mark-location" onClick={() => { onSourceJump?.(); onNavigate(mark); close(); }}>
                   <span className="notebook-mark-meta"><Icon name={mark.kind === "bookmark" ? "bookmark" : mark.kind === "annotation" ? "list" : "book"} size={14} />
-                    <span>{mark.kind === "annotation" ? "Note" : mark.kind === "highlight" ? "Highlight" : "Bookmark"} · {mark.anchor.atom}</span>
+                    <span>{mark.kind === "annotation" ? "Note" : mark.kind === "highlight" ? "Highlight" : "Bookmark"}{chapterName?.(mark.anchor.atom) ? ` · ${chapterName(mark.anchor.atom)}` : ""}</span>
                     {mark.pending && <span title="Waiting to sync"><Icon name="cloud" size={14} /><span className="sr-only">Queued for sync</span></span>}
                   </span>
                   <span>{mark.kind === "highlight" ? mark.selected_text : mark.kind === "annotation" ? mark.body : mark.label || "Bookmarked page"}</span>
                 </button>
                 <Button variant="ghost" className="mark-delete icon-button" aria-label={`Delete ${mark.kind}`} disabled={busy} onClick={() => onDelete(mark)}><Icon name="close" size={15} /></Button>
               </li>)}
-            </ol> : (filter !== "all" || !visibleReplies.length) && <div className="notebook-empty"><Icon name="book" size={30} /><p>{query.trim() ? "Nothing found." : "A little space for your favorite pages."}</p></div>}
+            </ol> : (filter !== "all" || !visibleReplies.length) && <div className="notebook-empty"><Icon name="book" size={30} /><p>{query.trim() ? "Nothing found." : "Pick any words in the book to highlight them or add a note. They’ll wait for you here."}</p></div>}
           </section>}
           {(filter === "all" || filter === "mothli") && <section className="notebook-section notebook-mothli-keeps" aria-label="Saved from Mothli">
             {(visibleReplies.length > 0 || filter === "mothli" || keptBackLine) && <h3><Icon name="sparkle" size={15} /> From Mothli</h3>}
@@ -299,7 +308,7 @@ export function ReaderMarks({
                 </div>
                 {onDeleteReply && <Button variant="ghost" className="mark-delete icon-button" aria-label="Delete saved reply" onClick={() => onDeleteReply(reply.id)}><Icon name="close" size={15} /></Button>}
               </li>)}
-            </ol> : filter === "mothli" && !keptBackLine && <div className="notebook-empty"><Icon name="sparkle" size={30} /><p>{query.trim() ? "Nothing found." : "Keep a favorite reply here."}</p></div>}
+            </ol> : filter === "mothli" && !keptBackLine && <div className="notebook-empty"><Icon name="sparkle" size={30} /><p>{query.trim() ? "Nothing found." : "Keep any reply from the chat with “Keep in Notebook”, and it lands here."}</p></div>}
             {keptBackLine && <p className="notebook-kept-back">{keptBackLine}</p>}
           </section>}
           <a

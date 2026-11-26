@@ -21,6 +21,17 @@ function initials(name: string) {
   const parts = name.replace(/[^\p{L}\s'-]/gu, "").trim().split(/\s+/);
   return ((parts[0]?.[0] ?? "?") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
 }
+/** The chapter's name as the reader sees it everywhere ("Chapter 2"), from its piece's ordinal:
+ * the book's own chapter number (chapterPlace), never the piece's place in the file. */
+export type ChapterName = (ordinal: number) => string | null;
+const plainChapter: ChapterName = (ordinal) => `Chapter ${ordinal}`;
+/** A title that already names its chapter ("CHAPTER II. The Pool of Tears") loses that part, so
+ * the card shows one chapter number, ours, and the title's own words. */
+const NAMED_CHAPTER = /^\s*(?:chapter|chap\.|ch\.)\s+(?:[0-9]+|[ivxlcdm]+)(?=[\s.:\u2014\u2013-]|$)[\s.:\u2014\u2013-]*/i;
+export function titleWords(title: string) {
+  const rest = title.replace(NAMED_CHAPTER, "").trim();
+  return rest || title.trim();
+}
 export function shortName(name: string) {
   return name.split(/\s+/)[0] ?? name;
 }
@@ -84,7 +95,9 @@ export function PeoplePanel({
   refresh = 0,
   focusId,
   onAsk,
+  chapterName = plainChapter,
 }: {
+  chapterName?: ChapterName;
   bookId: string;
   bookmark: number;
   /** The reader's chapter counter: how many chapters they have finished. */
@@ -171,7 +184,7 @@ export function PeoplePanel({
               <div>
                 <h3 className="lp-voice">{name}</h3>
                 {detail.aliases.length > 0 && <p className="memory-aliases">Also called {detail.aliases.slice(0, 4).join(", ")}</p>}
-                <p className="memory-met">You met them in chapter {detail.first_seen}</p>
+                <p className="memory-met">You met them in {(chapterName(detail.first_seen) ?? `chapter ${detail.first_seen}`).toLowerCase()}</p>
               </div>
             </header>
             <button type="button" className="lp-lamp-button memory-ask" onClick={() => onAsk(name)}>
@@ -235,7 +248,7 @@ export function PeoplePanel({
                   {person.revealed_at >= bookmark && <span className="memory-new">New</span>}
                   <PersonAvatar id={person.entity_id} name={person.canonical_name} size={52} />
                   <strong>{person.canonical_name}</strong>
-                  <small>Chapter {person.revealed_at}</small>
+                  <small>{chapterName(person.revealed_at) ?? `Chapter ${person.revealed_at}`}</small>
                 </button>
               </li>
             ))}
@@ -254,7 +267,9 @@ export function StoryPanel({
   refresh = 0,
   onOpenPerson,
   onAskChapter,
+  chapterName = plainChapter,
 }: {
+  chapterName?: ChapterName;
   bookId: string;
   bookmark: number;
   /** The reader's chapter counter: how many chapters they have finished. */
@@ -302,11 +317,16 @@ export function StoryPanel({
       <ol className="memory-timeline" aria-label="The story so far">
         {chapters.map((chapter, index) => {
           const expanded = open === chapter.chapter_key;
+          const name = chapterName(chapter.revealed_at);
+          const title = chapter.title ? titleWords(chapter.title) : name ?? `Chapter ${chapter.revealed_at}`;
           return (
             <li key={chapter.chapter_key} className={index === 0 ? "is-latest" : undefined}>
-              <span className="memory-timeline-dot" aria-hidden="true">{chapter.revealed_at}</span>
+              <span className="memory-timeline-dot" aria-hidden="true" />
               <article>
-                <h3>{chapter.title || `Chapter ${chapter.revealed_at}`}</h3>
+                <header className="memory-chapter-head">
+                  {name && title !== name && <span className="memory-chapter-number">{name}{index === 0 && " · latest"}</span>}
+                  <h3>{title}</h3>
+                </header>
                 {chapter.unremembered ? (
                   <p className="lp-voice">{UNREMEMBERED}</p>
                 ) : (
@@ -333,7 +353,7 @@ export function StoryPanel({
                   <button type="button" onClick={() => setOpen(expanded ? null : chapter.chapter_key)} aria-expanded={expanded}>
                     {expanded ? "Show less" : "Show more"}
                   </button>
-                  <button type="button" className="memory-ask-inline" onClick={() => onAskChapter(chapter.title || `chapter ${chapter.revealed_at}`)}>
+                  <button type="button" className="memory-ask-inline" onClick={() => onAskChapter(chapter.title || name || `chapter ${chapter.revealed_at}`)}>
                     <Moth mood="curious" size={18} glow={false} />
                     Talk about this
                   </button>

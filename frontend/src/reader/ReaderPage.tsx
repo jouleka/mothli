@@ -4,7 +4,7 @@
  * only. Spoiler discipline: sections map to atoms ONCE against the whole spine, far jumps (the real
  * Karamazov ToC links every chapter) never auto-report — the bookmark is a permanent ratchet — and
  * the pending report is FLUSHED, not dropped, when the reader leaves. */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   ApiError,
@@ -18,6 +18,7 @@ import {
   type ReadOffer,
   type SelectionAction,
 } from "../api";
+import { storedPanelWidth } from "./PanelResize";
 import { AskTheBook, type AskSession, type CompanionSeed, type CompanionTab } from "./AskTheBook";
 import { MothCorner, WelcomeBackCard, type CornerNote } from "./MothMoments";
 import { crossedMilestone, milestoneLine, readingStreak, recordReadingDay, streakName, unlockCast } from "../journey/journey";
@@ -261,6 +262,10 @@ export function ReaderPage({
   const fromChapterStartRef = useRef(false);
   const [sourceReturn, setSourceReturn] = useState<{cfi:string; destination:"mothli"|"notebook"} | null>(null);
   const [notebookOpenRequest, setNotebookOpenRequest] = useState(0);
+  // Which part of the Notebook a request opens on: Mothli's kept replies, after keeping one.
+  const [notebookOpenTo, setNotebookOpenTo] = useState<"all" | "mothli">("all");
+  // The width the reader gave Mothli's side panel, in this browser (null: its usual size).
+  const [panelWidth, setPanelWidth] = useState<number | null>(storedPanelWidth);
   const [askOpen, setAskOpen] = useState(false);
   const [initialAction, setInitialAction] = useState<"recap" | null>(null);
   const [companionSeed, setCompanionSeed] = useState<CompanionSeed | null>(null);
@@ -1662,6 +1667,14 @@ export function ReaderPage({
     manifest?.atoms[chapter - 1]?.title?.trim() ||
     `${unit} ${(manifest && chapterNumber(manifest.atoms, chapter - 1)) ?? chapter}`;
   const throughLabel = pos && pos.bookmark > 0 ? completedTitle(pos.bookmark) : "";
+  // Mothli's panel names chapters as the footer does: "Chapter 2", the book's own count.
+  const chapterName = useCallback(
+    (ordinal: number) => {
+      const number = manifest ? chapterNumber(manifest.atoms, ordinal - 1) : null;
+      return number == null ? null : `${unit[0]?.toUpperCase() ?? ""}${unit.slice(1)} ${number}`;
+    },
+    [manifest, unit],
+  );
 
   // Journey: the streak so far on open (a day counts once a page is read, not for opening a
   // book), and Mothli's moments when a chapter is finished.
@@ -1799,6 +1812,7 @@ export function ReaderPage({
       if (!askOpen) openConversation();
     } else if (event.key === "n" || event.key === "N") {
       event.preventDefault();
+      setNotebookOpenTo("all");
       setNotebookOpenRequest((value) => value + 1);
     }
   };
@@ -1855,6 +1869,7 @@ export function ReaderPage({
       data-reader-theme={preferences.theme}
       data-chat-open={askOpen || undefined}
       data-compact={compactShell || undefined}
+      style={panelWidth ? ({ "--mothli-panel-width": `${panelWidth}px` } as CSSProperties) : undefined}
     >
       <a className="skip-link" href="#main">
         skip to the book
@@ -1935,6 +1950,8 @@ export function ReaderPage({
                 void deleteReaderMark(mark);
               }}
               openRequest={notebookOpenRequest}
+              openTo={notebookOpenTo}
+              chapterName={chapterName}
               onSourceJump={() => {
                 if (currentAnchor) setSourceReturn({ cfi: currentAnchor.cfi, destination: "notebook" });
               }}
@@ -2199,11 +2216,19 @@ export function ReaderPage({
           seed={companionSeed}
           navigate={companionNav}
           chapterLabel={throughLabel}
+          chapterName={chapterName}
+          resize={compactShell ? undefined : { width: panelWidth, onWidth: setPanelWidth }}
           embedded
           compact={compactShell}
           selection={passageHelp ? readerSelection : null}
           onClearSelection={clearReaderSelection}
           sessionRef={askSessionRef}
+          onOpenNotebook={() => {
+            // On a phone Mothli is the whole screen: step back to the book, where the Notebook is.
+            if (compactShell) closeWorkspace();
+            setNotebookOpenTo("mothli");
+            setNotebookOpenRequest((value) => value + 1);
+          }}
           onSaveReply={(reply) => saveReplies([...savedReplies.filter((saved) => saved.id !== reply.id), { ...reply, createdAt: new Date().toISOString() }])}
           onNavigate={(citation) => {
             setInitialAction(null);

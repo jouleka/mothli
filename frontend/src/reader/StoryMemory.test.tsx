@@ -7,7 +7,7 @@ vi.mock("../api", async (importOriginal) => ({
   api: mocks,
 }));
 import { ApiError, type EntityId } from "../api";
-import { CATCHING_UP, PeoplePanel, StoryPanel, toneFor } from "./StoryMemory";
+import { CATCHING_UP, PeoplePanel, StoryPanel, titleWords, toneFor } from "./StoryMemory";
 
 // Hosted ids are UUIDs (ADR 0042 part 4); local ids are numbers.
 const MARA = "6f1c2a7e-0b7d-4c55-9e3b-1d2f3a4b5c6d";
@@ -198,5 +198,42 @@ describe("local mode is as it was", () => {
     await screen.findByRole("heading", { name: "Ann" });
     expect(mocks.character).toHaveBeenCalledWith("b", 1, 4);
     expect(mocks.ingest).not.toHaveBeenCalled();
+  });
+});
+
+// 2026-11-27: a book with front matter showed "4 CHAPTER II. The Pool of Tears", the piece's place
+// in the file beside the title's own number. Now one number, the book's own, as the footer counts.
+describe("chapter numbers in the story so far and the cast", () => {
+  const ownNumber = (ordinal: number) => (ordinal > 2 ? `Chapter ${ordinal - 2}` : null);
+
+  test("a card shows the book's own chapter number once, and the title without its own", async () => {
+    mocks.notes.mockResolvedValue({ as_of_chapter: 5, cast: [], chapters: [
+      { chapter_key: "k3", revealed_at: 3, title: "CHAPTER I. Down the Rabbit-Hole", summary: "A fall.", new_characters: [], events: [] },
+      { chapter_key: "k4", revealed_at: 4, title: "CHAPTER II. The Pool of Tears", summary: "Tears.", new_characters: [], events: [] },
+      { chapter_key: "k5", revealed_at: 5, title: "", summary: "A race.", new_characters: [], events: [] }] });
+    const asked = vi.fn();
+    const { container } = render(<StoryPanel bookId="b" bookmark={5} chapterName={ownNumber} onOpenPerson={() => {}} onAskChapter={asked} />);
+    await screen.findByText("The Pool of Tears");
+    expect([...container.querySelectorAll(".memory-chapter-head")].map((head) => head.textContent)).toEqual([
+      "Chapter 3", "Chapter 2The Pool of Tears", "Chapter 1Down the Rabbit-Hole",
+    ]);
+    expect(container.querySelector(".memory-timeline-dot")?.textContent).toBe("");
+    expect(screen.queryByText(/^[45]$/)).toBeNull();
+    fireEvent.click(screen.getAllByRole("button", { name: /Talk about this/ })[0]);
+    expect(asked).toHaveBeenCalledWith("Chapter 3");
+  });
+
+  test("the cast names the chapter someone was met in the same way", async () => {
+    mocks.graph.mockResolvedValue(graph(5, [person(MARA, "Mara", 4)]));
+    render(<PeoplePanel bookId="b" bookmark={5} chapterName={ownNumber} onAsk={() => {}} />);
+    expect(await screen.findByRole("button", { name: /Mara.*Chapter 2/ })).toBeTruthy();
+  });
+
+  test("only a title's leading chapter label is taken off", () => {
+    expect(titleWords("CHAPTER IV. The Rabbit Sends in a Little Bill")).toBe("The Rabbit Sends in a Little Bill");
+    expect(titleWords("Chapter 12: Home")).toBe("Home");
+    expect(titleWords("Chapter Ivy Grows")).toBe("Chapter Ivy Grows");
+    expect(titleWords("CHAPTER XII")).toBe("CHAPTER XII");
+    expect(titleWords("The Chapter House")).toBe("The Chapter House");
   });
 });

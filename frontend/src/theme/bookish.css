@@ -4,7 +4,20 @@
 
 /* ---------- the desk and the sheet ---------- */
 .reader-grid.mr { background: var(--m-bg); }
-.reader-grid.mr[data-chat-open] { grid-template-columns: minmax(0, 1fr) 400px; }
+/* Mothli's panel: the reader may drag it wider or narrower (PanelResize sets the width); the book
+   always keeps 380px beside it. A tablet starts it a little under half the screen; a phone
+   (700px and under) shows it full screen instead. */
+.reader-grid.mr[data-chat-open] {
+  grid-template-columns: minmax(0, 1fr) min(var(--mothli-panel-width, 440px), max(320px, calc(100vw - 380px)));
+}
+@media (max-width: 900px) {
+  .reader-grid.mr[data-chat-open] {
+    grid-template-columns: minmax(0, 1fr) min(var(--mothli-panel-width, max(320px, 44%)), max(320px, calc(100vw - 380px)));
+  }
+}
+@media (max-width: 700px) {
+  .reader-grid.mr[data-chat-open] { grid-template-columns: minmax(0, 1fr); }
+}
 
 .mr .running-head.mr-top { height: 64px; min-height: 64px; padding: 0 32px; }
 .mr .mr-back.reader-library {
@@ -227,13 +240,16 @@
 .lp-companion .lp-thread { padding: 24px 28px 8px; }
 .lp-hello-line,
 .lp-reply-body > p {
-  font: 500 26px/1.16 var(--m-hand);
+  font: 500 24px/1.28 var(--m-hand);
   color: var(--m-mothli-ink);
 }
+/* a long reply in the book's own type: easy to read at length, still in Mothli's ink */
+.lp-reply-body > p.lp-reply-long { font: 400 18px/1.6 var(--m-book); }
 .lp-hello-line { max-width: none; padding: 0; border-radius: 0; background: transparent; }
 .lp-hello-fine { margin: 14px 0 0; font: 400 13px/1.5 var(--m-ui); color: var(--m-soft); }
 .lp-hello-fine button { font-weight: 600; }
-.lp-companion .lp-exchange { gap: 14px; margin: 0 0 28px; }
+.lp-companion .lp-exchange { gap: 10px; margin: 0 0 22px; padding-bottom: 22px; border-bottom: 1px solid var(--m-line); }
+.lp-companion .lp-exchange:last-of-type { border-bottom: 0; }
 .lp-companion .mothli-question.lp-you {
   justify-self: start;
   max-width: none;
@@ -241,7 +257,7 @@
   border-radius: 0;
   background: transparent;
   color: var(--m-pencil);
-  font: 500 26px/1.12 var(--m-hand);
+  font: 500 22px/1.2 var(--m-hand);
 }
 .lp-moment-label {
   padding: 0;
@@ -253,18 +269,61 @@
   text-transform: uppercase;
 }
 .lp-companion .lp-reply { max-width: none; padding: 0; border-radius: 0; background: transparent; }
-.lp-reply-actions { gap: 4px 20px; margin-top: 8px; }
+.lp-reply-actions { align-items: center; gap: 6px 8px; margin-top: 10px; }
 .lp-companion .lp-sources > summary,
 .lp-companion .lp-save.ui-button {
-  height: 44px;
-  min-height: 44px;
-  padding: 0;
-  border-radius: 0;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 14px;
+  gap: 6px;
+  border: 1px solid var(--m-line-strong);
+  border-radius: 18px;
   background: transparent;
-  color: var(--m-accent);
+  color: var(--m-ink);
   font: 500 14px var(--m-ui);
+}
+.lp-companion .lp-sources > summary:hover,
+.lp-companion .lp-save.ui-button:hover { border-color: var(--m-accent); color: var(--m-accent); }
+.lp-companion .lp-save.ui-button svg { width: 15px; height: 15px; color: var(--m-accent); }
+/* kept: says where it went, and opens it */
+.lp-kept {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  color: var(--m-soft);
+  font: 500 14px var(--m-ui);
+}
+.lp-kept > svg { color: var(--m-accent); }
+.lp-kept-open {
+  min-height: 36px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--m-accent);
+  font: 600 14px var(--m-ui);
   text-decoration: underline;
   text-underline-offset: 4px;
+  cursor: pointer;
+}
+/* the once-only line telling a first-time reader what keeping does */
+.lp-keep-hint {
+  margin: 8px 0 0;
+  font: 400 13px/1.45 var(--m-ui);
+  color: var(--m-soft);
+}
+.lp-keep-hint button {
+  display: inline;
+  min-height: 0;
+  margin-left: 8px;
+  padding: 0;
+  line-height: inherit;
+  border: 0;
+  background: none;
+  color: var(--m-accent);
+  font: 600 13px/1.45 var(--m-ui);
+  cursor: pointer;
 }
 .lp-companion .lp-sources > div > button {
   padding: 10px 0 10px 14px;
@@ -330,7 +389,7 @@
 .memory-intro,
 .memory-state p,
 .memory-empty-line {
-  font: 500 24px/1.14 var(--m-hand);
+  font: 500 22px/1.22 var(--m-hand);
   color: var(--m-mothli-ink);
 }
 .memory-people.memory-collection { display: block; }
@@ -361,18 +420,63 @@
 .memory-ties strong { font: 400 20px/1.25 var(--m-book); }
 .memory-ties small { font: italic 400 16px var(--m-book); color: var(--m-soft); }
 .memory-ask { border-radius: 24px; }
-.memory-timeline article h3 { font: italic 400 22px/1.25 var(--m-book); }
-.memory-timeline article > p { font: 400 18px/1.45 var(--m-book); color: var(--m-body); }
-.memory-timeline-dot {
-  border-radius: 0;
-  background: transparent;
-  color: var(--m-accent);
-  font: 600 24px/1 var(--m-display);
-  box-shadow: none;
+/* one chapter number, the book's own (as the footer counts), above the title's own words */
+.memory-timeline { gap: 14px; }
+.memory-timeline > li {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 18px 20px 14px;
+  border-radius: 14px;
+  border-left: 3px solid transparent;
 }
-.memory-timeline > li.is-latest .memory-timeline-dot { background: transparent; color: var(--m-accent); }
-.memory-chapter-actions button,
-.memory-chips button { border-radius: 22px; }
+.memory-timeline > li.is-latest { border-left-color: var(--m-accent); }
+.memory-timeline-dot { display: none; }
+.memory-chapter-number {
+  display: block;
+  margin-bottom: 4px;
+  font: 600 11px/1.3 var(--m-ui);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--m-accent);
+}
+.memory-timeline article h3 { margin: 0 0 8px; font: italic 400 23px/1.22 var(--m-book); color: var(--m-ink); }
+.memory-timeline article > p { font: 400 17px/1.55 var(--m-book); color: var(--m-body); }
+.memory-events {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  font: 400 16px/1.5 var(--m-book);
+  color: var(--m-body);
+}
+.memory-events li { position: relative; padding-left: 18px; }
+.memory-events li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.68em;
+  width: 7px;
+  height: 1.5px;
+  background: var(--m-accent);
+}
+.memory-chips { gap: 8px; margin-top: 14px; }
+.memory-chips button {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--m-line-strong);
+  border-radius: 16px;
+  background: var(--m-surface);
+  font: 500 13px var(--m-ui);
+}
+.memory-chips button:hover { border-color: var(--m-accent); color: var(--m-accent); }
+.memory-chips .memory-avatar { display: none; }
+.memory-chapter-actions {
+  gap: 20px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--m-line);
+}
+.memory-chapter-actions button { min-height: 32px; font: 500 14px var(--m-ui); }
 
 /* ---------- Mothli in the corner of the page ---------- */
 .mc-moth {
