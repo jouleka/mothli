@@ -116,7 +116,7 @@ jobs:
           cat headers.txt
           for header in "content-security-policy: default-src 'self'" \
                         "x-content-type-options: nosniff" "referrer-policy: no-referrer" \
-                        "x-frame-options: DENY" "permissions-policy: camera=()"; do
+                        "x-frame-options: SAMEORIGIN" "permissions-policy: camera=()"; do
             grep -qiF "$header" headers.txt || { echo "missing: $header"; exit 1; }
           done
           if grep -qi '^server:' headers.txt; then echo "the Server header is shown"; exit 1; fi

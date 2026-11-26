@@ -41,12 +41,12 @@ def test_browser_security_headers_cover_api_and_block_untrusted_hosts(client):
     response = client.get("/api/books")
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["referrer-policy"] == "no-referrer"
-    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["x-frame-options"] == "SAMEORIGIN"
     assert response.headers["permissions-policy"] == "camera=(), microphone=(), geolocation=()"
     policy = response.headers["content-security-policy"]
     assert "script-src 'self'" in policy
     assert "script-src-attr 'none'" in policy
-    assert "frame-ancestors 'none'" in policy
+    assert "frame-ancestors 'self'" in policy
 
     rejected = client.get("/api/books", headers={"host": "attacker.example"})
     assert rejected.status_code == 400

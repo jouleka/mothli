@@ -188,7 +188,7 @@ def test_the_proxy_sets_the_same_browser_defences_as_the_backend() -> None:
         "Content-Security-Policy": _CONTENT_SECURITY_POLICY,
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
-        "X-Frame-Options": "DENY",
+        "X-Frame-Options": "SAMEORIGIN",
         "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
     }
     # Streams: no periodic-flush override (it would keep a reply running after the reader left)

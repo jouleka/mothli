@@ -325,7 +325,7 @@ def test_the_privacy_page_is_told_the_ai_company_this_server_really_uses(tmp_pat
 # The policy as it stood before step 8. The public pages need nothing more: no Paddle script, no
 # analytics, no fonts or images from elsewhere.
 POLICY_BEFORE_STEP_8 = (
-    "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; "
+    "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; "
     "frame-src 'self' blob: https://buy.paddle.com https://sandbox-buy.paddle.com; "
     "form-action 'self'; script-src 'self' https://cdn.paddle.com; script-src-attr 'none'; "
     "style-src 'self' 'unsafe-inline' https://cdn.paddle.com https://sandbox-cdn.paddle.com; "

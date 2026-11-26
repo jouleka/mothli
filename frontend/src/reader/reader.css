@@ -411,3 +411,11 @@
     bottom: 68px;
   }
 }
+
+/* under a book that would not open: where it stopped, quietly, for a screenshot to carry back */
+.mr .reader-stuck-detail {
+  max-width: 34rem;
+  margin-top: 6px;
+  font: 400 12px/1.4 var(--m-ui);
+  color: var(--m-faint);
+}

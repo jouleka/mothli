@@ -378,6 +378,30 @@ describe("reader startup and search boundaries", () => {
     await waitFor(() => expect(mocks.goTo).toHaveBeenCalledExactlyOnceWith(0));
   });
 
+  test("a book that never finds its page says so, and trying again opens at the chapter's start", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
+    try {
+      mocks.init.mockImplementationOnce(() => new Promise(() => {}));
+      render(<ReaderPage bookId="b" onBack={() => {}} />);
+      await waitFor(() => expect(mocks.init).toHaveBeenCalledOnce());
+      expect(screen.queryByText("This one’s being stubborn.")).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(20_000);
+      });
+      expect(await screen.findByText("This one’s being stubborn.")).toBeTruthy();
+      expect(screen.getByText("Stopped while finding your page.")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      // the second open skips the exact spot and goes to the start of chapter two (bookmark 1)
+      await waitFor(() => expect(mocks.goTo).toHaveBeenCalledWith("c2.html"));
+      expect(mocks.init).toHaveBeenCalledOnce();
+      await waitFor(() => expect(screen.queryByText("This one’s being stubborn.")).toBeNull());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("prefers an existing CFI over the legacy chapter bookmark", async () => {
     render(<ReaderPage bookId="b" onBack={() => {}} />);
 
