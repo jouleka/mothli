@@ -20,6 +20,7 @@ import { PeoplePanel, StoryPanel } from "./StoryMemory";
 import { activeOfflineOwner } from "../pwa/offline";
 import { keepTabFocusInside } from "./focusTrap";
 import type { ReaderSelection } from "./ReaderMarksPanel";
+import { useCycle } from "../ui/useCycle";
 import { CountAsRead } from "./CountAsRead";
 import { untilNotesReady } from "./closeoutWait";
 import { PASSAGE_HELP_ABSENT } from "./SelectionAssistant";
@@ -391,6 +392,7 @@ export function AskTheBook({
   );
   const [peopleBusy, setPeopleBusy] = useState(false);
   const [peopleError, setPeopleError] = useState("");
+  const thinkingLine = useCycle(BOOK_THINKING_LINES, 2600, busy);
   const [aiDisclosure, setAiDisclosure] = useState(() => {
     try {
       return localStorage.getItem("litlet.pip.introduced") !== "yes";
@@ -879,7 +881,7 @@ export function AskTheBook({
           <span className="lp-moth-ring"><Moth mood={mood} size={42} glow={false} /></span>
           <div>
             <h2 id={titleId} className="lp-voice">Mothli</h2>
-            <span>{busy ? "Thinking it over…" : selection ? "Talking about the passage you picked" : "Knows the story up to here"}</span>
+            <span key={busy ? thinkingLine : "rest"} className="lp-companion-status">{busy ? thinkingLine : selection ? "Talking about the passage you picked" : "Knows the story up to here"}</span>
           </div>
         </div>
         <div className="lp-companion-head-actions">
@@ -1035,7 +1037,7 @@ export function AskTheBook({
                 </p>
                 {aiDisclosure && (
                   <p className="lp-hello-fine">
-                    I’m an AI. I only use the pages you’ve already read, so I can’t spoil what’s ahead.{" "}
+                    I only know the pages you’ve already read, so I can’t spoil what’s ahead.{" "}
                     <button
                       type="button"
                       aria-label="Dismiss introduction"
@@ -1299,3 +1301,11 @@ export function AskTheBook({
     </div>
   );
 }
+
+/** What Mothli is up to while a reply in the book is on its way. */
+const BOOK_THINKING_LINES = [
+  "Thinking it over…",
+  "Flipping back a few pages…",
+  "Checking what we’ve read so far…",
+  "Got it. Writing it down…",
+];

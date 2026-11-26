@@ -1,0 +1,121 @@
+/* Mothli on an errand (Errand.tsx): the moth carrying a book, and what it's doing, in pencil. */
+.errand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 56px;
+  color: var(--m-mothli-ink);
+}
+.errand-flight {
+  flex: 0 0 auto;
+  width: 92px;
+  height: 50px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.errand-trail {
+  stroke-width: 1.5;
+  stroke-dasharray: 0.03 0.05;
+  opacity: 0.55;
+  animation: errand-trail 1.6s linear infinite;
+}
+.errand-moth {
+  animation: errand-bob 1.3s ease-in-out infinite;
+}
+.errand-wing {
+  transform-box: view-box;
+  transform-origin: 93px 26px;
+  animation: errand-flap 0.16s ease-in-out infinite alternate;
+}
+.errand-book {
+  fill: var(--m-accent);
+  stroke: var(--m-accent);
+  transform-box: view-box;
+  transform-origin: 93px 36px;
+  animation: errand-swing 1.3s ease-in-out infinite;
+}
+.errand-book path + path { stroke: var(--m-surface); stroke-width: 1.2; }
+.errand-string { stroke-width: 1.2; }
+.errand-line {
+  margin: 0;
+  font-size: 23px;
+  line-height: 1.15;
+  animation: errand-line 0.45s ease both;
+}
+
+@keyframes errand-trail { to { stroke-dashoffset: -0.16; } }
+@keyframes errand-bob {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-3px, -5px); }
+}
+@keyframes errand-flap {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0.35); }
+}
+@keyframes errand-swing {
+  0%, 100% { transform: rotate(-6deg); }
+  50% { transform: rotate(6deg); }
+}
+@keyframes errand-line {
+  from { opacity: 0; filter: blur(3px); transform: translateY(4px); }
+  to { opacity: 1; filter: blur(0); transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .errand *,
+  .errand-line { animation: none !important; }
+}
+
+/* the shelf's own errand: a little card at the foot of the screen while a book is added */
+.errand-card {
+  position: fixed;
+  z-index: 70;
+  left: 50%;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  max-width: calc(100vw - 32px);
+  padding: 10px 22px 10px 14px;
+  border-radius: 999px;
+  background: var(--m-surface);
+  box-shadow: 0 18px 40px -16px rgba(40, 25, 5, 0.45), 0 0 0 1px var(--m-line);
+  transform: translateX(-50%);
+  animation: errand-card-in 0.5s cubic-bezier(0.3, 1.35, 0.5, 1) both;
+}
+.errand-card .errand-line { font-size: 21px; }
+@keyframes errand-card-in {
+  from { opacity: 0; transform: translate(-50%, 24px) scale(0.96); }
+  to { opacity: 1; transform: translateX(-50%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .errand-card { animation: none; }
+}
+
+/* a book that has just landed on the shelf */
+@keyframes arrive-on-shelf {
+  0% { opacity: 0; transform: translateY(-60px) rotate(-8deg); }
+  55% { opacity: 1; transform: translateY(4px) rotate(2deg); }
+  75% { transform: translateY(-6px) rotate(-1deg); }
+  100% { transform: none; }
+}
+.is-arriving { animation: arrive-on-shelf 0.95s cubic-bezier(0.3, 0.9, 0.4, 1) both; }
+.is-arriving::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px var(--m-mothli-ink);
+  opacity: 0;
+  animation: arrive-ring 2.2s ease 0.7s both;
+  pointer-events: none;
+}
+@keyframes arrive-ring {
+  0%, 100% { opacity: 0; }
+  20%, 60% { opacity: 0.55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .is-arriving,
+  .is-arriving::after { animation: none; }
+}

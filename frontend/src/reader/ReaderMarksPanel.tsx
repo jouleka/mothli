@@ -6,6 +6,7 @@ import type {
   SelectionAction,
 } from "../api";
 import { Icon } from "../ui/Icon";
+import { Moth } from "../ui/Moth";
 import { Button } from "../ui/Button";
 import { useReaderPopover } from "../ui/useReaderPopover";
 import type { SavedCompanionReply } from "./companionNotes";
@@ -316,10 +317,25 @@ export function ReaderMarks({
         </section>
       )}
       {!open && !selection && status && (
-        <p className="reader-feedback" role="status" aria-live="polite">
-          {status}
+        <p className={`reader-feedback${KEPT[status] ? " reader-feedback--kept" : ""}`} role="status" aria-live="polite" key={status}>
+          {KEPT[status] ? (
+            <>
+              <Moth size={22} />
+              <span className="m-hand">{KEPT[status]}</span>
+            </>
+          ) : status}
         </p>
       )}
     </div>
   );
 }
+
+/** What Mothli says when something is kept, in place of the plain status. */
+const KEPT: Record<string, string> = {
+  "highlight saved": "Highlighted! It’s in your notebook.",
+  "note saved": "Noted. I’ll keep that for you.",
+  "bookmark saved": "Bookmarked. Your place is safe with me.",
+  "highlight queued for sync": "Highlighted! I’ll sync it once you’re back online.",
+  "note queued for sync": "Noted! I’ll sync it once you’re back online.",
+  "bookmark queued for sync": "Bookmarked! I’ll sync it once you’re back online.",
+};

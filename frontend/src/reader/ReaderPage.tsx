@@ -21,6 +21,7 @@ import {
 import { AskTheBook, type AskSession, type CompanionSeed, type CompanionTab } from "./AskTheBook";
 import { MothCorner, WelcomeBackCard, type CornerNote } from "./MothMoments";
 import { crossedMilestone, milestoneLine, readingStreak, recordReadingDay, streakName, unlockCast } from "../journey/journey";
+import { useCycle } from "../ui/useCycle";
 import { Moth } from "../ui/Moth";
 import { mothliStanding, useMothliEnded } from "../ui/mothliStanding";
 import "./reader.css";
@@ -1988,7 +1989,7 @@ export function ReaderPage({
         {!readerReady && !fatal && (
           <div className="reader-loading mr-loading" role="status">
             <Moth mood="thinking" size={72} glow={false} />
-            <span>Opening your book…</span>
+            <OpeningLine />
           </div>
         )}
         {fatal && (
@@ -2191,4 +2192,12 @@ export function ReaderPage({
       )}
     </div>
   );
+}
+
+const OPENING_LINES = ["Opening your book…", "Smoothing the pages flat…", "Finding your page…"];
+
+/** While the book opens: what's happening, a line at a time (the first is what's announced). */
+function OpeningLine() {
+  const line = useCycle(OPENING_LINES, 1800);
+  return <span key={line} className="mr-loading-line">{line}</span>;
 }

@@ -11,8 +11,34 @@
   transform-origin: 38px 30px;
 }
 
-/* thinking: the wings fold and open quietly while a reply is on its way. Every other mood is still. */
-.moth--thinking .moth-wing {
+/* alive: most of the time still, then a quick double flick of the wings, as moths do */
+.moth--alive .moth-wing {
+  animation: moth-twitch 7.5s ease-in-out infinite;
+}
+.moth--curious.moth--alive .moth-wing { animation-duration: 5.5s; }
+.moth--sleepy.moth--alive .moth-wing { animation: none; }
+/* a pointer close by: it flutters */
+.moth--alive:hover .moth-wing,
+:hover > .moth--alive .moth-wing,
+:active > .moth--alive .moth-wing {
+  animation: moth-flutter 0.13s ease-in-out 8 alternate;
+}
+
+@keyframes moth-twitch {
+  0%, 86%, 100% { transform: scaleX(1); }
+  89% { transform: scaleX(0.5); }
+  92% { transform: scaleX(1); }
+  95% { transform: scaleX(0.7); }
+  98% { transform: scaleX(1); }
+}
+@keyframes moth-flutter {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0.4); }
+}
+
+/* thinking: the wings fold and open quietly while a reply is on its way. */
+.moth--thinking .moth-wing,
+.moth--thinking.moth--alive .moth-wing {
   animation: moth-fold 0.9s ease-in-out infinite alternate;
 }
 

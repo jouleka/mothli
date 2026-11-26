@@ -35,3 +35,22 @@
 @media (max-width: 760px) {
   .reader-marks .notebook-simple { position: fixed; inset: 64px 8px auto; width: auto; max-height: calc(100dvh - 80px); }
 }
+
+/* something kept: a word from Mothli, in pencil, that pops in */
+.reader-feedback--kept {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: auto;
+  max-width: 300px;
+  color: var(--m-mothli-ink);
+  animation: reader-kept 0.5s cubic-bezier(0.3, 1.35, 0.5, 1) both;
+}
+.reader-feedback--kept .m-hand { font-size: 20px; line-height: 1.1; }
+@keyframes reader-kept {
+  from { opacity: 0; transform: translateY(-6px) scale(0.95); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reader-feedback--kept { animation: none; }
+}

@@ -354,3 +354,48 @@
   .ml-hc-dots i { animation: none; }
   .ml-hc-dots i { opacity: 0.7; }
 }
+.ml-mem-fine {
+  margin: 28px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--m-line);
+  font: 400 13px/1.5 var(--m-ui);
+  color: var(--m-faint);
+}
+
+/* a suggested book being fetched, and the moment it's on the shelf */
+.ml-hc-errand { margin: 4px 0; }
+.ml-hc-errand .errand-line { font-size: 21px; }
+.ml-hc-offer-done--fresh { animation: ml-hc-done 0.6s cubic-bezier(0.3, 1.35, 0.5, 1) both; }
+@keyframes ml-hc-done {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+.ml-book.is-arriving,
+.ml-row.is-arriving { position: relative; }
+@media (prefers-reduced-motion: reduce) {
+  .ml-hc-offer-done--fresh { animation: none; }
+}
+
+/* What Mothli remembers: each note laid down in turn, and crossed out in pencil while forgotten */
+.ml-mem-item { animation: ml-mem-in 0.5s ease both; }
+.ml-mem-item:nth-child(2) { animation-delay: 0.06s; }
+.ml-mem-item:nth-child(3) { animation-delay: 0.12s; }
+.ml-mem-item:nth-child(4) { animation-delay: 0.18s; }
+.ml-mem-item:nth-child(5) { animation-delay: 0.24s; }
+.ml-mem-item:nth-child(n + 6) { animation-delay: 0.3s; }
+@keyframes ml-mem-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.ml-mem-text {
+  background-image: linear-gradient(var(--m-mothli-ink), var(--m-mothli-ink));
+  background-repeat: no-repeat;
+  background-position: 0 55%;
+  background-size: 0% 2px;
+  transition: background-size 0.6s ease, opacity 0.6s ease;
+}
+.is-forgetting .ml-mem-text { background-size: 100% 2px; opacity: 0.55; }
+@media (prefers-reduced-motion: reduce) {
+  .ml-mem-item { animation: none; }
+  .ml-mem-text { transition: none; }
+}

@@ -349,8 +349,10 @@ describe("HomeChat", () => {
       expect(await axeAA(container)).toHaveNoViolations();
       fireEvent.click(button);
       expect(mocks.addClassic).toHaveBeenCalledWith("158");
-      expect((button as HTMLButtonElement).disabled).toBe(true);
-      fireEvent.click(button); // a second press while it is being added adds nothing twice
+      // While it is fetched, Mothli says so in the button's place: nothing to press twice.
+      expect(within(thread).queryByRole("button", { name: /Add Emma/ })).toBeNull();
+      expect(within(thread).getByRole("status").textContent).toBe("Off to the library for Emma…");
+      fireEvent.click(button); // the old button, gone: adds nothing twice
       expect(mocks.addClassic).toHaveBeenCalledTimes(1);
       expect(changed).not.toHaveBeenCalled();
       await act(async () => done({ book_id: "bkemma" }));

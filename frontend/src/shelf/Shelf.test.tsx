@@ -299,6 +299,31 @@ describe("Shelf a11y", () => {
     );
   });
 
+  // Catches: an upload that looks frozen (nothing but a dimmed button), or a new book that
+  // appears on the shelf without anything marking it as the one just added.
+  test("while a book is added Mothli says what it's doing, and the new book lands on the shelf", async () => {
+    let release!: () => void;
+    mocks.books.mockResolvedValue([{ book_id: "b1", title: "The Lantern", author: "Ada Example" }]);
+    mocks.importBook.mockReturnValue(new Promise<{ book_id: string }>((res) => {
+      release = () => res({ book_id: "b2" });
+    }));
+    const { container } = render(<Shelf onOpen={() => {}} />);
+    await screen.findByRole("button", { name: /The Lantern/ });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [new File([new Uint8Array([1, 2, 3])], "b.epub", { type: "application/epub+zip" })] },
+    });
+    await waitFor(() => expect(container.querySelector(".errand-card")?.textContent).toContain("Got it! Opening the cover…"));
+    mocks.books.mockResolvedValue([
+      { book_id: "b1", title: "The Lantern", author: "Ada Example" },
+      { book_id: "b2", title: "The Orchard", author: "Ben Example" },
+    ]);
+    await act(async () => release());
+    const added = await screen.findByRole("button", { name: /The Orchard/ });
+    expect(added.closest(".ml-book")?.classList.contains("is-arriving")).toBe(true);
+    expect(screen.getByRole("button", { name: /The Lantern/ }).closest(".ml-book")?.classList.contains("is-arriving")).toBe(false);
+    expect(container.querySelector(".errand-card")).toBeNull();
+  });
+
   test("no axe violations", async () => {
     mocks.books.mockResolvedValue([
       { book_id: "kar", title: "The Brothers Karamazov", author: "Dostoevsky" },

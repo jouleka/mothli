@@ -11,6 +11,8 @@ import { api, ApiError, type HomeTurn, type ReadSkipped, type SuggestedBook } fr
 import { Button } from "../ui/Button";
 import { companionPause, needsPlan } from "../ui/companionPause";
 import { Icon } from "../ui/Icon";
+import { Errand } from "../ui/Errand";
+import { useCycle } from "../ui/useCycle";
 import { Moth } from "../ui/Moth";
 import { HOME_HELLO_NO_BOOKS, MOTHLI_HELLO, MothliEndingNote, MothliInvitation } from "../ui/MothliPlan";
 import { noteMothliUsed, useMothliStanding } from "../ui/mothliStanding";
@@ -47,6 +49,13 @@ type Suggestion = SuggestedBook & { state: "open" | "saving" | "done" | "failed"
 const addLabel = (book: SuggestedBook) => `Add ${book.title} to my shelf`;
 const addDone = (book: SuggestedBook) => `${book.title} is on your shelf now.`;
 const ADD_FAILED = "I couldn’t add that just now. Try again in a moment.";
+/** What Mothli is up to while a reply is on its way, one after another. */
+export const THINKING_LINES = [
+  "Thinking it over…",
+  "Flipping back through your shelf…",
+  "Checking my notes in the margin…",
+  "Got it. Writing it down…",
+];
 
 function exchangesOf(turns: HomeTurn[]): Exchange[] {
   const out: Exchange[] = [];
@@ -144,6 +153,7 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
 
   const busy = asked !== null;
   const waiting = busy && sentences.length === 0;
+  const thinkingLine = useCycle(THINKING_LINES, 2600, waiting);
 
   useEffect(() => {
     if (!waiting) return;
@@ -476,14 +486,14 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
                       {suggested.items.map((book, at) => (
                         <li key={book.classic_id}>
                           {book.state === "done" ? (
-                            <p className="ml-hc-offer-done">{addDone(book)}</p>
+                            <p className="ml-hc-offer-done ml-hc-offer-done--fresh">{addDone(book)}</p>
+                          ) : book.state === "saving" ? (
+                            <Errand kind="library" title={book.title} className="ml-hc-errand" />
                           ) : (
                             <>
                               <button
                                 type="button"
                                 className="ml-hc-offer"
-                                disabled={book.state === "saving"}
-                                aria-busy={book.state === "saving" || undefined}
                                 onClick={() => void add(at)}
                               >
                                 <Icon name="plus" size={15} />
@@ -512,7 +522,7 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
                 )}
                 <p className="ml-hc-thinking">
                   <span className="ml-hc-dots" aria-hidden="true"><i /><i /><i /></span>
-                  {waiting && <span>{slow ? "Still thinking. Careful replies take a little while." : "Thinking it over…"}</span>}
+                  {waiting && <span key={slow ? "slow" : thinkingLine}>{slow ? "Still thinking. Careful replies take a little while." : thinkingLine}</span>}
                 </p>
               </li>
             )}
