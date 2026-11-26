@@ -253,6 +253,12 @@ export function ReaderPage({
   }, [bookId]);
   const [readerReady, setReaderReady] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  // Opening a book never just spins: after a while the reader hears what's going on, can try
+  // again, and sees (quietly) which step it stopped at. A retry after a stall while finding the
+  // saved page opens at the start of that chapter instead of the exact spot.
+  const [stuck, setStuck] = useState<{ stage: OpeningStage; error: string | null } | null>(null);
+  const openingStageRef = useRef<OpeningStage>("fetching");
+  const fromChapterStartRef = useRef(false);
   const [sourceReturn, setSourceReturn] = useState<{cfi:string; destination:"mothli"|"notebook"} | null>(null);
   const [notebookOpenRequest, setNotebookOpenRequest] = useState(0);
   const [askOpen, setAskOpen] = useState(false);
@@ -553,6 +559,23 @@ export function ReaderPage({
     setReaderReady(false);
     setFinishCandidate(null);
     setFatal(null);
+    setStuck(null);
+    openingStageRef.current = "fetching";
+    let openingError: string | null = null;
+    const noteOpeningError = (event: ErrorEvent | PromiseRejectionEvent) => {
+      const reason = "reason" in event ? event.reason : event.error ?? event.message;
+      openingError = String(reason instanceof Error ? reason.message : reason ?? "").slice(0, 160) || null;
+    };
+    window.addEventListener("error", noteOpeningError);
+    window.addEventListener("unhandledrejection", noteOpeningError);
+    const stopWatching = () => {
+      window.clearTimeout(openingWatch);
+      window.removeEventListener("error", noteOpeningError);
+      window.removeEventListener("unhandledrejection", noteOpeningError);
+    };
+    const openingWatch = window.setTimeout(() => {
+      if (!dead) setStuck({ stage: openingStageRef.current, error: openingError });
+    }, OPENING_PATIENCE_MS);
     setReadFrontier(null);
     readAnchorRef.current = null;
     let pageContextDisabled = false;
@@ -952,6 +975,7 @@ export function ReaderPage({
         finishedRef.current = saved.bookmark;
         setCurrentAtom(saved.bookmark);
 
+        openingStageRef.current = "unpacking";
         const book = await makeBook(file);
         ownedBook = book as { destroy?: () => void };
         if (dead) return;
@@ -1148,9 +1172,11 @@ export function ReaderPage({
           }
         });
 
+        openingStageRef.current = "opening";
         await view.open(book);
         if (dead) return;
         disposeMotion = bindReaderMotion(view.renderer);
+        openingStageRef.current = "marks";
         for (const mark of marksRef.current) {
           if (mark.kind === "highlight")
             await view.addAnnotation(annotationFor(mark));
@@ -1184,8 +1210,13 @@ export function ReaderPage({
         };
         // Older imports may have a completed-chapter bookmark without a CFI. Resume at the next
         // unread atom only when the whole-spine map validates its file; never guess a spine index.
-        await mapProbe;
-        if (saved.cfi) await view.init({ lastLocation: saved.cfi });
+        // The map only decides whether to ask where the reader is up to; it never holds the book shut.
+        openingStageRef.current = "map";
+        await Promise.race([mapProbe, new Promise((resolve) => window.setTimeout(resolve, 5000))]);
+        openingStageRef.current = "placing";
+        const exactSpot = saved.cfi && !fromChapterStartRef.current ? saved.cfi : null;
+        fromChapterStartRef.current = false;
+        if (exactSpot) await view.init({ lastLocation: exactSpot });
         else {
           const atomIndex =
             Number.isSafeInteger(saved.bookmark) && saved.bookmark > 0
@@ -1216,9 +1247,12 @@ export function ReaderPage({
         }
         if (dead) return;
         viewRef.current = view;
+        stopWatching();
+        setStuck(null);
         setReaderReady(true);
         updateHistory();
       } catch (e) {
+        stopWatching();
         download.abort();
         releaseBook();
         // Not on this reader's shelf (removed, or never theirs): the kind line, not the error.
@@ -1236,6 +1270,7 @@ export function ReaderPage({
       readReporter.dispose();
       if (readReporterRef.current === readReporter) readReporterRef.current = null;
       readAnchorRef.current = null;
+      stopWatching();
       download.abort();
       window.removeEventListener("pagehide", flush);
       window.removeEventListener("online", retry);
@@ -1986,7 +2021,30 @@ export function ReaderPage({
           </div>
         )}
         <div className="book-view mr-book" ref={holder} role="region" aria-label="Book pages" />
-        {!readerReady && !fatal && (
+        {!readerReady && !fatal && stuck && (
+          <div className="reader-fatal mr-loading" role="alert">
+            <Moth mood="sleepy" size={72} glow={false} />
+            <h2>This one’s being stubborn.</h2>
+            <p>I can’t get the pages to open just now. Let’s try again, from the start of your chapter.</p>
+            <div className="reader-fatal-actions">
+              <Button
+                variant="primary"
+                icon="refresh"
+                onClick={() => {
+                  fromChapterStartRef.current = stuck.stage === "placing";
+                  setLoadAttempt((attempt) => attempt + 1);
+                }}
+              >
+                Try again
+              </Button>
+              <Button onClick={onBack}>Back to library</Button>
+            </div>
+            <p className="reader-stuck-detail">
+              Stopped while {OPENING_STAGES[stuck.stage]}{stuck.error ? ` (${stuck.error})` : ""}.
+            </p>
+          </div>
+        )}
+        {!readerReady && !fatal && !stuck && (
           <div className="reader-loading mr-loading" role="status">
             <Moth mood="thinking" size={72} glow={false} />
             <OpeningLine />
@@ -2193,6 +2251,18 @@ export function ReaderPage({
     </div>
   );
 }
+
+type OpeningStage = "fetching" | "unpacking" | "opening" | "marks" | "map" | "placing";
+/** Where an open that never finished stopped, in words a screenshot can carry back. */
+const OPENING_STAGES: Record<OpeningStage, string> = {
+  fetching: "fetching the book",
+  unpacking: "unpacking the book file",
+  opening: "laying out the pages",
+  marks: "putting back your highlights",
+  map: "checking what you’ve read",
+  placing: "finding your page",
+};
+const OPENING_PATIENCE_MS = 20_000;
 
 const OPENING_LINES = ["Opening your book…", "Smoothing the pages flat…", "Finding your page…"];
 
