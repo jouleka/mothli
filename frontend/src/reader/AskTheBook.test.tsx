@@ -513,10 +513,18 @@ describe("Mothli conversation", () => {
       viewport.offsetTop = 40;
       viewport.dispatchEvent(new Event("resize"));
       await waitFor(() => expect(sheet.style.getPropertyValue("--mothli-viewport-height")).toBe("452px"));
-      expect(sheet.style.getPropertyValue("--mothli-viewport-top")).toBe("40px");
+      expect(sheet.style.transform).toBe("translate3d(0, 40px, 0)");
+      expect(document.body.style.position).toBe("fixed");
+
+      // a swipe on something that can't scroll is held, so iOS never pans the page under it
+      document.dispatchEvent(new TouchEvent("touchstart", { touches: [{ clientX: 10, clientY: 200 } as Touch] }));
+      const swipe = new TouchEvent("touchmove", { bubbles: true, cancelable: true, touches: [{ clientX: 10, clientY: 300 } as Touch] });
+      sheet.querySelector("header")!.dispatchEvent(swipe);
+      expect(swipe.defaultPrevented).toBe(true);
 
       view.unmount();
       expect(document.documentElement.style.overflow).toBe("");
+      expect(document.body.style.position).toBe("");
     } finally {
       vi.unstubAllGlobals();
     }
