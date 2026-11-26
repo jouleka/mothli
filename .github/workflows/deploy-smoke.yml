@@ -89,7 +89,9 @@ jobs:
             code=$(get -o "page-$page.html" -w '%{http_code}' "$PROXY/$page")
             echo "/$page: $code"
             test "$code" = 200
-            has "page-$page.html" 'id="root"><div class="mothli-library'
+            # The page written into the root: the front page's own (public/landing), the others'.
+            if [ -z "$page" ]; then wrapper='id="root"><div class="lp">'; else wrapper='id="root"><div class="mothli-library'; fi
+            has "page-$page.html" "$wrapper"
             for link in terms privacy refunds contact; do has "page-$page.html" "<a href=\"/$link\">"; done
             if grep -q '@@' "page-$page.html"; then echo "/$page has a placeholder"; exit 1; fi
           done
