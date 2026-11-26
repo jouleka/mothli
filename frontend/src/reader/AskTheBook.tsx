@@ -115,9 +115,6 @@ const STORE_GRACE_MS = 5000;
 const STORAGE_PREFIX = "litlet.pip.conversation:";
 const spokenSeeds = new Set<string>();
 const KEEP_HINT_KEY = "mothli.keepHintSeen";
-/** A reply past a few lines is set in the book's own type, which reads easily at length; a short
- * one stays in Mothli's handwriting. */
-const isLongReply = (text: string) => text.length > 220;
 function storageKey(bookId: string, owner: string, pass: string) {
   return `${STORAGE_PREFIX}${encodeURIComponent(owner)}:${encodeURIComponent(bookId)}:${encodeURIComponent(pass)}`;
 }
@@ -1237,7 +1234,7 @@ export function AskTheBook({
                 )}
                 <div className="mothli-reply lp-reply">
                   <div className="lp-reply-body">
-                    <p className={isLongReply(readableAnswer(exchange.answer)) ? "lp-reply-long" : undefined}>{readableAnswer(exchange.answer)}</p>
+                    <p>{readableAnswer(exchange.answer)}</p>
                     {liveOffer?.id === exchange.id && (
                       <CountAsRead offers={liveOffer.offers} onCounted={onChaptersRead} />
                     )}
@@ -1323,7 +1320,7 @@ export function AskTheBook({
                 {streaming && (
                   <div className="mothli-reply lp-reply" aria-live="polite">
                     <div className="lp-reply-body">
-                      <p className={isLongReply(streaming) ? "lp-reply-long" : undefined}>{streaming}</p>
+                      <p>{streaming}</p>
                     </div>
                   </div>
                 )}

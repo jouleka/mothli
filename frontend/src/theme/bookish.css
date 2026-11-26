@@ -243,8 +243,7 @@
   font: 500 24px/1.28 var(--m-hand);
   color: var(--m-mothli-ink);
 }
-/* a long reply in the book's own type: easy to read at length, still in Mothli's ink */
-.lp-reply-body > p.lp-reply-long { font: 400 18px/1.6 var(--m-book); }
+/* every reply in Mothli's own hand, short or long: one voice, never a switch mid-reply */
 .lp-hello-line { max-width: none; padding: 0; border-radius: 0; background: transparent; }
 .lp-hello-fine { margin: 14px 0 0; font: 400 13px/1.5 var(--m-ui); color: var(--m-soft); }
 .lp-hello-fine button { font-weight: 600; }

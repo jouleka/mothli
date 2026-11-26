@@ -5,6 +5,7 @@ import {
   normalizeReaderPreferences,
   READER_THEME_COLORS,
   ReaderPreferenceSaver,
+  withAppTheme,
 } from "./readerPreferences";
 
 afterEach(() => vi.useRealTimers());
@@ -101,5 +102,28 @@ describe("reader typography presets", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(saved).toEqual(["night"]);
     expect(statuses.at(-1)).toBe("saved");
+  });
+});
+
+describe("light or dark is one choice for the whole app", () => {
+  afterEach(() => localStorage.removeItem("mothli.theme"));
+  const book = (theme: "paper" | "sepia" | "night") => ({ ...DEFAULT_READER_PREFERENCES, theme, font_size: "large" as const });
+
+  test("a book saved light opens dark when the app is dark, keeping its own type", () => {
+    localStorage.setItem("mothli.theme", "dark");
+    expect(withAppTheme(book("paper"))).toEqual({ ...book("paper"), theme: "night" });
+    expect(withAppTheme(book("sepia")).theme).toBe("night");
+    expect(withAppTheme(book("night")).theme).toBe("night");
+  });
+
+  test("a book saved dark opens light when the app is light; sepia stays", () => {
+    localStorage.setItem("mothli.theme", "light");
+    expect(withAppTheme(book("night")).theme).toBe("paper");
+    expect(withAppTheme(book("sepia")).theme).toBe("sepia");
+    expect(withAppTheme(book("paper")).theme).toBe("paper");
+  });
+
+  test("with no choice saved, the book's own theme stands", () => {
+    expect(withAppTheme(book("night")).theme).toBe("night");
   });
 });
