@@ -253,7 +253,7 @@
   font: 500 25px/1.2 var(--m-hand);
   field-sizing: content;
 }
-.ml-hc-composer textarea::placeholder { color: var(--m-soft); }
+.ml-hc-composer textarea::placeholder { color: var(--m-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mothli-library .ml-hc-send.ui-button,
 .ml-hc-send.ui-button {
   flex: 0 0 auto;

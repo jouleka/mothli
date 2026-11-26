@@ -513,6 +513,11 @@
 }
 .lp-companion .lp-composer textarea::placeholder {
   color: var(--m-faint);
+  /* one line, always: the box sizes to its content, and a hint that wrapped made it jump a
+     line shorter the moment you typed */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .lp-companion .lp-send.ui-button {
   flex: 0 0 auto;
@@ -869,3 +874,16 @@
     animation: none !important;
   }
 }
+
+/* on a phone the shortcuts are one row you can swipe: they never wrap onto new lines, so the
+   text box doesn't jump when one of them changes */
+.mothli-conversation--compact .lp-starters {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.mothli-conversation--compact .lp-starters > * { flex: 0 0 auto; }
+/* the sheet itself never scrolls; only the conversation inside it does */
+.mothli-conversation--compact { overscroll-behavior: contain; touch-action: manipulation; }
+.mothli-conversation--compact .lp-thread { overscroll-behavior: contain; }
