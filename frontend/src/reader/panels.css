@@ -425,6 +425,12 @@
   box-shadow: var(--m-shadow);
   font-family: var(--m-ui);
 }
+/* a note, not a banner: on a tablet or a big screen it keeps a note's width, centred over the page */
+.mr .jump-note,
+.mr .start-over-note {
+  max-width: 560px;
+  margin-inline: auto;
+}
 .mr [role="alertdialog"] h2 {
   font: 800 20px/1.25 var(--m-ui);
   color: var(--m-ink);

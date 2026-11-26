@@ -221,6 +221,7 @@
 :root.lp-live .lp-hero-moth { visibility: hidden; }
 .lp-hero-note {
   display: grid;
+  text-wrap: pretty;
   gap: 14px;
   margin-top: 18px;
   font-size: clamp(26px, 2.4vw, 32px);
@@ -253,8 +254,8 @@
 }
 .lp-scribble path + path { animation-delay: calc(var(--lp-shift, 0ms) + 4900ms); animation-duration: 0.3s; }
 .lp-onward {
-  grid-column: 1 / -1;
-  justify-self: center;
+  grid-column: 1;
+  justify-self: start;
   margin-top: clamp(56px, 8vw, 96px);
   font-size: 24px;
   color: var(--lp-pencil);
@@ -266,7 +267,7 @@
   display: block;
   width: 2px;
   height: 34px;
-  margin: 8px auto 0;
+  margin: 8px 0 0 1.4em;
   background: linear-gradient(var(--lp-pencil), transparent);
 }
 
@@ -788,11 +789,19 @@
 
 /* ---------- smaller screens: the margin comes into the text ---------- */
 @media (max-width: 1000px) {
-  .lp-sheet { grid-template-columns: minmax(0, 1fr) minmax(10rem, 13rem); column-gap: 40px; }
+  .lp-sheet { grid-template-columns: minmax(0, 1fr) minmax(9.5rem, 12.5rem); column-gap: clamp(24px, 4vw, 40px); }
   .lp-book-page { padding-left: 28px; padding-right: 28px; }
+  .lp-hero-note { font-size: 25px; }
 }
 
-@media (max-width: 820px) {
+/* a tablet held upright: the margin keeps its place, the open book stays open */
+@media (min-width: 741px) and (max-width: 1000px) {
+  .lp-title { font-size: clamp(64px, 10vw, 96px); }
+  .lp-book-page { padding: 48px 22px 28px; }
+  .lp-cast-card { grid-template-columns: minmax(0, 1fr); row-gap: 0; }
+}
+
+@media (max-width: 740px) {
   .lp-sheet {
     grid-template-columns: minmax(0, 1fr);
     padding-top: 72px;
@@ -810,18 +819,16 @@
   .lp-mark-text { max-width: none; }
 
   .lp-hero { padding-top: 36px; }
+  /* on a phone the notes come first, on the same edge as everything else, with the moth's
+     seat tucked at their top right: when it flies off, nothing is left looking pushed in */
   .lp-hero-margin {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    column-gap: 16px;
-    align-items: start;
     order: -1;
     margin: 0 0 28px;
-    padding: 0;
+    padding: 0 56px 0 0;
   }
   .lp-hero-margin .lp-rule,
   .lp-scribble { display: none; }
-  .lp-hero-moth { grid-row: 1; margin-top: 2px; }
+  .lp-hero-moth { position: absolute; top: -6px; right: 0; }
   .lp-hero-moth .moth { width: 48px; height: auto; }
   .lp-hero-note { margin: 0; gap: 6px; font-size: 24px; }
   .lp-hero .lp-text { order: 0; }

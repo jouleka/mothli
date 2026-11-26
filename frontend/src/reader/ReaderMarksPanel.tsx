@@ -338,4 +338,5 @@ const KEPT: Record<string, string> = {
   "highlight queued for sync": "Highlighted! I’ll sync it once you’re back online.",
   "note queued for sync": "Noted! I’ll sync it once you’re back online.",
   "bookmark queued for sync": "Bookmarked! I’ll sync it once you’re back online.",
+  "offline changes synced": "All caught up! What you kept offline is in your notebook.",
 };

@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 
-export const MOBILE_READER_QUERY = "(max-width: 900px)";
+// Phones get Mothli as a full-screen sheet; from a tablet up the book stays open beside it.
+export const MOBILE_READER_QUERY = "(max-width: 700px)";
 
 function query(): MediaQueryList | null {
   return typeof window !== "undefined" && typeof window.matchMedia === "function"

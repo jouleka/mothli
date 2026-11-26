@@ -342,6 +342,10 @@
   .reader-grid.mr[data-chat-open] {
     grid-template-columns: minmax(0, 1fr);
   }
+  /* a tablet: the book stays open, Mothli sits beside it (a phone gets a full-screen sheet) */
+  @media (min-width: 701px) {
+    .reader-grid.mr[data-chat-open] { grid-template-columns: minmax(0, 1fr) minmax(300px, 42%); }
+  }
   .mr .running-head.mr-top {
     grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 6px;

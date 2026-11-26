@@ -97,3 +97,6 @@
 @media (max-width: 560px) {
   .ml-plan-choice .ui-button { width: 100%; justify-content: center; }
 }
+
+/* the account's links start on the same edge as the words around them */
+.ml-account-part .ml-hc-link { padding-inline: 0; }
