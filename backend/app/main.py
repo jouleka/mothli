@@ -141,7 +141,10 @@ _CONTENT_SECURITY_POLICY = "; ".join((
     "default-src 'self'",
     "base-uri 'none'",
     "object-src 'none'",
-    "frame-ancestors 'none'",
+    # 'self', not 'none': Safari applies it to the book's own blob: frames (Foliate draws each
+    # chapter in one), and 'none' kept every book from opening there. Other sites still can't
+    # frame Mothli; X-Frame-Options below says the same.
+    "frame-ancestors 'self'",
     "frame-src 'self' blob: https://buy.paddle.com https://sandbox-buy.paddle.com",
     "form-action 'self'",
     "script-src 'self' https://cdn.paddle.com",
@@ -176,7 +179,7 @@ class _SecurityHeaders:
                 headers["content-security-policy"] = _CONTENT_SECURITY_POLICY
                 headers["x-content-type-options"] = "nosniff"
                 headers["referrer-policy"] = "no-referrer"
-                headers["x-frame-options"] = "DENY"
+                headers["x-frame-options"] = "SAMEORIGIN"
                 headers["permissions-policy"] = "camera=(), microphone=(), geolocation=()"
             await send(message)
 

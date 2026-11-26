@@ -195,7 +195,7 @@ def test_the_policy_allows_paddles_own_addresses_and_nothing_wider() -> None:
     parsed = directives(_CONTENT_SECURITY_POLICY)
     assert parsed["script-src"] == ["'self'", "https://cdn.paddle.com"]
     assert parsed["script-src-attr"] == ["'none'"]
-    assert parsed["frame-ancestors"] == ["'none'"]
+    assert parsed["frame-ancestors"] == ["'self'"]
     assert parsed["default-src"] == ["'self'"]
 
 

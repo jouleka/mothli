@@ -7,7 +7,9 @@ const securityHeaders = {
     "default-src 'self'",
     "base-uri 'none'",
     "object-src 'none'",
-    "frame-ancestors 'none'",
+    // 'self', not 'none': Safari applies it to the book's own blob: frames, and 'none' kept every
+    // book from opening there. Other sites still can't frame Mothli.
+    "frame-ancestors 'self'",
     // Paddle's addresses for the plan sheet (ADR 0045 step 4), as in backend/app/main.py.
     "frame-src 'self' blob: https://buy.paddle.com https://sandbox-buy.paddle.com",
     "form-action 'self'",
@@ -22,7 +24,7 @@ const securityHeaders = {
   ].join("; "),
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
-  "X-Frame-Options": "DENY",
+  "X-Frame-Options": "SAMEORIGIN",
   "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 };
 
