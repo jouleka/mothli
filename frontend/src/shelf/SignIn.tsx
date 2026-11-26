@@ -13,6 +13,7 @@ import { MothliMark } from "../ui/MothliMark";
 import { noteMothliJoined } from "../ui/mothliStanding";
 import { readerDay } from "../ui/readerDay";
 import { AboutMothli, SiteFooter, useSite } from "../public/PublicPage";
+import { Landing } from "../public/landing/Landing";
 import { forgetPaymentLink, paymentLinkTransaction } from "./paddle";
 import { PaymentLink } from "./PaymentLink";
 import { PlanSheet } from "./PlanSheet";
@@ -203,6 +204,28 @@ export function SignIn({ ended = false, paymentLink = null, again = false }: {
       {ended ? "Sign in again" : "Sign in to start reading"}
     </a>
   );
+
+  // A first-time visitor: the front page (public/landing). Everyone else, the plain welcome.
+  if (!ended && !paymentLink && !deleted) {
+    const notes = (
+      <>
+        {again && !offline && (
+          <p className="ml-welcome-note" role="status">{SIGN_IN_AGAIN_LINE}</p>
+        )}
+        {retried && !again && !offline && (
+          <p className="ml-welcome-note" role="status">
+            Hmm, that didn’t quite work. Let’s try once more.
+          </p>
+        )}
+        {offline && (
+          <p className="ml-welcome-note" role="status">
+            You’re offline right now. Sign in once you’re back on the internet.
+          </p>
+        )}
+      </>
+    );
+    return <Landing door={door} notes={notes} site={site} />;
+  }
 
   return (
     <div className="mothli-library ml-welcome">

@@ -16,6 +16,7 @@ import { ReadingHistory } from "./history/ReadingHistory";
 import { FreeLibrary } from "./library/FreeLibrary";
 import { routedPublicPage } from "./public/pages";
 import { PublicPage, preloadSite } from "./public/PublicPage";
+import { arrival } from "./public/landing/arrival";
 import { ReaderPage } from "./reader/ReaderPage";
 import { Shelf } from "./shelf/Shelf";
 import { SignInGate } from "./shelf/SignIn";
@@ -176,6 +177,7 @@ function Boot({ initial }: { initial?: Initialization }) {
 const container = document.getElementById("root")!;
 const root = ReactDOM.createRoot(container);
 if (container.firstElementChild) {
+  arrival.prerendered = true;
   // A public page the server wrote out to be read without JavaScript (ADR 0045 step 8;
   // public/prerender.tsx). It stays on screen until the app can draw the same page, prices and
   // all, and the app's first draw then replaces it with the same thing: nothing flashes.
