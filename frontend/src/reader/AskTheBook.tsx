@@ -749,25 +749,60 @@ export function AskTheBook({
       if (!session.getSnapshot().busy) void send("Catch me up");
     }
   }, [initialAction, session]);
+  // On a phone Mothli is a sheet over the page. It must sit exactly in what's visible above the
+  // keyboard: the page behind is held still (iOS otherwise scrolls it as the keyboard rises), and
+  // the sheet follows the keyboard frame by frame while it slides, instead of snapping to a size
+  // read halfway through. The latest words stay in view as the sheet gets shorter.
   useEffect(() => {
-    if (!compact || !window.visualViewport) return;
+    if (!compact) return;
+    const html = document.documentElement;
+    const body = document.body;
+    const held = { htmlOverflow: html.style.overflow, bodyOverflow: body.style.overflow, overscroll: body.style.overscrollBehavior };
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    body.style.overscrollBehavior = "none";
     const viewport = window.visualViewport;
-    const resize = () => {
-      rootRef.current?.style.setProperty(
-        "--mothli-viewport-height",
-        `${viewport.height}px`,
-      );
-      rootRef.current?.style.setProperty(
-        "--mothli-viewport-top",
-        `${viewport.offsetTop}px`,
-      );
+    let lastHeight = -1;
+    let lastTop = -1;
+    const fit = () => {
+      const root = rootRef.current;
+      if (!root || !viewport) return;
+      const height = Math.round(viewport.height);
+      const top = Math.round(Math.max(0, viewport.offsetTop));
+      if (height === lastHeight && top === lastTop) return;
+      const thread = conversationRef.current;
+      const atEnd = thread ? thread.scrollHeight - thread.scrollTop - thread.clientHeight < 24 : false;
+      root.style.setProperty("--mothli-viewport-height", `${height}px`);
+      root.style.setProperty("--mothli-viewport-top", `${top}px`);
+      if (thread && atEnd && height < lastHeight) thread.scrollTop = thread.scrollHeight;
+      lastHeight = height;
+      lastTop = top;
     };
-    resize();
-    viewport.addEventListener("resize", resize);
-    viewport.addEventListener("scroll", resize);
+    let following = 0;
+    let until = 0;
+    const follow = () => {
+      fit();
+      if (performance.now() < until) following = requestAnimationFrame(follow);
+      else following = 0;
+    };
+    const followKeyboard = () => {
+      until = performance.now() + 800;
+      if (!following) following = requestAnimationFrame(follow);
+    };
+    fit();
+    viewport?.addEventListener("resize", followKeyboard);
+    viewport?.addEventListener("scroll", fit);
+    document.addEventListener("focusin", followKeyboard);
+    document.addEventListener("focusout", followKeyboard);
     return () => {
-      viewport.removeEventListener("resize", resize);
-      viewport.removeEventListener("scroll", resize);
+      cancelAnimationFrame(following);
+      viewport?.removeEventListener("resize", followKeyboard);
+      viewport?.removeEventListener("scroll", fit);
+      document.removeEventListener("focusin", followKeyboard);
+      document.removeEventListener("focusout", followKeyboard);
+      html.style.overflow = held.htmlOverflow;
+      body.style.overflow = held.bodyOverflow;
+      body.style.overscrollBehavior = held.overscroll;
     };
   }, [compact]);
   // Mothli speaks first: a recap already in hand, or a chapter closeout fetched once on open.
@@ -1270,9 +1305,12 @@ export function AskTheBook({
                 ref={inputRef}
                 rows={1}
                 maxLength={500}
-                placeholder={selection ? "Ask about this passage…" : "Ask Mothli anything about your book…"}
+                placeholder={selection ? "Ask about this passage…" : compact ? "Ask Mothli anything…" : "Ask Mothli anything about your book…"}
                 value={question}
-                disabled={busy}
+                // read-only, not disabled, while Mothli answers: a disabled box drops focus, and on
+                // a phone that closes the keyboard after every message and jolts the whole sheet
+                readOnly={busy}
+                aria-busy={busy || undefined}
                 onChange={(event) => session.update({ question: event.currentTarget.value })}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {

@@ -300,7 +300,7 @@ describe("Mothli conversation", () => {
       screen.getByRole("region", { name: "Book conversation" }).scrollTop,
     ).toBe(120);
     expect(
-      (screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).disabled,
+      (screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).readOnly,
     ).toBe(true);
     expect(mocks.askBook).toHaveBeenCalledTimes(1);
     second.rerender(
@@ -497,6 +497,29 @@ describe("Mothli conversation", () => {
     view.unmount();
     expect(document.activeElement).toBe(opener);
     opener.remove();
+  });
+
+  test("on a phone the sheet holds the page still and follows the keyboard", async () => {
+    const viewport = Object.assign(new EventTarget(), { height: 800, offsetTop: 0 });
+    vi.stubGlobal("visualViewport", viewport);
+    try {
+      const view = render(<AskTheBook {...props} compact onClose={() => {}} />);
+      const sheet = screen.getByRole("dialog");
+      expect(document.documentElement.style.overflow).toBe("hidden");
+      expect(sheet.style.getPropertyValue("--mothli-viewport-height")).toBe("800px");
+
+      // the keyboard rises: the visible area shrinks and is panned down a little
+      viewport.height = 452;
+      viewport.offsetTop = 40;
+      viewport.dispatchEvent(new Event("resize"));
+      await waitFor(() => expect(sheet.style.getPropertyValue("--mothli-viewport-height")).toBe("452px"));
+      expect(sheet.style.getPropertyValue("--mothli-viewport-top")).toBe("40px");
+
+      view.unmount();
+      expect(document.documentElement.style.overflow).toBe("");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
