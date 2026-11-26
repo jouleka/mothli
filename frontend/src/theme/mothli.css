@@ -218,3 +218,13 @@ body {
   text-transform: uppercase;
   color: var(--m-accent);
 }
+
+/* Big screens: a 27-inch monitor shouldn't make Mothli a thin strip of small print. Everything
+   grows together, the way it would if the screen were simply closer. The reading page is left
+   alone: the reader sets its own text size there, and the book's frame measures in real pixels. */
+@media (min-width: 1800px) {
+  :root:not(:has(.reader-grid)) { zoom: 1.12; }
+}
+@media (min-width: 2300px) {
+  :root:not(:has(.reader-grid)) { zoom: 1.3; }
+}

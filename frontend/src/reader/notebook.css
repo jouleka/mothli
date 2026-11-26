@@ -36,13 +36,18 @@
   .reader-marks .notebook-simple { position: fixed; inset: 64px 8px auto; width: auto; max-height: calc(100dvh - 80px); }
 }
 
+/* the word under the notebook button opens leftwards, so it never runs off the screen's edge */
+@media (min-width: 701px) {
+  .mr .mr-tools .reader-feedback { right: 0; left: auto; }
+}
+
 /* something kept: a word from Mothli, in pencil, that pops in */
 .reader-feedback--kept {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: auto;
-  max-width: 300px;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 32px));
   color: var(--m-mothli-ink);
   animation: reader-kept 0.5s cubic-bezier(0.3, 1.35, 0.5, 1) both;
 }

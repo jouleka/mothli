@@ -77,7 +77,10 @@ function FlyingMoth({ lamp }: { lamp: boolean }) {
     };
 
     const onPointer = (event: PointerEvent) => {
-      pointer = { x: event.clientX, y: event.clientY, at: performance.now() };
+      // A finger scrolling the page isn't something to chase; only a mouse (or the lamp) leads.
+      if (event.pointerType === "mouse" || lampOn.current) {
+        pointer = { x: event.clientX, y: event.clientY, at: performance.now() };
+      }
       lastLamp = { x: event.clientX, y: event.clientY };
       root.style.setProperty("--lp-lamp-x", `${event.clientX}px`);
       root.style.setProperty("--lp-lamp-y", `${event.clientY}px`);
