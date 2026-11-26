@@ -324,6 +324,8 @@ describe("Mothli conversation", () => {
         }),
     );
     submit("Who else was there?");
+    // sent, so it leaves the box at once, as in any messaging app
+    expect((screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value).toBe("");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(
       (screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value,
@@ -371,6 +373,29 @@ describe("Mothli conversation", () => {
     expect(screen.queryByText(answer.claims[0].text)).toBeNull();
   });
 
+  test("Retry after a failed shortcut sends the shortcut again, not the half-typed draft", async () => {
+    mocks.askBook.mockRejectedValueOnce(new Error("network"));
+    render(<AskTheBook {...props} />);
+    fireEvent.change(screen.getByLabelText("Message Mothli"), { target: { value: "Half a thought" } });
+    fireEvent.click(screen.getByRole("button", { name: "Catch me up" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await screen.findByText(answer.claims[0].text);
+    expect(mocks.askBook).toHaveBeenLastCalledWith("b", "Catch me up", 2, [], undefined, expect.any(AbortSignal));
+    expect((screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value).toBe("Half a thought");
+  });
+
+  test("a typed message that fails comes back to the box, and Retry sends it as edited", async () => {
+    mocks.askBook.mockRejectedValueOnce(new Error("network"));
+    render(<AskTheBook {...props} />);
+    submit("Where did they meat?");
+    await screen.findByRole("button", { name: "Retry" });
+    expect((screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value).toBe("Where did they meat?");
+    fireEvent.change(screen.getByLabelText("Message Mothli"), { target: { value: "Where did they meet?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText(answer.claims[0].text);
+    expect(mocks.askBook).toHaveBeenLastCalledWith("b", "Where did they meet?", 2, [], undefined, expect.any(AbortSignal));
+  });
+
   test("routes recap and person shortcuts into the same conversation without diagnostics", async () => {
     mocks.askBook.mockResolvedValue({
       ...answer,
@@ -380,8 +405,12 @@ describe("Mothli conversation", () => {
       citations: [],
     });
     render(<AskTheBook {...props} />);
+    // a shortcut leaves what the reader had typed alone
+    fireEvent.change(screen.getByLabelText("Message Mothli"), { target: { value: "Half a thought" } });
     fireEvent.click(screen.getByRole("button", { name: "Catch me up" }));
     await screen.findByText("Aldric arrived in the valley.");
+    expect((screen.getByLabelText("Message Mothli") as HTMLTextAreaElement).value).toBe("Half a thought");
+    fireEvent.change(screen.getByLabelText("Message Mothli"), { target: { value: "" } });
     expect(mocks.askBook).toHaveBeenCalledWith("b", "Catch me up", 2, [], undefined, expect.any(AbortSignal));
     fireEvent.click(screen.getByRole("button", { name: "Who was that?" }));
     fireEvent.click(await screen.findByRole("button", { name: "Aldric" }));

@@ -18,7 +18,6 @@ from copy import copy
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import logging
-import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
@@ -35,6 +34,7 @@ from app.ask import (
     ask_prompt,
     conversation_question,
     conversation_retrieval_question,
+    recap_request as _recap_request,
     ask_repair_prompt,
     cited_sources,
     complete_ask_citations,
@@ -137,15 +137,6 @@ NON_NOVEL_RECAP_PROMPT_VERSION = "recap-v4"       # LIT-9 profile-aware neutral 
 RECAP_FAILURE_TTL_S = 60.0                        # negative cache: a double-rejected key 502s without
 #                                                   re-paying until the TTL lapses (pass-2 convoy fix)
 _log = logging.getLogger(__name__)
-
-
-def _recap_request(question):
-    value = re.sub(r"[^\w\s]", "", question.casefold()).strip()
-    return bool(re.fullmatch(
-        r"(?:please )?(?:catch me up|(?:give me |can you give me )?(?:a |the )?(?:quick |brief )?recap|"
-        r"what(?:s| has)? happened (?:so far|up to now)|what should i remember so far|"
-        r"remind me what happened|summari[sz]e (?:what ive read|the story so far))"
-        r"(?: please)?", value))
 
 
 def _preparation_state(state, requested, worker, book_id):

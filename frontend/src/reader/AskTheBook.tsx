@@ -93,6 +93,11 @@ export type AskSession = {
   abandon: () => void;
   /** The request for the reply in flight. */
   request: AbortController | null;
+  /** What the reader typed for the reply in flight, put back in the box if it never comes. */
+  typed: string | null;
+  /** The shortcut last sent ("Catch me up"), which Retry sends again; null when the last
+   * message was typed, since its words are back in the box, edits and all. */
+  lastSent: string | null;
 };
 const BOOK_USAGE_LIMIT_MESSAGE =
   "Mothli is paused for this book: its usage limit has been reached.";
@@ -252,6 +257,8 @@ function createAskSession(
     readingPass,
     scrollTop: null,
     loadToken: 0,
+    typed: null,
+    lastSent: null,
     getSnapshot: () => snapshot,
     subscribe: (listener) => {
       listeners.add(listener);
@@ -268,8 +275,13 @@ function createAskSession(
       // A new request token means the reply in flight is no longer wanted (Cancel, hide, or a
       // new question): stop its request. A reply that had already finished was stored by the
       // server and stays stored; it is the reader's, and comes back at the next load.
-      if (changes.requestToken !== undefined && changes.requestToken !== snapshot.requestToken)
+      if (changes.requestToken !== undefined && changes.requestToken !== snapshot.requestToken) {
         session.abandon();
+        // What the reader typed for it goes back in the box, unless they have typed another.
+        if (session.typed && !("question" in changes) && !snapshot.question)
+          changes = { ...changes, question: session.typed };
+        session.typed = null;
+      }
       snapshot = { ...snapshot, ...changes };
       if ("question" in changes && owner === activeOfflineOwner()) storeDraft(key, snapshot.question);
       listeners.forEach((listener) => listener());
@@ -524,6 +536,12 @@ export function AskTheBook({
     setConfirmClear(false);
   }, [bookId, owner, pass, bookmark]);
 
+  // A message that got no reply goes back in the box, unless the reader has typed another.
+  const giveBackTyped = () => {
+    const typed = session.typed;
+    session.typed = null;
+    if (typed && !session.getSnapshot().question) session.update({ question: typed });
+  };
   const send = async (
     value = session.getSnapshot().question.trim(),
     bookScope = false,
@@ -532,14 +550,19 @@ export function AskTheBook({
     // Mothli needs the plan: nothing is asked (a seed or a shortcut can still call this).
     if (mothliStanding()?.state === "ended") return;
     const requestToken = session.getSnapshot().requestToken + 1;
+    // Like any messaging app, what was typed leaves the box the moment it's sent; a shortcut
+    // ("Catch me up") leaves whatever the reader had typed alone.
+    const fromBox = value === session.getSnapshot().question.trim();
     session.update({
-      question: value,
+      ...(fromBox ? { question: "" } : {}),
       busy: true,
       error: "",
       pendingQuestion: value,
       streaming: "",
       requestToken,
     });
+    session.typed = fromBox ? value : null;
+    session.lastSent = fromBox ? null : value;
     const request = new AbortController();
     session.request = request;
     const isCurrentRequest = () =>
@@ -670,13 +693,14 @@ export function AskTheBook({
             ...(kept ? { stored: true, arrived: now } : {}),
           },
         ].slice(-40),
-        question: "",
         pendingQuestion: null,
       });
+      session.typed = null;
       setPeopleOpen(false);
     } catch (reason) {
       // Mothli needs the plan: the invitation stands where the reply would be, never an error
-      // line. The question stays in the box for when the reader is back.
+      // line. The question goes back in the box for when the reader is back.
+      if (isCurrentRequest()) giveBackTyped();
       if (isCurrentRequest() && !needsPlan(reason)) {
         const message =
           companionPause(reason)?.line ??
@@ -912,6 +936,7 @@ export function AskTheBook({
     if (session.getSnapshot().busy) return;
     const requestToken = session.getSnapshot().requestToken + 1;
     session.update({ busy: true, error: "", pendingQuestion: null, requestToken });
+    session.lastSent = null; // Retry after this sends what is in the box, never an older shortcut
     const isCurrentRequest = () => isCurrent() && session.getSnapshot().requestToken === requestToken;
     // A server with no chapter closeout (hosted mode, where Mothli's notes go into the chat
     // instead): ask the chat about the chapter, as the reader would have.
@@ -1258,14 +1283,14 @@ export function AskTheBook({
                   <button
                     className="mothli-cancel"
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
                       session.update({
                         busy: false,
                         pendingQuestion: null,
                         streaming: "",
                         requestToken: session.getSnapshot().requestToken + 1,
-                      })
-                    }
+                      });
+                    }}
                   >
                     Cancel
                   </button>
@@ -1358,7 +1383,7 @@ export function AskTheBook({
                     <>
                       <span>{error}</span>
                       {error !== BOOK_USAGE_LIMIT_MESSAGE && error !== REQUEST_TOO_LARGE_MESSAGE && error !== CLEAR_FAILED && !isAllowanceLine(error) && (
-                        <button type="button" onClick={() => void send()}>
+                        <button type="button" onClick={() => void send(session.lastSent ?? undefined)}>
                           Retry
                         </button>
                       )}
@@ -1375,7 +1400,7 @@ export function AskTheBook({
                 ref={inputRef}
                 rows={1}
                 maxLength={500}
-                placeholder={selection ? "Ask about this passage…" : compact ? "Ask Mothli anything…" : "Ask Mothli anything about your book…"}
+                placeholder={selection ? "Ask about this passage…" : "Ask Mothli anything…"}
                 value={question}
                 // read-only, not disabled, while Mothli answers: a disabled box drops focus, and on
                 // a phone that closes the keyboard after every message and jolts the whole sheet
