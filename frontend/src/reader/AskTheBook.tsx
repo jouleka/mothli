@@ -16,7 +16,7 @@ import { Icon } from "../ui/Icon";
 import { Moth, type MothMood } from "../ui/Moth";
 import { MOTHLI_HELLO, MothliEndingNote, MothliInvitation, startMothli } from "../ui/MothliPlan";
 import { mothliStanding, noteMothliUsed, useMothliStanding } from "../ui/mothliStanding";
-import { PeoplePanel, StoryPanel } from "./StoryMemory";
+import { type ChapterName, PeoplePanel, StoryPanel } from "./StoryMemory";
 import { activeOfflineOwner } from "../pwa/offline";
 import { keepTabFocusInside } from "./focusTrap";
 import type { ReaderSelection } from "./ReaderMarksPanel";
@@ -24,6 +24,7 @@ import { useCycle } from "../ui/useCycle";
 import { CountAsRead } from "./CountAsRead";
 import { untilNotesReady } from "./closeoutWait";
 import { PASSAGE_HELP_ABSENT } from "./SelectionAssistant";
+import { PanelResizeHandle } from "./PanelResize";
 import "./mothli-conversation.css";
 import "./companion.css";
 
@@ -113,6 +114,10 @@ const STORE_GRACE_MS = 5000;
 // hold the whole conversation. The conversation itself is the server's: see `loadHistory`.
 const STORAGE_PREFIX = "litlet.pip.conversation:";
 const spokenSeeds = new Set<string>();
+const KEEP_HINT_KEY = "mothli.keepHintSeen";
+/** A reply past a few lines is set in the book's own type, which reads easily at length; a short
+ * one stays in Mothli's handwriting. */
+const isLongReply = (text: string) => text.length > 220;
 function storageKey(bookId: string, owner: string, pass: string) {
   return `${STORAGE_PREFIX}${encodeURIComponent(owner)}:${encodeURIComponent(bookId)}:${encodeURIComponent(pass)}`;
 }
@@ -315,6 +320,9 @@ export function AskTheBook({
   selection,
   onClearSelection,
   onSaveReply,
+  onOpenNotebook,
+  chapterName,
+  resize,
   initialAction,
   prepareReadContext,
   onChaptersRead,
@@ -343,6 +351,12 @@ export function AskTheBook({
   selection?: ReaderSelection | null;
   onClearSelection?: () => void;
   onSaveReply?: (reply: SavedCompanionReply) => void;
+  /** Opens the Notebook on what was kept from Mothli: where a saved reply went. */
+  onOpenNotebook?: () => void;
+  /** The book's own chapter name for a piece ("Chapter 2"), as the footer counts them. */
+  chapterName?: ChapterName;
+  /** The side panel's width, when the reader may resize it (beside the book, not on a phone). */
+  resize?: { width: number | null; onWidth: (width: number | null) => void };
   initialAction?: "recap" | null;
   prepareReadContext?: () => Promise<ReadFrontier | null>;
   /** The reader told Mothli, from a reply, that some chapters are read: refresh what shows it. */
@@ -398,6 +412,23 @@ export function AskTheBook({
   const [liveOffer, setLiveOffer] = useState<{ id: string; offers: ReadSkipped[] } | null>(null);
   const [saveError, setSaveError] = useState("");
   const [saved, setSaved] = useState<Set<string>>(new Set());
+  // A first-time reader sees one quiet line under the latest reply saying what keeping does,
+  // until they keep one or say they have it. Remembered in this browser only.
+  const [keepHint, setKeepHint] = useState(() => {
+    try {
+      return localStorage.getItem(KEEP_HINT_KEY) == null;
+    } catch {
+      return false;
+    }
+  });
+  const hideKeepHint = useCallback(() => {
+    setKeepHint(false);
+    try {
+      localStorage.setItem(KEEP_HINT_KEY, "1");
+    } catch {
+      /* The hint simply comes back next time. */
+    }
+  }, []);
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [people, setPeople] = useState<{ name: string; entity_id: EntityId }[]>(
     [],
@@ -996,6 +1027,9 @@ export function AskTheBook({
       ? ["What just happened?", "What have I missed?"]
       : [];
   const chips = (visibleExchanges.length ? [] : starters).slice(0, 3);
+  const keepable = (exchange: AskExchange) =>
+    !exchange.answer.insufficient_evidence && exchange.answer.answer_type !== "conversation";
+  const lastKeepable = visibleExchanges.reduce((last, exchange, index) => (keepable(exchange) ? index : last), -1);
 
   return (
     <div
@@ -1006,6 +1040,7 @@ export function AskTheBook({
       ref={rootRef}
       data-tab={tab}
     >
+      {resize && embedded && !compact && <PanelResizeHandle width={resize.width} onWidth={resize.onWidth} />}
       <header className="lp-companion-head">
         <div className="lp-companion-id">
           <span className="lp-moth-ring"><Moth mood={mood} size={42} glow={false} /></span>
@@ -1072,6 +1107,7 @@ export function AskTheBook({
             place={finishedChapters}
             refresh={memoryRefresh}
             focusId={focusPerson}
+            chapterName={chapterName}
             onAsk={(name) => askAbout(`Remind me who ${name} is.`)}
           />
         </div>
@@ -1082,6 +1118,7 @@ export function AskTheBook({
             bookmark={bookmark}
             place={finishedChapters}
             refresh={memoryRefresh}
+            chapterName={chapterName}
             onOpenPerson={(id) => {
               setFocusPerson(id);
               setTab("people");
@@ -1103,7 +1140,7 @@ export function AskTheBook({
             <MothliEndingNote after={inputRef} onShown={showEndingNote} />
             {confirmClear && (
               <div className="mothli-clear lp-clear">
-                <span>Start a fresh chat? Saved replies stay in Notebook.</span>
+                <span>Start a fresh chat? Replies you kept stay in your Notebook.</span>
                 <Button
                   variant="ghost"
                   onClick={() => {
@@ -1200,11 +1237,11 @@ export function AskTheBook({
                 )}
                 <div className="mothli-reply lp-reply">
                   <div className="lp-reply-body">
-                    <p>{readableAnswer(exchange.answer)}</p>
+                    <p className={isLongReply(readableAnswer(exchange.answer)) ? "lp-reply-long" : undefined}>{readableAnswer(exchange.answer)}</p>
                     {liveOffer?.id === exchange.id && (
                       <CountAsRead offers={liveOffer.offers} onCounted={onChaptersRead} />
                     )}
-                    {!exchange.answer.insufficient_evidence && exchange.answer.answer_type !== "conversation" && (
+                    {keepable(exchange) && (
                       <div className="mothli-reply-actions lp-reply-actions">
                         {exchange.answer.citations.length > 0 && (
                           <details className="mothli-sources lp-sources">
@@ -1231,13 +1268,22 @@ export function AskTheBook({
                             </div>
                           </details>
                         )}
-                        {onSaveReply && (
+                        {onSaveReply && (saved.has(exchange.id) ? (
+                          <span className="lp-kept" role="status">
+                            <Icon name="check" size={14} />
+                            <span>Kept in your Notebook</span>
+                            {onOpenNotebook && (
+                              <button type="button" className="lp-kept-open" onClick={() => isCurrent() && onOpenNotebook()}>
+                                Open Notebook
+                              </button>
+                            )}
+                          </span>
+                        ) : (
                           <Button
                             variant="ghost"
                             className="mothli-save lp-save"
-                            icon={saved.has(exchange.id) ? "check" : "bookmark"}
-                            aria-label={saved.has(exchange.id) ? "Saved to Notebook" : "Save reply to Notebook"}
-                            disabled={saved.has(exchange.id)}
+                            icon="bookmark"
+                            title="Keep this reply in your Notebook to read again later"
                             onClick={() => {
                               if (!isCurrent()) return;
                               try {
@@ -1250,14 +1296,21 @@ export function AskTheBook({
                                 });
                                 setSaved(new Set([...saved, exchange.id]));
                                 setSaveError("");
+                                hideKeepHint();
                               } catch {
-                                setSaveError("Couldn’t save that reply. Tap Save to try again.");
+                                setSaveError("Couldn’t keep that reply. Try Keep in Notebook again.");
                               }
                             }}
                           >
-                            {saved.has(exchange.id) ? "Saved" : "Save"}
+                            Keep in Notebook
                           </Button>
-                        )}
+                        ))}
+                      </div>
+                    )}
+                    {onSaveReply && keepHint && !saved.has(exchange.id) && index === lastKeepable && (
+                      <div className="lp-keep-hint">
+                        <span>Like a reply? Keep it in your Notebook and find it there any time.</span>
+                        <button type="button" onClick={hideKeepHint}>Got it</button>
                       </div>
                     )}
                   </div>
@@ -1270,7 +1323,7 @@ export function AskTheBook({
                 {streaming && (
                   <div className="mothli-reply lp-reply" aria-live="polite">
                     <div className="lp-reply-body">
-                      <p>{streaming}</p>
+                      <p className={isLongReply(streaming) ? "lp-reply-long" : undefined}>{streaming}</p>
                     </div>
                   </div>
                 )}

@@ -18,6 +18,7 @@ const mark: ReaderMark = {
   updated_at: "now",
 };
 const props = {
+  chapterName: (ordinal: number) => `Chapter ${ordinal}`,
   marks: [mark],
   selection: null,
   currentAnchor: { cfi: "epubcfi(/6/2)", atom: 1 },
@@ -37,10 +38,10 @@ describe("ReaderMarks", () => {
     render(<ReaderMarks {...props} />);
     fireEvent.click(screen.getByRole("button", { name: "Notebook" }));
     fireEvent.change(screen.getByRole("searchbox", { name: "Search your notebook" }), { target: { value: "missing" } });
-    expect(screen.queryByRole("button", { name: /highlight · 1/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /highlight · chapter 1/i })).toBeNull();
     expect(screen.getByText("Nothing found.")).toBeTruthy();
     fireEvent.change(screen.getByRole("searchbox", { name: "Search your notebook" }), { target: { value: "DANGEROUS" } });
-    expect(screen.getByRole("button", { name: /highlight · 1/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /highlight · chapter 1/i })).toBeTruthy();
   });
   test("selection actions preserve text, save a color and note, and pass axe", async () => {
     const onHighlight = vi.fn();
@@ -69,7 +70,7 @@ describe("ReaderMarks", () => {
     fireEvent.change(screen.getByLabelText(/add a note/i), {
       target: { value: "Remember this." },
     });
-    fireEvent.click(screen.getByRole("button", { name: /save note/i }));
+    fireEvent.click(screen.getByRole("button", { name: /keep note/i }));
     expect(onAnnotate).toHaveBeenCalledWith("Remember this.");
     expect(container.querySelector("script")).toBeNull();
     expect(await axeAA(container)).toHaveNoViolations();
@@ -84,7 +85,7 @@ describe("ReaderMarks", () => {
       screen.getByRole("link", { name: /^export pages$/i }).getAttribute("href"),
     ).toBe("/export");
     fireEvent.click(
-      screen.getByRole("button", { name: /highlight · 1/i }),
+      screen.getByRole("button", { name: /highlight · chapter 1/i }),
     );
     expect(onNavigate).toHaveBeenCalledWith(mark);
     expect(
@@ -108,7 +109,7 @@ describe("ReaderMarks", () => {
       name: /add a note/i,
     }) as HTMLTextAreaElement;
     fireEvent.change(note, { target: { value: "A note worth keeping" } });
-    fireEvent.click(screen.getByRole("button", { name: /save note/i }));
+    fireEvent.click(screen.getByRole("button", { name: /keep note/i }));
     rerender(
       <ReaderMarks
         {...props}

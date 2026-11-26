@@ -480,10 +480,12 @@ describe("Mothli conversation", () => {
       throw new Error("full");
     });
     const onNavigate = vi.fn();
+    const onOpenNotebook = vi.fn();
     const { container } = render(
       <AskTheBook
         {...props}
         onSaveReply={onSaveReply}
+        onOpenNotebook={onOpenNotebook}
         onNavigate={onNavigate}
       />,
     );
@@ -492,15 +494,13 @@ describe("Mothli conversation", () => {
     fireEvent.click(screen.getByText("Pages", { selector: "summary" }));
     fireEvent.click(screen.getByRole("button", { name: /The forge/ }));
     expect(onNavigate).toHaveBeenCalledWith(answer.citations[0]);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Save reply to Notebook" }),
-    );
-    expect(
-      screen.queryByRole("button", { name: "Saved to Notebook" }),
-    ).toBeNull();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Save reply to Notebook" }),
-    );
+    // A failed keep says so and leaves the button to try again.
+    fireEvent.click(screen.getByRole("button", { name: "Keep in Notebook" }));
+    expect(screen.queryByText("Kept in your Notebook")).toBeNull();
+    expect(screen.getByText("Couldn’t keep that reply. Try Keep in Notebook again.")).toBeTruthy();
+    // The first-time hint is under the latest reply until the reader keeps one.
+    expect(screen.getByText(/Like a reply\? Keep it in your Notebook/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Keep in Notebook" }));
     expect(onSaveReply).toHaveBeenLastCalledWith(
       expect.objectContaining({
         body: answer.claims[0].text,
@@ -508,9 +508,13 @@ describe("Mothli conversation", () => {
         citations: answer.citations,
       }),
     );
-    expect(
-      screen.getByRole("button", { name: "Saved to Notebook" }),
-    ).toBeTruthy();
+    // Kept: it says where it went, and opens it.
+    expect(screen.getByText("Kept in your Notebook")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Keep in Notebook" })).toBeNull();
+    expect(screen.queryByText(/Like a reply\?/)).toBeNull();
+    expect(localStorage.getItem("mothli.keepHintSeen")).toBe("1");
+    fireEvent.click(screen.getByRole("button", { name: "Open Notebook" }));
+    expect(onOpenNotebook).toHaveBeenCalledTimes(1);
     expect(await axeAA(container)).toHaveNoViolations();
   });
 
@@ -566,7 +570,7 @@ test("shows a reaction clarification and retains it for the next turn without a 
   render(<AskTheBook {...props} onSaveReply={vi.fn()} />);
   submit("That was so unfair!");
   await screen.findByText("Oof. Which part felt unfair to you?");
-  expect(screen.queryByRole("button", { name: "Save reply to Notebook" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Keep in Notebook" })).toBeNull();
   submit("When Mara was blamed for the key.");
   await screen.findByText(answer.claims[0].text);
   expect(mocks.askBook.mock.calls[1][3][1].content).toBe("Oof. Which part felt unfair to you?");
@@ -636,7 +640,7 @@ describe("the server's conversation", () => {
     render(<AskTheBook {...props} onSaveReply={vi.fn()} />);
     await screen.findByText("Who dies in the end?");
     expect(screen.getByText("I didn’t have an answer for that from what you’d read.")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Save reply to Notebook" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Keep in Notebook" })).toBeNull();
   });
 
   // Catches: turns surviving "read it fresh" from the panel's own memory. A new reading pass

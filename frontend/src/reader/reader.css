@@ -14,7 +14,8 @@
   font-family: var(--m-ui);
 }
 .reader-grid.mr[data-chat-open] {
-  grid-template-columns: minmax(0, 1fr) 420px;
+  /* the reader may drag Mothli's panel wider (PanelResize); the book always keeps 380px */
+  grid-template-columns: minmax(0, 1fr) min(var(--mothli-panel-width, 440px), max(320px, calc(100vw - 380px)));
 }
 
 .mr .book-pane.mr-main {
@@ -344,7 +345,9 @@
   }
   /* a tablet: the book stays open, Mothli sits beside it (a phone gets a full-screen sheet) */
   @media (min-width: 701px) {
-    .reader-grid.mr[data-chat-open] { grid-template-columns: minmax(0, 1fr) minmax(300px, 42%); }
+    .reader-grid.mr[data-chat-open] {
+      grid-template-columns: minmax(0, 1fr) min(var(--mothli-panel-width, max(320px, 44%)), max(320px, calc(100vw - 380px)));
+    }
   }
   .mr .running-head.mr-top {
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -419,3 +422,37 @@
   font: 400 12px/1.4 var(--m-ui);
   color: var(--m-faint);
 }
+
+/* the edge between the book and Mothli's panel: drag (or arrow keys) to resize */
+.mr .mothli-conversation--embedded:not(.mothli-conversation--compact) { position: relative; }
+.panel-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  width: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  border-radius: 8px;
+  outline: none;
+}
+.panel-resize > span {
+  width: 4px;
+  height: 44px;
+  border-radius: 4px;
+  background: var(--m-line, rgba(0, 0, 0, 0.14));
+  transition: height 160ms ease, background 160ms ease;
+}
+.panel-resize:hover > span,
+.panel-resize:focus-visible > span,
+:root[data-panel-resizing] .panel-resize > span {
+  height: 72px;
+  background: var(--m-accent);
+}
+.panel-resize:focus-visible { box-shadow: 0 0 0 2px var(--m-accent); }
+:root[data-panel-resizing],
+:root[data-panel-resizing] * { cursor: col-resize !important; user-select: none !important; }
