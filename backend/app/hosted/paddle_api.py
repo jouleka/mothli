@@ -16,6 +16,8 @@ settings:
 - ``subscription``: ``GET /subscriptions/{id}`` (.../api-reference/subscriptions/get-subscription);
 - ``cancel``: ``POST /subscriptions/{id}/cancel`` with ``effective_from: next_billing_period``
   (.../api-reference/subscriptions/cancel-subscription);
+- ``cancel_now``: the same with ``effective_from: immediately``, only for a stored subscription
+  whose plan a refund or a chargeback ended;
 - ``remove_scheduled_change``: ``PATCH /subscriptions/{id}`` with ``scheduled_change: null``
   (developer.paddle.com/build/subscriptions/cancel-subscriptions);
 - ``portal``: ``POST /customers/{id}/portal-sessions`` for one subscription
@@ -162,6 +164,13 @@ class PaddleApi:
         """Cancel at the end of the period paid for; the subscription as Paddle now has it."""
         return self._call("POST", f"/subscriptions/{_checked(subscription_id, _SUBSCRIPTION)}"
                                   "/cancel", {"effective_from": "next_billing_period"})
+
+    def cancel_now(self, subscription_id: str) -> dict:
+        """Cancel at once, for a plan a refund or a chargeback ended (``effective_from:
+        immediately``: the status is ``canceled`` right away and it never renews); the
+        subscription as Paddle now has it."""
+        return self._call("POST", f"/subscriptions/{_checked(subscription_id, _SUBSCRIPTION)}"
+                                  "/cancel", {"effective_from": "immediately"})
 
     def remove_scheduled_change(self, subscription_id: str) -> dict:
         """Undo a scheduled cancel; the subscription as Paddle now has it."""

@@ -336,7 +336,7 @@ class _Copy:
         with self._catalog._transaction() as conn:
             row = conn.execute(
                 "SELECT gift_until, paddle_status, paddle_price_id,"
-                " first_paid_at, period_ends_at, ends_at, cancel_owed_since"
+                " first_paid_at, period_ends_at, ends_at, cancel_owed_since, refunded_at"
                 " FROM public.reader_plans WHERE owner_id=%s", (self._owner.value,)).fetchone()
         row = row or {}
         gift, status = row.get("gift_until"), row.get("paddle_status")
@@ -356,6 +356,7 @@ class _Copy:
                     "first_paid": _when(row["first_paid_at"]),
                     "this_period_ends": _when(row["period_ends_at"]),
                     "ends": _when(row["ends_at"]),
+                    "ended_by_a_refund": _when(row["refunded_at"]),
                     "sold_by": "Paddle sells the plan and keeps its own records of your payments."}
         return {"gift": gift_said, "plan": plan,
                 "not_to_renew_since_you_asked_to_delete_your_account":

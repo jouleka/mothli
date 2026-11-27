@@ -111,9 +111,16 @@ class StandInPaddle:
         if parts[0] == "subscriptions" and parts[1] in self.subscriptions:
             entity = self.subscriptions[parts[1]]
             if request.method == "POST" and parts[2:] == ["cancel"]:
-                entity["scheduled_change"] = {
-                    "action": "cancel", "resume_at": None,
-                    "effective_at": entity["current_billing_period"]["ends_at"]}
+                if entity["status"] == "canceled":
+                    return httpx.Response(400, json={"error": {
+                        "type": "request_error", "code": "subscription_update_when_canceled"}})
+                if body.get("effective_from") == "immediately":
+                    entity.update(status="canceled", scheduled_change=None,
+                                  current_billing_period=None, canceled_at=self.tick())
+                else:
+                    entity["scheduled_change"] = {
+                        "action": "cancel", "resume_at": None,
+                        "effective_at": entity["current_billing_period"]["ends_at"]}
                 entity["updated_at"] = self.tick()
             elif request.method == "PATCH" and len(parts) == 2:
                 entity["scheduled_change"] = body["scheduled_change"]

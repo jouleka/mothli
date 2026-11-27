@@ -16,6 +16,8 @@ It is also how the cancel owed to a reader who asked to delete their account is 
 0045 step 7): those plans come first in the list, and for each that Paddle's answer still shows
 renewing, it asks for the cancel at the end of the period paid for through the code "Cancel my
 plan" runs (``subscribe.change``), every run until Paddle's answer brings the scheduled end.
+Likewise for a plan a refund or a chargeback ended (migration 0044): while Paddle's answer is
+not yet cancelled, it asks for the immediate cancel (``subscribe.cancel_refunded``).
 
 Run in the web container, which holds the key, the billing role's address and the prices, from
 the server's crontab (the runbook, step 4c):
@@ -35,7 +37,7 @@ import psycopg
 
 from app.hosted.billing import Malformed, apply_message, read_subscription
 from app.hosted.paddle_api import PaddleApi, PaddleRefused, PaddleUnavailable
-from app.hosted.subscribe import cancel_owed, owes_cancel
+from app.hosted.subscribe import cancel_owed, cancel_refunded, owes_cancel, refund_cancel_due
 
 
 def plans_to_check(dsn: str, size: int) -> list[tuple]:
@@ -79,6 +81,18 @@ def check(dsn: str, api: PaddleApi, prices: frozenset[str], *, size: int, pause:
                 failed += 1
                 break
             if outcome == "locked":
+                failed += 1
+            elif outcome == "done":
+                changed += 1
+        # The immediate cancel of a plan a refund or a chargeback ended, until Paddle's answer
+        # says cancelled (migration 0044).
+        if refund_cancel_due(dsn, reader) is not None:
+            sleep(pause)
+            outcome = cancel_refunded(dsn, api, prices, reader)
+            if outcome == "unavailable":
+                failed += 1
+                break
+            if outcome in ("locked", "refused"):
                 failed += 1
             elif outcome == "done":
                 changed += 1

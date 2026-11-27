@@ -48,6 +48,14 @@ APPROVED_SECURITY_LOG_MESSAGES = frozenset(
         "purge held an account whose Paddle plan still renews: it is not erased until Paddle "
         "confirms the cancel (the regular check asks for it hourly); see the runbook, "
         "'Deleting an account while paying'",
+        # Migration 0044: the immediate cancel at Paddle of a plan a refund or a chargeback ended
+        # (app/hosted/billing.py, app/hosted/subscribe.py). None names anyone.
+        "a refunded plan could not be cancelled at Paddle: no PADDLE_API_KEY; cancel it in "
+        "Paddle (runbook)",
+        "a refunded plan could not be cancelled at Paddle: the regular check tries again",
+        "paddle refused to cancel a refunded plan while a renewal is under way: the regular check "
+        "tries again; if that renewal was charged, refund it (runbook)",
+        "paddle refused to cancel a refunded plan: the regular check tries again",
         # A return from the sign-in service that could not become a session
         # (app/hosted/auth/api.py ``_RETURN_FAILED``): the stage only, never who or which values.
         "sign-in return failed: no state or cookie",

@@ -523,7 +523,8 @@ def test_your_plan_json_holds_the_gift_and_plan_and_nothing_secret(desk, databas
     assert set(mine) == {"gift", "plan", "not_to_renew_since_you_asked_to_delete_your_account"}
     assert mine["gift"] is None
     assert set(mine["plan"]) == {"kind", "status_at_paddle", "first_paid", "this_period_ends",
-                                 "ends", "sold_by"}
+                                 "ends", "ended_by_a_refund", "sold_by"}
+    assert mine["plan"]["ended_by_a_refund"] is None
     assert (mine["plan"]["kind"], mine["plan"]["status_at_paddle"]) == ("yearly", "active")
     assert datetime.fromisoformat(mine["plan"]["ends"]) == period_end(standin, sub_id("a"))
     assert mine["plan"]["first_paid"] is not None
