@@ -1669,6 +1669,10 @@ export function ReaderPage({
     manifest?.atoms[chapter - 1]?.title?.trim() ||
     `${unit} ${(manifest && chapterNumber(manifest.atoms, chapter - 1)) ?? chapter}`;
   const throughLabel = pos && pos.bookmark > 0 ? completedTitle(pos.bookmark) : "";
+  // The chapter the reader is in, as the footer counts it ("chapter 12"): where a question kept
+  // for a reader who does not pay says they are. Nothing on a cover or the opening pages.
+  const placeNumber = manifest ? chapterNumber(manifest.atoms, currentAtom) : null;
+  const readerPlace = placeNumber != null ? `${unit} ${placeNumber}` : null;
   // Mothli's panel names chapters as the footer does: "Chapter 2", the book's own count.
   const chapterName = useCallback(
     (ordinal: number) => {
@@ -2218,6 +2222,8 @@ export function ReaderPage({
           seed={companionSeed}
           navigate={companionNav}
           chapterLabel={throughLabel}
+          bookTitle={title !== bookId ? title : ""}
+          place={readerPlace}
           chapterName={chapterName}
           resize={compactShell ? undefined : { width: panelWidth, onWidth: setPanelWidth }}
           embedded

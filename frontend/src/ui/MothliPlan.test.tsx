@@ -52,7 +52,7 @@ import { AskTheBook } from "../reader/AskTheBook";
 import { HomeChat } from "../shelf/HomeChat";
 import { planOf } from "../shelf/plan-fakes";
 import * as MothliPlan from "./MothliPlan";
-import { INVITATIONS, KEEP_TALKING, START_TALKING } from "./MothliPlan";
+import { INVITATIONS, KEEP_TALKING, KEPT_FOR_YOU, KEPT_SAID, keptInvitation, START_TALKING } from "./MothliPlan";
 import { type MothliStanding, mothliStanding, noteMothliPlan, setMothliStanding } from "./mothliStanding";
 
 const EMAIL = "reader@example.test";
@@ -135,12 +135,29 @@ describe("the lines, word for word", () => {
       "Your plan has ended, so I’m taking a little rest. Your books, your place and your highlights stay right here, free, always. Come back any time and we’ll pick up right where we left off.");
     expect(KEEP_TALKING).toBe("Keep talking with Mothli");
     expect(START_TALKING).toBe("Talk with Mothli");
-    for (const line of [...Object.values(INVITATIONS), KEEP_TALKING, START_TALKING]) {
+    for (const line of [...Object.values(INVITATIONS), KEEP_TALKING, START_TALKING, KEPT_FOR_YOU, KEPT_SAID,
+      keptInvitation(null), keptInvitation("plan"), keptInvitation(null, { title: "Emma" }),
+      keptInvitation("plan", { title: "Emma" })]) {
       noCounter(line);
       noFreeWeeks(line);
       // Never words the owner does not want a reader to read.
       expect(line).not.toMatch(/\bAI\b|\bchat\b|\bmodel\b|credits?\b|unlimited/i);
+      // No price and no number of replies where the reader's question waits.
+      expect(line).not.toMatch(/\$|price|repl(y|ies)\b|month|year/i);
     }
+  });
+
+  test("the invitation under a kept question, word for word: the book, the reader's place, nothing past it", () => {
+    expect(keptInvitation(null, { title: "Pride and Prejudice", place: "chapter 12" })).toBe(
+      "Ooh, good one! I’d love to answer, using only the pages of Pride and Prejudice you’ve read so far, up to your page in chapter 12. Join me on the plan and I’ll answer right away.");
+    expect(keptInvitation("plan", { title: "Pride and Prejudice", place: "chapter 12" })).toBe(
+      "Ooh, I’ve missed these! I’d love to answer, using only the pages of Pride and Prejudice you’ve read so far, up to your page in chapter 12. Come back to the plan and I’ll answer right away.");
+    // At home, or on a book's opening pages: no book or no place is named.
+    expect(keptInvitation(null)).toBe(
+      "Ooh, good one! I’d love to answer, using only the pages you’ve read so far. Join me on the plan and I’ll answer right away.");
+    expect(keptInvitation(null, { title: "Emma", place: null })).toBe(
+      "Ooh, good one! I’d love to answer, using only the pages of Emma you’ve read so far. Join me on the plan and I’ll answer right away.");
+    expect(KEPT_FOR_YOU).toBe("I’ll keep this for you.");
   });
 
   // Catches (ADR 0046): anything of the free weeks left for a screen to say.
@@ -156,8 +173,9 @@ describe("without the plan: one invitation in place of each panel", () => {
     const { container } = render(<AskTheBook {...book} />);
     const line = screen.getByText(words);
     expect(screen.getByRole("button", { name: button })).toBeTruthy();
-    // Nothing of the conversation: no box, no stored turns asked for, nothing to clear.
-    expect(screen.queryByLabelText("Message Mothli")).toBeNull();
+    // Nothing of the conversation: no stored turns asked for, nothing to clear. The box stays,
+    // so a question can be asked and kept.
+    expect(screen.getByLabelText("Message Mothli")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Conversation options" })).toBeNull();
     expect(mocks.bookConversation).not.toHaveBeenCalled();
     // The panel just opened: its words take focus, so they are read out.
@@ -193,7 +211,7 @@ describe("without the plan: one invitation in place of each panel", () => {
     expect(screen.getByRole("button", { name: button })).toBeTruthy();
     // "What Mothli remembers" stays open: it is the reader's own.
     expect(screen.getByRole("button", { name: "What Mothli remembers" })).toBeTruthy();
-    expect(screen.queryByLabelText("Ask Mothli about your books")).toBeNull();
+    expect(screen.getByLabelText("Ask Mothli about your books")).toBeTruthy();
     expect(mocks.homeConversation).not.toHaveBeenCalled();
     // On the home screen at load, it takes no focus from the page.
     expect(document.activeElement).toBe(document.body);
@@ -226,18 +244,21 @@ describe("without the plan: one invitation in place of each panel", () => {
 describe("a question sent anyway", () => {
   // Catches: an old tab, or a reader whose plan ends under an open panel, meeting "I couldn’t get
   // a reply. Try again?" for a question Mothli will not answer.
-  test.each(WITHOUT)("in a book (%s): the invitation where the reply would be, never an error line",
-    async (state, why, words) => {
+  test.each(WITHOUT)("in a book (%s): the question kept with the invitation, never an error line",
+    async (state, why) => {
       stand("paying");
       mocks.askBookStream.mockImplementation(planNeeded(why));
       render(<AskTheBook {...book} />);
       await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalled());
-      screen.getByLabelText("Message Mothli").focus();
+      const box = screen.getByLabelText("Message Mothli") as HTMLTextAreaElement;
+      box.focus();
       askInBook("Who is Aldric?");
-      const line = await screen.findByText(words);
+      expect(await screen.findByText(keptInvitation(why))).toBeTruthy();
+      expect(screen.getByText("Who is Aldric?")).toBeTruthy();
       expect(screen.queryByText(/couldn’t get a reply|Try again|Retry/)).toBeNull();
-      // The box went with the panel's content: focus moves to the invitation, so it is read out.
-      expect(document.activeElement).toBe(line);
+      // The box stays the reader's, with focus, and empty: the question is in the thread.
+      expect(document.activeElement).toBe(box);
+      expect(box.value).toBe("");
       expect(mothliStanding()).toEqual({ state, why });
     });
 
@@ -251,10 +272,11 @@ describe("a question sent anyway", () => {
     await waitFor(() => expect(mocks.homeConversation).toHaveBeenCalled());
     screen.getByLabelText("Ask Mothli about your books").focus();
     askAtHome("Where did I leave off?");
-    const line = await screen.findByText(INVITATIONS.plan);
+    expect(await screen.findByText(keptInvitation("plan"))).toBeTruthy();
+    expect(screen.getByText("Where did I leave off?")).toBeTruthy();
     expect(screen.queryByText(/didn’t go through|can’t check its reply/)).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(document.activeElement).toBe(line);
+    expect(document.activeElement).toBe(screen.getByLabelText("Ask Mothli about your books"));
   });
 
   test("a stored conversation refused by the gate shows the invitation, not “I can’t reach…”", async () => {
@@ -277,23 +299,24 @@ describe("joining from the invitation", () => {
     expect(mothliStanding()?.state).toBe("paying");
   }
 
-  test("the chat in a book comes back with its stored conversation and the question asked", async () => {
+  test("the chat in a book comes back with its stored conversation, and the question asked is answered", async () => {
     stand("paying");
     mocks.askBookStream.mockImplementationOnce(planNeeded("plan"));
     render(<AskTheBook {...book} />);
     await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalledTimes(1));
     askInBook("Who is Aldric?");
-    await screen.findByText(INVITATIONS.plan);
+    await screen.findByText(keptInvitation("plan"));
     mocks.bookConversation.mockResolvedValue({
       read_frontier: point, turns: [turn("user", "Who is Mitya?"), turn("assistant", "Fyodor’s eldest son.")] });
     await join();
     expect(await screen.findByText("Fyodor’s eldest son.")).toBeTruthy();
+    expect(await screen.findByText("Aldric was at the forge.")).toBeTruthy();
     expect(mocks.bookConversation).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText(INVITATIONS.plan)).toBeNull();
-    // The question is still in the box, and the box has focus.
+    expect(mocks.askBookStream).toHaveBeenCalledTimes(2);
+    expect(mocks.askBookStream.mock.calls[1][1]).toBe("Who is Aldric?");
+    expect(screen.queryByText(keptInvitation("plan"))).toBeNull();
     const box = screen.getByLabelText("Message Mothli") as HTMLTextAreaElement;
-    expect(box.value).toBe("Who is Aldric?");
-    expect(document.activeElement).toBe(box);
+    expect(box.value).toBe("");
   });
 
   test("a new reader's first question: the invitation, then the chat once they join", async () => {
@@ -406,5 +429,188 @@ describe("where the server told nothing", () => {
     askAtHome("Where did I leave off?");
     expect(await screen.findByText("That didn’t go through. Your question is still here.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: KEEP_TALKING })).toBeNull();
+  });
+});
+
+describe("keep their question (ADR 0046)", () => {
+  const pride = { ...book, bookTitle: "Pride and Prejudice", place: "chapter 12" };
+  const kept = (why: MothliStanding["why"]) =>
+    keptInvitation(why, { title: "Pride and Prejudice", place: "chapter 12" });
+
+  test.each(WITHOUT)("typed in a book (%s): kept as theirs, nothing asked, the invitation about their book",
+    async (state, why, _words, button) => {
+      stand(state, why);
+      const { container } = render(<AskTheBook {...pride} />);
+      const box = screen.getByLabelText("Message Mothli") as HTMLTextAreaElement;
+      box.focus();
+      askInBook("Who is Elizabeth?");
+      const thread = screen.getByRole("region", { name: "Book conversation" });
+      expect(within(thread).getByText("Who is Elizabeth?").className).toMatch(/lp-you/);
+      expect(within(thread).getByText(kept(why))).toBeTruthy();
+      expect(within(thread).getByRole("button", { name: button })).toBeTruthy();
+      // Not "I'll keep this" until the reader has said not now; no pop-up opened by itself.
+      expect(screen.queryByText(KEPT_FOR_YOU)).toBeNull();
+      expect(screen.queryByRole("dialog", { name: "The plan" })).toBeNull();
+      // Nothing was read, asked or reserved: the question never left the page.
+      await act(async () => {});
+      expect(mocks.askBookStream).not.toHaveBeenCalled();
+      expect(mocks.bookConversation).not.toHaveBeenCalled();
+      expect(box.value).toBe("");
+      expect(document.activeElement).toBe(box);
+      noFreeWeeks(container.textContent ?? "");
+      expect(container.textContent).not.toMatch(/\$|\bAI\b|\bmodel\b|credits?\b|unlimited|repl(y|ies) left/i);
+      expect(await axeAA(container)).toHaveNoViolations();
+    });
+
+  test("not now: the question waits, says so once, survives a reload, and is answered once they join", async () => {
+    stand("new");
+    const first = render(<AskTheBook {...pride} />);
+    askInBook("Who is Elizabeth?");
+    fireEvent.click(screen.getByRole("button", { name: START_TALKING }));
+    fireEvent.click(screen.getByRole("button", { name: "Close the sheet" }));
+    expect(screen.getByText(KEPT_FOR_YOU)).toBeTruthy();
+    expect(screen.getByText("Who is Elizabeth?")).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: START_TALKING }));
+    await waitFor(() => expect(mocks.plan).toHaveBeenCalled());
+    // Kept on this device, not on the server.
+    expect(JSON.stringify({ ...localStorage })).toContain("Who is Elizabeth?");
+    expect(mocks.askBookStream).not.toHaveBeenCalled();
+    first.unmount();
+
+    // A reload: the question is still there, already waiting.
+    render(<AskTheBook {...pride} />);
+    expect(screen.getByText("Who is Elizabeth?")).toBeTruthy();
+    expect(screen.getByText(kept(null))).toBeTruthy();
+    expect(screen.getByText(KEPT_FOR_YOU)).toBeTruthy();
+
+    // They join: sent once, exactly as asked, and the checked reply streams in.
+    fireEvent.click(screen.getByRole("button", { name: START_TALKING }));
+    fireEvent.click(screen.getByRole("button", { name: "Pay" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close the sheet" }));
+    expect(await screen.findByText("Aldric was at the forge.")).toBeTruthy();
+    expect(mocks.askBookStream).toHaveBeenCalledTimes(1);
+    expect(mocks.askBookStream.mock.calls[0][1]).toBe("Who is Elizabeth?");
+    expect(screen.getByText("Who is Elizabeth?").className).toMatch(/lp-you/);
+    expect(JSON.stringify({ ...localStorage })).not.toContain("Who is Elizabeth?");
+    expect(screen.queryByText(KEPT_FOR_YOU)).toBeNull();
+
+    // Never twice: the plan ending and coming back, or the panel opening again, sends nothing more.
+    act(() => noteMothliPlan(null));
+    act(() => stand("paying"));
+    await act(async () => {});
+    expect(mocks.askBookStream).toHaveBeenCalledTimes(1);
+  });
+
+  test("removed, it is gone and never sent", async () => {
+    stand("ended", "plan");
+    const first = render(<AskTheBook {...pride} />);
+    askInBook("Who is Elizabeth?");
+    fireEvent.click(screen.getByRole("button", { name: "Remove it" }));
+    expect(screen.queryByText("Who is Elizabeth?")).toBeNull();
+    expect(screen.getByText(INVITATIONS.plan)).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByLabelText("Message Mothli"));
+    first.unmount();
+    render(<AskTheBook {...pride} />);
+    expect(screen.queryByText("Who is Elizabeth?")).toBeNull();
+    act(() => stand("paying"));
+    await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalled());
+    expect(mocks.askBookStream).not.toHaveBeenCalled();
+  });
+
+  test("edited: the words go back in the box, and asking again keeps the new ones", async () => {
+    stand("new");
+    render(<AskTheBook {...pride} />);
+    askInBook("Who is Elizabeth?");
+    fireEvent.click(screen.getByRole("button", { name: "Edit my question" }));
+    const box = screen.getByLabelText("Message Mothli") as HTMLTextAreaElement;
+    expect(box.value).toBe("Who is Elizabeth?");
+    expect(document.activeElement).toBe(box);
+    expect(screen.queryByText(kept(null))).toBeNull();
+    askInBook("Who is Elizabeth Bennet?");
+    expect(screen.getByText("Who is Elizabeth Bennet?")).toBeTruthy();
+    expect(screen.queryByText("Who is Elizabeth?")).toBeNull();
+    expect(mocks.askBookStream).not.toHaveBeenCalled();
+  });
+
+  test("a tapped name is kept as the natural question", async () => {
+    stand("new");
+    render(<AskTheBook {...pride} seed={{ id: "ask-name-1", kind: "ask", prompt: "Remind me who Elizabeth is." }} />);
+    expect(await screen.findByText("Remind me who Elizabeth is.")).toBeTruthy();
+    expect(screen.getByText(kept(null))).toBeTruthy();
+    expect(mocks.askBookStream).not.toHaveBeenCalled();
+  });
+
+  test("joined elsewhere before opening the book: the waiting question is sent once on open", async () => {
+    stand("new");
+    const first = render(<AskTheBook {...pride} />);
+    askInBook("Who is Elizabeth?");
+    first.unmount();
+    stand("paying");
+    render(<AskTheBook {...pride} />);
+    expect(await screen.findByText("Aldric was at the forge.")).toBeTruthy();
+    expect(mocks.askBookStream).toHaveBeenCalledTimes(1);
+  });
+
+  test("where the server told nothing, the question waits", async () => {
+    stand("new");
+    const first = render(<AskTheBook {...pride} />);
+    askInBook("Who is Elizabeth?");
+    first.unmount();
+    setMothliStanding(null);
+    render(<AskTheBook {...pride} />);
+    await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalled());
+    expect(mocks.askBookStream).not.toHaveBeenCalled();
+    expect(JSON.stringify({ ...localStorage })).toContain("Who is Elizabeth?");
+  });
+
+  test("each book keeps its own question", async () => {
+    stand("new");
+    const first = render(<AskTheBook {...pride} />);
+    askInBook("Who is Elizabeth?");
+    first.unmount();
+    render(<AskTheBook {...pride} bookId="other" />);
+    expect(screen.queryByText("Who is Elizabeth?")).toBeNull();
+  });
+
+  test("at home: kept, survives a reload, then answered once into the conversation they had", async () => {
+    stand("ended", "plan");
+    const first = render(<HomeChat />);
+    askAtHome("What should I read tonight?");
+    expect(screen.getByText("What should I read tonight?")).toBeTruthy();
+    expect(screen.getByText(keptInvitation("plan"))).toBeTruthy();
+    expect(mocks.askHome).not.toHaveBeenCalled();
+    expect((screen.getByLabelText("Ask Mothli about your books") as HTMLTextAreaElement).value).toBe("");
+    first.unmount();
+
+    const { container } = render(<HomeChat />);
+    expect(screen.getByText("What should I read tonight?")).toBeTruthy();
+    expect(screen.getByText(KEPT_FOR_YOU)).toBeTruthy();
+    noFreeWeeks(container.textContent ?? "");
+    expect(await axeAA(container)).toHaveNoViolations();
+
+    mocks.homeConversation.mockResolvedValue({ turns: [turn("user", "What next?"), turn("assistant", "Try Emma.")] });
+    await join();
+    const talk = await screen.findByRole("region", { name: "Conversation with Mothli" });
+    expect(await within(talk).findByText("Your place is chapter two.")).toBeTruthy();
+    expect(screen.getByText("Try Emma.")).toBeTruthy();
+    expect(mocks.askHome).toHaveBeenCalledTimes(1);
+    expect(mocks.askHome.mock.calls[0][0]).toBe("What should I read tonight?");
+    expect(JSON.stringify({ ...localStorage })).not.toContain("What should I read tonight?");
+  });
+
+  async function join() {
+    fireEvent.click(screen.getByRole("button", { name: KEEP_TALKING }));
+    fireEvent.click(screen.getByRole("button", { name: "Pay" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close the sheet" }));
+  }
+
+  test("a paying reader's question is asked, never kept", async () => {
+    stand("paying");
+    render(<AskTheBook {...pride} />);
+    await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalled());
+    askInBook("Who is Elizabeth?");
+    expect(await screen.findByText("Aldric was at the forge.")).toBeTruthy();
+    expect(screen.queryByText(kept(null))).toBeNull();
+    expect(JSON.stringify({ ...localStorage })).not.toContain("Who is Elizabeth?");
   });
 });

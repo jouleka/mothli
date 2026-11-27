@@ -3,3 +3,21 @@
 .mothli-invite p { max-width: 34ch; }
 .mothli-invite--home { justify-items: start; }
 .mothli-invite--home p { max-width: 30ch; }
+
+/* A question kept for a reader who does not pay: their bubble, Mothli's line under it, the button,
+   and quiet links to edit or remove it. */
+.mothli-kept-actions { display: grid; gap: 10px; justify-items: start; margin-top: 12px; }
+.mothli-kept-note { margin: 0; font: 600 14px/1.4 var(--m-ui); color: var(--m-body); }
+.mothli-kept-edit { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.mothli-kept-edit button {
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: 600 14px/1.3 var(--m-ui);
+  color: var(--m-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.mothli-kept .ml-hc-reply + .mothli-kept-actions { margin-top: 16px; }

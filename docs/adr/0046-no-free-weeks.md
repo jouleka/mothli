@@ -52,3 +52,17 @@ needs the plan from the first question: a gift from the owner, or a live Paddle 
   So a reader who joins finds Mothli warm. `paying`: as today. `ended`: none.
 - Spoiler safety and the checking of every shown sentence: nothing here changes what is read,
   searched, sent or checked.
+
+## Keep their question (2026-11-27)
+
+A reader who does not pay keeps the box in the chat in a book and on the home screen. A question
+they ask (typed, a shortcut, or "Remind me who ... is." from a name) is not sent: it stays on
+screen as theirs, with an invitation under it that names the book and the chapter they are in
+(`keptInvitation` in `frontend/src/ui/MothliPlan.tsx`), never a price or a number of replies, and
+one button for the plan sheet. Closing the sheet leaves it with "I'll keep this for you."; the
+reader can edit or remove it. It is kept per book (and once for home) on this device only
+(`frontend/src/ui/keptQuestion.ts`, localStorage), never on the server. When where the reader
+stands turns `paying`, the panel takes the question out of keeping and sends it in the same step,
+so it is sent once, as if just asked; a `402 mothli_plan` on it keeps it again. The cast and
+"Story so far" keep the plain invitation. The server is unchanged: the gate still refuses before
+anything is read or reserved.
