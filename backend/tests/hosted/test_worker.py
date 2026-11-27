@@ -122,6 +122,14 @@ def test_the_companion_dispatcher_starts_without_the_reader_key_settings(monkeyp
     try:
         assert checked == ["postgresql://unused.invalid/db"]
         assert dispatcher.kinds == {"chapter_notes", "recollect"}
+        # The worker's calls are background work: they ask for Flex, and its lease outlasts the
+        # longest Flex call and a standard retry after it, renewed before each paid call.
+        from app.hosted.companion.jobs import FLEX_LEASE
+        from app.llm.client import FLEX_TIMEOUT_SECONDS
+        assert dispatcher._client.background_flex is True
+        assert dispatcher._lease_for == FLEX_LEASE
+        assert FLEX_TIMEOUT_SECONDS == 300
+        assert FLEX_LEASE.total_seconds() == 480 >= FLEX_TIMEOUT_SECONDS + 120 + 60
     finally:
         dispatcher._client.jev.close()
 

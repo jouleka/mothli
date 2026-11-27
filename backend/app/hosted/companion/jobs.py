@@ -61,7 +61,7 @@ from app.hosted.jobs import (
 from app.hosted.tenant.models import OwnerId
 from app.hosted.worker import HandledJobFailure
 from app.ingest.extraction.validation import ExtractionGroundingRejected, ExtractionSafetyError
-from app.llm.client import ProviderUnavailable
+from app.llm.client import FLEX_TIMEOUT_SECONDS, ProviderUnavailable
 from app.llm.jev import JevUnavailable
 from app.llm.versioning import ModelMigrationRequired
 from app.read_map import read_snapshot
@@ -77,6 +77,13 @@ COMPANION_PRIORITY = 10
 # within about 4.5.
 STORY_MEMORY_PRIORITY = COMPANION_PRIORITY
 NOTES_CHAPTERS_PER_RUN = 10
+# The lease a run renews before every paid call, when its calls go on the Flex lane: one call may
+# take up to ``FLEX_TIMEOUT_SECONDS`` (five minutes) on Flex and then, had Flex no room or no
+# answer in that time, the standard lane's own timeout (at most two minutes: the extraction
+# client's 120 s, the writers' at most 120 s). The lease outlasts both with a minute to spare
+# (eight minutes), so no other worker takes the job, and pays for its chapter again, while a call
+# is out. A worker that dies is replaced after this long rather than two minutes.
+FLEX_LEASE = timedelta(seconds=FLEX_TIMEOUT_SECONDS + 2 * 60 + 60)
 # The provider the checks are paid at: a refusal of the platform's account there pauses every
 # reader's companion jobs for the local pause's five minutes.
 CHECKER_PROVIDER = "typesafe"
@@ -412,13 +419,19 @@ class CompanionJobs:
                          warmup_days=settings.hosted_warmup_days,
                          warmup_new_chapters=settings.hosted_warmup_new_chapters,
                          warmup_notes_usd=settings.hosted_warmup_notes_usd)
+        client = build_platform_clients(settings)
+        extraction_client = build_extraction_client(settings) if "story_memory" in kinds else None
+        # This process's clients serve background work only, which nobody waits on: they ask for
+        # the provider's Flex lane (half price, slower), and the lease outlasts its longer calls.
+        flex = [each.use_flex_for_background() for each in (client, extraction_client)
+                if hasattr(each, "use_flex_for_background")]
         return cls(tenant_dsn=tenant_dsn, settings=settings,
-                   client=build_platform_clients(settings),
+                   client=client,
                    storage=build_object_storage(settings),
                    sources=SourceParseCache(settings.segmentation_cache_max_entries),
                    kinds=kinds,
-                   extraction_client=(build_extraction_client(settings)
-                                      if "story_memory" in kinds else None))
+                   extraction_client=extraction_client,
+                   lease_for=FLEX_LEASE if any(flex) else timedelta(minutes=2))
 
     def __call__(self, claim: ClaimedJob, repository: PostgresWorkerRepository) -> None:
         if claim.kind not in self.kinds or (claim.kind in ("chapter_notes", "story_memory")
