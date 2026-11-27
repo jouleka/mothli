@@ -7,7 +7,7 @@ import { type ReactNode, createContext, useCallback, useContext, useEffect, useS
 import { Button } from "../ui/Button";
 import { MothliMark } from "../ui/MothliMark";
 import { monthlyTotal, yearlyMonth, yearlyTotal } from "../ui/planFigures";
-import { Contact, Privacy, Refunds, Terms, UPDATED } from "./legal";
+import { Contact, DAILY_RHYTHM, Privacy, Refunds, Terms, UPDATED } from "./legal";
 import { PAGE_PATHS, type PublicPageName } from "./pages";
 import { fetchSite, planShown, type Operator, type PlanShown, type Site } from "./site";
 import "../shelf/shelf-redesign.css";
@@ -155,7 +155,7 @@ export function AboutMothli({ site, action }: { site: Site | null; action?: Reac
       {/* The way in, again beside the prices (the welcome's own door, the same action). */}
       {action && <div className="pp-cta">{action}</div>}
       <p className="pp-quiet">
-        Cancel any time from Your account, and keep reading for free either way. Payments are
+        {DAILY_RHYTHM} Cancel any time from Your account, and keep reading for free either way. Payments are
         handled by Paddle, who sells Mothli on our behalf.
         {shown && " Paddle’s checkout shows your exact price where you live, with any tax."}
       </p>

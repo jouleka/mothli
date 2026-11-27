@@ -692,6 +692,18 @@ one does (section 11).
 
 ### 4. The paid allowance
 
+**Amended 27 November 2026 (the owner): a soft brake replaces the wall at the month.** Past the
+month allowance ($4.00; in the first paid month, the $6.30 first-month allowance, measured as before
+on chat since the plan began), a paying reader's day drops from $1.00 to **$0.25**
+(`HOSTED_READER_USD_PER_DAY_PAST_MONTH`) instead of stopping them, and Mothli says: "That’s a lot of
+good talk for one day! Let’s pick this up tomorrow. Your book and your place are right here." Only a
+ceiling of **$8.00** (`HOSTED_READER_USD_MONTH_CEILING`, measured the same way, never below the
+allowance it follows) stops them until the month or the 30 days end, with a line naming the day
+Mothli is back ("…I’ll be back on 2 December…"). The old month line ("back at the start of the
+next") is gone. No guard is tighter than before for anyone; an operator's own `owner_limits` caps
+still win; the terms and the plan pages say, in words, that Mothli keeps a gentle daily rhythm. The
+text below is the record of 23 November.
+
 **No number shown, ever.** Two hidden guards, reusing the existing settings and lines. **Decided by
 the owner on 23 November 2026**: about 47 replies a day, about 190 a month, and about 300 in a
 reader's first paid month only; at 2.1 cents a reply, $1.00 a day, $4.00 a month and $6.30 for the

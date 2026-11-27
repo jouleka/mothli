@@ -8,7 +8,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { axeAA } from "../test-a11y";
 import { SignIn } from "../shelf/SignIn";
-import { CHAT_NOT_OPEN, PADDLE_LINKS, SHARED_NOTES } from "./legal";
+import { CHAT_NOT_OPEN, DAILY_RHYTHM, PADDLE_LINKS, SHARED_NOTES } from "./legal";
 import { PAGE_PATHS, publicPageAt, routedPublicPage, type PublicPageName } from "./pages";
 import { NOT_OPEN, PublicPage, SITE_FAILED, TITLES, forgetSite } from "./PublicPage";
 import type { Site } from "./site";
@@ -160,6 +160,8 @@ describe("the pages' words", () => {
       // ADR 0046: talking with Mothli is the plan, with no free weeks.
       "Talking with Mothli is the plan: the chat in your books and on your home page, who’s who, and the story so far. The plan is paid every month or every year. The prices are on our front page and in the checkout.",
       SHARED_NOTES,
+      // The owner's soft brake (27 November 2026), in words, never a number.
+      "Mothli keeps a gentle daily rhythm, so on a very busy day it may ask to pick up again tomorrow. The plan also has fair-use limits for each day and each month",
     ]) expect(text).toContain(said);
     expect(text).not.toMatch(/cancel it[^.]*before you delete/i);
     expect(text).not.toMatch(/free weeks|first two weeks|don’t need a card/);
@@ -240,6 +242,9 @@ describe("the front page", () => {
     expect(total.compareDocumentPosition(monthly) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(container.textContent).not.toMatch(/free weeks|no card needed|first time you use it/);
     expect(container.textContent).toContain("Payments are handled by Paddle, who sells Mothli on our behalf.");
+    // The daily rhythm beside the prices, in words (the owner's soft brake, 27 November 2026).
+    expect(screen.getByText(DAILY_RHYTHM, { exact: false }).closest(".pp-about")).toBeTruthy();
+    expect(DAILY_RHYTHM).not.toMatch(/\d/);
     // A way in right beside the prices too (L9 of the plan walk), the same as the welcome's.
     const [door, again] = screen.getAllByRole("link", { name: "Sign in to start reading" });
     expect(again.getAttribute("href")).toBe(door.getAttribute("href"));

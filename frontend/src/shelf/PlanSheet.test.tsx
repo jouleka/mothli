@@ -70,6 +70,8 @@ describe("the plan sheet", () => {
     const yearly = within(sheet).getByRole("button", { name: "Choose yearly" });
     expect(document.getElementById(yearly.getAttribute("aria-describedby")!)?.textContent).toBe(
       "$6.67 a month, billed yearly$79.99 a year, 48% less than paying monthly.");
+    // The owner's soft brake (27 November 2026), in Mothli's words, never a number.
+    expect(within(sheet).getByText("I keep a gentle daily rhythm, so on a very busy day I might ask to pick up again tomorrow.")).toBeTruthy();
     expect(within(sheet).getByText("Cancel any time from Your account. Your books stay free either way.")).toBeTruthy();
     expect(within(sheet).getByText("Payments are handled by Paddle, who sells Mothli on our behalf.")).toBeTruthy();
     // The public pages (ADR 0045 step 8), opened beside the sheet so it stays as it is.

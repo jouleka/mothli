@@ -20,6 +20,11 @@ export const PADDLE_LINKS = {
 export const SHARED_NOTES =
   "Mothli’s notes on a book’s story (who’s who and what has happened, chapter by chapter) are made once for each exact book file and used for everyone who has that same file, whether they uploaded it or took it from the free library. Each reader is shown them only up to where they have read. Nothing of yours is shared: not your highlights, notes, conversations or reading position, and not your copy of the book. When nobody has the file any more, its notes are deleted 30 days later.";
 
+/** The plan's daily rhythm (the owner's soft brake, 27 November 2026), in words, never numbers:
+ * on the terms and wherever the plan is described. */
+export const DAILY_RHYTHM =
+  "Mothli keeps a gentle daily rhythm, so on a very busy day it may ask to pick up again tomorrow.";
+
 /** What each page is given: who runs Mothli, and the AI company this server's chat uses
  * (`writer`, a name from the server's settings), or null where the chat is not open here. */
 export type PageProps = { operator: Operator; writer?: string | null };
@@ -93,8 +98,8 @@ export function Terms({ operator }: PageProps) {
           <a href="/">front page</a> and in the checkout.
         </p>
         <p>
-          The plan has fair-use limits for each day and each month, so Mothli can keep running well
-          for everyone. If you reach one, Mothli takes a rest until the next day or the next month
+          {DAILY_RHYTHM} The plan also has fair-use limits for each day and each month, so Mothli
+          can keep running well for everyone. If you reach one, Mothli takes a rest until the next day or the next month
           and tells you so. Your books stay open the whole time.
         </p>
         <p>

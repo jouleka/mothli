@@ -30,7 +30,7 @@ from psycopg import conninfo, sql
 
 from app.hosted.companion.spend import (
     _DAY,
-    _MONTH,
+    _DAY_PAST_MONTH,
     FIRST_PAID_MONTH,
     back_on,
     first_month_line,
@@ -46,7 +46,7 @@ from tests.hosted.test_companion_stream_postgres import (
     restore_caps,  # noqa: F401  (autouse: the hosted app sets this process's caps)
 )
 from tests.hosted.test_deploy import load_roles
-from tests.hosted.test_mothli_gate_postgres import gated, refused, shelve
+from tests.hosted.test_mothli_gate_postgres import gated, month_wall, refused, shelve
 
 pytestmark = pytest.mark.postgres
 
@@ -766,21 +766,25 @@ def test_a_paying_readers_month_line_is_todays(paddle, tenant_dsn, database, rea
     post(paddle, message(sub_id("a"), reader=a))
     move_first_paid(database, a, "now() - interval '31 days'")
     set_spend_limits(reader_usd_per_day=Decimal("0.10"), reader_usd_per_month=Decimal("0.20"),
-                     platform_usd_per_day=100)
+                     platform_usd_per_day=100, reader_usd_month_ceiling=Decimal("0.20"))
     chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
     spend(chat, book, 0.09)
     spend(chat, book, 0.01)
     refused(chat, book, "day", _DAY)
     set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=Decimal("0.10"),
-                     platform_usd_per_day=100)
-    refused(chat, book, "month", _MONTH)
+                     platform_usd_per_day=100, reader_usd_month_ceiling=Decimal("0.10"))
+    refused(chat, book, "month", month_wall(database))
 
 
 # ---- the first paid month (ADR 0045 section 4) --------------------------------------------------
 
-def caps(*, day="1.00", month="0.20", first="0.50") -> None:
+def caps(*, day="1.00", month="0.20", first="0.50", ceiling=None, past="0.25") -> None:
+    """The caps; the month's ceiling at the month unless given, so no soft brake between (the
+    first paid month's ceiling is then its own allowance, since a ceiling is never below it)."""
     set_spend_limits(reader_usd_per_day=Decimal(day), reader_usd_per_month=Decimal(month),
-                     platform_usd_per_day=100, first_paid_month_usd=Decimal(first))
+                     platform_usd_per_day=100, first_paid_month_usd=Decimal(first),
+                     reader_usd_month_ceiling=Decimal(ceiling or month),
+                     reader_usd_per_day_past_month=Decimal(past))
 
 
 def chat_at(dsn: str, owner: uuid.UUID, usd: str, when: str = "now()") -> None:
@@ -819,12 +823,12 @@ def first_month_ends(dsn: str, owner: uuid.UUID) -> tuple[datetime, datetime]:
 
 
 def at_the_first_ceiling(dsn: str, owner: uuid.UUID, *, past_the_month: bool) -> str:
-    """The line due at the first paid month's ceiling (see the two tests of it below): today's
-    month line when the 30 days end in this calendar month and this month's chat has already
-    reached the ordinary month (``past_the_month``), else the line naming the day."""
+    """The line due at the first paid month's ceiling (see the two tests of it below): the
+    month's line when the 30 days end in this calendar month and this month's chat has already
+    reached the month's ceiling (``past_the_month``), else the line naming the day."""
     ends, now = first_month_ends(dsn, owner)
     if (ends.year, ends.month) == (now.year, now.month) and past_the_month:
-        return _MONTH
+        return month_wall(dsn)
     return first_month_line(back_on(ends))
 
 
@@ -853,7 +857,7 @@ def test_the_first_paid_month_holds_chat_since_the_plan_began_to_its_own_ceiling
     refused(chat, book, "day", _DAY)                          # the day is the day
     caps(first="5")
     update_limits(database, a, {"max_spend_usd_per_month": Decimal("0.60")})
-    refused(chat, book, "month", _MONTH)                      # their own month cap wins
+    refused(chat, book, "month", month_wall(database))  # their own month cap wins
     update_limits(database, a, {"max_spend_usd_per_month": None})
     spend(chat, book, 0.01)
 
@@ -867,7 +871,7 @@ def test_the_first_paid_month_holds_chat_since_the_plan_began_to_its_own_ceiling
     assert first_month(database, a) is not None               # still within its 30 days
     move_first_paid(database, a, "now() - interval '30 days 1 minute'")
     assert first_month(database, a) is None
-    refused(chat, book, "month", _MONTH)                      # the calendar month: $0.66 > $0.20
+    refused(chat, book, "month", month_wall(database))  # the calendar month: $0.66 > $0.20
     moved = first_paid(database, a)
     post(paddle, message(sub_id("a2"), "past_due", reader=a, at=now + timedelta(seconds=3)))
     assert first_paid(database, a) == moved
@@ -885,11 +889,11 @@ def test_the_first_paid_month_is_paddles_alone(paddle, tenant_dsn, database, rea
     assert first_paid(database, a) is None and first_month(database, a) is None
     chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
     spend(chat, book, 0.20)
-    refused(chat, book, "month", _MONTH)
+    refused(chat, book, "month", month_wall(database))
     post(paddle, message(sub_id("a"), reader=a))
     assert first_paid(database, a) is not None
     assert first_month(database, a) is None                   # the gift wins while it lasts
-    refused(chat, book, "month", _MONTH)
+    refused(chat, book, "month", month_wall(database))
     with psycopg.connect(database) as conn:
         conn.execute("SELECT set_gift(%s, NULL::date)", (a,))
     assert first_month(database, a) == Decimal("0")
@@ -923,7 +927,7 @@ def test_the_first_paid_month_across_two_calendar_months_is_bounded(paddle, tena
     move_first_paid(database, a, f"{month_start} - interval '31 days'")
     spend(chat, book, 0.19)
     spend(chat, book, 0.01)
-    refused(chat, book, "month", _MONTH)
+    refused(chat, book, "month", month_wall(database))
     # What was spent this month within the 30 days counts for this month after them.
     b = readers["b"]
     book_b = shelve(database, b)
@@ -933,7 +937,7 @@ def test_the_first_paid_month_across_two_calendar_months_is_bounded(paddle, tena
     spend(chat_b, book_b, 0.50)
     refused(chat_b, book_b, "month", at_the_first_ceiling(database, b, past_the_month=True))
     move_first_paid(database, b, f"{month_start} - interval '31 days'")
-    refused(chat_b, book_b, "month", _MONTH)                  # $0.50 this month > $0.20
+    refused(chat_b, book_b, "month", month_wall(database))  # $0.50 this month > $0.20
 
 
 def test_at_the_first_ceiling_mothli_names_the_day_it_is_back_and_is_back_that_day(
@@ -946,7 +950,7 @@ def test_at_the_first_ceiling_mothli_names_the_day_it_is_back_and_is_back_that_d
     named day. The line names that day and nothing else: no amount, no count, no countdown."""
     a = readers["a"]
     book = shelve(database, a)
-    caps(month="5")                                           # the ordinary month is not reached
+    caps(month="5", ceiling="0.50")                           # the ordinary month is not reached
     post(paddle, message(sub_id("a"), reader=a))
     chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
     spend(chat, book, 0.50)
@@ -998,7 +1002,87 @@ def test_at_the_first_ceiling_mothli_says_the_1st_when_the_1st_is_when_it_is_bac
     chat_at(database, a, "0.50")                              # this month, within the 30 days
     chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
     assert first_month(database, a) == Decimal("0.50")
-    refused(chat, book, "month", _MONTH)                      # $0.50 this month > $0.20
-    caps(month="5")
+    refused(chat, book, "month", month_wall(database))  # $0.50 this month > $0.20
+    caps(month="5", ceiling="0.50")
     ends, _now = first_month_ends(database, a)
     refused(chat, book, "month", first_month_line(back_on(ends)))
+
+
+# ---- the soft brake (the owner, 27 November 2026) ---------------------------------------------
+
+MONTH_START = "(date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')"
+
+
+def this_month(dsn: str, owner: uuid.UUID) -> Decimal:
+    with psycopg.connect(dsn) as conn:
+        return conn.execute(
+            f"SELECT COALESCE(sum(usd), 0) FROM cost_ledger WHERE owner_id=%s"
+            f" AND recorded_at >= {MONTH_START}", (owner,)).fetchone()[0]
+
+
+def test_past_the_month_a_paying_reader_keeps_mothli_every_day_until_the_ceiling(
+        paddle, tenant_dsn, database, readers):
+    """The soft brake, in the calendar month. Below the month allowance nothing changes; past
+    it, where a reader was stopped until the 1st, they are answered up to the smaller day and then
+    told to pick up tomorrow; at the month's ceiling they are stopped as before, told the day
+    Mothli is back. An operator's own caps still win: their day is the reader's day past the
+    allowance too, and their month stops the reader with no brake. The break it catches: the
+    brake missing (the old wall), braking a reader below the allowance, a ceiling that does not
+    stop, or a line other than the one due."""
+    with psycopg.connect(database) as conn:
+        first_day = conn.execute(
+            "SELECT extract(day FROM now() AT TIME ZONE 'UTC') = 1").fetchone()[0]
+    if first_day:
+        pytest.skip("no earlier day this month to have talked on")
+    a = readers["a"]
+    book = shelve(database, a)
+    with psycopg.connect(database) as conn:
+        conn.execute("SELECT set_gift(%s, '9999-12-31'::date)", (a,))
+    caps(day="0.10", month="0.20", ceiling="0.40", past="0.03")
+    chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
+    chat_at(database, a, "0.05", MONTH_START)                  # an earlier day this month
+    spend(chat, book, 0.05)
+    spend(chat, book, 0.05)                                   # /usr/bin/bash.15 this month, /usr/bin/bash.10 today
+    refused(chat, book, "day", _DAY)                           # below the allowance: as before
+    caps(day="1.00", month="0.20", ceiling="0.40", past="0.15")
+    spend(chat, book, 0.05)                                   # /usr/bin/bash.20: the month allowance
+    refused(chat, book, "day", _DAY_PAST_MONTH)                # /usr/bin/bash.15 today: the smaller day
+    caps(day="1.00", month="0.20", ceiling="0.40", past="0.20")
+    spend(chat, book, 0.01)                                   # before: stopped at the month
+    update_limits(database, a, {"max_spend_usd_per_day": Decimal("0.50")})
+    spend(chat, book, 0.05)                                   # their own day, past the allowance
+    update_limits(database, a, {"max_spend_usd_per_day": None,
+                                "max_spend_usd_per_month": Decimal("0.25")})
+    refused(chat, book, "month", month_wall(database))         # their own month: no brake
+    update_limits(database, a, {"max_spend_usd_per_month": None})
+    assert this_month(database, a) == Decimal("0.26")
+    caps(day="1.00", month="0.20", ceiling="0.40", past="1.00")
+    spend(chat, book, 0.14)
+    refused(chat, book, "month", month_wall(database))         # the ceiling (/usr/bin/bash.40), as before
+    caps(day="1.00", month="0.45", ceiling="0.10")           # a ceiling below the month is
+    spend(chat, book, 0.05)                                   # the month
+    refused(chat, book, "month", month_wall(database))
+
+
+def test_past_the_first_paid_month_a_subscriber_keeps_mothli_every_day_until_its_ceiling(
+        paddle, tenant_dsn, database, readers):
+    """The soft brake in a subscriber's first paid month, measured as that month is: their chat
+    since the plan began. Past its allowance, where they were stopped until the 30 days ended,
+    they are answered up to the smaller day; at the ceiling they are stopped, told the day
+    Mothli is back. The break it catches: the first paid month's allowance still a wall, or its
+    ceiling measured on the calendar month."""
+    a = readers["a"]
+    book = shelve(database, a)
+    caps(day="1.00", month="0.20", first="0.50", ceiling="0.60", past="0.03")
+    post(paddle, message(sub_id("a"), reader=a))
+    move_first_paid(database, a, "now() - interval '2 days'")
+    chat_at(database, a, "0.50", "now() - interval '1 day'")   # the first month's allowance
+    chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
+    assert first_month(database, a) == Decimal("0.50")
+    spend(chat, book, 0.02)                                   # before: stopped
+    spend(chat, book, 0.01)
+    refused(chat, book, "day", _DAY_PAST_MONTH)
+    chat_at(database, a, "0.07", "now() - interval '1 day'")
+    assert first_month(database, a) == Decimal("0.60")
+    refused(chat, book, "month", at_the_first_ceiling(
+        database, a, past_the_month=this_month(database, a) >= Decimal("0.60")))

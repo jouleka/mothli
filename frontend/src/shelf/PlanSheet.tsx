@@ -44,6 +44,8 @@ export const PLAN_LINES = {
   chooseYearly: "Choose yearly",
   chooseMonthly: "Choose monthly",
   starting: "One moment…",
+  // The owner's soft brake (27 November 2026), in words, never numbers.
+  rhythm: "I keep a gentle daily rhythm, so on a very busy day I might ask to pick up again tomorrow.",
   cancelAnyTime: "Cancel any time from Your account. Your books stay free either way.",
   paddle: "Payments are handled by Paddle, who sells Mothli on our behalf.",
   paying: "Your checkout is open. Take your time, I’ll be right here.",
@@ -394,6 +396,7 @@ export function PlanSheet({
                 )}
               </ul>
               {problem && <p className="fl-error" role="alert">{problem}</p>}
+              <p className="ml-mem-quiet">{PLAN_LINES.rhythm}</p>
               <p className="ml-mem-quiet">{PLAN_LINES.cancelAnyTime}</p>
               <p className="ml-mem-quiet">{PLAN_LINES.paddle}</p>
               {/* Open point 8, decided: no refund promise of Mothli's own, Paddle's terms only.

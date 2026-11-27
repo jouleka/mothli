@@ -129,6 +129,13 @@ class SpendLimits:
     # ADR 0045 step 3: a subscriber's first paid month (``HOSTED_FIRST_PAID_MONTH_USD``), in place
     # of the month for the 30 days after their first Paddle plan began, once per account.
     first_paid_month_usd: Decimal = Decimal("6.30")
+    # The soft brake (the owner, 27 November 2026): past the month allowance above (in the first
+    # paid month, past the first paid month's), a paying reader's day is this instead of the day
+    # (``HOSTED_READER_USD_PER_DAY_PAST_MONTH``), and only the month's ceiling
+    # (``HOSTED_READER_USD_MONTH_CEILING``), measured as the allowance is, stops them until the
+    # month (or the 30 days) ends. Never below the allowance: a ceiling set lower is the allowance.
+    reader_usd_per_day_past_month: Decimal = Decimal("0.25")
+    reader_usd_month_ceiling: Decimal = Decimal("8.00")
     # ADR 0045 section 5, step 6: a new reader (never a plan or a gift) gets background work
     # within ``warmup_days`` of sign-up, up to ``warmup_new_chapters`` chapters of story memory
     # their reading is the first to build and ``warmup_notes_usd`` of chapter notes, then none
@@ -157,53 +164,77 @@ def set_spend_limits(*, reader_usd_per_day, reader_usd_per_month, platform_usd_p
                      warmup_days=SpendLimits.warmup_days,
                      warmup_new_chapters=SpendLimits.warmup_new_chapters,
                      warmup_notes_usd=SpendLimits.warmup_notes_usd,
+                     reader_usd_per_day_past_month=SpendLimits.reader_usd_per_day_past_month,
+                     reader_usd_month_ceiling=SpendLimits.reader_usd_month_ceiling,
                      ) -> None:
     """Set this process's caps from settings (startup only, like the connection limit)."""
     global _limits
     values = [_money(value) for value in (
         reader_usd_per_day, reader_usd_per_month, platform_usd_per_day, notes_usd_per_day,
         background_usd_per_day, reader_background_usd_per_day, reader_background_usd_per_month,
-        first_paid_month_usd, warmup_notes_usd)]
+        first_paid_month_usd, warmup_notes_usd, reader_usd_per_day_past_month,
+        reader_usd_month_ceiling)]
     if any(not value.is_finite() or value < 0 for value in values):
         raise ValueError("spend caps must be finite and non-negative")
     if any(not isinstance(count, int) or isinstance(count, bool) or count < 0
            for count in (warmup_days, warmup_new_chapters)):
         raise ValueError("the warm-up's days and chapters must be non-negative whole numbers")
     with _limits_guard:
-        *values, first_paid_month, warmup_notes = values
+        *values, first_paid_month, warmup_notes, past_month, ceiling = values
         _limits = SpendLimits(*values, first_paid_month, warmup_days=warmup_days,
                               warmup_new_chapters=warmup_new_chapters,
-                              warmup_notes_usd=warmup_notes)
+                              warmup_notes_usd=warmup_notes,
+                              reader_usd_per_day_past_month=past_month,
+                              reader_usd_month_ceiling=ceiling)
 
 
 def spend_limits() -> SpendLimits:
     return _limits
 
 
+def _month_ceiling(allowance, limits) -> Decimal:
+    """Where the soft brake ends and the reader rests until the month (or the 30 days) ends: the
+    month's ceiling, never below the ``allowance`` it brakes past, so no guard is ever tighter
+    than the allowance alone was."""
+    return max(limits.reader_usd_month_ceiling, allowance)
+
+
 def _reader_cap_reached(used, policy, limits, *, notes: bool = False,
                         first_month=None) -> str | None:
-    """"day" or "month" when that companion allowance of the owner is used up, else None: the
-    owner's own ``owner_limits`` cap, or the process default where it is NULL. For the notes
-    account (``notes``) the default day cap is the notes ceiling and there is no default month
-    cap (ADR 0044 section 5): only one its row sets. In a subscriber's first paid month
-    (``first_month``: their chat spend since their first Paddle plan began, which
-    ``reader_plan_state`` answers only within the 30 days after it) the default month is that
-    spend against the first paid month's ceiling, in place of the calendar month ("first_month"
-    when that ceiling is reached); a month cap of their own still wins, and the day is the
-    day."""
+    """Which companion allowance of the owner is used up, else None: the owner's own
+    ``owner_limits`` cap, or the process default where it is NULL. For the notes account
+    (``notes``) the default day cap is the notes ceiling and there is no default month cap (ADR
+    0044 section 5): only one its row sets, which stops it as it always has ("day", "month").
+
+    A reader's default month is a soft brake (the owner, 27 November 2026): past the month
+    allowance their default day is the smaller day past the month ("day_past_month" when that is
+    used up), and only the month's ceiling stops them ("month"). In a subscriber's first paid
+    month (``first_month``: their chat spend since their first Paddle plan began, which
+    ``reader_plan_state`` answers only within the 30 days after it) that spend is measured, in
+    place of the calendar month, against the first paid month's allowance and the same ceiling
+    ("first_month" when that ceiling is reached). The ceiling is checked before the day, so the
+    line a reader is given there is the one that comes true. A month cap of their own still
+    wins, with no brake, as before; a day cap of their own is their day before and past the
+    allowance."""
     day_cap = policy["max_spend_usd_per_day"]
     month_cap = policy["max_spend_usd_per_month"]
+    own_day = day_cap is not None
     if day_cap is None:
         day_cap = limits.notes_usd_per_day if notes else limits.reader_usd_per_day
-    month_used, month = used["month"], "month"
     if month_cap is None and not notes:
-        month_cap = limits.reader_usd_per_month
+        allowance, month_used, month = limits.reader_usd_per_month, used["month"], "month"
         if first_month is not None:
-            month_cap, month_used, month = limits.first_paid_month_usd, first_month, "first_month"
+            allowance, month_used, month = limits.first_paid_month_usd, first_month, "first_month"
+        if month_used >= _month_ceiling(allowance, limits):
+            return month
+        if month_used >= allowance and not own_day:
+            braked = used["day"] >= min(day_cap, limits.reader_usd_per_day_past_month)
+            return "day_past_month" if braked else None
+        return "day" if used["day"] >= day_cap else None
     if used["day"] >= day_cap:
         return "day"
-    if month_cap is not None and month_used >= month_cap:
-        return month
+    if month_cap is not None and used["month"] >= month_cap:
+        return "month"
     return None
 
 
@@ -225,6 +256,21 @@ def back_on(moment: datetime) -> date:
     return day if there == datetime.combine(day, time(), UTC) else day + timedelta(days=1)
 
 
+def month_line(day: date) -> str:
+    """What Mothli says at the month's ceiling when the reader can talk again on ``day``: the
+    day, nothing else; no amount, no count, no countdown."""
+    return (f"We’ve talked our way through so much this month! I’ll be back on "
+            f"{day.day} {_MONTH_NAMES[day.month - 1]}. Your book and your place are right here.")
+
+
+def next_month(now: datetime) -> date:
+    """The day named at the month's ceiling: the first day begun nowhere before the next UTC
+    calendar month starts, when the month's spend is counted afresh."""
+    now = now.astimezone(UTC)
+    first = date(now.year + now.month // 12, now.month % 12 + 1, 1)
+    return back_on(datetime.combine(first, time(), UTC))
+
+
 def first_month_line(day: date) -> str:
     """What Mothli says at the first paid month's ceiling when the reader can talk again on
     ``day``: the day, nothing else; no amount, no count, no countdown."""
@@ -236,13 +282,14 @@ def _first_month_refusal(first_paid_at: datetime, now: datetime, month_used, lim
                          ) -> ReaderAllowanceReached:
     """The refusal at the first paid month's ceiling, with a line that comes true. The reader can
     talk again when the 30 days end, unless they end within this UTC calendar month and this
-    month's chat has already reached the ordinary month: then on the 1st, which today's month
-    line says. Between now and the end of the 30 days nothing more is spent, so this month's chat
-    is what the calendar month will count then."""
+    month's chat has already reached the month's ceiling: then when the next month starts, which
+    the month's line names. Between now and the end of the 30 days nothing more is spent, so this
+    month's chat is what the calendar month will count then. (Past the ordinary month but under
+    its ceiling, the reader is back when the 30 days end, under the soft brake.)"""
     ends, now = (first_paid_at + FIRST_PAID_MONTH).astimezone(UTC), now.astimezone(UTC)
     same_month = (ends.year, ends.month) == (now.year, now.month)
-    if same_month and month_used >= limits.reader_usd_per_month:
-        return ReaderAllowanceReached("month", _MONTH)
+    if same_month and month_used >= _month_ceiling(limits.reader_usd_per_month, limits):
+        return ReaderAllowanceReached("month", month_line(next_month(now)))
     return ReaderAllowanceReached("month", first_month_line(back_on(ends)))
 
 
@@ -323,8 +370,9 @@ class BackgroundAllowanceReached(AllowanceReached):
 # Said by Mothli itself, as it speaks in the chat: the first person, and no amount or setting.
 _DAY = ("We’ve talked a lot today, so I’m resting until tomorrow. "
         "Your book and your place are right here.")
-_MONTH = ("We’ve talked our way through this month, so I’ll be back at the start of the next. "
-          "Your book and your place are right here.")
+# Past the month allowance, at the smaller day (the soft brake): when Mothli is back, and no more.
+_DAY_PAST_MONTH = ("That’s a lot of good talk for one day! Let’s pick this up tomorrow. "
+                   "Your book and your place are right here.")
 _LIFETIME = ("We’ve used up the conversations this account has. "
              "Your books and your place are right here.")
 _BUSY = "Give me a moment, I’m still on your last question. Then ask again."
@@ -507,7 +555,8 @@ class SpendStore(OwnerBoundAdapter):
                         AS held_all,
                       {_spent(background)},
                       COALESCE((SELECT sum(usd) FROM public.cost_ledger
-                        WHERE owner_id=%(o)s AND NOT background),0) AS lifetime""",
+                        WHERE owner_id=%(o)s AND NOT background),0) AS lifetime,
+                      now() AS now""",
                 {"o": owner}).fetchone()
             lifetime_cap = policy["max_spend_usd"]
             if background:
@@ -527,8 +576,10 @@ class SpendStore(OwnerBoundAdapter):
                 pass            # admitted with its first call: it finishes; or not the reader's
             elif reached == "day":
                 raise ReaderAllowanceReached("day", _DAY)
+            elif reached == "day_past_month":
+                raise ReaderAllowanceReached("day", _DAY_PAST_MONTH)
             elif reached == "month":
-                raise ReaderAllowanceReached("month", _MONTH)
+                raise ReaderAllowanceReached("month", month_line(next_month(used["now"])))
             elif reached == "first_month":
                 raise _first_month_refusal(first_month["since"], first_month["now"],
                                            used["month"], limits)

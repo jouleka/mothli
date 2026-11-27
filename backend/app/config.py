@@ -189,6 +189,16 @@ class Settings(BaseSettings):
     # their chat since then is held to this in place of the month above; the day stays. A gift
     # has none. Never shown to a reader.
     hosted_first_paid_month_usd: float = Field(default=6.30, ge=0, le=10000, allow_inf_nan=False)
+    # The soft brake (the owner, 27 November 2026), in place of a wall at the month: past the
+    # month above (in the first paid month, past the first paid month's), a paying reader's day
+    # drops to this, still a full reading evening; only the month's ceiling, measured the same
+    # way, stops them until the month (or the 30 days) ends. A ceiling below the allowance it
+    # follows counts as that allowance, so no reader is ever held tighter than by the month
+    # alone. Never shown to a reader.
+    hosted_reader_usd_per_day_past_month: float = Field(default=0.25, ge=0, le=1000,
+                                                        allow_inf_nan=False)
+    hosted_reader_usd_month_ceiling: float = Field(default=8.00, ge=0, le=10000,
+                                                   allow_inf_nan=False)
     # ADR 0041 section 6, amended 20 November 2026: a reader's allowance counts only their
     # conversation. Mothli's background work for a reader (their chapter notes, what it remembers
     # of them) is Mothli's cost: the budget of all readers' background work together per UTC day,
