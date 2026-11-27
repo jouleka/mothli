@@ -107,11 +107,27 @@ function preview(text: string, fromEnd: boolean, limit = 220) {
   return (stop > 80 ? cut.slice(0, stop + 1) : `${cut.replace(/\s+\S*$/, "").trimEnd()}…`).trim();
 }
 
-/** The welcome-back moment, said in Mothli's speech bubble. */
+/** Hosted mode's "Last time": the latest chapter of "Story so far" up to the reader's place, as
+ * already written (a read, nothing is made for it). Hosted mode has no recap route. */
+async function storySoFar(bookId: string, bookmark: number): Promise<CatchMeUp | null> {
+  const notes = await api.notes(bookId, bookmark);
+  if (!notes || notes.as_of_chapter > bookmark) return null;
+  const latest = [...(notes.chapters ?? [])]
+    .reverse()
+    .find((chapter) => chapter.revealed_at <= bookmark && !chapter.unremembered && chapter.summary?.trim());
+  if (!latest) return null;
+  return { recap: null, now: latest.summary, as_of_chapter: latest.revealed_at, cast_size: 0, open_threads: 0,
+           cast: [], cached: true };
+}
+
+/** The welcome-back moment, said in Mothli's speech bubble. Showing it asks for nothing to be made:
+ * locally the recap already kept, in hosted mode the "Story so far" already written. */
 export function WelcomeBackCard({
   bookId,
   bookmark,
   awayMs,
+  chapterTitle,
+  hosted = false,
   onCatchUp,
   onPerson,
   onDismiss,
@@ -119,7 +135,10 @@ export function WelcomeBackCard({
   bookId: string;
   bookmark: number;
   awayMs: number;
+  /** The chapter the reader was in, as the footer names it. */
   chapterTitle?: string;
+  hosted?: boolean;
+  /** Hosted mode is handed no recap: "Catch me up" there asks Mothli, as any question. */
   onCatchUp: (recap: CatchMeUp | null) => void;
   onPerson: (name: string) => void;
   onDismiss: () => void;
@@ -131,7 +150,7 @@ export function WelcomeBackCard({
     if (bookmark < 1) return;
     let live = true;
     Promise.resolve()
-      .then(() => api.catchMeUp(bookId, bookmark))
+      .then(() => (hosted ? storySoFar(bookId, bookmark) : api.catchMeUp(bookId, bookmark)))
       .then((value) => {
         if (!live) return;
         if (value && value.as_of_chapter <= bookmark && (value.recap || value.now)) {
@@ -143,7 +162,7 @@ export function WelcomeBackCard({
     return () => {
       live = false;
     };
-  }, [bookId, bookmark]);
+  }, [bookId, bookmark, hosted]);
 
   const people = useMemo(() => {
     const seen = new Set<EntityId>();
@@ -164,6 +183,7 @@ export function WelcomeBackCard({
       </button>
       <p>
         <strong>Welcome back!</strong> It’s been {formatAway(awayMs)}.{" "}
+        {chapterTitle ? `You were in ${chapterTitle}. ` : ""}
         {state === "loading"
           ? "Let me remember where we were…"
           : state === "ready" && recap
@@ -183,7 +203,7 @@ export function WelcomeBackCard({
         </div>
       )}
       <div className="mc-actions">
-        <button type="button" className="mc-primary" onClick={() => onCatchUp(state === "ready" ? recap : null)}>
+        <button type="button" className="mc-primary" onClick={() => onCatchUp(state === "ready" && !hosted ? recap : null)}>
           Catch me up
         </button>
         <button type="button" className="mc-quiet" onClick={onDismiss}>
