@@ -247,7 +247,7 @@ def test_work_that_began_before_the_reader_ended_is_finished(
 
 @pytest.mark.parametrize("ended_by, how", [("gift", "gift"), ("paddle", "paddle")])
 def test_a_reader_who_pays_again_gets_notes_and_story_memory_to_their_place_and_not_past_it(
-        shelf, readers, database, worker_dsn, monkeypatch, ended_by, how):
+        shelf, readers, database, tenant_dsn, worker_dsn, monkeypatch, ended_by, how):
     """ADR 0045 sections 5 and 9: subscribing picks up where the reader left off, and nothing is
     ever built or served past their place. The reader finished part 1 while ended (nothing was
     asked for or built); then they pay and ask a question. The break it catches: either kind not
@@ -287,7 +287,7 @@ def test_a_reader_who_pays_again_gets_notes_and_story_memory_to_their_place_and_
 # ---- one reader's state never reaches another reader of the same file -------------------------------
 
 def test_two_readers_of_one_file_one_ended_one_paying_each_get_only_what_their_own_state_gives(
-        shelf, readers, database, worker_dsn, monkeypatch):
+        shelf, readers, database, tenant_dsn, worker_dsn, monkeypatch):
     """ADR 0045 section 5 and the owner's rule that nothing shown may imply anything about another
     reader. A is ended, B pays; both have the same file and have finished part 1. The break it
     catches: B's notes or story memory held because A is ended (or A's jobs, claimed first,

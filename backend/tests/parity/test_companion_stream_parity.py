@@ -93,6 +93,8 @@ class HostedChat:
         with psycopg.connect(dsn) as conn:
             conn.execute("INSERT INTO users (id,display_name) VALUES (%s,'Parity reader')",
                          (self.owner,))
+            # ADR 0046: talking with Mothli needs the plan from the first question.
+            conn.execute("SELECT set_gift(%s, '9999-12-31'::date)", (self.owner,))
         tokens, sessions = signed_in({"a": self.owner})
         self.app = create_app(
             hosted_settings(dsn, tmp_path / "objects", **CHAT),

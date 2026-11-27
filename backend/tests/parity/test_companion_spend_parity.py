@@ -135,6 +135,8 @@ def test_the_same_calls_leave_the_same_ledger_locally_and_hosted(tmp_path, postg
     book = uuid.uuid4()
     with psycopg.connect(postgres_database) as conn:
         conn.execute("INSERT INTO users (id,display_name) VALUES (%s,'Parity reader')", (owner,))
+        # ADR 0046: talking with Mothli needs the plan from the first question.
+        conn.execute("SELECT set_gift(%s, '9999-12-31'::date)", (owner,))
         conn.execute(
             "INSERT INTO books (owner_id,id,incarnation,title,author,schema_version)"
             " VALUES (%s,%s,%s,'The Lamp Book','Ada Writer',1)", (owner, book, uuid.uuid4()))
