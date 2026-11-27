@@ -51,7 +51,7 @@ export const START_TALKING = PLAN_TITLE_NEW;
  * panel comes back in the invitation's place. Closed without joining: focus goes back to the
  * button, `onDeclined` is told, and a reader already on the plan from elsewhere (another tab,
  * another device) gets the panel back. */
-function usePlanSheet(onDeclined?: () => void) {
+export function usePlanSheet(onDeclined?: () => void) {
   const [seeing, setSeeing] = useState(false);
   const joined = useRef(false);
   const backToButton = useRef(false);

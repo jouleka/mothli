@@ -108,6 +108,23 @@
 .ml-main { min-width: 0; outline: none; }
 .ml-notice { margin-top: 24px; }
 
+/* ---------- a new reader's first book: Mothli's one invitation, a note on the shelf ---------- */
+.ml-first-invite {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-top: 32px;
+  padding: 24px clamp(20px, 4vw, 32px);
+  border-radius: 6px;
+  background: var(--m-surface);
+  box-shadow: var(--m-shadow);
+}
+.ml-first-invite .moth { flex: none; margin-top: 4px; }
+.ml-first-invite-body { display: grid; gap: 16px; min-width: 0; }
+.ml-first-invite-words { margin: 0; max-width: 46ch; font-size: 24px; line-height: 1.2; overflow-wrap: anywhere; }
+.ml-first-invite-words cite { font-style: italic; }
+.ml-first-invite-actions { display: flex; flex-wrap: wrap; gap: 10px 12px; }
+
 /* ---------- the open book ---------- */
 .ml-spread {
   display: flex;
