@@ -37,6 +37,14 @@ _CACHE_INPUT_USD = {
     "gpt-6.1-sol": (0.10e-6, 2.50e-6),
     "gpt-6.1-terra": (0.05e-6, 1.25e-6),
 }
+# Flex processing (input, output, cached input, 30-minute cache write), short context, from the
+# provider's pricing page read 2026-11-27: half the standard prices. Chosen by the tier the
+# response reports (``usage["service_tier"]``); reservations stay at the standard price.
+_FLEX_USD = {
+    "gpt-6-luna": (0.05e-6, 0.25e-6, 0.005e-6, 0.0625e-6),
+    "gpt-6.1-sol": (1.00e-6, 5.00e-6, 0.05e-6, 1.25e-6),
+    "gpt-6.1-terra": (0.50e-6, 2.50e-6, 0.025e-6, 0.625e-6),
+}
 
 
 def _price_name(model):
@@ -76,6 +84,8 @@ def usd_of(model, usage):
     actual = completion_usage(usage)
     read, write = actual.get("cache_read", 0), actual.get("cache_write", 0)
     cached_price, write_price = _CACHE_INPUT_USD[name]
+    if usage.get("service_tier") == "flex":
+        input_price, output_price, cached_price, write_price = _FLEX_USD[name]
     # GPT-6 long-context premiums apply to the entire request, not only the excess tokens.
     input_scale, output_scale = (2, 1.5) if actual["in"] > 272_000 else (1, 1)
     return (((actual["in"] - read - write) * input_price + read * cached_price + write * write_price)
@@ -240,7 +250,9 @@ def budgeted_completion(catalog, settings, client, book_id, *, phase, system, us
     missing_usage = actual == {"in": 0, "out": 0} and getattr(client, "provider", None) != "stub"
     if missing_usage:
         actual = reserved_usage                         # missing real-provider usage fails conservative
-    actual_usd = reserved_usd_of(model, actual) if missing_usage else usd_of(model, actual)
+    # A call the provider served on Flex is priced at Flex prices; the reservation was standard.
+    actual_usd = (reserved_usd_of(model, actual) if missing_usage
+                  else usd_of(model, {**actual, "service_tier": usage.get("service_tier")}))
     try:
         # Recorded only (migration 0043): the parts of the input read from and written to the
         # prompt cache, as ``completion_usage`` kept them; unknown when the provider gave no usage.

@@ -37,7 +37,7 @@ import time
 
 import httpx
 from openai import (APIConnectionError, APIStatusError, APITimeoutError, BadRequestError, OpenAI,
-                    LengthFinishReasonError, ContentFilterFinishReasonError)
+                    LengthFinishReasonError, ContentFilterFinishReasonError, RateLimitError)
 from openai.lib._pydantic import to_strict_json_schema
 from pydantic import ValidationError
 
@@ -57,36 +57,59 @@ logger = logging.getLogger(__name__)
 # 30 minutes. Explicit mode writes only at a marked breakpoint; the rest is billed at the plain
 # rate. Only how a call is billed changes: the text the model reads is the same.
 _EXPLICIT_CACHE = {"mode": "explicit"}
+# Flex processing: the provider's slower lane at Batch prices, asked for by background work only
+# (``use_flex_for_background``: the hosted worker's story memory, chapter notes and recollections,
+# never a call a reader waits on). The provider's guide raises the SDK's ten-minute default to
+# fifteen for it. Same model, same effort, same prompt: only the lane and the price change.
+FLEX_TIMEOUT_SECONDS = 900.0
 
 
 class Reusable(str):
     """Prompt text whose first ``reusable_end`` characters recur across calls: native OpenAI
-    marks a cache breakpoint there. Everywhere else it is the same text as a plain ``str``."""
+    marks a cache breakpoint there, and at each of the ``earlier`` ends (shorter prefixes that
+    recur in still more calls). Everywhere else it is the same text as a plain ``str``."""
 
     reusable_end: int
+    reusable_ends: tuple[int, ...]
 
-    def __new__(cls, text: str, end: int | None = None):
+    def __new__(cls, text: str, end: int | None = None, *, earlier: tuple[int, ...] = ()):
         made = super().__new__(cls, text)
         made.reusable_end = len(text) if end is None else end
+        made.reusable_ends = tuple(sorted({at for at in (*earlier, made.reusable_end)
+                                           if 0 < at <= len(text)}))
         return made
 
 
 def _cache_content(text):
-    """``text`` as content parts with a breakpoint after its reusable part, or as it is when
+    """``text`` as content parts with a breakpoint after each reusable part, or as it is when
     nothing in it is marked. The parts join to exactly ``text``."""
-    end = getattr(text, "reusable_end", None)
-    if end is None or end <= 0:
+    ends = getattr(text, "reusable_ends", None)
+    if not ends:
         return text
-    parts = [{"type": "text", "text": str(text[:end]), "prompt_cache_breakpoint": {"mode": "explicit"}}]
-    if end < len(text):
-        parts.append({"type": "text", "text": str(text[end:])})
+    parts, start = [], 0
+    for end in ends:
+        parts.append({"type": "text", "text": str(text[start:end]),
+                      "prompt_cache_breakpoint": {"mode": "explicit"}})
+        start = end
+    if start < len(text):
+        parts.append({"type": "text", "text": str(text[start:])})
     return parts
 
 
-def _names_cache_option(exc: BadRequestError) -> bool:
+def allowed_tiers(asked):
+    """The processing tiers a native response may report: Standard, and Flex exactly when the
+    call asked for Flex. Any other lane (a pricier one) is refused as a provider failure."""
+    return (None, "default", "flex") if asked == "flex" else (None, "default")
+
+
+def _names(exc: BadRequestError, option: str) -> bool:
     said = " ".join(str(value) for value in (getattr(exc, "param", None), getattr(exc, "message", None),
                                              getattr(exc, "body", None)) if value)
-    return "prompt_cache" in said
+    return option in said
+
+
+def _names_cache_option(exc: BadRequestError) -> bool:
+    return _names(exc, "prompt_cache")
 
 
 class ProviderUnavailable(RuntimeError):
@@ -257,6 +280,16 @@ class LLMClient:
             return f"chatgpt-plan:{model}"
         return model
 
+    def use_flex_for_background(self) -> bool:
+        """Send this client's calls on the provider's Flex lane: for a client that only background
+        work nobody waits on uses (the hosted worker's). Native OpenAI only; True if it applies.
+        A call Flex has no room for (a 429) goes to the standard lane at once, and a provider that
+        no longer offers Flex has every call sent there from then on: no work waits or is lost."""
+        if self.provider != "openai-compatible" or not self._is_native_openai:
+            return False
+        self.background_flex = True
+        return True
+
     # ---- completion --------------------------------------------------------
     def reasoning_effort(self, tier, schema=None):
         """Terra: low for bounded extraction/selection; medium for prose and audits."""
@@ -346,6 +379,9 @@ class LLMClient:
                 value = getattr(details, source, None)
                 if value is not None and value != 0:
                     usage[target] = value
+            # The lane the provider says it served the call on prices it (``app.cost.limits``).
+            if getattr(resp, "service_tier", None) == "flex":
+                usage["service_tier"] = "flex"
         return usage
 
     def _complete_openai(self, system, user, tier, schema, max_output_tokens):
@@ -353,8 +389,28 @@ class LLMClient:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         cached = (self._is_native_openai and model in _NATIVE_REASONING_EFFORT
                   and not getattr(self, "_cache_options_refused", False))
+        lane = {"tier": None}       # the tier the request that answered asked for
 
         def send(method, **kwargs):
+            # A background call asks for Flex first. Should Flex have no room for it (a 429,
+            # which the provider does not charge) or the provider refuse the tier, the same call
+            # goes at once to the standard lane, so background work never waits on Flex or is
+            # lost to it. After a refusal of the tier this client stops asking for it.
+            lane["tier"] = kwargs.get("service_tier")
+            if lane["tier"] == "flex":
+                try:
+                    return cache_send(method, timeout=FLEX_TIMEOUT_SECONDS, **kwargs)
+                except RateLimitError:
+                    logger.info("flex had no room for a background call; sending it standard")
+                except BadRequestError as exc:
+                    if not _names(exc, "service_tier"):
+                        raise
+                    self._flex_refused = True
+                    logger.warning("the provider refused flex processing; sending standard")
+                kwargs["service_tier"] = lane["tier"] = "default"
+            return cache_send(method, **kwargs)
+
+        def cache_send(method, **kwargs):
             # The same request with the cache options, and, should the provider refuse those
             # options, once more exactly as it was sent before they existed: a reply is never lost
             # to how it is billed. After one refusal this client stops sending them.
@@ -379,7 +435,8 @@ class LLMClient:
             unreasoned = short_recap_draft
             # Native Luna defaults to medium; its short recap draft uses none. Sol stays low. The
             # shared cap bounds visible output AND reasoning. Every client asks for Standard
-            # processing (the local Fast option went with the solo speed-ups, ADR 0043).
+            # processing (the local Fast option went with the solo speed-ups, ADR 0043), except a
+            # background client's unstreamed calls, which ask for Flex (``use_flex_for_background``).
             cap = {"max_completion_tokens": max_output_tokens if max_output_tokens is not None else 4096,
                    "reasoning_effort": ("none" if unreasoned else self.reasoning_effort(tier, schema)),
                    "service_tier": "default"}
@@ -387,8 +444,10 @@ class LLMClient:
                 cap["temperature"] = 0
         if self._is_native_openai:
             cap["store"] = False
-        allowed_tiers = (None, "default")
         on_delta = getattr(self, "on_text_delta", None) if schema is None else None
+        if (cap.get("service_tier") == "default" and on_delta is None
+                and getattr(self, "background_flex", False) and not getattr(self, "_flex_refused", False)):
+            cap["service_tier"] = "flex"
         if on_delta is not None:
             # A spoken reply: the caller receives each fragment as it is written. Its reasoning
             # effort follows the conversation draft setting rather than the prose default.
@@ -409,7 +468,7 @@ class LLMClient:
         if schema is None:
             resp = send(self._oai.chat.completions.create, **cap)
             if (self._is_native_openai and model in _NATIVE_REASONING_EFFORT
-                    and getattr(resp, "service_tier", None) not in allowed_tiers):
+                    and getattr(resp, "service_tier", None) not in allowed_tiers(lane["tier"])):
                 self._record_provider_failure("completion", "unsupported_service_tier")
                 raise ProviderUnavailable("unsupported_service_tier", service="completion")
             return resp.choices[0].message.content or "", self._usage_openai(
@@ -420,7 +479,7 @@ class LLMClient:
             if parsed is None:
                 raise ValueError("OpenAI returned no parsed structured output (refusal or truncation)")
             if (model in _NATIVE_REASONING_EFFORT
-                    and getattr(resp, "service_tier", None) not in allowed_tiers):
+                    and getattr(resp, "service_tier", None) not in allowed_tiers(lane["tier"])):
                 self._record_provider_failure("completion", "unsupported_service_tier")
                 raise ProviderUnavailable("unsupported_service_tier", service="completion")
             return parsed.model_dump(mode="json"), self._usage_openai(resp, native=True)

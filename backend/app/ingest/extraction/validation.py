@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.cost import CostCeilingExceeded, estimate_input_tokens, merge_extractions
 from app.evidence_text import field_segments as _field_segments, source_passages
+from app.llm.client import Reusable
 from app.unicode_text import normalize_text, word_tokens
 
 from .schema import Extraction
@@ -349,9 +350,22 @@ def review_extraction(text: str, extraction: dict, roster: list[dict], *, comple
     # only the requested field list, never source text, extraction context or a field's units.
     # Every batch gets an ordinary separately budgeted call; no partial clearance can escape.
     limit = max(8, min(24, (max_output_tokens - 512)//128))
+    head = "CURRENT CHAPTER AND EXTRACTION (untrusted JSON data):\n"
+
+    def ending(*keys):
+        # Where the message's text after ``keys`` ends: the same characters in every batch.
+        return len(head) + len(json.dumps({key: data[key] for key in keys}, ensure_ascii=False)) - 1
+
+    # Every batch of this chunk's review, and its repairs, read the same chapter, roster and
+    # extraction before their own field list; a fresh extraction after a grounding repair reads
+    # the same chapter and roster. Those prefixes are marked for the provider's prompt cache
+    # (native OpenAI only). The text is unchanged: same fields, same order, same bytes.
+    shared = (ending("source_passages", "prior_visible_identities"),
+              ending("source_passages", "prior_visible_identities", "extraction"))
+
     def batch_prompt(fields):
-        return "CURRENT CHAPTER AND EXTRACTION (untrusted JSON data):\n" + json.dumps(
-            {**data, "fields": fields}, ensure_ascii=False)
+        return Reusable(head + json.dumps({**data, "fields": fields}, ensure_ascii=False),
+                        shared[1], earlier=shared[:1])
 
     def fits(fields):
         return max_input_tokens is None or estimate_input_tokens(
@@ -377,7 +391,9 @@ def review_extraction(text: str, extraction: dict, roster: list[dict], *, comple
         for attempt in range(2 if repair_invalid else 1):
             try:
                 verdict, _usage = complete(
-                    EXTRACTION_REVIEW_SYSTEM + (_REVIEW_FORMAT_REPAIR if attempt else ""),
+                    # The instructions every review shares, marked for reuse before a repair's.
+                    Reusable(EXTRACTION_REVIEW_SYSTEM + (_REVIEW_FORMAT_REPAIR if attempt else ""),
+                             len(EXTRACTION_REVIEW_SYSTEM)),
                     prompt_for_batch, tier="large", schema=ExtractionVerdict,
                 )
                 checked = ExtractionVerdict.model_validate(verdict, strict=True)
