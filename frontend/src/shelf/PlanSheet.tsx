@@ -1,6 +1,6 @@
 /** Hosted mode: the plan sheet, "Keep talking with Mothli" (ADR 0045 section 6). The two plans with
  * the prices Paddle gives this reader (yearly first, as a month beside the total it is billed, with
- * its saving; neither chosen for the reader, both offered alike), then Paddle's
+ * its saving; neither chosen for the reader nor favoured, both drawn alike), then Paddle's
  * checkout over the page for a transaction the server made. When the checkout completes or closes
  * nothing is assumed: the sheet asks the server for the plan until it says the reader is on it,
  * for a bounded time. After a completed payment that has not arrived in that time it says the
@@ -41,7 +41,6 @@ export const PLAN_LINES = {
   tryAgain: "Try again",
   yearly: "Yearly",
   monthly: "Monthly",
-  bestValue: "Best value",
   chooseYearly: "Choose yearly",
   chooseMonthly: "Choose monthly",
   starting: "One moment…",
@@ -354,9 +353,7 @@ export function PlanSheet({
               <ul className="ml-plan-choices">
                 {prices.yearly && (
                   <li className="ml-plan-choice">
-                    <h3>
-                      {PLAN_LINES.yearly} <span className="ml-plan-tag">{PLAN_LINES.bestValue}</span>
-                    </h3>
+                    <h3>{PLAN_LINES.yearly}</h3>
                     <div id={yearlyId}>
                       <p className="ml-plan-price">
                         {prices.yearly.perMonth

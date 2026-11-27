@@ -70,7 +70,6 @@
   border-radius: 6px;
   background: var(--m-surface);
 }
-.pp-price--best { border-color: var(--m-accent); box-shadow: var(--m-shadow); }
 .pp-price h3 {
   display: flex;
   flex-wrap: wrap;
@@ -83,14 +82,6 @@
 .pp-price p { margin: 0; font-size: 16px; color: var(--m-soft); }
 .pp-cta { margin: 4px 0 20px; }
 .pp-price .pp-price-main { font: 500 21px/1.35 var(--m-book); color: var(--m-ink); }
-.pp-tag {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--m-accent-wash);
-  font: 600 12px/1.4 var(--m-ui);
-  letter-spacing: 0.04em;
-  color: var(--m-accent);
-}
 
 /* ---------- the footer ---------- */
 .pp-footer {

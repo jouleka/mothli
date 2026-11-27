@@ -135,12 +135,12 @@ export function AboutMothli({ site, action }: { site: Site | null; action?: Reac
       <h2 id="plan-title">Free to read. Mothli is the plan.</h2>
       <p>
         Reading here is free, always: your books, your place, your highlights and the free library.
-        Mothli, the chat in every book, who’s who and the story so far, is the plan.
+        Mothli, a friend to talk with in every book, along with who’s who and the story so far, is the plan.
       </p>
       {shown ? (
         <ul className="pp-prices" aria-labelledby="plan-title">
-          <li className="pp-price pp-price--best">
-            <h3>Yearly <span className="pp-tag">Best value</span></h3>
+          <li className="pp-price">
+            <h3>Yearly</h3>
             <p className="pp-price-main">{yearlyMonth(shown.yearlyPerMonth, shown.yearlyTotal)}</p>
             {shown.saving !== null && <p>{yearlySaving(shown.saving)}</p>}
           </li>

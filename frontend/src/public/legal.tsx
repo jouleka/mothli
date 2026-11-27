@@ -93,8 +93,8 @@ export function Terms({ operator }: PageProps) {
           bookmarks, and the free library.
         </p>
         <p>
-          Talking with Mothli is the plan: the chat in your books and on your home page, who’s who,
-          and the story so far. The plan is paid every month or every year. The prices are on our{" "}
+          Talking with Mothli is the plan: in your books and on your home page, along with who’s
+          who and the story so far. The plan is paid every month or every year. The prices are on our{" "}
           <a href="/">front page</a> and in the checkout.
         </p>
         <p>

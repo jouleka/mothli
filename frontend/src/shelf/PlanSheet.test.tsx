@@ -63,11 +63,12 @@ describe("the plan sheet", () => {
     await within(sheet).findByRole("button", { name: "Choose yearly" });
     const choices = within(sheet).getAllByRole("listitem");
     expect(choices.map((item) => item.textContent)).toEqual([
-      "Yearly Best value$6.67 a month, billed $79.99 a year48% less than paying monthly.Choose yearly",
+      "Yearly$6.67 a month, billed $79.99 a year48% less than paying monthly.Choose yearly",
       "Monthly$12.99 a monthChoose monthly",
     ]);
     expect(within(sheet).getAllByRole("heading").map((heading) => heading.textContent)).toEqual([
-      "Keep talking with Mothli", "Yearly Best value", "Monthly"]);
+      "Keep talking with Mothli", "Yearly", "Monthly"]);
+    expect(sheet.textContent).not.toMatch(/best value/i);
     const yearly = within(sheet).getByRole("button", { name: "Choose yearly" });
     expect(document.getElementById(yearly.getAttribute("aria-describedby")!)?.textContent).toBe(
       "$6.67 a month, billed $79.99 a year48% less than paying monthly.");

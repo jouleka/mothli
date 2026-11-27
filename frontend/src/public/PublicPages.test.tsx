@@ -158,7 +158,7 @@ describe("the pages' words", () => {
       // Step 7: asking to delete stops the plan renewing by itself; never "cancel first".
       "If you’re on the plan, asking to delete your account stops it from renewing, so you won’t be charged again. You keep Mothli until the end of the month or year you have paid for, or until your account is erased, whichever comes first. If you come back within the 30 days, your plan still ends unless you choose “Keep my plan”.",
       // ADR 0046: talking with Mothli is the plan, with no free weeks.
-      "Talking with Mothli is the plan: the chat in your books and on your home page, who’s who, and the story so far. The plan is paid every month or every year. The prices are on our front page and in the checkout.",
+      "Talking with Mothli is the plan: in your books and on your home page, along with who’s who and the story so far. The plan is paid every month or every year. The prices are on our front page and in the checkout.",
       SHARED_NOTES,
       // The owner's soft brake (27 November 2026), in words, never a number.
       "Mothli keeps a gentle daily rhythm, so on a very busy day it may ask to pick up again tomorrow. The plan also has fair-use limits for each day and each month",
