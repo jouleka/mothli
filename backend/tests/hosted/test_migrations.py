@@ -729,8 +729,10 @@ def _kept_rows(conn) -> dict:
     return {"users": conn.execute(
         f"SELECT * FROM users WHERE id NOT IN (SELECT account_id FROM {account}) "
         "ORDER BY 1, 2").fetchall(),
-        # (0036's background mark is checked by its own test.)
-        "cost_ledger": conn.execute("SELECT to_jsonb(entry) - 'background' FROM cost_ledger"
+        # (0036's background mark and 0043's cache split, empty on rows already there, are
+        # checked by their own tests.)
+        "cost_ledger": conn.execute("SELECT to_jsonb(entry) - 'background' - 'cache_read_tokens'"
+                                    " - 'cache_write_tokens' FROM cost_ledger"
                                     " AS entry ORDER BY owner_id, id").fetchall()} | {
         "books": conn.execute("SELECT to_jsonb(book) - 'split_hash' - 'edition_of' "
                               "- 'no_holder_since' "
@@ -1285,7 +1287,9 @@ def test_background_spend_is_marked_by_its_names_and_nothing_else_changes(
                   "recollect-write", "recollect-check"}
     with psycopg.connect(database) as conn:
         for table, before in (("cost_ledger", ledger), ("cost_reservations", held)):
-            assert conn.execute(f"SELECT to_jsonb(row) - 'background' FROM {table} AS row"
+            # 0043's cache split, empty on rows already there, is checked by its own test.
+            assert conn.execute(f"SELECT to_jsonb(row) - 'background' - 'cache_read_tokens'"
+                                f" - 'cache_write_tokens' FROM {table} AS row"
                                 " ORDER BY id").fetchall() == before
             marked = dict(conn.execute(f"SELECT COALESCE(purpose, ''), background FROM {table}"
                                        ).fetchall())
