@@ -426,8 +426,6 @@ def create_app(
                     reader_background_usd_per_day=settings.hosted_reader_background_usd_per_day,
                     reader_background_usd_per_month=(
                         settings.hosted_reader_background_usd_per_month),
-                    free_usd=settings.hosted_free_usd,
-                    free_days=settings.hosted_free_days,
                     first_paid_month_usd=settings.hosted_first_paid_month_usd,
                     warmup_days=settings.hosted_warmup_days,
                     warmup_new_chapters=settings.hosted_warmup_new_chapters,

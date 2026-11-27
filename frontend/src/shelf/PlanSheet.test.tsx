@@ -70,7 +70,6 @@ describe("the plan sheet", () => {
     const yearly = within(sheet).getByRole("button", { name: "Choose yearly" });
     expect(document.getElementById(yearly.getAttribute("aria-describedby")!)?.textContent).toBe(
       "$6.67 a month, billed yearly$79.99 a year, 48% less than paying monthly.");
-    expect(within(sheet).getByText("Join now and your plan starts today.")).toBeTruthy();
     expect(within(sheet).getByText("Cancel any time from Your account. Your books stay free either way.")).toBeTruthy();
     expect(within(sheet).getByText("Payments are handled by Paddle, who sells Mothli on our behalf.")).toBeTruthy();
     // The public pages (ADR 0045 step 8), opened beside the sheet so it stays as it is.
@@ -85,34 +84,22 @@ describe("the plan sheet", () => {
     expect(await axeAA(document.body)).toHaveNoViolations();
   });
 
-  test("past the free weeks, no line about the plan starting today", async () => {
-    mocks.plan.mockResolvedValue(planOf({ state: "ended", why: "time", next_date: null }));
-    await openSheet();
-    expect(screen.queryByText("Join now and your plan starts today.")).toBeNull();
-  });
-
-  // Catches: "Keep talking" said to a reader who has not talked yet, or joining shown as costing
-  // nothing of their free weeks (paying first means the free weeks never start: reader_plan_state
-  // answers paying, then ended by the plan, and never free).
-  test("a reader who has not started: their own title, and what joining now means for the free weeks", async () => {
-    await openSheet({ plan: planOf({ state: "new", next_date: null }) });
+  // Catches: "Keep talking" said to a reader who has not talked yet, or anything of the removed
+  // free weeks (ADR 0046) said to them.
+  test("a reader who has never had Mothli: their own title, and nothing about free weeks", async () => {
+    await openSheet({ plan: planOf({ state: "new", why: null, next_date: null }) });
     const sheet = screen.getByRole("dialog", { name: "Talk with Mothli" });
     expect(within(sheet).getAllByRole("heading")[0].textContent).toBe("Talk with Mothli");
     expect(PLAN_TITLE_NEW).toBe("Talk with Mothli");
-    expect(within(sheet).getByText(
-      "Your two free weeks start the first time you try me out, so there’s no need to join yet. If you join now, your plan starts today, in place of the free weeks.",
-    )).toBeTruthy();
-    expect(PLAN_LINES.instead).toBe(
-      "Your two free weeks start the first time you try me out, so there’s no need to join yet. If you join now, your plan starts today, in place of the free weeks.");
-    expect(within(sheet).queryByText("Join now and your plan starts today.")).toBeNull();
+    expect(sheet.textContent).not.toMatch(/free weeks|two weeks|starts today/);
+    expect("instead" in PLAN_LINES || "startsToday" in PLAN_LINES).toBe(false);
     noCounter(sheet);
   });
 
-  // Catches: the line for a gifted reader kept although no screen opens the sheet for them
-  // (Your account offers a gifted reader no "See the plan").
+  // Catches: a line about when the plan starts said to a gifted reader.
   test("a gifted reader is not told their plan starts today", async () => {
     await openSheet({ plan: planOf({ state: "paying", plan: "gift", next_date: null }) });
-    expect(screen.queryByText("Join now and your plan starts today.")).toBeNull();
+    expect(screen.queryByText(/starts today/)).toBeNull();
     expect(screen.getByRole("dialog", { name: "Keep talking with Mothli" })).toBeTruthy();
   });
 

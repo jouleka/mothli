@@ -99,14 +99,14 @@ def test_the_role_script_matches_every_startup_check_as_written() -> None:
     # the operator and the billing role executes any function.
     assert by_key["operator"].functions == {
         "set_gift(uuid,date)": {"EXECUTE"},
-        "reader_plan_state(uuid,integer,numeric)": {"EXECUTE"}}
+        "reader_plan_state(uuid)": {"EXECUTE"}}
     assert by_key["operator"].tables["reader_plans"] == {"SELECT"}
     assert [role.key for role in roles.RUNTIME_ROLES if role.functions] == [
         "tenant", "worker", "operator", "billing"]
     # ADR 0045 step 6: the worker reads where a reader stands, through the one function, and
     # when they signed up, through two columns of users and no other: never a name or an email.
     assert by_key["worker"].functions is WORKER_FUNCTION_PRIVILEGES == {
-        "reader_plan_state(uuid,integer,numeric)": {"EXECUTE"}}
+        "reader_plan_state(uuid)": {"EXECUTE"}}
     assert by_key["worker"].tables["reader_plans"] == {"SELECT"}
     assert "users" not in by_key["worker"].tables
     assert by_key["worker"].columns is WORKER_COLUMN_PRIVILEGES == {"users": {"id", "created_at"}}
@@ -471,7 +471,7 @@ def test_every_process_that_reads_app_env_starts_with_paddle_on(monkeypatch) -> 
     "Paddle's messages require HOSTED_BILLING_DSN", an address only the web process may hold.
     Each such container is built here from compose.yaml's own lines, with both AI keys empty and
     filled in. The worker and the purge get none of Paddle's secrets, nor the billing role, and
-    read every other number (free weeks, caps, warm-up) exactly as the web process does."""
+    read every other number (caps, warm-up) exactly as the web process does."""
     from app.hosted.companion.jobs import companion_kinds
 
     services = compose_services()

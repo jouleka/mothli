@@ -44,11 +44,6 @@ export const PLAN_LINES = {
   chooseYearly: "Choose yearly",
   chooseMonthly: "Choose monthly",
   starting: "One moment…",
-  startsToday: "Join now and your plan starts today.",
-  // A reader who has not started: paying first means the free weeks never begin
-  // (reader_plan_state answers paying, then ended by the plan, never free).
-  instead:
-    "Your two free weeks start the first time you try me out, so there’s no need to join yet. If you join now, your plan starts today, in place of the free weeks.",
   cancelAnyTime: "Cancel any time from Your account. Your books stay free either way.",
   paddle: "Payments are handled by Paddle, who sells Mothli on our behalf.",
   paying: "Your checkout is open. Take your time, I’ll be right here.",
@@ -324,8 +319,6 @@ export function PlanSheet({
     : phase === "slow" ? PLAN_LINES.slow
     : phase === "choose" && unchanged ? PLAN_LINES.nothingChanged
     : "";
-  // A gifted reader is offered no "See the plan" (Your account), so no line is kept for them.
-  const startsToday = plan?.state === "free";
   const notStarted = (plan?.state ?? mothliStanding()?.state) === "new";
 
   return createPortal(
@@ -401,8 +394,6 @@ export function PlanSheet({
                 )}
               </ul>
               {problem && <p className="fl-error" role="alert">{problem}</p>}
-              {startsToday && <p className="ml-mem-quiet">{PLAN_LINES.startsToday}</p>}
-              {notStarted && <p className="ml-mem-quiet">{PLAN_LINES.instead}</p>}
               <p className="ml-mem-quiet">{PLAN_LINES.cancelAnyTime}</p>
               <p className="ml-mem-quiet">{PLAN_LINES.paddle}</p>
               {/* Open point 8, decided: no refund promise of Mothli's own, Paddle's terms only.

@@ -1,9 +1,9 @@
-"""The gate in front of Mothli (ADR 0045 step 5), without a database.
+"""The gate in front of Mothli (ADR 0045 step 5, ADR 0046), without a database.
 
 Which hosted routes are behind the gate and which are reading (and so never gated), checked
 against every route the hosted app has, so a new route has to be placed on one side; the gate's
-answer to an ended reader on every gated route, given before anything of the reader's is opened;
-the start route; and the session's ``mothli``. Where the reader stands is stood in for
+answer to a new or an ended reader on every gated route, given before anything of the reader's
+is opened; and the session's ``mothli``. Where the reader stands is stood in for
 (``gate.standing``), so no database and no model is needed. The same rules on real PostgreSQL,
 from the plan's own row, are in ``test_mothli_gate_postgres.py``.
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from contextlib import ExitStack, contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import psycopg
 import pytest
@@ -47,7 +47,7 @@ GATED = {
 # Every other route a signed-in reader has, deliberately not behind it: reading, the place,
 # highlights, notes, bookmarks, the library and the free library, the account and the copy of
 # one's data, what Mothli remembers (the reader's own data, to read and to forget), clearing a
-# conversation, the plan itself, and the start of the free weeks (which answers the state).
+# conversation, and the plan itself.
 NOT_GATED = {
     ("GET", "/api/limits"), ("POST", "/api/books"), ("GET", "/api/books"),
     ("GET", "/api/books/{book_id}"), ("GET", "/api/books/{book_id}/manifest"),
@@ -71,7 +71,7 @@ NOT_GATED = {
     ("PUT", "/api/books/{book_id}/read-frontier"), ("DELETE", "/api/books/{book_id}/conversation"),
     ("DELETE", "/api/reader/conversation"), ("GET", "/api/reader/profile"),
     ("GET", "/api/reader/recollections"), ("DELETE", "/api/reader/recollections/{public_id}"),
-    ("DELETE", "/api/reader/recollections"), ("POST", "/api/reader/mothli/start"),
+    ("DELETE", "/api/reader/recollections"),
     ("GET", "/api/classics"), ("GET", "/api/classics/front"),
     ("GET", "/api/classics/{classic_id}"), ("POST", "/api/classics/{classic_id}"),
     ("POST", "/api/account/delete"), ("POST", "/api/account/keep"), ("GET", "/api/account/export"),
@@ -83,7 +83,8 @@ NOT_GATED = {
 }
 _THE_GATE = (routes._mothli, routes._csrf_mothli)
 
-ENDED = {"state": "ended", "why": "time", "ending_note": False}
+ENDED = {"state": "ended", "why": "plan"}
+NEW = {"state": "new", "why": None}
 
 
 class _Reader:
@@ -145,12 +146,12 @@ def stand(monkeypatch, *answers) -> list:
 
 class Touched:
     """Everything behind a gated route that opens the reader's catalog, source, search or story
-    memory, reserves, starts the free weeks or asks for background work: each call is kept, then
+    memory, reserves or asks for background work: each call is kept, then
     refused, so a route that went past the gate would fail here even if nothing else noticed."""
 
     PLACES = [(HostedCompanionCatalog, "__init__"), (HostedBookStore, "__init__"),
               (HostedBookSource, "__init__"), (SpendStore, "reserve_cost"),
-              (SpendStore, "start_free_weeks"), (jobs.ChapterNotesQueue, "ensure"),
+              (jobs.ChapterNotesQueue, "ensure"),
               (jobs.RecollectQueue, "ensure"), (routes, "stream_read_prefix"),
               (routes, "stream_home"), (routes, "read_snapshot"), (routes, "home_turns"),
               (routes, "visible_turns"), (stream_conversation, "compact_candidates")]
@@ -204,8 +205,8 @@ def requests_for(book: str = BOOK) -> list[tuple[str, str, dict | None]]:
 
 def test_every_hosted_route_is_placed_and_the_gate_stands_in_front_of_exactly_the_gated(
         signed_in) -> None:
-    """The break it catches: a route that serves what Mothli wrote or knows left open to an
-    ended reader (or a new one added without a decision), or a reading route (the place, a page
+    """The break it catches: a route that serves what Mothli wrote or knows left open to a
+    reader who does not pay (or a new route added without a decision), or a reading route (the place, a page
     report, highlights, what Mothli remembers) shut by the gate."""
     client, _reader = signed_in(paddle_api_key=None)
     every = list(_api_routes(client.app))
@@ -221,15 +222,17 @@ def test_every_hosted_route_is_placed_and_the_gate_stands_in_front_of_exactly_th
 
 # ---- the answer ------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("why", ["time", "ceiling", "plan"])
-def test_an_ended_reader_gets_the_gates_answer_on_every_gated_route_and_nothing_behind_it_runs(
-        signed_in, monkeypatch, why) -> None:
-    """The break it catches: an ended reader's request opening their catalog, source, search or
-    story memory, reserving, starting the free weeks or asking for background work before it is
-    refused; a refusal of another shape (a 429, a stream that opens and then fails); or one whose
-    body differs by route or by book."""
+@pytest.mark.parametrize("standing", [NEW, ENDED])
+def test_a_reader_who_does_not_pay_gets_the_gates_answer_on_every_gated_route_and_nothing_runs(
+        signed_in, monkeypatch, standing) -> None:
+    """The break it catches: a new reader (who has never had a plan or a gift, so who would have
+    started free weeks before ADR 0046) or an ended one opening their catalog, source, search or
+    story memory, reserving or asking for background work before they are refused; a refusal of
+    another shape (a 429, a stream that opens and then fails); or one whose body differs by route
+    or by book."""
     client, reader = signed_in()
-    asked = stand(monkeypatch, {"state": "ended", "why": why, "ending_note": False})
+    why = standing["why"]
+    asked = stand(monkeypatch, standing)
     touched = Touched(monkeypatch)
     answers = []
     for book in (BOOK, str(uuid.uuid4())):
@@ -247,20 +250,20 @@ def test_a_gated_write_checks_the_csrf_token_before_the_gate(signed_in, monkeypa
     """The break it catches: the gate answering a request that carries no CSRF token (telling a
     cross-site page where a reader stands)."""
     client, _reader = signed_in()
-    asked = stand(monkeypatch, ENDED)
-    for path, body in (("/api/reader/ask/stream", {"question": "Hi"}),
-                       ("/api/reader/mothli/start", {})):
-        assert client.post(path, json=body).status_code == 403
-    assert asked == []
+    for standing in (NEW, ENDED):
+        asked = stand(monkeypatch, standing)
+        for path, body in (("/api/reader/ask/stream", {"question": "Hi"}),
+                           (f"/api/books/{BOOK}/ask/stream", {"question": "Hi"})):
+            assert client.post(path, json=body).status_code == 403
+        assert asked == []
 
 
-@pytest.mark.parametrize("state", ["new", "free", "paying"])
-def test_anyone_not_ended_goes_past_the_gate_to_the_route_as_before(
-        signed_in, monkeypatch, state) -> None:
-    """The break it catches: the gate refusing a reader who is new, in the free weeks or paying.
+def test_a_paying_reader_goes_past_the_gate_to_the_route_as_before(
+        signed_in, monkeypatch) -> None:
+    """The break it catches: the gate refusing a paying reader (a gift or a live Paddle plan).
     Past it, the route's own body runs (here it reaches the catalog, which the stand-in stops)."""
     client, reader = signed_in()
-    stand(monkeypatch, {"state": state, "why": None, "ending_note": False})
+    stand(monkeypatch, {"state": "paying", "why": None})
     touched = Touched(monkeypatch)
     for method, path, body in requests_for():
         with pytest.raises(AssertionError, match="reached behind the gate"):
@@ -284,81 +287,6 @@ def test_a_plan_that_cannot_be_read_serves_nothing(signed_in, monkeypatch) -> No
     assert touched.seen == []
 
 
-# ---- the gentle note -------------------------------------------------------------------------------
-
-@pytest.mark.parametrize("state, left, note", [
-    ("free", timedelta(days=2), True), ("free", timedelta(hours=1), True),
-    ("free", timedelta(days=2, seconds=1), False), ("free", timedelta(days=10), False),
-    ("paying", timedelta(hours=1), False), ("ended", timedelta(hours=1), False),
-])
-def test_the_ending_note_is_for_the_free_weeks_last_two_days_only(monkeypatch, state, left,
-                                                                  note) -> None:
-    """The break it catches: the note shown before the last two days, after the free weeks, to
-    a paying reader, or with anything beyond yes or no (a date, a count)."""
-    now = datetime(2026, 11, 23, 12, tzinfo=UTC)
-
-    def plan(self):
-        return {"state": state, "why": "time" if state == "ended" else None,
-                "free_ends_at": now + left, "now": now}
-
-    monkeypatch.setattr(SpendStore, "plan", plan)
-    from app.hosted.tenant.models import OwnerId
-    assert gate.standing("postgresql://unused.invalid/x", OwnerId(uuid.uuid4())) == {
-        "state": state, "why": "time" if state == "ended" else None, "ending_note": note}
-
-
-# ---- the start route ------------------------------------------------------------------------------
-
-def test_the_start_route_starts_the_free_weeks_and_asks_for_the_books_work_unless_ended(
-        signed_in, monkeypatch) -> None:
-    """The break it catches: the start stamping an ended reader (a paid plan that stopped could
-    otherwise reach the free weeks), not stamping a new one, or not asking for the book's
-    background work; or an answer other than where the reader stands."""
-    client, reader = signed_in()
-    stamped, finished = [], []
-    monkeypatch.setattr(SpendStore, "start_free_weeks", lambda self: stamped.append(self))
-    monkeypatch.setattr(routes, "_finished",
-                        lambda request, owner_id, book: finished.append((owner_id.value, book)))
-    free = {"state": "free", "why": None, "ending_note": False}
-    stand(monkeypatch, {"state": "new", "why": None, "ending_note": False}, free)
-    answer = client.post("/api/reader/mothli/start", json={"book_id": BOOK},
-                         headers={CSRF_HEADER: reader.csrf})
-    assert (answer.status_code, answer.json()) == (200, free)
-    assert answer.headers["cache-control"] == "private, no-store"
-    assert len(stamped) == 1 and finished == [(reader.owner, BOOK)]
-
-    stand(monkeypatch, free)                       # no book: the free weeks only
-    assert client.post("/api/reader/mothli/start", json={},
-                       headers={CSRF_HEADER: reader.csrf}).json() == free
-    assert len(stamped) == 2 and len(finished) == 1
-
-    stand(monkeypatch, {"state": "ended", "why": "plan", "ending_note": False})
-    answer = client.post("/api/reader/mothli/start", json={"book_id": BOOK},
-                         headers={CSRF_HEADER: reader.csrf})
-    assert (answer.status_code, answer.json()) == (200, {"state": "ended", "why": "plan",
-                                                         "ending_note": False})
-    assert len(stamped) == 2 and len(finished) == 1
-
-    for body in ({"book_id": "not-a-book"}, {"owner_id": str(uuid.uuid4())}):
-        assert client.post("/api/reader/mothli/start", json=body,
-                           headers={CSRF_HEADER: reader.csrf}).status_code == 422
-    assert len(stamped) == 2
-
-
-def test_without_the_chat_there_is_no_start_and_no_mothli_in_the_session(
-        signed_in, monkeypatch) -> None:
-    """The break it catches: a server with no chat starting anyone's free weeks, or telling the
-    app about a plan for a Mothli it does not have."""
-    client, reader = signed_in(reader_conversation_jev=False, jev_enabled=False,
-                               typesafe_api_key=None, openai_api_key=None)
-    asked = stand(monkeypatch, ENDED)
-    assert client.post("/api/reader/mothli/start", json={},
-                       headers={CSRF_HEADER: reader.csrf}).status_code == 404
-    session = client.get("/api/auth/session").json()
-    assert session["chat"] is False and session["mothli"] is None
-    assert asked == []
-
-
 # ---- the session ------------------------------------------------------------------------------------
 
 def test_the_session_says_where_the_reader_stands_and_nothing_more(signed_in, monkeypatch) -> None:
@@ -366,10 +294,7 @@ def test_the_session_says_where_the_reader_stands_and_nothing_more(signed_in, mo
     the session carrying a date, an amount or a count; or a session that fails because the plan
     cannot be read (the gate still answers every route)."""
     client, reader = signed_in()
-    for standing in ({"state": "new", "why": None, "ending_note": False},
-                     {"state": "free", "why": None, "ending_note": True},
-                     {"state": "paying", "why": None, "ending_note": False},
-                     {"state": "ended", "why": "ceiling", "ending_note": False}):
+    for standing in (NEW, {"state": "paying", "why": None}, ENDED):
         asked = stand(monkeypatch, standing)
         session = client.get("/api/auth/session")
         assert session.status_code == 200
@@ -382,3 +307,14 @@ def test_the_session_says_where_the_reader_stands_and_nothing_more(signed_in, mo
     monkeypatch.setattr(gate, "standing", down)
     session = client.get("/api/auth/session")
     assert session.status_code == 200 and session.json()["mothli"] is None
+
+
+def test_without_the_chat_there_is_no_mothli_in_the_session(signed_in, monkeypatch) -> None:
+    """The break it catches: a server with no chat telling the app about a plan for a Mothli it
+    does not have."""
+    client, _reader = signed_in(reader_conversation_jev=False, jev_enabled=False,
+                                typesafe_api_key=None, openai_api_key=None)
+    asked = stand(monkeypatch, ENDED)
+    session = client.get("/api/auth/session").json()
+    assert session["chat"] is False and session["mothli"] is None
+    assert asked == []

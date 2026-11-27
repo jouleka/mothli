@@ -407,10 +407,8 @@ class CompanionJobs:
                              settings.hosted_reader_background_usd_per_day),
                          reader_background_usd_per_month=(
                              settings.hosted_reader_background_usd_per_month),
-                         # Where a reader stands (ADR 0045 section 5): the claim reads it with
-                         # the web process's free weeks, and holds a new reader to the warm-up.
-                         free_usd=settings.hosted_free_usd,
-                         free_days=settings.hosted_free_days,
+                         # Where a reader stands (ADR 0045 section 5): the claim holds a new
+                         # reader to the warm-up.
                          warmup_days=settings.hosted_warmup_days,
                          warmup_new_chapters=settings.hosted_warmup_new_chapters,
                          warmup_notes_usd=settings.hosted_warmup_notes_usd)

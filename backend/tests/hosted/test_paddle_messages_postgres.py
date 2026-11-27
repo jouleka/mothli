@@ -40,21 +40,22 @@ from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.limits import update_limits
 from app.hosted.tenant.models import OwnerId
 from tests.hosted import test_companion_read_map_postgres as read_map_gate
-from tests.hosted import test_free_weeks_postgres as free_weeks
+from tests.hosted import test_mothli_gate_postgres as mothli_gate
 from tests.hosted.test_companion_spend_postgres import spend
 from tests.hosted.test_companion_stream_postgres import (
     restore_caps,  # noqa: F401  (autouse: the hosted app sets this process's caps)
 )
 from tests.hosted.test_deploy import load_roles
-from tests.hosted.test_free_weeks_postgres import gated, refused, shelve, stamp
+from tests.hosted.test_mothli_gate_postgres import gated, refused, shelve
 
 pytestmark = pytest.mark.postgres
 
 admin_dsn = read_map_gate.admin_dsn
 database = read_map_gate.database
 tenant_dsn = read_map_gate.tenant_dsn
-readers = read_map_gate.readers
-make_app = free_weeks.make_app
+# New readers: Paddle's messages are what make them paying here.
+readers = read_map_gate.new_readers
+make_app = mothli_gate.make_app
 
 PATH = "/api/billing/paddle"
 # Stand-ins in Paddle's shapes; none is a real secret or id.
@@ -200,7 +201,7 @@ def paddle(make_app, billing_dsn, database):
 
 def plan_of(dsn: str, owner: uuid.UUID) -> tuple:
     with psycopg.connect(dsn) as conn:
-        return conn.execute("SELECT state, why, paid_by FROM reader_plan_state(%s, 14, 2.10)",
+        return conn.execute("SELECT state, why, paid_by FROM reader_plan_state(%s)",
                             (owner,)).fetchone()
 
 
@@ -376,29 +377,27 @@ def test_each_status_gives_the_state_of_section_1(paddle, database, readers):
     assert (row["paddle_subscription_id"], row["paddle_status"], row["ends_at"],
             row["period_ends_at"]) == (sub_id("a"), "canceled", None, None)
     with psycopg.connect(database) as conn:
-        dates = conn.execute("SELECT paddle_status, plan_ends_at FROM reader_plan_state"
-                             "(%s, 14, 2.10)", (a,)).fetchone()
+        dates = conn.execute("SELECT paddle_status, plan_ends_at FROM reader_plan_state(%s)",
+                             (a,)).fetchone()
     assert dates == ("canceled", None)
 
 
-def test_a_reader_who_paid_and_stopped_is_never_back_in_the_free_weeks(paddle, tenant_dsn,
-                                                                       database, readers):
-    """The break it catches: a reader who subscribed during their free weeks and cancelled
-    given the rest of the free weeks (and the free ceiling) back, or answered at all: ended with
-    why "plan", they meet the gate (ADR 0045 step 5), not the paying readers' day (step 1's
-    stopgap); or a gift not winning over a cancelled plan while it lasts."""
+def test_a_reader_who_paid_and_stopped_is_ended_and_meets_the_gate(paddle, tenant_dsn,
+                                                                   database, readers):
+    """The break it catches: a reader who subscribed and cancelled answered at all, or taken for
+    new: ended with why "plan", they meet the gate (ADR 0045 step 5, ADR 0046), not the paying
+    readers' day; or a gift not winning over a cancelled plan while it lasts."""
     a = readers["a"]
     book = shelve(database, a)
-    stamp(tenant_dsn, a)
-    assert plan_of(database, a) == ("free", None, None)
+    assert plan_of(database, a) == ("new", None, None)
     now = datetime.now(UTC)
     post(paddle, message(sub_id("a"), reader=a, at=now))
     assert plan_of(database, a) == ("paying", None, "paddle")
     post(paddle, message(sub_id("a"), "canceled", reader=a, at=now + timedelta(seconds=1)))
     assert plan_of(database, a) == ("ended", "plan", None)
-    # Not back in the free weeks: the gate, with nothing spent.
+    # The gate, with nothing spent.
     set_spend_limits(reader_usd_per_day=Decimal("0.10"), reader_usd_per_month=2,
-                     platform_usd_per_day=100, free_usd=Decimal("0.05"))
+                     platform_usd_per_day=100)
     chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
     gated(chat, book, "plan")
     with psycopg.connect(database) as conn:
@@ -728,8 +727,7 @@ def test_the_billing_role_reads_and_writes_only_its_three_tables(billing_dsn, da
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
                     conn.execute(statement)
         for call, params in (("SELECT set_gift(%s, '9999-12-31'::date)", (a,)),
-                             ("SELECT start_free_weeks()", ()),
-                             ("SELECT * FROM reader_plan_state(%s, 14, 2.10)", (a,))):
+                             ("SELECT * FROM reader_plan_state(%s)", (a,))):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(call, params)
     with psycopg.connect(database) as conn:
@@ -743,7 +741,6 @@ def test_the_tenant_role_cannot_write_a_paddle_plan_or_find_one(tenant_dsn, data
     a = readers["a"]
     with psycopg.connect(tenant_dsn, autocommit=True) as conn:
         conn.execute("SELECT set_config('app.owner_id', %s, false)", (str(a),))
-        conn.execute("SELECT start_free_weeks()")
         for statement, params in (
                 ("UPDATE reader_plans SET paddle_subscription_id = %s, paddle_status = 'active',"
                  " paddle_occurred_at = now()", (sub_id("a"),)),
@@ -758,25 +755,24 @@ def test_the_tenant_role_cannot_write_a_paddle_plan_or_find_one(tenant_dsn, data
                 ("SELECT paddle_reader(%s, %s)", (sub_id("a"), a))):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(statement, params)
-    assert plan_of(database, a) == ("free", None, None)
+    assert plan_of(database, a) == ("new", None, None)
 
 
 def test_a_paying_readers_month_line_is_todays(paddle, tenant_dsn, database, readers):
-    """The break it catches: a reader paying through Paddle held by the free ceiling, or by
-    nothing; past their first paid month they are held by the day and month guards with today's
-    lines."""
+    """The break it catches: a reader paying through Paddle held by nothing; past their first
+    paid month they are held by the day and month guards with today's lines."""
     a = readers["a"]
     book = shelve(database, a)
     post(paddle, message(sub_id("a"), reader=a))
     move_first_paid(database, a, "now() - interval '31 days'")
     set_spend_limits(reader_usd_per_day=Decimal("0.10"), reader_usd_per_month=Decimal("0.20"),
-                     platform_usd_per_day=100, free_usd=Decimal("0.01"))
+                     platform_usd_per_day=100)
     chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
-    spend(chat, book, 0.09)                                 # past the free ceiling: not applied
+    spend(chat, book, 0.09)
     spend(chat, book, 0.01)
     refused(chat, book, "day", _DAY)
     set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=Decimal("0.10"),
-                     platform_usd_per_day=100, free_usd=Decimal("0.01"))
+                     platform_usd_per_day=100)
     refused(chat, book, "month", _MONTH)
 
 
@@ -784,8 +780,7 @@ def test_a_paying_readers_month_line_is_todays(paddle, tenant_dsn, database, rea
 
 def caps(*, day="1.00", month="0.20", first="0.50") -> None:
     set_spend_limits(reader_usd_per_day=Decimal(day), reader_usd_per_month=Decimal(month),
-                     platform_usd_per_day=100, free_usd=Decimal("0.01"),
-                     first_paid_month_usd=Decimal(first))
+                     platform_usd_per_day=100, first_paid_month_usd=Decimal(first))
 
 
 def chat_at(dsn: str, owner: uuid.UUID, usd: str, when: str = "now()") -> None:
@@ -806,7 +801,7 @@ def first_paid(dsn: str, owner: uuid.UUID):
 
 def first_month(dsn: str, owner: uuid.UUID):
     with psycopg.connect(dsn) as conn:
-        return conn.execute("SELECT first_month_spent_usd FROM reader_plan_state(%s, 14, 2.10)",
+        return conn.execute("SELECT first_month_spent_usd FROM reader_plan_state(%s)",
                             (owner,)).fetchone()[0]
 
 

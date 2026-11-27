@@ -194,7 +194,6 @@ def test_the_first_paid_month_is_the_owners_number_and_reaches_the_spend_check()
         set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=4, platform_usd_per_day=15,
                          first_paid_month_usd=Decimal("7.5"))
         assert spend_limits().first_paid_month_usd == Decimal("7.5")
-        assert spend_limits().free_days == 14
         with pytest.raises(ValueError):
             set_spend_limits(reader_usd_per_day=1, reader_usd_per_month=4,
                              platform_usd_per_day=15, first_paid_month_usd=-1)
@@ -202,8 +201,7 @@ def test_the_first_paid_month_is_the_owners_number_and_reaches_the_spend_check()
         set_spend_limits(**{name: getattr(before, name) for name in (
             "reader_usd_per_day", "reader_usd_per_month", "platform_usd_per_day",
             "notes_usd_per_day", "background_usd_per_day", "reader_background_usd_per_day",
-            "reader_background_usd_per_month", "free_usd", "free_days",
-            "first_paid_month_usd")})
+            "reader_background_usd_per_month", "first_paid_month_usd")})
     with pytest.raises(ValidationError):
         paddle_settings(hosted_first_paid_month_usd=-0.01)
 
@@ -482,7 +480,7 @@ def test_a_subscription_from_paddles_api_is_read_as_a_message_is() -> None:
 
 
 def plan_row(**values) -> dict:
-    row = dict(state="new", why=None, free_ends_at=None, paid_by=None, gift_until=None,
+    row = dict(state="new", why=None, paid_by=None, gift_until=None,
                paddle_status=None, period_ends_at=None, plan_ends_at=None, paddle_price_id=None)
     row.update(values)
     return row
@@ -502,7 +500,6 @@ def test_the_plan_the_account_sheet_reads() -> None:
     earlier = datetime.now(UTC) - timedelta(days=1)
     cases = [
         (plan_row(), (None, None, False, False, False)),
-        (plan_row(state="free", free_ends_at=later), (None, later, False, False, False)),
         (plan_row(state="paying", paid_by="paddle", paddle_status="active",
                   period_ends_at=later, paddle_price_id=YEARLY), ("yearly", later, True, False,
                                                                   False)),

@@ -193,6 +193,7 @@ def people(database: str) -> dict:
     with psycopg.connect(database) as conn:
         conn.cursor().executemany("INSERT INTO users (id,display_name) VALUES (%s,%s)",
                                   [(owner, f"Reader {label}") for label, owner in owners.items()])
+    read_map_gate.give_the_plan(database, *owners.values())
     return owners
 
 

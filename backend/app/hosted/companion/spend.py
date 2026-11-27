@@ -30,30 +30,18 @@ the budget of every reader's background work for the day (``HOSTED_BACKGROUND_US
 checked call by call. The platform's day counts them as it counts every call. Calls in flight are
 counted on each side apart.
 
-A reader's two free weeks (ADR 0045 step 1, migration 0037) start at their first use of Mothli
-(``start_free_weeks``, called by the ask routes and ``POST /api/reader/mothli/start``). While they
-last the reader's day and month are not checked; one ceiling is instead, ``HOSTED_FREE_USD`` of
-their own chat spend since the start, read by ``reader_plan_state`` in the same transaction under
-the same lock and counted as the day and month are (the conversation only, the ledger and
-reservations left open). A reader whose ``owner_limits`` row sets their own day or month cap is
-held by those caps in the free weeks too. Everything else holds as for every reader: the
-lifetime cap, the calls in flight, the platform's day. Background work is never read for the
-ceiling and never stopped by it.
-
-The gate (ADR 0045 step 5): a reader ``reader_plan_state`` answers ``ended`` (their two weeks
-passed, the free ceiling reached, or a paid plan that stopped) is refused their next reply with
-``PlanNeeded`` (code ``mothli_plan``, with why), whatever their own caps; the routes answer the
-same before anything is opened (``app.hosted.companion.gate``). So the free ceiling reached
-inside the two weeks and the end of the two weeks are the gate's one answer, and a reader past
-their free weeks who does not pay is never held by the paying readers' day and month instead.
-A reply admitted under it is finished as under the day.
+The gate (ADR 0045 step 5, ADR 0046): a reader for whom ``reader_plan_state`` does not answer
+``paying`` (``new``, who has never had a plan or a gift, or ``ended``, whose plan stopped) is
+refused their next reply with ``PlanNeeded`` (code ``mothli_plan``, with why), whatever their own
+caps; the routes answer the same before anything is opened (``app.hosted.companion.gate``). A
+reply admitted before it is finished as under the day.
 
 A gifted reader (ADR 0045 step 2, migration 0038: the owner's own account and test accounts,
 given a gift by the operator's command) is a paying reader: ``reader_plan_state`` answers
-``paying`` while the gift lasts, the free ceiling is not applied to them, and they are held by
-the reader's day and month (the paying readers' hidden guards) with today's lines, or by their own
-``owner_limits`` caps where those are set. Everything else holds as for every reader. A gift that
-has passed leaves the reader where they would be without it.
+``paying`` while the gift lasts, and they are held by the reader's day and month (the paying
+readers' hidden guards) with today's lines, or by their own ``owner_limits`` caps where those are
+set. Everything else holds as for every reader. A gift that has passed leaves the reader
+``ended``.
 
 Story memory is never a reader's spend (ADR 0044 section 5): a chapter's calls are reserved by a
 store bound to the notes account (``NotesCatalog`` in ``store.py``) against the edition being
@@ -138,17 +126,13 @@ class SpendLimits:
     background_usd_per_day: Decimal = Decimal("3.00")
     reader_background_usd_per_day: Decimal = Decimal("1.00")
     reader_background_usd_per_month: Decimal = Decimal("5.00")
-    # ADR 0045 step 1: a reader's two free weeks (``HOSTED_FREE_DAYS``) and their one ceiling, in
-    # dollars of their own chat spend since the start (``HOSTED_FREE_USD``).
-    free_usd: Decimal = Decimal("2.10")
-    free_days: int = 14
     # ADR 0045 step 3: a subscriber's first paid month (``HOSTED_FIRST_PAID_MONTH_USD``), in place
     # of the month for the 30 days after their first Paddle plan began, once per account.
     first_paid_month_usd: Decimal = Decimal("6.30")
-    # ADR 0045 section 5, step 6: a reader who has never asked Mothli anything gets background work
+    # ADR 0045 section 5, step 6: a new reader (never a plan or a gift) gets background work
     # within ``warmup_days`` of sign-up, up to ``warmup_new_chapters`` chapters of story memory
     # their reading is the first to build and ``warmup_notes_usd`` of chapter notes, then none
-    # until their first question (``app.hosted.jobs``, the claim). Read by the worker only.
+    # until they pay (``app.hosted.jobs``, the claim). Read by the worker only.
     warmup_days: int = 30
     warmup_new_chapters: int = 25
     warmup_notes_usd: Decimal = Decimal("0.50")
@@ -169,7 +153,6 @@ def set_spend_limits(*, reader_usd_per_day, reader_usd_per_month, platform_usd_p
                      background_usd_per_day=SpendLimits.background_usd_per_day,
                      reader_background_usd_per_day=SpendLimits.reader_background_usd_per_day,
                      reader_background_usd_per_month=SpendLimits.reader_background_usd_per_month,
-                     free_usd=SpendLimits.free_usd, free_days=SpendLimits.free_days,
                      first_paid_month_usd=SpendLimits.first_paid_month_usd,
                      warmup_days=SpendLimits.warmup_days,
                      warmup_new_chapters=SpendLimits.warmup_new_chapters,
@@ -180,17 +163,15 @@ def set_spend_limits(*, reader_usd_per_day, reader_usd_per_month, platform_usd_p
     values = [_money(value) for value in (
         reader_usd_per_day, reader_usd_per_month, platform_usd_per_day, notes_usd_per_day,
         background_usd_per_day, reader_background_usd_per_day, reader_background_usd_per_month,
-        free_usd, first_paid_month_usd, warmup_notes_usd)]
+        first_paid_month_usd, warmup_notes_usd)]
     if any(not value.is_finite() or value < 0 for value in values):
         raise ValueError("spend caps must be finite and non-negative")
-    if not isinstance(free_days, int) or isinstance(free_days, bool) or free_days < 1:
-        raise ValueError("the free weeks must last at least one day")
     if any(not isinstance(count, int) or isinstance(count, bool) or count < 0
            for count in (warmup_days, warmup_new_chapters)):
         raise ValueError("the warm-up's days and chapters must be non-negative whole numbers")
     with _limits_guard:
         *values, first_paid_month, warmup_notes = values
-        _limits = SpendLimits(*values, free_days, first_paid_month, warmup_days=warmup_days,
+        _limits = SpendLimits(*values, first_paid_month, warmup_days=warmup_days,
                               warmup_new_chapters=warmup_new_chapters,
                               warmup_notes_usd=warmup_notes)
 
@@ -322,12 +303,12 @@ MOTHLI_PLAN = "mothli_plan"
 
 
 class PlanNeeded(ReaderAllowanceReached):
-    """The gate (ADR 0045 step 5): the reader is ``ended`` and Mothli needs the plan. ``why`` is
-    ``time``, ``ceiling`` or ``plan``. The stream's error event carries status 402, the code and
+    """The gate (ADR 0045 step 5, ADR 0046): the reader is not paying and Mothli needs the plan.
+    ``why`` is None for a new reader, ``plan`` for one whose plan stopped. The stream's error event carries status 402, the code and
     why, as the routes' own refusal does; the words the reader sees are the screens', chosen by
     why. The message is for the logs and names no amount."""
 
-    def __init__(self, why: str) -> None:
+    def __init__(self, why: str | None) -> None:
         super().__init__("plan", _PLAN, code=MOTHLI_PLAN)
         self.why = why
         self.extra = {"status": 402, "why": why}
@@ -432,28 +413,18 @@ class SpendStore(OwnerBoundAdapter):
             raise ValueError(f"unknown cost reservation {reservation_id!r}")
         return row
 
-    # ---- the two free weeks (ADR 0045 step 1) -----------------------------------------------
-    def start_free_weeks(self) -> None:
-        """The reader's first use of Mothli: stamp the start of their free weeks, once. The database
-        decides the account (the one this transaction is set to) and the time (its own clock);
-        a start already stamped is kept."""
-        with self._transaction() as conn:
-            conn.execute("SELECT public.start_free_weeks()")
-
+    # ---- where the reader stands (ADR 0045, ADR 0046) ----------------------------------------
     def plan(self) -> dict:
-        """Where this reader stands, from ``reader_plan_state`` with this process's free weeks:
-        ``state`` (``new``, ``free``, ``paying`` or ``ended``), ``why`` (``time``, ``ceiling``,
-        ``plan`` or None), ``free_ends_at`` and the database's ``now``. What the gate and the
-        session read (ADR 0045 step 5) and the routes read to decide whether to ask for
-        background work (section 5)."""
-        limits = _limits
+        """Where this reader stands, from ``reader_plan_state``: ``state`` (``new``, ``paying``
+        or ``ended``) and ``why`` (``plan`` or None). What the gate and the session read (ADR
+        0045 step 5) and the routes read to decide whether to ask for background work (section
+        5)."""
         with self._transaction() as conn:
             return conn.execute(
-                "SELECT state,why,free_ends_at,now() AS now"
-                " FROM public.reader_plan_state(%s,%s,%s)",
-                (self._owner.value, limits.free_days, limits.free_usd)).fetchone()
+                "SELECT state,why FROM public.reader_plan_state(%s)",
+                (self._owner.value,)).fetchone()
 
-    def _plan(self, conn, limits) -> tuple[str | None, str | None, dict | None]:
+    def _plan(self, conn) -> tuple[str | None, str | None, dict | None]:
         """(state, why, first paid month), read in the caller's transaction, under the owner's
         spend lock, from ``reader_plan_state``; (None, None, None) for the notes account.
 
@@ -464,8 +435,8 @@ class SpendStore(OwnerBoundAdapter):
             return None, None, None
         plan = conn.execute(
             "SELECT state,why,first_month_spent_usd,first_paid_at,now() AS now"
-            " FROM public.reader_plan_state(%s,%s,%s)",
-            (self._owner.value, limits.free_days, limits.free_usd)).fetchone()
+            " FROM public.reader_plan_state(%s)",
+            (self._owner.value,)).fetchone()
         first_month = None if plan["first_month_spent_usd"] is None else {
             "spent": plan["first_month_spent_usd"], "since": plan["first_paid_at"],
             "now": plan["now"]}
@@ -487,9 +458,8 @@ class SpendStore(OwnerBoundAdapter):
         background work refuse it instead, with ``BackgroundAllowanceReached``. The calls in
         flight are counted on each side apart, so background work never makes the chat wait.
 
-        In the reader's free weeks the free ceiling stands in for their day and month, and an
-        ended reader is refused with ``PlanNeeded`` (module docstring); each only admits or
-        refuses the call, as the day and month do.
+        A reader who is not paying is refused with ``PlanNeeded`` (module docstring); it only
+        admits or refuses the call, as the day and month do.
         """
         for value, what in ((input_tokens, "input_tokens"), (output_tokens, "output_tokens"),
                             (max_input_tokens, "max_input_tokens"),
@@ -545,16 +515,11 @@ class SpendStore(OwnerBoundAdapter):
                     raise BackgroundAllowanceReached(guard, _BACKGROUND)
                 reached = None
             else:
-                # The gate (ADR 0045 step 5): an ended reader is refused, whatever their own
-                # caps. In the free weeks one ceiling stands in for the day and the month,
-                # unless an operator set this reader's own; it is ``reader_plan_state``'s, so a
-                # reader at it is ended. A subscriber's first paid month stands in for their
-                # calendar month.
-                state, why, first_month = self._plan(conn, limits)
-                own = (policy["max_spend_usd_per_day"] is not None
-                       or policy["max_spend_usd_per_month"] is not None)
-                reached = ("plan" if state == "ended" else None if state == "free" and not own
-                           else _reader_cap_reached(
+                # The gate (ADR 0045 step 5, ADR 0046): a reader who is not paying is refused,
+                # whatever their own caps. A subscriber's first paid month stands in for their
+                # calendar month. The notes account has no state and is held by its own caps.
+                state, why, first_month = self._plan(conn)
+                reached = ("plan" if state in ("new", "ended") else _reader_cap_reached(
                                used, policy, limits, notes=self._NOTES,
                                first_month=None if first_month is None else first_month["spent"]))
             if under_way or background:

@@ -287,13 +287,8 @@ describe("Your plan", () => {
   // Every state of ADR 0045 section 6, each line exactly, and only the buttons that work.
   test.each<[string, Partial<Plan>, string[], string[]]>([
     ["new", { state: "new", next_date: null },
-      ["Talking with Mothli is free for your first two weeks, starting the first time you use it."],
+      ["Talking with Mothli comes with the plan, whenever you’d like to start. Your books stay free, always."],
       ["See the plan"]],
-    ["free weeks", { state: "free", next_date: DATE }, [`Your free weeks end on ${day}.`], ["See the plan"]],
-    ["ended: two weeks", { state: "ended", why: "time", next_date: null },
-      ["Your two free weeks with Mothli are over. Your books stay free, always."], ["See the plan"]],
-    ["ended: free start used", { state: "ended", why: "ceiling", next_date: null },
-      ["Your free start with Mothli is all used up. Your books stay free, always."], ["See the plan"]],
     ["ended: plan", { state: "ended", why: "plan", next_date: null },
       ["Your plan has ended. Your books stay free, always."], ["See the plan"]],
     ["monthly", { ...PAYING, plan: "monthly" }, [`You’re on the monthly plan. It renews on ${day}.`],
@@ -333,7 +328,7 @@ describe("Your plan", () => {
 
   // Catches: a "See the plan" or a cancel button on a server without the routes behind it.
   test("a server without Paddle shows where the reader stands and no button", async () => {
-    for (const values of [{ state: "free" as const }, { ...PAYING, plan: "monthly" as const },
+    for (const values of [{ state: "new" as const }, { ...PAYING, plan: "monthly" as const },
       { ...PAYING, plan: "monthly" as const, cancel_scheduled: true }]) {
       const { part, unmount } = await sheetFor(planOf({ ...values, manage: false, checkout: null }));
       expect(lines(part)).toHaveLength(1);
@@ -443,7 +438,7 @@ describe("Your plan", () => {
   // Catches: Paddle's script fetched with the account sheet (or any screen but the plan sheet),
   // the reader's email not passed on, or focus lost on the way back.
   test("See the plan opens the plan sheet, which alone fetches Paddle, and comes back", async () => {
-    const { part } = await sheetFor(planOf({ state: "free", next_date: DATE }));
+    const { part } = await sheetFor(planOf({ state: "ended", why: "plan" }));
     expect(paddleScripts()).toEqual([]);
     fireEvent.click(within(part).getByRole("button", { name: "See the plan" }));
     const plan = await screen.findByRole("dialog", { name: "Keep talking with Mothli" });
@@ -513,9 +508,9 @@ describe("Deleting while paying", () => {
     expect(await axeAA(sheet)).toHaveNoViolations();
   });
 
-  // Catches: the line shown to a reader with no plan that renews (free weeks, a gift alone).
+  // Catches: the line shown to a reader with no plan that renews (new, a gift alone).
   test("a reader without a plan that renews hears nothing about one", async () => {
-    for (const values of [{ state: "free" as const, subscribed: false },
+    for (const values of [{ state: "new" as const, subscribed: false },
       { state: "paying" as const, plan: "gift" as const, subscribed: false }]) {
       await confirmFor(planOf({ next_date: null, ...values }));
       expect(steps()).toHaveLength(3);

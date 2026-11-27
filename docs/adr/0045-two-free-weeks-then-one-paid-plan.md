@@ -1,5 +1,7 @@
 # ADR 0045 — Two free weeks, then one paid plan: reading stays free, Mothli is the plan
 
+> **Amended by [ADR 0046](0046-no-free-weeks.md) (2026-11-27): the free weeks are removed; talking with Mothli is the plan from the first question.**
+
 **Status:** Proposed (2026-11-20). Steps 1, 2, 3, 4 (server and screens), 5 (server and
 screens), 6, 7 (deleting an account while paying, and "your plan.json") and 8 (the public
 pages), and Mothli's own payment link in the shared Paddle account ("One Paddle account, several

@@ -19,7 +19,7 @@ import {
   queuePosition,
   trackPositionDelivery,
 } from "./pwa/offline";
-import { MOTHLI_PLAN, noteMothliPlan, type MothliStanding } from "./ui/mothliStanding";
+import { MOTHLI_PLAN, noteMothliPlan } from "./ui/mothliStanding";
 
 export type Book = { book_id: string; title: string; author: string | null };
 /** A public-domain book from the curated catalogue; `book_id` is set once it is on the shelf. */
@@ -314,8 +314,8 @@ export type PlanCheckout = {
 export type PlanEnding = { wont_renew: boolean; ends: string | null };
 
 export type Plan = {
-  state: "new" | "free" | "ended" | "paying";
-  why: "time" | "ceiling" | "plan" | null;
+  state: "new" | "ended" | "paying";
+  why: "plan" | null;
   plan: "monthly" | "yearly" | "gift" | null;
   next_date: string | null;
   /** A live Paddle plan of the reader's own, which they can cancel, keep or manage. */
@@ -953,15 +953,6 @@ export const api = {
   /** Hosted: undo a pending deletion; an ordinary account again, everything as it was. */
   keepAccount: () =>
     fetch("/api/account/keep", { method: "POST", headers: csrfHeaders() }).then((r) => j<void>(r)),
-  /** Hosted: the reader opened the cast or "Story so far" themselves, their first use of Mothli:
-   * the server starts their free weeks once and answers where they stand. Never called by the
-   * app's own fetches. */
-  startMothli: (bookId?: string) =>
-    fetch("/api/reader/mothli/start", {
-      method: "POST",
-      headers: { "content-type": "application/json", ...csrfHeaders() },
-      body: JSON.stringify(bookId ? { book_id: bookId } : {}),
-    }).then((r) => j<MothliStanding>(r)),
   /** Hosted: the reader's plan (ADR 0045). */
   plan: () => fetch("/api/billing/plan", { cache: "no-store" }).then((r) => j<Plan>(r)),
   /** Hosted, signed in or not: Paddle's environment and public client token, for the payment-link

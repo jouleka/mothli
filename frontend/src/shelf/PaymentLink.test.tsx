@@ -18,7 +18,7 @@ import { PAYMENT_LINK_LINES } from "./PaymentLink";
 import { fakePaddle, noCounter, paddleScripts, planOf, settleScript } from "./plan-fakes";
 import { ASK_EVERY_MS, PLAN_LINES } from "./PlanSheet";
 import { SignInGate } from "./SignIn";
-import { mothliStanding, setMothliStanding, useMothliEnded } from "../ui/mothliStanding";
+import { mothliStanding, setMothliStanding, useMothliClosed } from "../ui/mothliStanding";
 
 const TRANSACTION = "txn_standin0000000000000000000";
 const signedIn: OfflineSession = {
@@ -100,8 +100,8 @@ describe("signed in", () => {
   // every panel keep the invitation until a reload (H1 of the plan walk, 23 November 2026).
   test("joining from the link opens every panel at once, like every other way of joining", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    setMothliStanding({ state: "ended", why: "plan", ending_note: false });
-    const Panels = () => <p>{useMothliEnded() ? "The invitation" : "Mothli is here"}</p>;
+    setMothliStanding({ state: "ended", why: "plan" });
+    const Panels = () => <p>{useMothliClosed() ? "The invitation" : "Mothli is here"}</p>;
     history.replaceState(null, "", `/?_ptxn=${TRANSACTION}`);
     render(<SignInGate session={signedIn}><Panels /></SignInGate>);
     expect(screen.getByText("The invitation")).toBeTruthy();
@@ -150,8 +150,8 @@ describe("signed out", () => {
     expect(screen.queryByText("The shelf")).toBeNull();
     expect(screen.getByRole("status").textContent).toBe(PAYMENT_LINK_LINES.opening);
     expect(location.search).toBe("");
-    // A reader joining is not told the free weeks are ahead of them (ADR 0045 step 5).
-    expect(screen.queryByText(/free for your first two weeks/)).toBeNull();
+    // Nothing of the removed free weeks (ADR 0046).
+    expect(document.body.textContent).not.toMatch(/free weeks|first two weeks/);
     const door = screen.getByRole("link", { name: "Sign in to start reading" });
     expect(door.getAttribute("href")).toBe(`/api/auth/login?return_to=%2F%3F_ptxn%3D${TRANSACTION}`);
     await waitFor(() => expect(paddleScripts()).toHaveLength(1));

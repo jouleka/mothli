@@ -24,7 +24,7 @@ import { MothCorner, WelcomeBackCard, type CornerNote } from "./MothMoments";
 import { crossedMilestone, milestoneLine, readingStreak, recordReadingDay, streakName, unlockCast } from "../journey/journey";
 import { useCycle } from "../ui/useCycle";
 import { Moth } from "../ui/Moth";
-import { mothliStanding, useMothliEnded } from "../ui/mothliStanding";
+import { mothliClosed, useMothliClosed } from "../ui/mothliStanding";
 import "./reader.css";
 import "./panels.css";
 import { keptPasses, keptReplyShown, readSavedReplies, writeSavedReplies, type SavedCompanionReply } from "./companionNotes";
@@ -184,7 +184,7 @@ export function bookFileName(title: string): string {
 /** Mothli's offer at the end of the note after a chapter. */
 const NOTICED = " Want to hear what I noticed?";
 
-/** The corner note as shown: for a reader whose free weeks or plan are over, its first part
+/** The corner note as shown: for a reader without the plan (new, or ended), its first part
  * ("That’s Chapter 3 done!", and a milestone) without the offer, its button or its people. */
 function shownNote(note: CornerNote | null, ended: boolean): CornerNote | null {
   if (!note || !ended || !note.text.endsWith(NOTICED)) return note;
@@ -228,9 +228,9 @@ export function ReaderPage({
   // selection tools offer only what works (highlight, note), the chat is never about the picked
   // passage, nothing dead is shown and nothing is asked of the server.
   const passageHelp = !hosted;
-  // Hosted: the reader's free weeks or plan are over (ADR 0045). Reading is untouched; Mothli's
-  // own offers on the page are not made.
-  const mothliEnded = useMothliEnded();
+  // Hosted: the reader does not have the plan (ADR 0045, ADR 0046). Reading is untouched;
+  // Mothli's own offers on the page are not made.
+  const mothliEnded = useMothliClosed();
   useEffect(() => {
     const owner = activeOfflineOwner();
     const onGone = (event: Event) => {
@@ -1732,7 +1732,7 @@ export function ReaderPage({
       action: tellMe,
     });
     // Mothli needs the plan: the note keeps its first part (see `shownNote`) and nothing is asked.
-    if (mothliStanding()?.state === "ended") return;
+    if (mothliClosed()) return;
     Promise.resolve()
       .then(() => api.notes(bookId, bookmark))
       .then((notes) => {

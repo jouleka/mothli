@@ -84,8 +84,7 @@ def test_the_front_page_says_what_mothli_is_what_it_costs_and_who_sells_it(tmp_p
             "Mothli reads along with you and only knows it as far as you’ve read, so it can "
             "never spoil what happens next.",
             "I only know the pages you’ve read, so no spoilers. Promise.",
-            "Reading here is free, always.",
-            "Two free weeks with Mothli, no card needed.",
+            "Reading here is free, always: your books, your place, your highlights and the free library.",
             "Mothli knows the book only as far as you’ve read it",
             # The prices as the app writes them, from 12.99 a month and 79.99 a year.
             "$6.67 a month, billed yearly",
@@ -99,6 +98,8 @@ def test_the_front_page_says_what_mothli_is_what_it_costs_and_who_sells_it(tmp_p
     for link in NAV:
         assert link in body, link
     assert "@@" not in body and NOT_OPEN not in body
+    # ADR 0046: no free weeks, anywhere on the front page.
+    assert "free weeks" not in body and "no card needed" not in body
     # The same prices as the read the app makes, from one read of Paddle.
     assert found["/api/site"].json()["plan"] == {"currency": "USD", "monthly": "1299",
                                                  "yearly": "7999"}
@@ -141,6 +142,8 @@ def test_each_policy_page_is_there_in_full_with_who_runs_mothli(tmp_path, built)
         assert f"<h2>{heading}</h2>" in found["/privacy"].text, heading
     refunds = text(found["/refunds"].text)
     assert "Refunds are decided by Paddle" in refunds
+    # ADR 0046: the free weeks are gone, and "Try it first" with them.
+    assert "Try it first" not in refunds and "free weeks" not in refunds + terms + privacy
     assert 'href="https://www.paddle.com/legal/refund-policy"' in found["/refunds"].text
     contact = text(found["/contact"].text)
     assert "Write to us at hello@reader.example." in contact

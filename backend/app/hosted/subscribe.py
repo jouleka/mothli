@@ -176,7 +176,7 @@ def plan_payload(row: dict, monthly: frozenset[str], yearly: frozenset[str]) -> 
     ``state`` and ``why`` as ``reader_plan_state`` answers them; ``plan``: what makes the reader
     paying (``gift`` while a gift lasts, else ``monthly`` or ``yearly`` for a live Paddle plan,
     else None); ``next_date``: the gift's last moment (None for a gift for good), the scheduled
-    end of a cancelled plan, the renewal of a live one, or the end of the free weeks; and three
+    end of a cancelled plan, or the renewal of a live one; and three
     yes-or-no answers: ``subscribed`` (a live Paddle plan the reader can cancel, keep or manage,
     even under a gift), ``cancel_scheduled``, ``payment_retrying``. No amount, no count."""
     live = row["paddle_status"] in _LIVE and (
@@ -190,8 +190,6 @@ def plan_payload(row: dict, monthly: frozenset[str], yearly: frozenset[str]) -> 
         price = row["paddle_price_id"]
         plan = "monthly" if price in monthly else "yearly" if price in yearly else None
         next_date = row["plan_ends_at"] or row["period_ends_at"]
-    elif row["state"] == "free":
-        next_date = row["free_ends_at"]
     return {
         "state": row["state"],
         "why": row["why"],
@@ -209,12 +207,12 @@ def read_plan(settings, owner: uuid.UUID) -> dict:
                          connect_timeout=3) as conn, conn.transaction():
         conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(owner),))
         cursor = conn.execute(
-            "SELECT state.state, state.why, state.free_ends_at, state.paid_by, state.gift_until,"
+            "SELECT state.state, state.why, state.paid_by, state.gift_until,"
             " state.paddle_status, state.period_ends_at, state.plan_ends_at,"
             " (SELECT kept.paddle_price_id FROM public.reader_plans AS kept"
             "  WHERE kept.owner_id = %s) AS paddle_price_id"
-            " FROM public.reader_plan_state(%s::uuid, %s::integer, %s::numeric) AS state",
-            (owner, owner, settings.hosted_free_days, str(settings.hosted_free_usd)))
+            " FROM public.reader_plan_state(%s::uuid) AS state",
+            (owner, owner))
         names = [column.name for column in cursor.description]
         row = dict(zip(names, cursor.fetchone(), strict=True))
     return plan_payload(row, frozenset(_items(settings.paddle_price_monthly)),

@@ -250,30 +250,22 @@ def test_background_budget_and_guards_start_far_above_real_reading_and_reach_the
         set_spend_limits(**dataclasses.asdict(before))
 
 
-def test_the_free_weeks_start_at_the_owners_numbers_and_reach_the_process(tmp_path) -> None:
-    """ADR 0045 sections 3 and 11 step 1: two free weeks and a ceiling of $2.10 of the reader's
-    own chat spend. The break it catches: a default that differs from the record, a free weeks of
-    no days or an amount that is not money, or a process whose caps do not carry the settings."""
-    defaults = Settings.model_fields
-    assert (defaults["hosted_free_days"].default, defaults["hosted_free_usd"].default) == (
-        14, 2.10)
-    assert (SpendLimits().free_days, SpendLimits().free_usd) == (14, Decimal("2.10"))
-    for wrong in ({"hosted_free_days": 0}, {"hosted_free_days": 1.5},
-                  {"hosted_free_usd": -1}, {"hosted_free_usd": float("inf")}):
-        with pytest.raises(ValueError):
-            hosted_settings(tmp_path, **CHAT, **wrong)
-    before = spend_limits()
-    try:
-        with TestClient(hosted_app(hosted_settings(tmp_path, **CHAT, hosted_free_days=21,
-                                                   hosted_free_usd=3.5)),
-                        base_url="https://reader.example"):
-            assert (spend_limits().free_days, spend_limits().free_usd) == (21, Decimal("3.5"))
-    finally:
-        set_spend_limits(**dataclasses.asdict(before))
+def test_the_free_weeks_settings_are_gone_and_an_env_file_that_still_names_them_starts(
+        tmp_path, monkeypatch) -> None:
+    """ADR 0046: the free weeks are removed, and their two settings with them. The break it
+    catches: a setting or a cap left behind, or a server whose env file still holds
+    HOSTED_FREE_DAYS and HOSTED_FREE_USD refusing to start (settings ignore names they do not
+    know)."""
+    monkeypatch.setenv("HOSTED_FREE_DAYS", "14")
+    monkeypatch.setenv("HOSTED_FREE_USD", "2.10")
+    settings = hosted_settings(tmp_path, **CHAT)
+    assert not {"hosted_free_days", "hosted_free_usd"} & set(Settings.model_fields)
+    assert not hasattr(settings, "hosted_free_days")
+    assert not {"free_days", "free_usd"} & {field.name for field in dataclasses.fields(SpendLimits)}
 
 
 def test_the_warm_up_starts_at_the_records_numbers_and_reaches_the_process(tmp_path) -> None:
-    """ADR 0045 section 5 and step 6: a reader who has never asked gets background work within
+    """ADR 0045 section 5 and step 6, kept by ADR 0046: a new reader gets background work within
     30 days of sign-up, up to 25 chapters of story memory their reading is the first to build and
     $0.50 of chapter notes. The break it catches: a default that differs from the record, a
     negative or fractional bound or an amount that is not money accepted, or a process (web or
@@ -308,20 +300,17 @@ def test_the_warm_up_starts_at_the_records_numbers_and_reaches_the_process(tmp_p
         set_spend_limits(**dataclasses.asdict(before))
 
 
-def test_the_worker_carries_the_free_weeks_and_the_warm_up_from_its_settings(
-        monkeypatch, tmp_path) -> None:
-    """ADR 0045 section 5: the worker reads where a reader stands with the web process's free
-    weeks and holds a new reader to the warm-up. The break it catches: a worker started with
-    other free weeks or warm-up than its settings say (the defaults in code), so the claim and
-    the web process disagree about who is ended or new."""
+def test_the_worker_carries_the_warm_up_from_its_settings(monkeypatch, tmp_path) -> None:
+    """ADR 0045 section 5: the worker holds a new reader to the warm-up. The break it catches: a
+    worker started with another warm-up than its settings say (the defaults in code)."""
     from app.hosted.companion import jobs as companion_jobs
 
     passed = {}
     monkeypatch.setattr("app.hosted.companion.spend.set_spend_limits",
                         lambda **values: passed.update(values))
     monkeypatch.setattr("app.config.Settings", lambda: hosted_settings(
-        tmp_path, **{**CHAT, "reader_story_notes": True}, hosted_free_days=21,
-        hosted_free_usd=3.5, hosted_warmup_days=9, hosted_warmup_new_chapters=4,
+        tmp_path, **{**CHAT, "reader_story_notes": True}, hosted_warmup_days=9,
+        hosted_warmup_new_chapters=4,
         hosted_warmup_notes_usd=0.3))
 
     class _Checked:
@@ -337,9 +326,9 @@ def test_the_worker_carries_the_free_weeks_and_the_warm_up_from_its_settings(
     monkeypatch.setattr("app.hosted.storage.build_object_storage", lambda settings: object())
     companion_jobs.CompanionJobs.from_environment()
     assert {name: passed[name] for name in (
-        "free_days", "free_usd", "warmup_days", "warmup_new_chapters", "warmup_notes_usd")} == {
-        "free_days": 21, "free_usd": 3.5, "warmup_days": 9, "warmup_new_chapters": 4,
-        "warmup_notes_usd": 0.3}
+        "warmup_days", "warmup_new_chapters", "warmup_notes_usd")} == {
+        "warmup_days": 9, "warmup_new_chapters": 4, "warmup_notes_usd": 0.3}
+    assert not {"free_days", "free_usd"} & set(passed)
 
 
 # ---- whether this server has a chat at all, and the one mixed state that pays without replying ----

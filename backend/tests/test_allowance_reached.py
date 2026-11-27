@@ -133,9 +133,9 @@ def test_a_local_ceiling_ends_exactly_as_before(bare, monkeypatch):
                                   "message": "book cost ceiling reached"}]
 
 
-# ADR 0045 step 5: a reader whose free weeks end (or whose plan stops) between the route's gate and
-# the reply's first call is refused there, and the stream's error event is the gate's answer.
-GATE = PlanNeeded("ceiling")
+# ADR 0045 step 5: a reader whose plan stops between the route's gate and the reply's first call is
+# refused there, and the stream's error event is the gate's answer.
+GATE = PlanNeeded("plan")
 
 
 def test_the_gate_met_by_a_book_reply_ends_it_with_402_and_why(page_env, monkeypatch):
@@ -150,15 +150,15 @@ def test_the_gate_met_by_a_book_reply_ends_it_with_402_and_why(page_env, monkeyp
     response = api.post(f"/api/books/{bid}/ask/stream",
                         json={"question": "What did Mara do?", "read_frontier": point})
     assert events_of(response) == [{"type": "error", "status": 402, "code": "mothli_plan",
-                                    "why": "ceiling", "message": "Mothli needs the plan"}]
+                                    "why": "plan", "message": "Mothli needs the plan"}]
     assert looked == [] and "cobalt" not in response.text
 
 
 def test_the_gate_met_by_a_home_reply_ends_it_with_402_and_why(bare, monkeypatch):
-    """As in a book, on the home screen."""
+    """As in a book, on the home screen; for a new reader, why is null."""
     api, app, _settings = bare
     seen = stand_ins(app, monkeypatch, "Hi, I'm Mothli, and I read along with you.")
-    refuse(app.state.catalog, monkeypatch, PlanNeeded("time"))
+    refuse(app.state.catalog, monkeypatch, PlanNeeded(None))
     assert ask(api, "hello") == [{"type": "error", "status": 402, "code": "mothli_plan",
-                                  "why": "time", "message": "Mothli needs the plan"}]
+                                  "why": None, "message": "Mothli needs the plan"}]
     assert seen["prompt"] == []

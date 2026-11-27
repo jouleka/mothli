@@ -1,8 +1,9 @@
-/** ADR 0045 step 5, the screens: what a reader sees of the two free weeks and of the gate, in the
- * chat inside a book, the cast, "Story so far" and the home chat. The plan sheet is a stand-in
- * here (its own tests are PlanSheet.test.tsx); Paddle is never reached. */
+/** ADR 0045 step 5 and ADR 0046, the screens: what a reader sees of the gate, in the chat inside
+ * a book, the cast, "Story so far" and the home chat. A reader who has never had the plan (new)
+ * and one whose plan ended each get the invitation; there are no free weeks. The plan sheet is a
+ * stand-in here (its own tests are PlanSheet.test.tsx); Paddle is never reached. */
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { axeAA } from "../test-a11y";
 
 const mocks = vi.hoisted(() => ({
@@ -18,7 +19,6 @@ const mocks = vi.hoisted(() => ({
   askHome: vi.fn(),
   clearHome: vi.fn(),
   plan: vi.fn(),
-  startMothli: vi.fn(),
   owner: vi.fn(),
 }));
 vi.mock("../api", async (importOriginal) => ({
@@ -35,6 +35,7 @@ vi.mock("../shelf/PlanSheet", async () => {
   const { createElement: h } = await import("react");
   const { createPortal } = await import("react-dom");
   return {
+    PLAN_TITLE_NEW: "Talk with Mothli",
     PlanSheet: ({ email, onClose, onJoined }: {
       email?: string | null; onClose: () => void; onJoined?: (plan: unknown) => void;
     }) => createPortal(
@@ -50,19 +51,8 @@ import { ApiError } from "../api";
 import { AskTheBook } from "../reader/AskTheBook";
 import { HomeChat } from "../shelf/HomeChat";
 import { planOf } from "../shelf/plan-fakes";
-import {
-  endingNote,
-  endingWeekday,
-  endingWhen,
-  forgetEndingDay,
-  GOT_IT,
-  HOME_HELLO_NO_BOOKS,
-  INVITATIONS,
-  KEEP_TALKING,
-  MOTHLI_HELLO,
-  SEE_THE_PLAN,
-  SIGN_UP_LINE,
-} from "./MothliPlan";
+import * as MothliPlan from "./MothliPlan";
+import { INVITATIONS, KEEP_TALKING, START_TALKING } from "./MothliPlan";
 import { type MothliStanding, mothliStanding, noteMothliPlan, setMothliStanding } from "./mothliStanding";
 
 const EMAIL = "reader@example.test";
@@ -83,8 +73,8 @@ const book = {
   prepareReadContext: async () => point,
 };
 
-function stand(state: MothliStanding["state"], why: MothliStanding["why"] = null, ending_note = false) {
-  setMothliStanding({ state, why, ending_note }, EMAIL);
+function stand(state: MothliStanding["state"], why: MothliStanding["why"] = null) {
+  setMothliStanding({ state, why }, EMAIL);
 }
 /** What the real client does with the gate's answer: tell the app, then refuse. */
 const planNeeded = (why: MothliStanding["why"]) => async () => {
@@ -104,11 +94,20 @@ function noCounter(text: string) {
   expect(text).not.toMatch(/\d/);
   expect(text).not.toMatch(/unlimited|questions? left|count ?down|hours?\b|minutes?\b/i);
 }
+/** Nothing of what ADR 0046 removed. */
+function noFreeWeeks(text: string) {
+  expect(text).not.toMatch(/free weeks|two weeks|free start|\btrial\b/i);
+}
+
+// The two ways to be without the plan, each with its words and its button.
+const WITHOUT = [
+  ["new", null, INVITATIONS.new, START_TALKING],
+  ["ended", "plan", INVITATIONS.plan, KEEP_TALKING],
+] as const;
 
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
-  forgetEndingDay();
   setMothliStanding(null, null);
   mocks.owner.mockReturnValue("local");
   mocks.bookConversation.mockReset().mockResolvedValue({ read_frontier: point, turns: [] });
@@ -125,73 +124,38 @@ beforeEach(() => {
   });
   mocks.homeConversation.mockReset().mockResolvedValue({ turns: [] });
   mocks.askHome.mockReset().mockResolvedValue(reply("Your place is chapter two."));
-  mocks.plan.mockReset().mockResolvedValue(planOf({ state: "ended", why: "time", next_date: null }));
-  mocks.startMothli.mockReset().mockResolvedValue({ state: "free", why: null, ending_note: false });
+  mocks.plan.mockReset().mockResolvedValue(planOf({ state: "ended", why: "plan", next_date: null }));
 });
 
 describe("the lines, word for word", () => {
-  test("section 6's lines, and none counts, names a number or a countdown", () => {
-    expect(SIGN_UP_LINE).toBe("Reading here is free, always. Talking with me is free for your first two weeks.");
-    expect(MOTHLI_HELLO).toBe(
-      "Hi, I’m Mothli! Your first two weeks with me are free, so ask me anything about the pages you’ve read. No spoilers, promise.");
-    expect(endingNote("today")).toBe(
-      "Just so you know, our free weeks together end today. Your books stay yours either way. If you’d like to keep talking after that, here’s how.");
-    expect(endingNote("tomorrow")).toBe(
-      "Just so you know, our free weeks together end tomorrow. Your books stay yours either way. If you’d like to keep talking after that, here’s how.");
-    expect(endingNote("on Thursday")).toBe(
-      "Just so you know, our free weeks together end on Thursday. Your books stay yours either way. If you’d like to keep talking after that, here’s how.");
-    expect(INVITATIONS.time).toBe(
-      "Our two free weeks are over. I loved reading along with you! Your books, your place and your highlights stay right here, free, always. Join me on the plan and we’ll pick up right where we left off.");
-    expect(INVITATIONS.ceiling).toBe(
-      "We’ve talked so much these first days that your free start with me is all used up. That’s a good sign! Your books, your place and your highlights stay right here, free, always. Join me on the plan and we can keep going right now.");
+  test("the invitations and their buttons, and none counts, names a number or a countdown", () => {
+    expect(INVITATIONS.new).toBe(
+      "Hi, I’m Mothli! I’d love to read along with you. I only know the pages you’ve read, so no spoilers, promise. Join me on the plan and you can ask me anything. Your books, your place and your highlights stay free, always.");
     expect(INVITATIONS.plan).toBe(
       "Your plan has ended, so I’m taking a little rest. Your books, your place and your highlights stay right here, free, always. Come back any time and we’ll pick up right where we left off.");
     expect(KEEP_TALKING).toBe("Keep talking with Mothli");
-    expect(SEE_THE_PLAN).toBe("See the plan");
-    expect(GOT_IT).toBe("Got it");
-    for (const line of [SIGN_UP_LINE, MOTHLI_HELLO, endingNote("today"), endingNote("tomorrow"),
-      endingNote("on Thursday"), ...Object.values(INVITATIONS), KEEP_TALKING, SEE_THE_PLAN, GOT_IT]) noCounter(line);
+    expect(START_TALKING).toBe("Talk with Mothli");
+    for (const line of [...Object.values(INVITATIONS), KEEP_TALKING, START_TALKING]) {
+      noCounter(line);
+      noFreeWeeks(line);
+      // Never words the owner does not want a reader to read.
+      expect(line).not.toMatch(/\bAI\b|\bchat\b|\bmodel\b|credits?\b|unlimited/i);
+    }
   });
 
-  // Catches: the day said by the server's UTC calendar rather than the reader's own, or a bare
-  // weekday ("on Thursday" said on a Thursday) in the last two days, where it is ambiguous.
-  test("today, tomorrow or the weekday, by the reader's own calendar day, not UTC's", () => {
-    // Auckland is UTC+13 in December. The clock: 1 December 20:00 UTC, 2 December 09:00 there.
-    const now = new Date("2026-12-01T20:00:00Z");
-    const auckland = "Pacific/Auckland";
-    // 2 December 10:00 UTC is tomorrow in UTC but 23:00 today in Auckland.
-    expect(endingWhen("2026-12-02T10:00:00Z", now, auckland)).toBe("today");
-    expect(endingWhen("2026-12-02T10:00:00Z", now, "UTC")).toBe("tomorrow");
-    // 2 December 12:00 UTC is 3 December 01:00 in Auckland: tomorrow there.
-    expect(endingWhen("2026-12-02T12:00:00Z", now, auckland)).toBe("tomorrow");
-    // 3 December 12:00 UTC is Friday 4 December in Auckland, though Thursday in UTC.
-    expect(endingWhen("2026-12-03T12:00:00Z", now, auckland)).toBe("on Friday");
-    expect(endingWhen("2026-12-03T12:00:00Z", now, "UTC")).toBe("on Thursday");
-    // Los Angeles is UTC−8: at 2 December 03:00 UTC it is still 1 December there, so the end at
-    // 2 December 20:00 UTC is today in UTC and tomorrow in Los Angeles.
-    const evening = new Date("2026-12-02T03:00:00Z");
-    expect(endingWhen("2026-12-02T20:00:00Z", evening, "UTC")).toBe("today");
-    expect(endingWhen("2026-12-02T20:00:00Z", evening, "America/Los_Angeles")).toBe("tomorrow");
-    expect(endingWhen("not a date", now)).toBeNull();
-  });
-
-  test("the day the free weeks end is the weekday in the reader's own time zone", () => {
-    expect(endingWeekday("2026-12-03T12:00:00Z", "UTC")).toBe("Thursday");
-    // The same moment is still Thursday in Los Angeles and already Friday in Kiritimati.
-    expect(endingWeekday("2026-12-03T23:30:00Z", "America/Los_Angeles")).toBe("Thursday");
-    expect(endingWeekday("2026-12-03T23:30:00Z", "Pacific/Kiritimati")).toBe("Friday");
-    expect(endingWeekday("not a date")).toBeNull();
+  // Catches (ADR 0046): anything of the free weeks left for a screen to say.
+  test("nothing of the free weeks is left: no hello, no sign-up line, no note, no start call", () => {
+    for (const name of ["MOTHLI_HELLO", "HOME_HELLO_NO_BOOKS", "SIGN_UP_LINE", "endingNote",
+      "MothliEndingNote", "startMothli", "SEE_THE_PLAN", "GOT_IT"]) expect(name in MothliPlan, name).toBe(false);
   });
 });
 
-describe("ended: one invitation in place of each panel", () => {
-  const whys = ["time", "ceiling", "plan"] as const;
-
-  test.each(whys)("the chat in a book (%s)", async (why) => {
-    stand("ended", why);
+describe("without the plan: one invitation in place of each panel", () => {
+  test.each(WITHOUT)("the chat in a book (%s)", async (state, why, words, button) => {
+    stand(state, why);
     const { container } = render(<AskTheBook {...book} />);
-    const line = screen.getByText(INVITATIONS[why]);
-    expect(screen.getByRole("button", { name: KEEP_TALKING })).toBeTruthy();
+    const line = screen.getByText(words);
+    expect(screen.getByRole("button", { name: button })).toBeTruthy();
     // Nothing of the conversation: no box, no stored turns asked for, nothing to clear.
     expect(screen.queryByLabelText("Message Mothli")).toBeNull();
     expect(screen.queryByRole("button", { name: "Conversation options" })).toBeNull();
@@ -199,34 +163,34 @@ describe("ended: one invitation in place of each panel", () => {
     // The panel just opened: its words take focus, so they are read out.
     expect(document.activeElement).toBe(line);
     noCounter(container.textContent ?? "");
+    noFreeWeeks(container.textContent ?? "");
     expect(await axeAA(container)).toHaveNoViolations();
   });
 
-  test.each(whys)("the cast (%s)", async (why) => {
-    stand("ended", why);
+  test.each(WITHOUT)("the cast (%s)", async (state, why, words, button) => {
+    stand(state, why);
     render(<AskTheBook {...book} initialTab="people" />);
-    expect(screen.getByText(INVITATIONS[why])).toBeTruthy();
-    expect(screen.getByRole("button", { name: KEEP_TALKING })).toBeTruthy();
+    expect(screen.getByText(words)).toBeTruthy();
+    expect(screen.getByRole("button", { name: button })).toBeTruthy();
     await act(async () => {});
     expect(mocks.graph).not.toHaveBeenCalled();
-    expect(mocks.startMothli).not.toHaveBeenCalled();
     expect(screen.queryByText("Aldric")).toBeNull();
   });
 
-  test.each(whys)("“Story so far” (%s)", async (why) => {
-    stand("ended", why);
+  test.each(WITHOUT)("“Story so far” (%s)", async (state, why, words) => {
+    stand(state, why);
     render(<AskTheBook {...book} initialTab="story" />);
-    expect(screen.getByText(INVITATIONS[why])).toBeTruthy();
+    expect(screen.getByText(words)).toBeTruthy();
     await act(async () => {});
     expect(mocks.notes).not.toHaveBeenCalled();
     expect(screen.queryByText("The forge")).toBeNull();
   });
 
-  test.each(whys)("the home chat (%s)", async (why) => {
-    stand("ended", why);
+  test.each(WITHOUT)("the home chat (%s)", async (state, why, words, button) => {
+    stand(state, why);
     const { container } = render(<HomeChat />);
-    expect(screen.getByText(INVITATIONS[why])).toBeTruthy();
-    expect(screen.getByRole("button", { name: KEEP_TALKING })).toBeTruthy();
+    expect(screen.getByText(words)).toBeTruthy();
+    expect(screen.getByRole("button", { name: button })).toBeTruthy();
     // "What Mothli remembers" stays open: it is the reader's own.
     expect(screen.getByRole("button", { name: "What Mothli remembers" })).toBeTruthy();
     expect(screen.queryByLabelText("Ask Mothli about your books")).toBeNull();
@@ -234,57 +198,67 @@ describe("ended: one invitation in place of each panel", () => {
     // On the home screen at load, it takes no focus from the page.
     expect(document.activeElement).toBe(document.body);
     noCounter(container.textContent ?? "");
+    noFreeWeeks(container.textContent ?? "");
     expect(await axeAA(container)).toHaveNoViolations();
   });
 
+  test("at home with no book yet, a new reader gets the same invitation", async () => {
+    stand("new");
+    render(<HomeChat shelfEmpty />);
+    expect(screen.getByText(INVITATIONS.new)).toBeTruthy();
+    expect(screen.getByRole("button", { name: START_TALKING })).toBeTruthy();
+    expect(mocks.homeConversation).not.toHaveBeenCalled();
+  });
+
   test("the cast and the notes kept from before are not shown once the server says so", async () => {
-    stand("free");
+    stand("paying");
     render(<AskTheBook {...book} initialTab="people" />);
     await screen.findByText("Aldric");
-    act(() => noteMothliPlan("time"));
+    act(() => noteMothliPlan("plan"));
     expect(screen.queryByText("Aldric")).toBeNull();
-    expect(screen.getByText(INVITATIONS.time)).toBeTruthy();
+    expect(screen.getByText(INVITATIONS.plan)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Story so far" }));
-    expect(screen.getByText(INVITATIONS.time)).toBeTruthy();
+    expect(screen.getByText(INVITATIONS.plan)).toBeTruthy();
     expect(mocks.notes).not.toHaveBeenCalled();
   });
 });
 
 describe("a question sent anyway", () => {
-  // Catches: an old tab, or a reader whose free weeks end under an open panel, meeting "I couldn’t
-  // get a reply. Try again?" for a question Mothli will not answer.
-  test("in a book: the invitation where the reply would be, never an error line", async () => {
-    stand("free");
-    mocks.askBookStream.mockImplementation(planNeeded("ceiling"));
-    render(<AskTheBook {...book} />);
-    await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalled());
-    screen.getByLabelText("Message Mothli").focus();
-    askInBook("Who is Aldric?");
-    const line = await screen.findByText(INVITATIONS.ceiling);
-    expect(screen.queryByText(/couldn’t get a reply|Try again|Retry/)).toBeNull();
-    // The box went with the panel's content: focus moves to the invitation, so it is read out.
-    expect(document.activeElement).toBe(line);
-    expect(mothliStanding()).toEqual({ state: "ended", why: "ceiling", ending_note: false });
-  });
+  // Catches: an old tab, or a reader whose plan ends under an open panel, meeting "I couldn’t get
+  // a reply. Try again?" for a question Mothli will not answer.
+  test.each(WITHOUT)("in a book (%s): the invitation where the reply would be, never an error line",
+    async (state, why, words) => {
+      stand("paying");
+      mocks.askBookStream.mockImplementation(planNeeded(why));
+      render(<AskTheBook {...book} />);
+      await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalled());
+      screen.getByLabelText("Message Mothli").focus();
+      askInBook("Who is Aldric?");
+      const line = await screen.findByText(words);
+      expect(screen.queryByText(/couldn’t get a reply|Try again|Retry/)).toBeNull();
+      // The box went with the panel's content: focus moves to the invitation, so it is read out.
+      expect(document.activeElement).toBe(line);
+      expect(mothliStanding()).toEqual({ state, why });
+    });
 
   test("mid-stream, at home: the invitation, never “That didn’t go through.”", async () => {
-    stand("free");
+    stand("paying");
     mocks.askHome.mockImplementation(async (_question: string, onSentence: (text: string) => void) => {
       onSentence("Well,");
-      return planNeeded("time")();
+      return planNeeded("plan")();
     });
     render(<HomeChat />);
     await waitFor(() => expect(mocks.homeConversation).toHaveBeenCalled());
     screen.getByLabelText("Ask Mothli about your books").focus();
     askAtHome("Where did I leave off?");
-    const line = await screen.findByText(INVITATIONS.time);
+    const line = await screen.findByText(INVITATIONS.plan);
     expect(screen.queryByText(/didn’t go through|can’t check its reply/)).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(document.activeElement).toBe(line);
   });
 
   test("a stored conversation refused by the gate shows the invitation, not “I can’t reach…”", async () => {
-    stand("free");
+    stand("paying");
     mocks.bookConversation.mockImplementation(planNeeded("plan"));
     render(<AskTheBook {...book} />);
     expect(await screen.findByText(INVITATIONS.plan)).toBeTruthy();
@@ -293,8 +267,8 @@ describe("a question sent anyway", () => {
 });
 
 describe("joining from the invitation", () => {
-  async function join() {
-    fireEvent.click(screen.getByRole("button", { name: KEEP_TALKING }));
+  async function join(button: string = KEEP_TALKING) {
+    fireEvent.click(screen.getByRole("button", { name: button }));
     const sheet = screen.getByRole("dialog", { name: "The plan" });
     expect(within(sheet).getByText(`Checkout for ${EMAIL}`)).toBeTruthy();
     fireEvent.click(within(sheet).getByRole("button", { name: "Pay" }));
@@ -304,26 +278,37 @@ describe("joining from the invitation", () => {
   }
 
   test("the chat in a book comes back with its stored conversation and the question asked", async () => {
-    stand("free");
-    mocks.askBookStream.mockImplementationOnce(planNeeded("time"));
+    stand("paying");
+    mocks.askBookStream.mockImplementationOnce(planNeeded("plan"));
     render(<AskTheBook {...book} />);
     await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalledTimes(1));
     askInBook("Who is Aldric?");
-    await screen.findByText(INVITATIONS.time);
+    await screen.findByText(INVITATIONS.plan);
     mocks.bookConversation.mockResolvedValue({
       read_frontier: point, turns: [turn("user", "Who is Mitya?"), turn("assistant", "Fyodor’s eldest son.")] });
     await join();
     expect(await screen.findByText("Fyodor’s eldest son.")).toBeTruthy();
     expect(mocks.bookConversation).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText(INVITATIONS.time)).toBeNull();
+    expect(screen.queryByText(INVITATIONS.plan)).toBeNull();
     // The question is still in the box, and the box has focus.
     const box = screen.getByLabelText("Message Mothli") as HTMLTextAreaElement;
     expect(box.value).toBe("Who is Aldric?");
     expect(document.activeElement).toBe(box);
   });
 
+  test("a new reader's first question: the invitation, then the chat once they join", async () => {
+    stand("new");
+    render(<AskTheBook {...book} />);
+    expect(screen.getByText(INVITATIONS.new)).toBeTruthy();
+    await join(START_TALKING);
+    expect(await screen.findByLabelText("Message Mothli")).toBeTruthy();
+    expect(mocks.bookConversation).toHaveBeenCalled();
+    askInBook("Who is Aldric?");
+    expect(await screen.findByText("Aldric was at the forge.")).toBeTruthy();
+  });
+
   test("the cast loads", async () => {
-    stand("ended", "time");
+    stand("ended", "plan");
     render(<AskTheBook {...book} initialTab="people" />);
     await join();
     expect(await screen.findByText("Aldric")).toBeTruthy();
@@ -331,9 +316,9 @@ describe("joining from the invitation", () => {
   });
 
   test("“Story so far” loads", async () => {
-    stand("ended", "ceiling");
+    stand("new");
     render(<AskTheBook {...book} initialTab="story" />);
-    await join();
+    await join(START_TALKING);
     expect(await screen.findByText("The forge")).toBeTruthy();
     expect(mocks.notes).toHaveBeenCalled();
   });
@@ -348,28 +333,29 @@ describe("joining from the invitation", () => {
   });
 
   test("closing the sheet without joining puts focus back on the button", async () => {
-    stand("ended", "time");
+    stand("ended", "plan");
     render(<AskTheBook {...book} />);
     fireEvent.click(screen.getByRole("button", { name: KEEP_TALKING }));
     fireEvent.click(screen.getByRole("button", { name: "Close the sheet" }));
     expect(document.activeElement).toBe(screen.getByRole("button", { name: KEEP_TALKING }));
     await waitFor(() => expect(mocks.plan).toHaveBeenCalled());
-    expect(screen.getByText(INVITATIONS.time)).toBeTruthy();
+    expect(screen.getByText(INVITATIONS.plan)).toBeTruthy();
   });
 
-  test("a reader already on the plan from elsewhere gets the panel back when the sheet closes", async () => {
-    stand("ended", "time");
-    mocks.plan.mockResolvedValue(planOf({ state: "paying", plan: "monthly", subscribed: true }));
-    render(<AskTheBook {...book} />);
-    fireEvent.click(screen.getByRole("button", { name: KEEP_TALKING }));
-    fireEvent.click(screen.getByRole("button", { name: "Close the sheet" }));
-    expect(await screen.findByLabelText("Message Mothli")).toBeTruthy();
-    expect(mothliStanding()?.state).toBe("paying");
-  });
+  test.each(WITHOUT)("a reader already on the plan from elsewhere gets the panel back when the sheet closes (%s)",
+    async (state, why, _words, button) => {
+      stand(state, why);
+      mocks.plan.mockResolvedValue(planOf({ state: "paying", why: null, plan: "monthly", subscribed: true }));
+      render(<AskTheBook {...book} />);
+      fireEvent.click(screen.getByRole("button", { name: button }));
+      fireEvent.click(screen.getByRole("button", { name: "Close the sheet" }));
+      expect(await screen.findByLabelText("Message Mothli")).toBeTruthy();
+      expect(mothliStanding()?.state).toBe("paying");
+    });
 
   // Catches: Escape in the plan sheet also closing the chat panel under it.
   test("the plan sheet over the chat owns the keyboard", () => {
-    stand("ended", "time");
+    stand("ended", "plan");
     const onClose = vi.fn();
     render(<AskTheBook {...book} compact onClose={onClose} />);
     fireEvent.click(screen.getByRole("button", { name: KEEP_TALKING }));
@@ -379,230 +365,21 @@ describe("joining from the invitation", () => {
   });
 });
 
-describe("not started: the start call and the hello", () => {
-  test("opening the cast or “Story so far” by the reader's own tap starts the free weeks, once", async () => {
-    stand("new");
-    render(<AskTheBook {...book} />);
-    await act(async () => {});
-    expect(mocks.startMothli).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Cast" }));
-    await waitFor(() => expect(mothliStanding()?.state).toBe("free"));
-    expect(mocks.startMothli).toHaveBeenCalledTimes(1);
-    expect(mocks.startMothli).toHaveBeenCalledWith("b");
-    expect(await screen.findByText("Aldric")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Story so far" }));
-    await screen.findByText("The forge");
-    expect(mocks.startMothli).toHaveBeenCalledTimes(1);
-  });
-
-  test("“Story so far” opened from elsewhere by a tap, and “Who was that?”, start it too", async () => {
-    stand("new");
-    const first = render(<AskTheBook {...book} initialTab="story" />);
-    await waitFor(() => expect(mocks.startMothli).toHaveBeenCalledWith("b"));
-    first.unmount();
-    stand("new");
-    mocks.startMothli.mockClear();
-    render(<AskTheBook {...book} />);
-    fireEvent.click(screen.getByRole("button", { name: "Who was that?" }));
-    await waitFor(() => expect(mocks.startMothli).toHaveBeenCalledWith("b"));
-  });
-
-  test.each([["free"], ["paying"], ["nothing told"]] as const)(
-    "a reader %s is never sent to the start route", async (state) => {
-      if (state === "nothing told") setMothliStanding(null);
-      else stand(state);
-      render(<AskTheBook {...book} />);
-      fireEvent.click(screen.getByRole("button", { name: "Cast" }));
-      await screen.findByText("Aldric");
-      fireEvent.click(screen.getByRole("button", { name: "Story so far" }));
-      await screen.findByText("The forge");
-      expect(mocks.startMothli).not.toHaveBeenCalled();
-    });
-
-  test("the hello in a book, above the box, until the first reply arrives", async () => {
-    stand("new");
-    render(<AskTheBook {...book} />);
-    expect(await screen.findByText(MOTHLI_HELLO)).toBeTruthy();
-    let finish!: (value: unknown) => void;
-    mocks.askBookStream.mockImplementationOnce(() => new Promise((done) => { finish = done; }));
-    askInBook("Who is Aldric?");
-    await waitFor(() => expect(mocks.askBookStream).toHaveBeenCalled());
-    // Still there while the first reply is on its way.
-    expect(screen.getByText(MOTHLI_HELLO)).toBeTruthy();
-    await act(async () => finish(reply("Aldric was at the forge.")));
-    await screen.findByText("Aldric was at the forge.");
-    expect(screen.queryByText(MOTHLI_HELLO)).toBeNull();
-    expect(mothliStanding()?.state).toBe("free");
-  });
-
-  test("the hello at home, until the first reply arrives", async () => {
-    stand("new");
-    render(<HomeChat />);
-    expect(await screen.findByText(MOTHLI_HELLO)).toBeTruthy();
-    askAtHome("Where did I leave off?");
-    await screen.findAllByText("Your place is chapter two.");
-    expect(screen.queryByText(MOTHLI_HELLO)).toBeNull();
-  });
-
-  // Catches: a second "Hi, I’m Mothli" under the empty shelf's own, or a hello inviting
-  // questions "about the pages you’ve read" to a reader with no book yet (L5 of the plan walk).
-  test("at home with no book yet: one hello, and a line that suits an empty shelf", async () => {
-    stand("new");
-    render(<HomeChat shelfEmpty />);
-    const hello = await screen.findByText(HOME_HELLO_NO_BOOKS);
-    expect(HOME_HELLO_NO_BOOKS).toBe("Your first two weeks with me are free, starting the first time you try me out.");
-    expect(screen.queryByText(MOTHLI_HELLO)).toBeNull();
-    expect(document.body.textContent).not.toMatch(/Hi, I’m Mothli/);
-    expect(hello.textContent).not.toMatch(/pages you’ve read/);
-    noCounter(HOME_HELLO_NO_BOOKS);
-  });
-
-  test.each([["free"], ["paying"], ["nothing told"]] as const)("no hello for a reader %s", async (state) => {
+describe("a paying reader", () => {
+  // Catches: anything of the gate, or of the removed free weeks, shown to a reader who pays.
+  test.each([["paying"], ["nothing told"]] as const)("sees Mothli as before (%s)", async (state) => {
     if (state === "nothing told") setMothliStanding(null);
     else stand(state);
     render(<AskTheBook {...book} />);
     expect(await screen.findByText(/Hi! I’ve been reading along with you/)).toBeTruthy();
-    expect(screen.queryByText(MOTHLI_HELLO)).toBeNull();
-  });
-});
-
-describe("the gentle note in the last two days", () => {
-  // A fixed clock exactly a day before the end: "tomorrow" in every time zone.
-  const ends = "2026-12-03T12:00:00Z";
-  const day = () => "tomorrow";
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-12-02T12:00:00Z"));
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  test("at the top of the chat, saying when; “Got it” hides it on this device", async () => {
-    stand("free", null, true);
-    mocks.plan.mockResolvedValue(planOf({ state: "free", next_date: ends }));
-    const first = render(<AskTheBook {...book} />);
-    const note = await screen.findByText(endingNote(day()));
-    noCounter(note.textContent!.replace(day(), ""));
-    expect(screen.getByRole("button", { name: SEE_THE_PLAN })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: GOT_IT }));
-    expect(screen.queryByText(endingNote(day()))).toBeNull();
-    expect(document.activeElement).toBe(screen.getByLabelText("Message Mothli"));
-    first.unmount();
-    // Remembered on this device: not again, in a book or at home.
-    render(<AskTheBook {...book} />);
-    render(<HomeChat />);
-    await waitFor(() => expect(mocks.homeConversation).toHaveBeenCalled());
-    await act(async () => {});
-    expect(screen.queryByText(endingNote(day()))).toBeNull();
-  });
-
-  // Catches: the book chat opening scrolled to the latest exchange, so on a phone the note's
-  // first line is cut off at the top (M6 of the plan walk, 23 November 2026). jsdom has no
-  // layout: the latest exchange is placed 400 pixels down, the note at the top.
-  test("with an earlier conversation, the note is shown whole, not scrolled past", async () => {
-    const tops = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetTop");
-    const scroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTop");
-    const scrolled = new WeakMap<Element, number>();
-    Object.defineProperty(HTMLElement.prototype, "offsetTop", {
-      configurable: true, get(this: HTMLElement) { return this.hasAttribute("data-latest-exchange") ? 400 : 0; },
-    });
-    Object.defineProperty(HTMLElement.prototype, "scrollTop", {
-      configurable: true,
-      get(this: HTMLElement) { return scrolled.get(this) ?? 0; },
-      set(this: HTMLElement, value: number) { scrolled.set(this, value); },
-    });
-    try {
-      mocks.bookConversation.mockResolvedValue({ read_frontier: point,
-        turns: [turn("user", "Who is Aldric?"), turn("assistant", "Aldric keeps the forge.")] });
-      // Without the note: the thread opens at the latest exchange, as before.
-      stand("free", null, false);
-      const plain = render(<AskTheBook {...book} />);
-      await screen.findByText("Aldric keeps the forge.");
-      const thread = () => screen.getByRole("region", { name: "Book conversation" });
-      await waitFor(() => expect(thread().scrollTop).toBe(400));
-      plain.unmount();
-      // With it: the note, whole, at the top.
-      stand("free", null, true);
-      mocks.plan.mockResolvedValue(planOf({ state: "free", next_date: ends }));
-      render(<AskTheBook {...book} />);
-      await screen.findByText("Aldric keeps the forge.");
-      await screen.findByText(endingNote(day()));
-      await waitFor(() => expect(thread().scrollTop).toBe(0));
-    } finally {
-      if (tops) Object.defineProperty(HTMLElement.prototype, "offsetTop", tops);
-      else delete (HTMLElement.prototype as { offsetTop?: number }).offsetTop;
-      if (scroll) Object.defineProperty(HTMLElement.prototype, "scrollTop", scroll);
-      else delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop;
-    }
-  });
-
-  // Catches: "Got it" kept for the device, so a second reader signed in here later never sees
-  // their own note (L3 of the plan walk, 23 November 2026).
-  test("“Got it” is remembered for each reader on the device, not for the device", async () => {
-    const note = { state: "free", why: null, ending_note: true };
-    mocks.plan.mockResolvedValue(planOf({ state: "free", next_date: ends }));
-    setMothliStanding(note, EMAIL, "reader-a");
-    const first = render(<AskTheBook {...book} />);
-    await screen.findByText(endingNote(day()));
-    fireEvent.click(screen.getByRole("button", { name: GOT_IT }));
-    first.unmount();
-    expect(localStorage.getItem("mothli.ending-note-seen:reader-a")).toBe("yes");
-    expect(localStorage.getItem("mothli.ending-note-seen")).toBeNull();
-    // Another reader signs in on the same device: their own note.
-    setMothliStanding(note, "other@example.test", "reader-b");
-    const second = render(<AskTheBook {...book} />);
-    expect(await screen.findByText(endingNote(day()))).toBeTruthy();
-    second.unmount();
-    // The first reader again: still hidden for them.
-    setMothliStanding(note, EMAIL, "reader-a");
-    render(<AskTheBook {...book} />);
-    await waitFor(() => expect(mocks.bookConversation).toHaveBeenCalled());
-    await act(async () => {});
-    expect(screen.queryByText(endingNote(day()))).toBeNull();
-    setMothliStanding(null, null, null);
-  });
-
-  test("at home too, and “See the plan” opens the plan sheet and comes back to its button", async () => {
-    stand("free", null, true);
-    mocks.plan.mockResolvedValue(planOf({ state: "free", next_date: ends }));
-    const { container } = render(<HomeChat />);
-    expect(await screen.findByText(endingNote(day()))).toBeTruthy();
-    expect(await axeAA(container)).toHaveNoViolations();
-    fireEvent.click(screen.getByRole("button", { name: SEE_THE_PLAN }));
-    fireEvent.click(screen.getByRole("button", { name: "Close the sheet" }));
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: SEE_THE_PLAN }));
-    // Joining from it: the note goes, the chat stays, and the box has focus.
-    fireEvent.click(screen.getByRole("button", { name: SEE_THE_PLAN }));
-    fireEvent.click(screen.getByRole("button", { name: "Pay" }));
-    fireEvent.click(screen.getByRole("button", { name: "Close the sheet" }));
-    expect(screen.queryByText(endingNote(day()))).toBeNull();
-    expect(mothliStanding()?.state).toBe("paying");
-    expect(document.activeElement).toBe(screen.getByLabelText("Ask Mothli about your books"));
-  });
-
-  test.each([
-    ["free, not yet the last two days", { state: "free", why: null, ending_note: false }],
-    ["new", { state: "new", why: null, ending_note: false }],
-    ["paying", { state: "paying", why: null, ending_note: false }],
-    ["nothing told", null],
-  ] as const)("no note and no plan asked for when %s", async (_name, standing) => {
-    setMothliStanding(standing);
-    render(<AskTheBook {...book} />);
-    render(<HomeChat />);
-    await waitFor(() => expect(mocks.homeConversation).toHaveBeenCalled());
-    await act(async () => {});
-    expect(screen.queryByText(/our free weeks together end/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cast" }));
+    await screen.findByText("Aldric");
+    fireEvent.click(screen.getByRole("button", { name: "Story so far" }));
+    await screen.findByText("The forge");
+    expect(screen.queryByRole("button", { name: KEEP_TALKING })).toBeNull();
+    expect(screen.queryByRole("button", { name: START_TALKING })).toBeNull();
+    noFreeWeeks(document.body.textContent ?? "");
     expect(mocks.plan).not.toHaveBeenCalled();
-  });
-
-  test("without the day, the note is not said", async () => {
-    stand("free", null, true);
-    mocks.plan.mockRejectedValue(new ApiError("unavailable", 503));
-    render(<AskTheBook {...book} />);
-    await waitFor(() => expect(mocks.plan).toHaveBeenCalled());
-    await act(async () => {});
-    expect(screen.queryByText(/our free weeks together end/)).toBeNull();
   });
 });
 
@@ -626,7 +403,6 @@ describe("where the server told nothing", () => {
     mocks.askHome.mockRejectedValueOnce(new ApiError("the server said no (500)", 500));
     render(<HomeChat />);
     await waitFor(() => expect(mocks.homeConversation).toHaveBeenCalled());
-    expect(screen.queryByText(MOTHLI_HELLO)).toBeNull();
     askAtHome("Where did I leave off?");
     expect(await screen.findByText("That didn’t go through. Your question is still here.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: KEEP_TALKING })).toBeNull();

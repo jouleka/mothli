@@ -184,11 +184,6 @@ class Settings(BaseSettings):
     hosted_reader_usd_per_day: float = Field(default=1.00, ge=0, le=1000, allow_inf_nan=False)
     hosted_reader_usd_per_month: float = Field(default=4.00, ge=0, le=10000, allow_inf_nan=False)
     hosted_platform_usd_per_day: float = Field(default=15.00, ge=0, le=100000, allow_inf_nan=False)
-    # ADR 0045 step 1: a reader's two free weeks with Mothli, from their first question. While
-    # they last the reader's day and month above are not applied; one ceiling in dollars of their
-    # own chat spend since the start is (about 100 replies at 2.1 cents). Never shown to a reader.
-    hosted_free_days: int = Field(default=14, ge=1, le=365)
-    hosted_free_usd: float = Field(default=2.10, ge=0, le=10000, allow_inf_nan=False)
     # ADR 0045 step 3 (section 4, decided 23 November 2026): a subscriber's first paid month,
     # about 300 replies. For the 30 days after their first Paddle plan began, once per account,
     # their chat since then is held to this in place of the month above; the day stays. A gift
@@ -206,13 +201,13 @@ class Settings(BaseSettings):
                                                         allow_inf_nan=False)
     hosted_reader_background_usd_per_month: float = Field(default=5.00, ge=0, le=10000,
                                                           allow_inf_nan=False)
-    # ADR 0045 section 5, step 6: background work by where a reader stands with their plan. As
-    # above in the free weeks and for paying readers; none once their free weeks are over and
-    # they do not pay. A reader who has signed up and never asked Mothli anything gets a bounded
-    # warm-up so their first session is not cold: background work within this many days of
-    # sign-up, up to this many chapters of story memory their reading is the first to build, and
-    # up to this much of chapter notes, all counted over the whole time they have not asked. Past
-    # any of the three it stops, silently, until their first question. Never shown to a reader.
+    # ADR 0045 section 5, step 6, and ADR 0046: background work by where a reader stands with
+    # their plan. As above for paying readers; none once a plan they had has stopped. A new reader
+    # (never a plan or a gift) gets a bounded warm-up so their first session is not cold:
+    # background work within this many days of sign-up, up to this many chapters of story memory
+    # their reading is the first to build, and up to this much of chapter notes, all counted over
+    # the whole time they are new. Past any of the three it stops, silently, until they pay.
+    # Never shown to a reader.
     hosted_warmup_days: int = Field(default=30, ge=0, le=365)
     hosted_warmup_new_chapters: int = Field(default=25, ge=0, le=100000)
     hosted_warmup_notes_usd: float = Field(default=0.50, ge=0, le=1000, allow_inf_nan=False)

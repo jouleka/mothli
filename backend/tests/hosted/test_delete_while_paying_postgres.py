@@ -241,15 +241,16 @@ def test_asking_to_delete_schedules_the_cancel_at_the_period_end_for_that_reader
     assert standin.subscriptions[MYSIGNER_SUB] == mysigner
 
 
-def test_a_reader_with_no_plan_that_renews_costs_no_call(desk, database, readers, tenant_dsn):
+def test_a_reader_with_no_plan_that_renews_costs_no_call(desk, database, readers):
     """The break it catches: Paddle called (and the reader's deletion slowed or put at risk) for
-    a reader with a gift only, in the free weeks, never started, whose plan ended, or whose plan
-    is already cancelled to the period's end; or any of them told their plan won't renew."""
+    a reader with a gift only, one whose gift has passed, a new one, one whose plan ended, or one
+    whose plan is already cancelled to the period's end; or any of them told their plan won't
+    renew."""
     client, tokens, standin, _app = desk
-    gifted, free, new, ended, cancelled = (readers[label] for label in "abcde")
+    gifted, lapsed, new, ended, cancelled = (readers[label] for label in "abcde")
     with psycopg.connect(database) as conn:
         conn.execute("SELECT set_gift(%s, '9999-12-31'::date)", (gifted,))
-    messages.stamp(tenant_dsn, free)
+        conn.execute("SELECT set_gift(%s, '2020-01-31'::date)", (lapsed,))
     subscribe(client, tokens, standin, "d", ended, sub_id("d"))
     post(client, message(sub_id("d"), "canceled", customer=row(database, ended)[
         "paddle_customer_id"], custom={}, at=datetime.now(UTC) + timedelta(hours=1)), seed=False)
@@ -501,14 +502,12 @@ def test_the_purge_holds_a_plan_that_still_renews_then_erases_every_plan_row(
 
 # ---- the copy of one's data -----------------------------------------------------------------------
 
-def test_your_plan_json_holds_the_free_weeks_gift_and_plan_and_nothing_secret(
-        desk, database, readers, tenant_dsn):
-    """The break it catches: the copy missing when the free weeks began, the gift, or the plan's
-    kind, status and dates; or holding Paddle's ids, a checkout token or its digest, an amount,
-    or anything of another reader."""
+def test_your_plan_json_holds_the_gift_and_plan_and_nothing_secret(desk, database, readers):
+    """The break it catches: the copy missing the gift, or the plan's kind, status and dates;
+    holding Paddle's ids, a checkout token or its digest, an amount, or anything of another
+    reader; or still naming the removed free weeks."""
     client, tokens, standin, _app = desk
     a, b = readers["a"], readers["b"]
-    messages.stamp(tenant_dsn, a)
     custom = subscribe(client, tokens, standin, "a", a, sub_id("a"), which="yearly")
     with psycopg.connect(database) as conn:
         conn.execute("SELECT set_gift(%s, '2099-06-30'::date)", (b,))
@@ -521,9 +520,7 @@ def test_your_plan_json_holds_the_free_weeks_gift_and_plan_and_nothing_secret(
     files = {name: zipfile.ZipFile(io.BytesIO(response.content)).read(name).decode("utf-8")
              for name in zipfile.ZipFile(io.BytesIO(response.content)).namelist()}
     mine = json.loads(files["your plan.json"])
-    kept = row(database, a)
-    assert mine["free_weeks_began"] == datetime.fromisoformat(
-        kept["free_started_at"]).astimezone(UTC).isoformat()
+    assert set(mine) == {"gift", "plan", "not_to_renew_since_you_asked_to_delete_your_account"}
     assert mine["gift"] is None
     assert set(mine["plan"]) == {"kind", "status_at_paddle", "first_paid", "this_period_ends",
                                  "ends", "sold_by"}
@@ -532,6 +529,7 @@ def test_your_plan_json_holds_the_free_weeks_gift_and_plan_and_nothing_secret(
     assert mine["plan"]["first_paid"] is not None
     assert mine["not_to_renew_since_you_asked_to_delete_your_account"] is not None
     assert "your plan.json" in files["READ ME.txt"]
+    assert "free weeks" not in files["READ ME.txt"]
     everything = "\n".join(files.values())
     for secret in ("sub_", "ctm_", "pri_", "txn_", custom["mothli_checkout"], str(a), str(b),
                    "Reader B", "token", "digest", "$", "usd"):
@@ -541,7 +539,6 @@ def test_your_plan_json_holds_the_free_weeks_gift_and_plan_and_nothing_secret(
     response = client.get("/api/account/export")
     theirs = json.loads(zipfile.ZipFile(io.BytesIO(response.content)).read("your plan.json"))
     assert theirs["gift"] == "Mothli on the house until the end of 2099-06-30 (UTC)"
-    assert theirs["free_weeks_began"] is None
     assert theirs["plan"]["kind"] == "monthly"
     assert theirs["not_to_renew_since_you_asked_to_delete_your_account"] is None
 

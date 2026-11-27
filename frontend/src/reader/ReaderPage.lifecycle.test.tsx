@@ -923,8 +923,8 @@ describe("the note after a chapter", () => {
   });
 });
 
-// ADR 0045 step 5: the reading screen of a reader whose free weeks or plan are over, and of one
-// who has not started.
+// ADR 0045 step 5, ADR 0046: the reading screen of a reader without the plan (who never had one,
+// or whose plan ended), and of one who pays.
 describe("the reading screen and where the reader stands with Mothli", () => {
   const extra = mocks as Record<string, unknown>;
   const finishChapterTwo = async () => {
@@ -939,45 +939,45 @@ describe("the reading screen and where the reader stands with Mothli", () => {
     })));
   };
   afterEach(() => {
-    for (const name of ["graph", "notes", "startMothli", "askBookStream", "bookConversation"]) delete extra[name];
+    for (const name of ["graph", "notes", "askBookStream", "bookConversation"]) delete extra[name];
     setMothliStanding(null);
   });
 
-  // Catches: the corner note offering an ended reader "Want to hear what I noticed?", names in the
-  // page looked up (and refused), or anything about the gate on the page itself.
-  test("ended: the note keeps its first part and drops the offer; no names are looked up", async () => {
-    const asked = { graph: vi.fn(), notes: vi.fn(), startMothli: vi.fn(), askBookStream: vi.fn(),
-      bookConversation: vi.fn() };
+  // Catches: the corner note offering a reader without the plan "Want to hear what I noticed?",
+  // names in the page looked up (and refused), or anything about the gate on the page itself.
+  test.each([
+    ["new", { state: "new", why: null }, "Talk with Mothli"],
+    ["ended", { state: "ended", why: "plan" }, "Keep talking with Mothli"],
+  ])("%s: the note keeps its first part and drops the offer; no names are looked up", async (_name, standing, button) => {
+    const asked = { graph: vi.fn(), notes: vi.fn(), askBookStream: vi.fn(), bookConversation: vi.fn() };
     Object.assign(extra, asked);
-    setMothliStanding({ state: "ended", why: "time", ending_note: false });
+    setMothliStanding(standing);
     await finishChapterTwo();
     const note = await screen.findByText("That’s Chapter 2 done!");
     expect(note.textContent).toBe("That’s Chapter 2 done!");
     expect(screen.queryByRole("button", { name: "Tell me" })).toBeNull();
-    expect(document.body.textContent).not.toMatch(/Want to hear what I noticed|Keep talking with Mothli|free weeks/);
+    expect(document.body.textContent).not.toMatch(/Want to hear what I noticed|Talk with Mothli|free weeks/);
     // Reading is untouched: the place is kept.
     expect(mocks.putPosition).toHaveBeenCalled();
     // Opening Mothli shows the invitation, and asks nothing.
     fireEvent.click(screen.getByRole("button", { name: "Talk to Mothli" }));
-    expect(await screen.findByRole("button", { name: "Keep talking with Mothli" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: button })).toBeTruthy();
     for (const [name, call] of Object.entries(asked)) expect(call, name).not.toHaveBeenCalled();
   });
 
   // Catches: the app's own fetches (the cast for names in the page, the notes after a chapter)
-  // starting a new reader's free weeks.
-  test("new: the automatic fetches happen as before and never call the start route", async () => {
+  // held back from a reader who pays.
+  test("paying: the automatic fetches happen as before", async () => {
     const asked = {
       graph: vi.fn().mockResolvedValue({ as_of_chapter: 2, characters: [], relationships: [] }),
       notes: vi.fn().mockResolvedValue({ as_of_chapter: 2, cast: [], chapters: [] }),
-      startMothli: vi.fn(),
     };
     Object.assign(extra, asked);
-    setMothliStanding({ state: "new", why: null, ending_note: false });
+    setMothliStanding({ state: "paying", why: null });
     await finishChapterTwo();
     expect(await screen.findByRole("button", { name: "Tell me" })).toBeTruthy();
     await waitFor(() => expect(asked.notes).toHaveBeenCalled());
     expect(asked.graph).toHaveBeenCalled();
-    expect(asked.startMothli).not.toHaveBeenCalled();
   });
 });
 

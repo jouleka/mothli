@@ -65,18 +65,14 @@ describe("SignInGate", () => {
     expect(await axeAA(container)).toHaveNoViolations();
   });
 
-  // Catches (ADR 0045 section 6, "At sign-up"): the welcome not saying reading is free and Mothli
-  // free for the first two weeks, or saying it with a number or a countdown; or the line on the
-  // welcome-back of a reader signed out mid-read, who already knows.
-  test("the welcome says, once, that reading is free and Mothli free for the first two weeks", () => {
-    const line = "Reading here is free, always. Talking with me is free for your first two weeks.";
+  // Catches (ADR 0046): the welcome or the welcome-back promising free weeks that no longer exist.
+  test("the welcome promises no free weeks, and neither does the welcome-back", () => {
     const first = render(<SignInGate session={null}>{theApp()}</SignInGate>);
-    expect(screen.getAllByText(line)).toHaveLength(1);
-    expect(first.container.textContent).not.toMatch(/\d|unlimited|questions? left/i);
+    expect(first.container.textContent).not.toMatch(/free weeks|first two weeks|Talking with me is free/);
     first.unmount();
     render(<SignInGate session={signedIn}>{theApp()}</SignInGate>);
     act(() => announceSignedOut());
-    expect(screen.queryByText(line)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/free weeks|first two weeks|Talking with me is free/);
   });
 
   // Catches: a reader signed out mid-read left on failing screens, or sent back to the shelf
@@ -262,9 +258,8 @@ describe("waiting to be erased", () => {
     expect(screen.getByRole("status").textContent).toBe(
       `Done. You’re signed out everywhere, and your account will be erased ${erasureDay("2099-12-18T00:00:00+00:00")} `
       + "unless you sign in again before then.");
-    // The goodbye promises no free weeks: that reader may have had them, or been paying (L4).
-    expect(document.body.textContent).not.toMatch(/free for your first two weeks|Two free weeks/);
-    expect(screen.queryByText(/Talking with me is free/)).toBeNull();
+    // The goodbye promises no free weeks (ADR 0046).
+    expect(document.body.textContent).not.toMatch(/free weeks|first two weeks|Talking with me is free/);
     const stay = (event: Event) => event.preventDefault();
     window.addEventListener("click", stay);
     fireEvent.click(screen.getByRole("link", { name: "Sign in to start reading" }));

@@ -43,8 +43,8 @@ TENANT_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     # are inserted through the existing grant on ``jobs``.
     "recollections": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
     "recollection_cursors": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
-    # ADR 0045 step 1: when the reader's two free weeks started (migration 0037). Read only: the
-    # one write a reader's session makes is through ``start_free_weeks`` below.
+    # ADR 0045 (migration 0037), ADR 0046: the reader's plan. Read only: a reader's session
+    # never writes it.
     "reader_plans": frozenset({"SELECT"}),
 }
 
@@ -117,7 +117,7 @@ WORKER_COLUMN_PRIVILEGES: dict[str, frozenset[str]] = {
 # ADR 0045 step 6: where a reader stands, the one function the session, the spend check and the
 # worker all call, so they cannot disagree (ADR 0045 section 1).
 WORKER_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
-    "reader_plan_state(uuid,integer,numeric)": frozenset({"EXECUTE"}),
+    "reader_plan_state(uuid)": frozenset({"EXECUTE"}),
 }
 
 # ADR 0041 part 3 (migration 0020): the platform's day total is reached only through these two
@@ -137,11 +137,9 @@ TENANT_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
     "story_memory_door(uuid)": frozenset({"EXECUTE"}),
     "story_memory_later_names(uuid,integer,text[],text[],text[],text[],text[],text[])":
         frozenset({"EXECUTE"}),
-    # Migration 0037 (ADR 0045 step 1): stamps the start of the free weeks for the reader the
-    # transaction is set to, once; it takes no argument. And where a reader stands, which runs as
-    # its caller, so row-level security shows the reader only their own row and spend.
-    "start_free_weeks()": frozenset({"EXECUTE"}),
-    "reader_plan_state(uuid,integer,numeric)": frozenset({"EXECUTE"}),
+    # Where a reader stands (migration 0042, ADR 0046), which runs as its caller, so row-level
+    # security shows the reader only their own row and spend.
+    "reader_plan_state(uuid)": frozenset({"EXECUTE"}),
 }
 
 # ADR 0045 sections 1 and 7, step 3 (migration 0039): the billing role, used only by Paddle's

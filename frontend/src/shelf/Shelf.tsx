@@ -18,7 +18,7 @@ import { MothliMark } from "../ui/MothliMark";
 import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupportedBookMessage } from "../import/bookFiles";
 import { readLastPassage, sinceLabel } from "../reader/lastPassage";
 import { shelfJourney } from "../reader/chapterPlace";
-import { useMothliEnded } from "../ui/mothliStanding";
+import { useMothliClosed } from "../ui/mothliStanding";
 import { Account } from "./Account";
 import { keptWithoutPlanNote, takeKeptWithoutPlan } from "./SignIn";
 import { RemoveBook } from "./RemoveBook";
@@ -138,9 +138,9 @@ export function Shelf({
   // Hosted mode has no cover pictures for a reader's own books (no route): cloth covers only,
   // and nothing asked that can only answer 404.
   const hosted = session !== undefined;
-  // A reader whose free weeks or plan are over: the home chat shows its invitation, and nothing
-  // else on the shelf offers them a chat they cannot have (ADR 0045 section 6).
-  const mothliEnded = useMothliEnded();
+  // A reader without the plan (new, or ended): the home chat shows its invitation, and nothing
+  // else on the shelf offers them a chat they cannot have (ADR 0045 section 6, ADR 0046).
+  const mothliEnded = useMothliClosed();
   const offersTalk = chat && !mothliEnded;
   // "Keep my plan" on the waiting screen kept the account but not the plan: said once, here.
   const [keptNote] = useState(keptWithoutPlanNote);

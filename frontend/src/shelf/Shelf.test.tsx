@@ -140,10 +140,11 @@ describe("what the shelf offers, by where the reader stands", () => {
     sessionStorage.clear();
   });
 
-  // Catches: a chat promised beside the invitation to a reader who cannot have one (M2).
-  test("an ended reader is not offered a chat by the book card, the empty shelf or Meet Mothli", async () => {
-    for (const why of ["time", "ceiling", "plan"] as const) {
-      setMothliStanding({ state: "ended", why, ending_note: false });
+  // Catches: a chat promised beside the invitation to a reader who cannot have one (M2), new
+  // (ADR 0046: Mothli is the plan from the first question) or ended.
+  test("a reader without the plan is not offered a chat by the book card, the empty shelf or Meet Mothli", async () => {
+    for (const standing of [{ state: "new", why: null }, { state: "ended", why: "plan" }]) {
+      setMothliStanding(standing);
       mocks.books.mockResolvedValue([{ book_id: "b1", title: "The Lantern", author: "Ada Example" }]);
       const withBook = render(<Shelf onOpen={() => {}} session={signedIn} />);
       expect(await screen.findByText("This one is ready when you are.")).toBeTruthy();
@@ -162,7 +163,7 @@ describe("what the shelf offers, by where the reader stands", () => {
   });
 
   test("a reader who can talk is still offered it, as before", async () => {
-    setMothliStanding({ state: "free", why: null, ending_note: false });
+    setMothliStanding({ state: "paying", why: null });
     mocks.books.mockResolvedValue([{ book_id: "b1", title: "The Lantern", author: "Ada Example" }]);
     const withBook = render(<Shelf onOpen={() => {}} session={signedIn} />);
     expect(await screen.findByText(ASK_A_NAME)).toBeTruthy();
