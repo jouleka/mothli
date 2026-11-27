@@ -199,6 +199,28 @@ export function applyReaderPreferences(
 
 const cacheKey = (bookId: string) => `litlet.reader-preferences:${bookId}`;
 
+/** Light or dark is one choice for the whole app (the shelf's switch, the reader's moon), kept on
+ * this device as `mothli.theme`; each book keeps only its own type and layout. A book saved in the
+ * other brightness opens in the app's: night when the app is dark, paper when it is light (sepia,
+ * a light page, stays). Without a saved choice the book's own theme stands. */
+export function withAppTheme(preferences: ReaderPreferences): ReaderPreferences {
+  let app: string | null = null;
+  try {
+    app = localStorage.getItem("mothli.theme");
+  } catch {
+    return preferences;
+  }
+  if (app !== "dark" && app !== "light") return preferences;
+  const systemDark =
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+      : false;
+  const dark = preferences.theme === "night" || (preferences.theme === "system" && systemDark);
+  if (app === "dark" && !dark) return { ...preferences, theme: "night" };
+  if (app === "light" && dark) return { ...preferences, theme: "paper" };
+  return preferences;
+}
+
 export function readCachedReaderPreferences(bookId: string): ReaderPreferences {
   try {
     return normalizeReaderPreferences(

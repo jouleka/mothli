@@ -63,6 +63,7 @@ import {
   ReaderPreferenceSaver,
   type PreferenceSaveStatus,
   type ReaderPreferences,
+  withAppTheme,
 } from "./readerPreferences";
 import { PositionReporter, type PendingPosition, type PositionSyncState } from "./reporter";
 import { atomAtRange, pageAnchor, ReadFrontierReporter } from "./readFrontier";
@@ -313,7 +314,7 @@ export function ReaderPage({
   const [startOverError, setStartOverError] = useState<string | null>(null);
   const [syncState, setSyncState] = useState<PositionSyncState>("idle");
   const [preferences, setPreferences] = useState<ReaderPreferences>(() =>
-    readCachedReaderPreferences(bookId),
+    withAppTheme(readCachedReaderPreferences(bookId)),
   );
   const [preferenceStatus, setPreferenceStatus] =
     useState<PreferenceSaveStatus>("saved");
@@ -936,7 +937,8 @@ export function ReaderPage({
             typeof atom.href === "string" ? atom : { ...atom, href: "" },
           ),
         };
-        const loadedPreferences = normalizeReaderPreferences(remotePreferences);
+        // The book's own type and layout, in the app's light or dark (one choice for the whole app).
+        const loadedPreferences = withAppTheme(normalizeReaderPreferences(remotePreferences));
         let loadedMarks: ReaderMark[];
         if (remoteMarks.status === "fulfilled") {
           loadedMarks = remoteMarks.value.marks;
