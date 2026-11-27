@@ -59,9 +59,10 @@ logger = logging.getLogger(__name__)
 _EXPLICIT_CACHE = {"mode": "explicit"}
 # Flex processing: the provider's slower lane at Batch prices, asked for by background work only
 # (``use_flex_for_background``: the hosted worker's story memory, chapter notes and recollections,
-# never a call a reader waits on). The provider's guide raises the SDK's ten-minute default to
-# fifteen for it. Same model, same effort, same prompt: only the lane and the price change.
-FLEX_TIMEOUT_SECONDS = 900.0
+# never a call a reader waits on). A Flex call that has not answered within five minutes is sent
+# again on the standard lane, so slowness never fails a run. Same model, same effort, same
+# prompt: only the lane and the price change.
+FLEX_TIMEOUT_SECONDS = 300.0
 
 
 class Reusable(str):
@@ -96,10 +97,11 @@ def _cache_content(text):
     return parts
 
 
-def allowed_tiers(asked):
-    """The processing tiers a native response may report: Standard, and Flex exactly when the
-    call asked for Flex. Any other lane (a pricier one) is refused as a provider failure."""
-    return (None, "default", "flex") if asked == "flex" else (None, "default")
+def _tier_refused(asked, reported):
+    """Whether a native response's processing tier fails the call. A call that asked for Flex
+    accepts whatever tier the provider reports (priced at Flex rates only when it says ``flex``,
+    otherwise at standard ones); any other call accepts Standard only, as before."""
+    return asked != "flex" and reported not in (None, "default")
 
 
 def _names(exc: BadRequestError, option: str) -> bool:
@@ -393,15 +395,16 @@ class LLMClient:
 
         def send(method, **kwargs):
             # A background call asks for Flex first. Should Flex have no room for it (a 429,
-            # which the provider does not charge) or the provider refuse the tier, the same call
-            # goes at once to the standard lane, so background work never waits on Flex or is
-            # lost to it. After a refusal of the tier this client stops asking for it.
+            # which the provider does not charge), not answer within its timeout, or the provider
+            # refuse the tier, the same call is sent once on the standard lane with the standard
+            # timeout, so background work never fails, waits on Flex or is lost to it. After a
+            # refusal of the tier this client stops asking for it.
             lane["tier"] = kwargs.get("service_tier")
             if lane["tier"] == "flex":
                 try:
                     return cache_send(method, timeout=FLEX_TIMEOUT_SECONDS, **kwargs)
-                except RateLimitError:
-                    logger.info("flex had no room for a background call; sending it standard")
+                except (RateLimitError, APITimeoutError):
+                    logger.info("flex had no room or no time for a background call; sending it standard")
                 except BadRequestError as exc:
                     if not _names(exc, "service_tier"):
                         raise
@@ -468,7 +471,7 @@ class LLMClient:
         if schema is None:
             resp = send(self._oai.chat.completions.create, **cap)
             if (self._is_native_openai and model in _NATIVE_REASONING_EFFORT
-                    and getattr(resp, "service_tier", None) not in allowed_tiers(lane["tier"])):
+                    and _tier_refused(lane["tier"], getattr(resp, "service_tier", None))):
                 self._record_provider_failure("completion", "unsupported_service_tier")
                 raise ProviderUnavailable("unsupported_service_tier", service="completion")
             return resp.choices[0].message.content or "", self._usage_openai(
@@ -479,7 +482,7 @@ class LLMClient:
             if parsed is None:
                 raise ValueError("OpenAI returned no parsed structured output (refusal or truncation)")
             if (model in _NATIVE_REASONING_EFFORT
-                    and getattr(resp, "service_tier", None) not in allowed_tiers(lane["tier"])):
+                    and _tier_refused(lane["tier"], getattr(resp, "service_tier", None))):
                 self._record_provider_failure("completion", "unsupported_service_tier")
                 raise ProviderUnavailable("unsupported_service_tier", service="completion")
             return parsed.model_dump(mode="json"), self._usage_openai(resp, native=True)

@@ -42,7 +42,8 @@ def _endpoint(content='{"supported":true}', *, flex=None, served=None):
                        "choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10}}]
             return httpx.Response(200, headers={"content-type": "text/event-stream"},
                                   content="".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n")
-        return httpx.Response(200, json=_body(body["model"], content, served or body.get("service_tier")))
+        tier = body.get("service_tier") if served is None else None if served == "absent" else served
+        return httpx.Response(200, json=_body(body["model"], content, tier))
     return handler, seen
 
 
@@ -123,11 +124,48 @@ def test_a_flex_answer_to_a_call_that_did_not_ask_for_flex_is_still_refused(sche
     assert error.value.kind == "unsupported_service_tier"
 
 
-def test_a_flex_call_answered_on_another_paid_lane_is_refused():
-    handler, _ = _endpoint(served="priority")
+@pytest.mark.parametrize("schema", [None, SentenceVerdict])
+@pytest.mark.parametrize("served", ["default", "priority", "scale", "absent"])
+def test_a_flex_call_accepts_any_reported_lane_and_prices_it_standard_unless_flex(schema, served):
+    handler, _ = _endpoint(content='{"supported":true}', served=served)
+    client = _background(handler)
+    value, usage = client.complete(SECOND_LOOK_SYSTEM, "look", tier="large", schema=schema)
+    assert value in ({"supported": True}, '{"supported":true}')
+    assert "service_tier" not in usage                     # priced at standard rates
+    assert usd_of("gpt-6.1-terra", usage) == pytest.approx(1000 * 1.00e-6 + 100 * 5.00e-6)
+    assert client.provider_status()["completion"]["status"] == "ready"
+
+
+def test_a_slow_flex_call_is_sent_once_more_on_the_standard_lane_with_the_standard_timeout():
+    seen = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append((body, request.extensions["timeout"]["read"]))
+        if body["service_tier"] == "flex":
+            raise httpx.ReadTimeout("no answer within the flex timeout", request=request)
+        return httpx.Response(200, json=_body(body["model"], '{"supported":true}', "default"))
+    client = _background(handler)
+    value, usage = client.complete(SECOND_LOOK_SYSTEM, "look", tier="large", schema=SentenceVerdict)
+    assert value == {"supported": True} and usage == {"in": 1000, "out": 100}
+    (slow, slow_timeout), (retried, retried_timeout) = seen
+    assert slow["service_tier"] == "flex" and slow_timeout == FLEX_TIMEOUT_SECONDS == 300.0
+    assert retried["service_tier"] == "default" and retried_timeout == 120.0
+    assert {k: v for k, v in slow.items() if k != "service_tier"} == {
+        k: v for k, v in retried.items() if k != "service_tier"}
+    assert client.provider_status()["completion"]["status"] == "ready"
+    # Slowness is no refusal: the next background call asks for Flex again.
+    client.complete(SECOND_LOOK_SYSTEM, "look", tier="large", schema=SentenceVerdict)
+    assert seen[2][0]["service_tier"] == "flex"
+
+
+def test_a_standard_retry_that_also_times_out_fails_as_any_timeout_does_today():
+    def handler(request):
+        raise httpx.ReadTimeout("no answer", request=request)
+    client = _background(handler)
     with pytest.raises(ProviderUnavailable) as error:
-        _background(handler).complete(SECOND_LOOK_SYSTEM, "look", tier="large", schema=SentenceVerdict)
-    assert error.value.kind == "unsupported_service_tier"
+        client.complete("Write notes.", "Chapter.", tier="large")
+    assert error.value.kind == "network"
 
 
 def test_a_spoken_reply_never_goes_on_flex_even_from_a_background_client():
