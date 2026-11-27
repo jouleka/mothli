@@ -250,6 +250,26 @@ def test_background_budget_and_guards_start_far_above_real_reading_and_reach_the
         set_spend_limits(**dataclasses.asdict(before))
 
 
+def test_the_soft_brake_settings_reach_the_process(tmp_path) -> None:
+    """The owner's soft brake (27 November 2026): the day past the month and the month's
+    ceiling. The break it catches: a negative amount accepted, or a process whose caps do not
+    carry the settings."""
+    for wrong in ({"hosted_reader_usd_per_day_past_month": -0.01},
+                  {"hosted_reader_usd_month_ceiling": float("inf")}):
+        with pytest.raises(ValueError):
+            hosted_settings(tmp_path, **CHAT, **wrong)
+    before = spend_limits()
+    try:
+        with TestClient(hosted_app(hosted_settings(
+                tmp_path, **CHAT, hosted_reader_usd_per_day_past_month=0.4,
+                hosted_reader_usd_month_ceiling=9.5)), base_url="https://reader.example"):
+            limits = spend_limits()
+            assert (limits.reader_usd_per_day_past_month, limits.reader_usd_month_ceiling) == (
+                Decimal("0.4"), Decimal("9.5"))
+    finally:
+        set_spend_limits(**dataclasses.asdict(before))
+
+
 def test_the_free_weeks_settings_are_gone_and_an_env_file_that_still_names_them_starts(
         tmp_path, monkeypatch) -> None:
     """ADR 0046: the free weeks are removed, and their two settings with them. The break it

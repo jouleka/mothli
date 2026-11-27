@@ -24,7 +24,7 @@ import pytest
 from psycopg import conninfo, sql
 
 from app.hosted import plans
-from app.hosted.companion.spend import _DAY, _MONTH, set_spend_limits
+from app.hosted.companion.spend import _DAY, set_spend_limits
 from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.limits import update_limits
 from app.hosted.tenant.models import OwnerId
@@ -42,6 +42,7 @@ from tests.hosted.test_mothli_gate_postgres import (
     chat_spent,
     gate_of,
     gated,
+    month_wall,
     opened,
     refused,
     shelve,
@@ -116,8 +117,9 @@ def row_of(dsn: str, owner: uuid.UUID):
 
 
 def caps(day, month) -> None:
+    """The day and the month, with the month's ceiling at the month: no soft brake between."""
     set_spend_limits(reader_usd_per_day=Decimal(day), reader_usd_per_month=Decimal(month),
-                     platform_usd_per_day=100)
+                     platform_usd_per_day=100, reader_usd_month_ceiling=Decimal(month))
 
 
 # ---- the command ----------------------------------------------------------------------------------
@@ -233,7 +235,7 @@ def test_a_gifted_reader_is_held_by_the_day_and_month_and_gated_once_the_gift_en
     assert plan_of(database, a) == ("paying", None, "gift")
     refused(chat, book, "day", _DAY)                        # today's day, today's line
     caps("1", "0.10")
-    refused(chat, book, "month", _MONTH)
+    refused(chat, book, "month", month_wall(database))
     caps("1", "5")
     spend(chat, book, 0.01)
 

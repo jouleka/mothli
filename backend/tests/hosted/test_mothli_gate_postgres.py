@@ -32,7 +32,13 @@ from app import stream_conversation
 from app.hosted.companion import gate, jobs, routes
 from app.hosted.companion.memory import HostedBookStore
 from app.hosted.companion.source import HostedBookSource
-from app.hosted.companion.spend import PlanNeeded, ReaderAllowanceReached, SpendStore
+from app.hosted.companion.spend import (
+    PlanNeeded,
+    ReaderAllowanceReached,
+    SpendStore,
+    month_line,
+    next_month,
+)
 from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.limits import update_limits
 from app.hosted.tenant.models import OwnerId
@@ -117,6 +123,14 @@ def refused(adapter, book, limit: str, message: str) -> None:
     with pytest.raises(ReaderAllowanceReached) as raised:
         reserve(adapter, book, 0.001)
     assert (raised.value.limit, raised.value.reader_message) == (limit, message)
+
+
+def month_wall(dsn: str) -> str:
+    """The line at the month's ceiling today: the day named is when the next UTC month has
+    begun everywhere, by the database's clock."""
+    with psycopg.connect(dsn) as conn:
+        now = conn.execute("SELECT now()").fetchone()[0]
+    return month_line(next_month(now))
 
 
 def gated(adapter, book, why: str | None) -> None:

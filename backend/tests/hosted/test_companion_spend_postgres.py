@@ -510,7 +510,8 @@ def test_the_background_budget_and_guards_hold_background_work_and_never_the_cha
     the background; two readers' background calls at once both passing the budget's last cent;
     or the budget or a guard, once reached, refusing a reader's chat. Every refusal comes before
     anything is reserved and is never a line the reader is shown."""
-    from app.hosted.companion.spend import _DAY, _MONTH, _PLATFORM, BackgroundAllowanceReached
+    from app.hosted.companion.spend import (_DAY, _DAY_PAST_MONTH, _PLATFORM,
+                                            BackgroundAllowanceReached)
 
     a, b = readers["a"], readers["b"]
     book_a, book_b = shelve(database, a), shelve(database, b)
@@ -520,7 +521,7 @@ def test_the_background_budget_and_guards_hold_background_work_and_never_the_cha
         with pytest.raises(BackgroundAllowanceReached) as raised:
             reserve(adapter, book, 0.001, phase="notes-write")
         assert raised.value.limit == limit
-        assert raised.value.reader_message not in (_DAY, _MONTH, _PLATFORM)
+        assert raised.value.reader_message not in (_DAY, _DAY_PAST_MONTH, _PLATFORM)
         assert reservations(database, adapter._owner.value) == before
 
     def guard(day: str, month: str) -> None:

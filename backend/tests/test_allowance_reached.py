@@ -105,8 +105,10 @@ def test_a_home_reply_at_a_rest_line_speaks_of_the_shelf_not_one_book(bare, monk
     shelf = "Your books and your place in each are right here."
     for line, said in (
         (spend._DAY, "We’ve talked a lot today, so I’m resting until tomorrow. " + shelf),
-        (spend._MONTH, "We’ve talked our way through this month, so I’ll be back at the start of "
-                       "the next. " + shelf),
+        (spend._DAY_PAST_MONTH, "That’s a lot of good talk for one day! Let’s pick this up "
+                                "tomorrow. " + shelf),
+        (spend.month_line(date(2026, 12, 2)),
+         "We’ve talked our way through so much this month! I’ll be back on 2 December. " + shelf),
         (spend._PLATFORM, "I’m resting for the rest of today and I’ll be back tomorrow. " + shelf),
         (spend.first_month_line(date(2026, 12, 21)),
          "We’ve talked our way through your first month together already! I’ll be back on "
