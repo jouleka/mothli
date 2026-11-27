@@ -36,7 +36,7 @@ from app.eval.spoiler_gate import score_recap, unread_future_names
 from app.eval.spoiler_gate.binding import unsupported_event_bindings
 from app.eval.spoiler_gate.grounding import STOPWORDS
 from app.known_names import first_mention, names_note, same_person_names, text_same_person
-from app.llm.client import ProviderUnavailable
+from app.llm.client import ProviderUnavailable, Reusable
 from app.llm.jev import JevUnavailable
 from app.llm.jev_budget import budgeted_jev, estimate_jev_input
 from app.read_frontier import requested_snapshot
@@ -320,9 +320,13 @@ class SentenceVerdict(BaseModel):
 
 
 def second_look_prompt(sentence, earlier, passages, *, question, identities=()):
-    return json.dumps({"reader_message": question, "earlier_reply_sentences": list(earlier),
-                       "same_person_names": [list(group) for group in identities],
-                       "sentence": sentence, "passages": passages}, ensure_ascii=False)
+    # What every second look of one reply shares comes first, and is marked for the provider's
+    # prompt cache; the sentence and the ones before it follow. Same fields, only their order.
+    shared = {"reader_message": question, "same_person_names": [list(group) for group in identities],
+              "passages": passages}
+    text = json.dumps({**shared, "earlier_reply_sentences": list(earlier), "sentence": sentence},
+                      ensure_ascii=False)
+    return Reusable(text, len(json.dumps(shared, ensure_ascii=False)) - 1)
 
 
 # The checker refuses an input over this size by the budget's own count (bytes, see
@@ -816,7 +820,8 @@ def stream_read_prefix(book_id, body, catalog, store, settings, client, worker, 
                 prompt += "\n\n" + again
             prompt += "\n\nReply to the reader now."
             for event in write_and_gate(catalog=catalog, settings=settings, writer=writer, book_id=book_id,
-                                        system=STREAM_SYSTEM_REMEMBERING if remembered else STREAM_SYSTEM,
+                                        system=(STREAM_SYSTEM_REMEMBERING if remembered
+                                                else Reusable(STREAM_SYSTEM)),
                                         prompt=prompt, check=check, safe=safe, note=note):
                 if event[0] == "sentence":
                     if first_ms is None:

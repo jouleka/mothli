@@ -28,6 +28,7 @@ OpenAI-compatible endpoint), else ``stub``. ``tier`` is ``"cheap"`` (per-chapter
 """
 import hashlib
 import json
+import logging
 import math
 import os
 import sys
@@ -50,6 +51,42 @@ _DEFAULT_MODELS = {
 _OPENAI_DEFAULT_BASE = "https://api.openai.com/v1"
 _NATIVE_REASONING_EFFORT = {"gpt-6-luna": "medium", "gpt-6.1-sol": "low", "gpt-6.1-terra": "medium"}
 _ANTHROPIC_RETRY_STATUS = (429, 500, 502, 503, 504)
+logger = logging.getLogger(__name__)
+# Native OpenAI prompt caching (gpt-5.6 and later). In the default implicit mode every call pays a
+# 1.25x cache write on its whole prompt, read again only if the same prompt is sent again within
+# 30 minutes. Explicit mode writes only at a marked breakpoint; the rest is billed at the plain
+# rate. Only how a call is billed changes: the text the model reads is the same.
+_EXPLICIT_CACHE = {"mode": "explicit"}
+
+
+class Reusable(str):
+    """Prompt text whose first ``reusable_end`` characters recur across calls: native OpenAI
+    marks a cache breakpoint there. Everywhere else it is the same text as a plain ``str``."""
+
+    reusable_end: int
+
+    def __new__(cls, text: str, end: int | None = None):
+        made = super().__new__(cls, text)
+        made.reusable_end = len(text) if end is None else end
+        return made
+
+
+def _cache_content(text):
+    """``text`` as content parts with a breakpoint after its reusable part, or as it is when
+    nothing in it is marked. The parts join to exactly ``text``."""
+    end = getattr(text, "reusable_end", None)
+    if end is None or end <= 0:
+        return text
+    parts = [{"type": "text", "text": str(text[:end]), "prompt_cache_breakpoint": {"mode": "explicit"}}]
+    if end < len(text):
+        parts.append({"type": "text", "text": str(text[end:])})
+    return parts
+
+
+def _names_cache_option(exc: BadRequestError) -> bool:
+    said = " ".join(str(value) for value in (getattr(exc, "param", None), getattr(exc, "message", None),
+                                             getattr(exc, "body", None)) if value)
+    return "prompt_cache" in said
 
 
 class ProviderUnavailable(RuntimeError):
@@ -314,6 +351,26 @@ class LLMClient:
     def _complete_openai(self, system, user, tier, schema, max_output_tokens):
         model = self._model_for(tier)
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        cached = (self._is_native_openai and model in _NATIVE_REASONING_EFFORT
+                  and not getattr(self, "_cache_options_refused", False))
+
+        def send(method, **kwargs):
+            # The same request with the cache options, and, should the provider refuse those
+            # options, once more exactly as it was sent before they existed: a reply is never lost
+            # to how it is billed. After one refusal this client stops sending them.
+            if cached:
+                try:
+                    return method(model=model, prompt_cache_options=_EXPLICIT_CACHE,
+                                  messages=[{"role": "system", "content": _cache_content(system)},
+                                            {"role": "user", "content": _cache_content(user)}],
+                                  **kwargs)
+                except BadRequestError as exc:
+                    if not _names_cache_option(exc):
+                        raise
+                    self._cache_options_refused = True
+                    logger.warning("the provider refused the prompt cache options; sending without them")
+            return method(model=model, messages=messages, **kwargs)
+
         cap_name = "max_completion_tokens" if self._is_native_openai else "max_tokens"
         cap = ({cap_name: max_output_tokens} if max_output_tokens is not None else {})
         if self._is_native_openai and model in _NATIVE_REASONING_EFFORT:
@@ -338,8 +395,8 @@ class LLMClient:
             if "reasoning_effort" in cap:
                 cap["reasoning_effort"] = getattr(self, "conversation_draft_effort", cap["reasoning_effort"])
             parts, final = [], None
-            with self._oai.chat.completions.create(model=model, messages=messages, stream=True,
-                                                   stream_options={"include_usage": True}, **cap) as stream:
+            with send(self._oai.chat.completions.create, stream=True,
+                      stream_options={"include_usage": True}, **cap) as stream:
                 for chunk in stream:
                     if getattr(chunk, "usage", None) is not None:
                         final = chunk
@@ -350,7 +407,7 @@ class LLMClient:
                             on_delta(text)
             return "".join(parts), self._usage_openai(final, native=self._is_native_openai)
         if schema is None:
-            resp = self._oai.chat.completions.create(model=model, messages=messages, **cap)
+            resp = send(self._oai.chat.completions.create, **cap)
             if (self._is_native_openai and model in _NATIVE_REASONING_EFFORT
                     and getattr(resp, "service_tier", None) not in allowed_tiers):
                 self._record_provider_failure("completion", "unsupported_service_tier")
@@ -358,9 +415,7 @@ class LLMClient:
             return resp.choices[0].message.content or "", self._usage_openai(
                 resp, native=self._is_native_openai)
         if self._is_native_openai:
-            resp = self._oai.chat.completions.parse(
-                model=model, messages=messages, response_format=schema, **cap
-            )
+            resp = send(self._oai.chat.completions.parse, response_format=schema, **cap)
             parsed = resp.choices[0].message.parsed
             if parsed is None:
                 raise ValueError("OpenAI returned no parsed structured output (refusal or truncation)")
