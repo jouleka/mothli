@@ -14,7 +14,8 @@ import { Button } from "../ui/Button";
 import { companionPause, isAllowanceLine, needsPlan } from "../ui/companionPause";
 import { Icon } from "../ui/Icon";
 import { Moth, type MothMood } from "../ui/Moth";
-import { MothliInvitation } from "../ui/MothliPlan";
+import { KEPT_SAID, KeptQuestion, MothliInvitation } from "../ui/MothliPlan";
+import { dropKeptQuestion, keepQuestion, takeKeptQuestion, useKeptQuestion } from "../ui/keptQuestion";
 import { mothliClosed, useMothliClosed, useMothliStanding } from "../ui/mothliStanding";
 import { type ChapterName, PeoplePanel, StoryPanel } from "./StoryMemory";
 import { activeOfflineOwner } from "../pwa/offline";
@@ -329,6 +330,8 @@ export function AskTheBook({
   initialTab = "talk",
   navigate = null,
   hosted = false,
+  bookTitle = "",
+  place = null,
 }: {
   bookId: string;
   /** Hosted mode: replies come only as a stream; there is no non-streamed reply to fall back on
@@ -368,6 +371,10 @@ export function AskTheBook({
   chapterLabel?: string;
   initialTab?: CompanionTab;
   navigate?: { tab: CompanionTab; personId: EntityId | null; nonce: number } | null;
+  /** The book's title and the chapter the reader is in ("chapter 12", as the footer counts it),
+   * for the invitation under a question kept for a reader who does not pay. */
+  bookTitle?: string;
+  place?: string | null;
 }) {
   const localSessionRef = useRef<AskSession | null>(null);
   const retainedSession = sessionRef ?? localSessionRef;
@@ -451,6 +458,10 @@ export function AskTheBook({
   const standing = useMothliStanding();
   const closed = useMothliClosed();
   const wasClosed = useRef(closed);
+  // A question asked without the plan is kept for this book on this device, and sent once the
+  // reader joins (ui/keptQuestion.ts).
+  const kept = useKeptQuestion({ book: bookId });
+  const keptAtOpen = useRef(kept);
   const modal = !embedded || compact;
   const isCurrent = () =>
     retainedSession.current === session && activeOfflineOwner() === owner;
@@ -503,7 +514,8 @@ export function AskTheBook({
   }, [closed]);
 
   useEffect(() => {
-    inputRef.current?.focus({ preventScroll: true });
+    // Without the plan the invitation's words take focus, so they are read out.
+    if (!mothliClosed()) inputRef.current?.focus({ preventScroll: true });
     const keydown = (event: KeyboardEvent) => {
       // Another modal sheet over this panel (the plan sheet) owns the keyboard while it is open.
       const active = document.activeElement;
@@ -558,12 +570,17 @@ export function AskTheBook({
     bookScope = false,
   ) => {
     if (!isCurrent() || value.length < 2 || session.getSnapshot().busy) return;
-    // Mothli needs the plan: nothing is asked (a seed or a shortcut can still call this).
-    if (mothliClosed()) return;
-    const requestToken = session.getSnapshot().requestToken + 1;
     // Like any messaging app, what was typed leaves the box the moment it's sent; a shortcut
     // ("Catch me up") leaves whatever the reader had typed alone.
     const fromBox = value === session.getSnapshot().question.trim();
+    // Mothli needs the plan: nothing is asked. The question is kept on screen as theirs, with the
+    // invitation under it, and sent once they join.
+    if (mothliClosed()) {
+      keepQuestion({ book: bookId }, value);
+      if (fromBox) session.update({ question: "" });
+      return;
+    }
+    const requestToken = session.getSnapshot().requestToken + 1;
     session.update({
       ...(fromBox ? { question: "" } : {}),
       busy: true,
@@ -708,9 +725,12 @@ export function AskTheBook({
       session.typed = null;
       setPeopleOpen(false);
     } catch (reason) {
-      // Mothli needs the plan: the invitation stands where the reply would be, never an error
-      // line. The question goes back in the box for when the reader is back.
-      if (isCurrentRequest()) giveBackTyped();
+      // Mothli needs the plan: the question is kept on screen, with the invitation where the
+      // reply would be, never an error line; it is sent once the reader joins.
+      if (isCurrentRequest() && needsPlan(reason)) {
+        session.typed = null;
+        keepQuestion({ book: bookId }, value);
+      } else if (isCurrentRequest()) giveBackTyped();
       if (isCurrentRequest() && !needsPlan(reason)) {
         const message =
           companionPause(reason)?.line ??
@@ -985,6 +1005,15 @@ export function AskTheBook({
         if (askInstead) void send(`What did you notice in ${seed.label.replace(/^After /, "")}?`, true);
       });
   }, [seed?.id]);
+  // The reader is on the plan (they just joined, or joined elsewhere before opening this book):
+  // the question kept for them is sent, once, exactly as if they had just asked it. It is taken
+  // out of keeping in the same step, so nothing sends it again; removed, there is nothing to take.
+  // Where the server told nothing, it waits.
+  useEffect(() => {
+    if (standing?.state !== "paying" || !isCurrent() || session.getSnapshot().busy) return;
+    const waiting = takeKeptQuestion({ book: bookId });
+    if (waiting) void send(waiting, true);
+  }, [standing?.state, session]);
 
   const askAbout = (prompt: string) => {
     setTab("talk");
@@ -1008,6 +1037,44 @@ export function AskTheBook({
   const keepable = (exchange: AskExchange) =>
     !exchange.answer.insufficient_evidence && exchange.answer.answer_type !== "conversation";
   const lastKeepable = visibleExchanges.reduce((last, exchange, index) => (keepable(exchange) ? index : last), -1);
+
+  const composer = (
+    // Keyed, so the box stays the same box (and keeps focus) when the panel changes between
+    // the conversation and the kept question.
+    <form key="composer" className="mothli-composer lp-composer" onSubmit={submit}>
+      <label htmlFor={`${titleId}-message`} className="sr-only">
+        Message Mothli
+      </label>
+      <textarea
+        id={`${titleId}-message`}
+        ref={inputRef}
+        rows={1}
+        maxLength={500}
+        placeholder={selection ? "Ask about this passage…" : "Ask Mothli anything…"}
+        value={question}
+        // read-only, not disabled, while Mothli answers: a disabled box drops focus, and on
+        // a phone that closes the keyboard after every message and jolts the whole sheet
+        readOnly={busy}
+        aria-busy={busy || undefined}
+        onChange={(event) => session.update({ question: event.currentTarget.value })}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            void send();
+          }
+        }}
+      />
+      <Button
+        type="submit"
+        variant="primary"
+        aria-label="Send message"
+        className="mothli-send lp-send"
+        disabled={busy || question.trim().length < 2}
+      >
+        <Icon name="arrowRight" size={18} />
+      </Button>
+    </form>
+  );
 
   return (
     <div
@@ -1073,10 +1140,57 @@ export function AskTheBook({
           ))}
         </nav>
       </header>
-      {closed ? (
+      {closed && tab !== "talk" ? (
         <div className="lp-companion-body">
           <MothliInvitation key={tab} why={standing?.why ?? null} scope={rootRef} />
         </div>
+      ) : closed ? (
+        // Without the plan the chat keeps its box: a question asked is kept, as the reader's own,
+        // with the invitation about their book under it.
+        <>
+          <div className="mothli-thread lp-thread" role="region" aria-label="Book conversation">
+            {kept ? (
+              <KeptQuestion
+                key={kept}
+                question={kept}
+                why={standing?.why ?? null}
+                book={{ title: bookTitle, place }}
+                earlier={kept === keptAtOpen.current}
+                scope={rootRef}
+                onEdit={() => {
+                  dropKeptQuestion({ book: bookId });
+                  session.update({ question: kept });
+                  inputRef.current?.focus();
+                }}
+                onRemove={() => {
+                  dropKeptQuestion({ book: bookId });
+                  inputRef.current?.focus();
+                }}
+              />
+            ) : (
+              <MothliInvitation key={tab} why={standing?.why ?? null} scope={rootRef} />
+            )}
+          </div>
+          <div className="mothli-bottom lp-bottom">
+            {!kept && !selection && chips.length > 0 && (
+              <div className="mothli-shortcuts lp-starters" aria-label="Conversation shortcuts">
+                {chips.map((prompt) => (
+                  <button key={prompt} type="button" className="lp-chip" onClick={() => void send(prompt)}>
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div key="status" className="mothli-status lp-status" role="status" aria-live="polite">
+              {kept && <span className="sr-only">{KEPT_SAID}</span>}
+            </div>
+            {composer}
+            <p className="lp-spoiler-line" title="Mothli only uses the pages you’ve read">
+              <Icon name="shield" size={12} />
+              Only what you’ve read. No spoilers.
+            </p>
+          </div>
+        </>
       ) : tab === "people" ? (
         <div className="lp-companion-body">
           <PeoplePanel
@@ -1400,7 +1514,7 @@ export function AskTheBook({
                 )}
               </div>
             )}
-            <div className="mothli-status lp-status" role="status" aria-live="polite">
+            <div key="status" className="mothli-status lp-status" role="status" aria-live="polite">
               {saveError ||
                 (busy ? (
                   <span className="sr-only">Mothli is checking your pages.</span>
@@ -1417,39 +1531,7 @@ export function AskTheBook({
                   )
                 ))}
             </div>
-            <form className="mothli-composer lp-composer" onSubmit={submit}>
-              <label htmlFor={`${titleId}-message`} className="sr-only">
-                Message Mothli
-              </label>
-              <textarea
-                id={`${titleId}-message`}
-                ref={inputRef}
-                rows={1}
-                maxLength={500}
-                placeholder={selection ? "Ask about this passage…" : "Ask Mothli anything…"}
-                value={question}
-                // read-only, not disabled, while Mothli answers: a disabled box drops focus, and on
-                // a phone that closes the keyboard after every message and jolts the whole sheet
-                readOnly={busy}
-                aria-busy={busy || undefined}
-                onChange={(event) => session.update({ question: event.currentTarget.value })}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                    event.preventDefault();
-                    void send();
-                  }
-                }}
-              />
-              <Button
-                type="submit"
-                variant="primary"
-                aria-label="Send message"
-                className="mothli-send lp-send"
-                disabled={busy || question.trim().length < 2}
-              >
-                <Icon name="arrowRight" size={18} />
-              </Button>
-            </form>
+            {composer}
             <p className="lp-spoiler-line" title="Mothli only uses the pages you’ve read">
               <Icon name="shield" size={12} />
               {selection ? "Only this passage" : throughCurrentPage ? "Only up to this page. No spoilers." : "Only what you’ve read. No spoilers."}

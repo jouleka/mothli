@@ -14,7 +14,8 @@ import { Icon } from "../ui/Icon";
 import { Errand } from "../ui/Errand";
 import { useCycle } from "../ui/useCycle";
 import { Moth } from "../ui/Moth";
-import { MothliInvitation } from "../ui/MothliPlan";
+import { KeptQuestion, MothliInvitation } from "../ui/MothliPlan";
+import { dropKeptQuestion, keepQuestion, takeKeptQuestion, useKeptQuestion } from "../ui/keptQuestion";
 import { useMothliClosed, useMothliStanding } from "../ui/mothliStanding";
 import { MothliRemembers } from "./MothliRemembers";
 import "./home-chat.css";
@@ -82,6 +83,13 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
   // Whether the conversation was ever on screen here, so the invitation replacing it is read out.
   const showedChat = useRef(false);
   if (!closed && turns !== null) showedChat.current = true;
+  // A question asked without the plan is kept on this device, and sent once the reader joins.
+  const kept = useKeptQuestion("home");
+  const keptAtOpen = useRef(kept);
+  // Counts loads of the server's conversation since the reader was last without the plan: the
+  // kept question waits for one, so its reply joins the conversation rather than replacing it.
+  const [loaded, setLoaded] = useState(0);
+  const sendRef = useRef<(value: string, fromBox: boolean) => Promise<void>>();
   const [start, setStart] = useState(0); // first exchange drawn; earlier ones wait behind "Show earlier"
   const [question, setQuestion] = useState("");
   const [asked, setAsked] = useState<string | null>(null); // the question in flight
@@ -131,6 +139,7 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
       setStart(0);
       setOffers(null);
       setSuggested(null);
+      setLoaded(0);
       return;
     }
     let dead = false;
@@ -139,6 +148,7 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
         if (dead) return;
         setTurns(saved.turns);
         setStart(Math.max(0, exchangesOf(saved.turns).length - LATEST));
+        setLoaded((count) => count + 1);
       })
       .catch(() => { /* 404: no home conversation here; the panel stays hidden */ });
     return () => { dead = true; };
@@ -153,6 +163,16 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
 
   const busy = asked !== null;
   const waiting = busy && sentences.length === 0;
+
+  // The reader is on the plan and their conversation is here: the question kept for them is sent,
+  // once, exactly as if they had just asked it. It is taken out of keeping in the same step, so
+  // nothing sends it again; removed, there is nothing to take. Where the server told nothing, it
+  // waits.
+  useEffect(() => {
+    if (standing?.state !== "paying" || closed || !loaded || turns === null || busy) return;
+    const question = takeKeptQuestion("home");
+    if (question) void sendRef.current?.(question, false);
+  }, [standing?.state, loaded]);
   const thinkingLine = useCycle(THINKING_LINES, 2600, waiting);
 
   useEffect(() => {
@@ -214,6 +234,13 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
 
   const send = async (value: string, fromBox: boolean) => {
     if (value.length < 2 || busy) return;
+    // Mothli needs the plan: nothing is asked. The question is kept on screen as theirs, with the
+    // invitation under it, and sent once they join.
+    if (closed) {
+      keepQuestion("home", value);
+      if (fromBox) setQuestion("");
+      return;
+    }
     setError(null);
     setPause(null);
     setConfirming(false);
@@ -251,10 +278,14 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
         });
       }
     } catch (reason) {
-      setQuestion((current) => current || value);
       setSpoken([]);
-      // Mothli needs the plan: the invitation takes the conversation's place, and no line is said.
-      if (needsPlan(reason)) return;
+      // Mothli needs the plan: the question is kept, with the invitation under it, and no line
+      // is said.
+      if (needsPlan(reason)) {
+        keepQuestion("home", value);
+        return;
+      }
+      setQuestion((current) => current || value);
       const paused = companionPause(reason, { shelf: true });
       if (paused) setPause(paused.line);
       else setError(reason instanceof ApiError && reason.status === 503
@@ -266,6 +297,8 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
       setSentences([]);
     }
   };
+
+  sendRef.current = send;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -401,7 +434,24 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
         </div>
       )}
 
-      {closed ? (
+      {closed && kept ? (
+        <KeptQuestion
+          key={kept}
+          question={kept}
+          why={standing?.why ?? null}
+          home
+          earlier={kept === keptAtOpen.current}
+          onEdit={() => {
+            dropKeptQuestion("home");
+            setQuestion(kept);
+            inputRef.current?.focus();
+          }}
+          onRemove={() => {
+            dropKeptQuestion("home");
+            inputRef.current?.focus();
+          }}
+        />
+      ) : closed ? (
         <MothliInvitation why={standing?.why ?? null} home replaced={showedChat.current} />
       ) : (
       <>
@@ -537,6 +587,8 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
 
       {error && <p role="alert" className="ml-hc-error">{error}</p>}
       <p role="status" className="ml-hc-pause" hidden={!pause}>{pause}</p>
+      </>
+      )}
 
       <form className="ml-hc-composer" onSubmit={submit}>
         <label className="sr-only" htmlFor={inputId}>Ask Mothli about your books</label>
@@ -567,8 +619,6 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
         <Icon name="shield" size={12} />
         Only the pages you’ve read. No spoilers.
       </p>
-      </>
-      )}
     </section>
   );
 }
