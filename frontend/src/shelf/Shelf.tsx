@@ -18,7 +18,9 @@ import { MothliMark } from "../ui/MothliMark";
 import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupportedBookMessage } from "../import/bookFiles";
 import { readLastPassage, sinceLabel } from "../reader/lastPassage";
 import { shelfJourney } from "../reader/chapterPlace";
-import { useMothliClosed } from "../ui/mothliStanding";
+import { keptQuestion, useKeptQuestion } from "../ui/keptQuestion";
+import { useMothliClosed, useMothliStanding } from "../ui/mothliStanding";
+import { FirstBookInvitation, firstBookInvitationSeen, noteFirstBookInvitationSeen } from "./FirstBookInvitation";
 import { Account } from "./Account";
 import { keptWithoutPlanNote, takeKeptWithoutPlan } from "./SignIn";
 import { RemoveBook } from "./RemoveBook";
@@ -284,6 +286,25 @@ export function Shelf({
   const featured = books?.find((book) => book.book_id === recent[0]);
   const spotlight = featured ?? books?.[0];
   const spotlightId = spotlight?.book_id;
+  // A new reader's first book on the shelf: Mothli's one invitation about it, shown once (noted as
+  // seen the moment it shows). Never to a reader who has or had the plan, never where the server
+  // has no chat, and never over a question the reader asked anyway and is kept for them.
+  const standingState = useMothliStanding()?.state;
+  const homeKept = useKeptQuestion("home");
+  const [invited, setInvited] = useState<Book | null>(null);
+  useEffect(() => {
+    if (invited || !chat || standingState !== "new" || !books?.length || homeKept) return;
+    if (firstBookInvitationSeen() || books.some((book) => keptQuestion({ book: book.book_id }))) return;
+    noteFirstBookInvitationSeen();
+    setInvited(books.find((book) => arriving.has(book.book_id)) ?? spotlight ?? books[0]);
+  }, [invited, chat, standingState, books, homeKept, arriving, spotlight]);
+  const showInvitation = invited && standingState === "new" && !homeKept;
+  const endInvitation = () => {
+    setInvited(null);
+    // The card held focus: carry on where the reader reads.
+    window.setTimeout(() =>
+      (document.querySelector<HTMLElement>(".ml-spread-cta") ?? document.getElementById("library-main"))?.focus());
+  };
   /* Chapter path for the continue card: fetched lazily, and silently absent when unavailable. */
   useEffect(() => {
     if (!spotlightId) return;
@@ -601,6 +622,8 @@ export function Shelf({
           </div>
         )}
 
+        {showInvitation && <FirstBookInvitation book={invited} onDone={endInvitation} />}
+
         {/* The open book: the left page is the book you are in, the right page is Mothli's margin. */}
         {spotlight && browsingAll && (
           <section
@@ -692,7 +715,7 @@ export function Shelf({
           </section>
         )}
 
-        {chat && "homeConversation" in api && <HomeChat shelfEmpty={libraryEmpty} onShelfChanged={() => void refresh()} />}
+        {chat && "homeConversation" in api && <HomeChat shelfEmpty={libraryEmpty} invitedElsewhere={!!showInvitation} onShelfChanged={() => void refresh()} />}
 
         <section className="ml-collection" aria-labelledby="collection-title">
           <div className="ml-collection-head">
