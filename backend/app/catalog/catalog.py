@@ -757,8 +757,12 @@ class Catalog:
                 self._conn.rollback()
                 raise
 
-    def note_reservation_actual(self, book_id, reservation_id, *, input_tokens, output_tokens, usd, model=None):
-        """Replace a reservation's estimate with known actual usage while keeping it durable."""
+    def note_reservation_actual(self, book_id, reservation_id, *, input_tokens, output_tokens, usd, model=None,
+                                cache_read_tokens=None, cache_write_tokens=None):
+        """Replace a reservation's estimate with known actual usage while keeping it durable.
+
+        The cache split is accepted for the hosted ledger's sake (migration 0043) and not kept
+        locally."""
         self._check_cost_value(input_tokens, "input_tokens")
         self._check_cost_value(output_tokens, "output_tokens")
         self._check_usd(usd)

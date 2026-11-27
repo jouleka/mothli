@@ -403,7 +403,8 @@ class SpendStore(OwnerBoundAdapter):
         row = conn.execute(
             f"""SELECT id,book_id,book_incarnation,chapter_ordinal,phase,model,purpose,
                        reserved_input_tokens,reserved_output_tokens,reserved_usd,idempotency_key,
-                       background,(created_at AT TIME ZONE 'UTC')::date AS spend_day
+                       background,cache_read_tokens,cache_write_tokens,
+                       (created_at AT TIME ZONE 'UTC')::date AS spend_day
                 FROM public.cost_reservations
                 WHERE owner_id=%s AND id=%s AND {book_clause}
                   AND state='reserved' AND purpose IS NOT NULL
@@ -566,10 +567,19 @@ class SpendStore(OwnerBoundAdapter):
         return reservation.hex
 
     def note_reservation_actual(self, book_id, reservation_id, *, input_tokens, output_tokens,
-                                usd, model=None):
-        """Replace a reservation's estimate with known actual usage while keeping it open."""
+                                usd, model=None, cache_read_tokens=None, cache_write_tokens=None):
+        """Replace a reservation's estimate with known actual usage while keeping it open.
+
+        ``cache_read_tokens`` and ``cache_write_tokens`` (migration 0043), when the call's usage
+        gave them, are the parts of ``input_tokens`` read from and written to the provider's
+        prompt cache. They are only recorded, and copied into the ledger by ``settle_cost``;
+        ``usd`` is the call's money as before."""
         _check_tokens(input_tokens, "input_tokens")
         _check_tokens(output_tokens, "output_tokens")
+        for value, what in ((cache_read_tokens, "cache_read_tokens"),
+                            (cache_write_tokens, "cache_write_tokens")):
+            if value is not None:
+                _check_tokens(value, what)
         Catalog._check_usd(usd)
         if model is not None and (not isinstance(model, str) or not model):
             raise ValueError("actual billing model must be a nonempty string")
@@ -581,10 +591,10 @@ class SpendStore(OwnerBoundAdapter):
                 """UPDATE public.cost_reservations
                    SET reserved_input_tokens=%s,reserved_output_tokens=%s,reserved_usd=%s,
                        actual_input_tokens=%s,actual_output_tokens=%s,actual_usd=%s,
-                       model=COALESCE(%s,model)
+                       model=COALESCE(%s,model),cache_read_tokens=%s,cache_write_tokens=%s
                    WHERE owner_id=%s AND id=%s AND state='reserved'""",
                 (input_tokens, output_tokens, amount, input_tokens, output_tokens, amount, model,
-                 self._owner.value, row["id"]))
+                 cache_read_tokens, cache_write_tokens, self._owner.value, row["id"]))
             conn.execute("SELECT public.companion_platform_adjust(%s,%s,0)",
                          (row["spend_day"], amount - row["reserved_usd"]))
 
@@ -596,13 +606,15 @@ class SpendStore(OwnerBoundAdapter):
             conn.execute(
                 """INSERT INTO public.cost_ledger
                      (owner_id,book_id,book_incarnation,chapter_ordinal,phase,model,input_tokens,
-                      output_tokens,usd,idempotency_key,purpose,background)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                      output_tokens,usd,idempotency_key,purpose,background,cache_read_tokens,
+                      cache_write_tokens)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (self._owner.value, row["book_id"], row["book_incarnation"],
                  row["chapter_ordinal"], row["phase"], row["model"],
                  row["reserved_input_tokens"], row["reserved_output_tokens"],
                  row["reserved_usd"], row["idempotency_key"],
-                 _settled_purpose(phase, row["purpose"]), row["background"]))
+                 _settled_purpose(phase, row["purpose"]), row["background"],
+                 row["cache_read_tokens"], row["cache_write_tokens"]))
             conn.execute(
                 """UPDATE public.cost_reservations SET state='settled',settled_at=now()
                    WHERE owner_id=%s AND id=%s AND state='reserved'""",

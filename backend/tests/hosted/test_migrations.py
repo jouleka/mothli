@@ -729,8 +729,10 @@ def _kept_rows(conn) -> dict:
     return {"users": conn.execute(
         f"SELECT * FROM users WHERE id NOT IN (SELECT account_id FROM {account}) "
         "ORDER BY 1, 2").fetchall(),
-        # (0036's background mark is checked by its own test.)
-        "cost_ledger": conn.execute("SELECT to_jsonb(entry) - 'background' FROM cost_ledger"
+        # (0036's background mark and 0043's cache split, empty on rows already there, are
+        # checked by their own tests.)
+        "cost_ledger": conn.execute("SELECT to_jsonb(entry) - 'background' - 'cache_read_tokens'"
+                                    " - 'cache_write_tokens' FROM cost_ledger"
                                     " AS entry ORDER BY owner_id, id").fetchall()} | {
         "books": conn.execute("SELECT to_jsonb(book) - 'split_hash' - 'edition_of' "
                               "- 'no_holder_since' "
@@ -1285,7 +1287,9 @@ def test_background_spend_is_marked_by_its_names_and_nothing_else_changes(
                   "recollect-write", "recollect-check"}
     with psycopg.connect(database) as conn:
         for table, before in (("cost_ledger", ledger), ("cost_reservations", held)):
-            assert conn.execute(f"SELECT to_jsonb(row) - 'background' FROM {table} AS row"
+            # 0043's cache split, empty on rows already there, is checked by its own test.
+            assert conn.execute(f"SELECT to_jsonb(row) - 'background' - 'cache_read_tokens'"
+                                f" - 'cache_write_tokens' FROM {table} AS row"
                                 " ORDER BY id").fetchall() == before
             marked = dict(conn.execute(f"SELECT COALESCE(purpose, ''), background FROM {table}"
                                        ).fetchall())
@@ -1729,6 +1733,58 @@ def test_no_free_weeks_keeps_every_plan_and_gift_and_answers_new_paying_or_ended
                             (paying,)).fetchone()[0] == 0.25
         assert conn.execute("SELECT first_month_spent_usd FROM reader_plan_state(%s)",
                             (never,)).fetchone()[0] is None
+        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
+
+
+# ---- 0043: the cache split of a call's input, recorded only -----------------------------------------
+
+CACHE_TOKENS = 43
+
+
+def test_cache_tokens_start_unknown_change_nothing_else_and_are_never_negative(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0043 with settled and open calls: an old
+    row given a cache split it never had (it would read as a call that used no cache), any other
+    value changed, a negative split accepted, or a new definer."""
+    _apply_before(database, CACHE_TOKENS, monkeypatch)
+    reader = uuid.uuid4()
+    with psycopg.connect(database) as conn:
+        conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (reader,))
+        for purpose in ("stream-reply", "stream-sentence-check", "notes-write"):
+            key = f"companion:{uuid.uuid4().hex}"
+            conn.execute("INSERT INTO cost_ledger (owner_id, phase, model, input_tokens,"
+                         " output_tokens, usd, idempotency_key, purpose)"
+                         " VALUES (%s, 'synthesis', 'm', 100, 10, 0.01, %s, %s)",
+                         (reader, key, purpose))
+            conn.execute("INSERT INTO cost_reservations (owner_id, id, phase, model,"
+                         " reserved_input_tokens, reserved_output_tokens, reserved_usd,"
+                         " idempotency_key, purpose) VALUES (%s, %s, 'synthesis', 'm', 1, 1,"
+                         " 0.01, %s, %s)", (reader, uuid.uuid4(), key, purpose))
+        before = {table: conn.execute(f"SELECT to_jsonb(row) FROM {table} AS row ORDER BY id"
+                                      ).fetchall()
+                  for table in ("cost_ledger", "cost_reservations")}
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        for table, rows in before.items():
+            assert conn.execute(
+                f"SELECT to_jsonb(row) - 'cache_read_tokens' - 'cache_write_tokens'"
+                f" FROM {table} AS row ORDER BY id").fetchall() == rows
+            assert conn.execute(
+                f"SELECT count(*) FROM {table}"
+                " WHERE cache_read_tokens IS NOT NULL OR cache_write_tokens IS NOT NULL"
+            ).fetchone()[0] == 0
+            assert conn.execute(
+                "SELECT column_name, data_type, is_nullable FROM information_schema.columns"
+                " WHERE table_schema = 'public' AND table_name = %s"
+                " AND column_name LIKE 'cache_%%' ORDER BY column_name", (table,)).fetchall() == [
+                ("cache_read_tokens", "bigint", "YES"), ("cache_write_tokens", "bigint", "YES")]
+        for column in ("cache_read_tokens", "cache_write_tokens"):
+            with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+                conn.execute(f"UPDATE cost_ledger SET {column} = -1")
+            with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+                conn.execute(f"UPDATE cost_reservations SET {column} = -1")
         assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
 
 
