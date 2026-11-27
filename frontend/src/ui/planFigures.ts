@@ -32,7 +32,7 @@ export function savingOf(monthlyMinor: number, yearlyMinor: number): number | nu
   return percent >= 1 ? percent : null;
 }
 
-export const yearlyMonth = (perMonth: string) => `${perMonth} a month, billed yearly`;
-export const yearlyTotal = (total: string, saving: number | null) =>
-  saving === null ? `${total} a year.` : `${total} a year, ${saving}% less than paying monthly.`;
+/** The yearly plan as a month, always with the total it is billed: never the month alone. */
+export const yearlyMonth = (perMonth: string, total: string) => `${perMonth} a month, billed ${total} a year`;
+export const yearlySaving = (saving: number) => `${saving}% less than paying monthly.`;
 export const monthlyTotal = (total: string) => `${total} a month`;

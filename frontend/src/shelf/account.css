@@ -72,9 +72,8 @@
   border-radius: 12px;
   background: var(--m-surface);
 }
-/* The yearly plan, the natural choice: a stronger edge and the words "Best value", never the
- * colour alone. */
-.ml-plan-choice--yearly { border: 2px solid var(--m-accent); }
+/* Both plans drawn alike: neither is chosen for the reader or favoured (the owner's decision,
+ * until the first paying readers are looked at). */
 .ml-plan-choice h3 {
   display: flex;
   flex-wrap: wrap;
@@ -84,15 +83,9 @@
   font: 600 20px/1.2 var(--m-display);
   color: var(--m-ink);
 }
-.ml-plan-tag {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--m-accent-wash);
-  font: 600 12px/1.4 var(--m-ui);
-  letter-spacing: 0.04em;
-  color: var(--m-accent);
-}
 .ml-plan-price { margin: 0; font: 500 19px/1.35 var(--m-book); color: var(--m-ink); }
+/* The maker's line: in the book's voice, a little warmer than the small print around it. */
+.ml-plan-maker { margin: 0; font: italic 400 16px/1.45 var(--m-book); color: var(--m-body); }
 .ml-plan-choice .ui-button { margin-top: 6px; min-height: 44px; }
 @media (max-width: 560px) {
   .ml-plan-choice .ui-button { width: 100%; justify-content: center; }

@@ -9,7 +9,7 @@ import { assistRequest } from "./assistRequests";
 
 /** Said when the server has no help for a picked passage (a 404: hosted mode, for now). */
 export const PASSAGE_HELP_ABSENT =
-  "I can’t help with a picked passage here yet. Ask me about it in the chat, in your own words.";
+  "I can’t help with a picked passage here yet. Just ask me about it in your own words.";
 
 const LABELS: Record<SelectionAction, string> = {
   explain: "Explain this passage",

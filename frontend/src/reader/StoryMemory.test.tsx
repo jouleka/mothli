@@ -70,7 +70,7 @@ describe("the cast and the story with hosted ids", () => {
 });
 
 describe("a chapter Mothli could not make notes on", () => {
-  const UNREMEMBERED = "This chapter slipped past me, so I couldn’t make notes on it. You can still ask me about it in the chat.";
+  const UNREMEMBERED = "This chapter slipped past me, so I couldn’t make notes on it. You can still ask me about it whenever you like.";
 
   test("the story says so kindly in place of its empty summary, and only for that chapter", async () => {
     mocks.notes.mockResolvedValue({ as_of_chapter: 3, cast: [], chapters: [

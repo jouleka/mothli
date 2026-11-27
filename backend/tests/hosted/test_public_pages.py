@@ -87,8 +87,8 @@ def test_the_front_page_says_what_mothli_is_what_it_costs_and_who_sells_it(tmp_p
             "Reading here is free, always: your books, your place, your highlights and the free library.",
             "Mothli knows the book only as far as you’ve read it",
             # The prices as the app writes them, from 12.99 a month and 79.99 a year.
-            "$6.67 a month, billed yearly",
-            "$79.99 a year, 48% less than paying monthly.",
+            "$6.67 a month, billed $79.99 a year",
+            "48% less than paying monthly.",
             "$12.99 a month",
             "Payments are handled by Paddle, who sells Mothli on our behalf.",
             "Mothli is run by Example Reading Ltd.",
@@ -168,7 +168,7 @@ def test_without_prices_or_operator_the_pages_say_nothing_untrue(tmp_path, built
         assert "Read with a friend in the margin." in front
         assert "You’ll see the prices when you choose." in front
         assert NOT_OPEN in front
-        assert "a month, billed yearly" not in front and "$" not in text(front)
+        assert "a month, billed" not in front and "$" not in text(front)
         assert "Mothli is run by" not in front
         for path in ("/terms", "/privacy", "/refunds", "/contact"):
             page = found[path].text
@@ -189,7 +189,7 @@ def test_paddle_failing_gives_the_plan_without_figures(tmp_path, built) -> None:
     found, _recorder = fetch(tmp_path, built, ["/"], lambda r: httpx.Response(503), **KEYED)
     assert found["/"].status_code == 200
     assert "You’ll see the prices when you choose." in found["/"].text
-    assert "a month, billed yearly" not in found["/"].text
+    assert "a month, billed" not in found["/"].text
 
 
 def test_a_plan_without_a_saving_says_none(tmp_path, built) -> None:
@@ -197,7 +197,7 @@ def test_a_plan_without_a_saving_says_none(tmp_path, built) -> None:
               YEARLY_NEW: entity(YEARLY_NEW, "12000", "year")}
     found, _recorder = fetch(tmp_path, built, ["/"], catalog(prices), **KEYED)
     body = found["/"].text
-    assert "$10.00 a month, billed yearly" in body and "$120.00 a year." in body
+    assert "$10.00 a month, billed $120.00 a year" in body
     assert "less than paying monthly" not in body
 
 

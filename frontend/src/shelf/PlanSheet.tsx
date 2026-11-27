@@ -1,5 +1,6 @@
 /** Hosted mode: the plan sheet, "Keep talking with Mothli" (ADR 0045 section 6). The two plans with
- * the prices Paddle gives this reader (yearly first, as a month, with its saving), then Paddle's
+ * the prices Paddle gives this reader (yearly first, as a month beside the total it is billed, with
+ * its saving; neither chosen for the reader nor favoured, both drawn alike), then Paddle's
  * checkout over the page for a transaction the server made. When the checkout completes or closes
  * nothing is assumed: the sheet asks the server for the plan until it says the reader is on it,
  * for a bounded time. After a completed payment that has not arrived in that time it says the
@@ -20,7 +21,7 @@ import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
 import { claimLatePlan, watchForLatePlan } from "../ui/latePlan";
 import { mothliStanding } from "../ui/mothliStanding";
-import { monthlyTotal, yearlyMonth, yearlyTotal } from "../ui/planFigures";
+import { monthlyTotal, yearlyMonth, yearlySaving } from "../ui/planFigures";
 import { PAGE_PATHS } from "../public/pages";
 import { listenToPaddle, loadPaddle, planPrices, type PaddleLike, type PlanPrices } from "./paddle";
 import "../library/free-library.css";
@@ -40,10 +41,11 @@ export const PLAN_LINES = {
   tryAgain: "Try again",
   yearly: "Yearly",
   monthly: "Monthly",
-  bestValue: "Best value",
   chooseYearly: "Choose yearly",
   chooseMonthly: "Choose monthly",
   starting: "One moment…",
+  // The maker's own line (the owner's decision, 27 November 2026): no quotes, no counts.
+  maker: "Made by one reader, for readers. No ads.",
   // The owner's soft brake (27 November 2026), in words, never numbers.
   rhythm: "I keep a gentle daily rhythm, so on a very busy day I might ask to pick up again tomorrow.",
   cancelAnyTime: "Cancel any time from Your account. Your books stay free either way.",
@@ -67,7 +69,7 @@ export const CHECKOUT_REFUSED: Record<string, string> = {
 };
 export const CHECKOUT_FAILED = "I couldn’t start the checkout just now. Check your connection and try again.";
 
-export { monthlyTotal, yearlyMonth, yearlyTotal };
+export { monthlyTotal, yearlyMonth, yearlySaving };
 
 // After the checkout, how often and how long to ask the server whether the plan has arrived.
 // A payment Paddle has completed gets the longer wait; a checkout only closed, a short check in
@@ -350,20 +352,16 @@ export function PlanSheet({
             <>
               <ul className="ml-plan-choices">
                 {prices.yearly && (
-                  <li className="ml-plan-choice ml-plan-choice--yearly">
-                    <h3>
-                      {PLAN_LINES.yearly} <span className="ml-plan-tag">{PLAN_LINES.bestValue}</span>
-                    </h3>
+                  <li className="ml-plan-choice">
+                    <h3>{PLAN_LINES.yearly}</h3>
                     <div id={yearlyId}>
                       <p className="ml-plan-price">
-                        {prices.yearly.perMonth ? yearlyMonth(prices.yearly.perMonth) : `${prices.yearly.total} a year`}
+                        {prices.yearly.perMonth
+                          ? yearlyMonth(prices.yearly.perMonth, prices.yearly.total)
+                          : `${prices.yearly.total} a year`}
                       </p>
-                      {(prices.yearly.perMonth || prices.yearly.saving !== null) && (
-                        <p className="ml-mem-quiet">
-                          {prices.yearly.perMonth
-                            ? yearlyTotal(prices.yearly.total, prices.yearly.saving)
-                            : `${prices.yearly.saving}% less than paying monthly.`}
-                        </p>
+                      {prices.yearly.saving !== null && (
+                        <p className="ml-mem-quiet">{yearlySaving(prices.yearly.saving)}</p>
                       )}
                     </div>
                     <Button
@@ -384,7 +382,7 @@ export function PlanSheet({
                     <p className="ml-plan-price" id={monthlyId}>{monthlyTotal(prices.monthly.total)}</p>
                     <Button
                       ref={monthlyRef}
-                      variant={prices.yearly ? "secondary" : "primary"}
+                      variant="primary"
                       aria-describedby={monthlyId}
                       disabled={starting !== null}
                       aria-busy={starting === "monthly" || undefined}
@@ -396,6 +394,7 @@ export function PlanSheet({
                 )}
               </ul>
               {problem && <p className="fl-error" role="alert">{problem}</p>}
+              <p className="ml-plan-maker">{PLAN_LINES.maker}</p>
               <p className="ml-mem-quiet">{PLAN_LINES.rhythm}</p>
               <p className="ml-mem-quiet">{PLAN_LINES.cancelAnyTime}</p>
               <p className="ml-mem-quiet">{PLAN_LINES.paddle}</p>

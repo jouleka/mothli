@@ -308,7 +308,7 @@ export function ReaderMarks({
                 </div>
                 {onDeleteReply && <Button variant="ghost" className="mark-delete icon-button" aria-label="Delete saved reply" onClick={() => onDeleteReply(reply.id)}><Icon name="close" size={15} /></Button>}
               </li>)}
-            </ol> : filter === "mothli" && !keptBackLine && <div className="notebook-empty"><Icon name="sparkle" size={30} /><p>{query.trim() ? "Nothing found." : "Keep any reply from the chat with “Keep in Notebook”, and it lands here."}</p></div>}
+            </ol> : filter === "mothli" && !keptBackLine && <div className="notebook-empty"><Icon name="sparkle" size={30} /><p>{query.trim() ? "Nothing found." : "Keep anything Mothli says with “Keep in Notebook”, and it lands here."}</p></div>}
             {keptBackLine && <p className="notebook-kept-back">{keptBackLine}</p>}
           </section>}
           <a

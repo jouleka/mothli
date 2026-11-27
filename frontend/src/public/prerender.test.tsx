@@ -121,7 +121,7 @@ describe("the pages written out", () => {
       expect(written, `${page} ${version}`).toBe(appDraws(page, site));
     }
     expect(rootOf(filled(built.pages.front.o1p1, { operator: OPERATOR, plan: PLAN, writer: null })))
-      .toContain("$6.67 a month, billed yearly");
+      .toContain("$6.67 a month, billed $79.99 a year");
   });
 
   // Catches: the server told to write an amount differently from the app.

@@ -158,7 +158,7 @@ describe("the pages' words", () => {
       // Step 7: asking to delete stops the plan renewing by itself; never "cancel first".
       "If you’re on the plan, asking to delete your account stops it from renewing, so you won’t be charged again. You keep Mothli until the end of the month or year you have paid for, or until your account is erased, whichever comes first. If you come back within the 30 days, your plan still ends unless you choose “Keep my plan”.",
       // ADR 0046: talking with Mothli is the plan, with no free weeks.
-      "Talking with Mothli is the plan: the chat in your books and on your home page, who’s who, and the story so far. The plan is paid every month or every year. The prices are on our front page and in the checkout.",
+      "Talking with Mothli is the plan: in your books and on your home page, along with who’s who and the story so far. The plan is paid every month or every year. The prices are on our front page and in the checkout.",
       SHARED_NOTES,
       // The owner's soft brake (27 November 2026), in words, never a number.
       "Mothli keeps a gentle daily rhythm, so on a very busy day it may ask to pick up again tomorrow. The plan also has fair-use limits for each day and each month",
@@ -235,8 +235,8 @@ describe("the front page", () => {
   test("the prices are the server's, the yearly plan first as a month with its saving", async () => {
     serve({ operator: OPERATOR, plan: PLAN, writer: null });
     const { container } = render(<SignIn />);
-    const yearly = await screen.findByText("$6.67 a month, billed yearly");
-    const total = screen.getByText("$79.99 a year, 48% less than paying monthly.");
+    const yearly = await screen.findByText("$6.67 a month, billed $79.99 a year");
+    const total = screen.getByText("48% less than paying monthly.");
     const monthly = screen.getByText("$12.99 a month");
     expect(yearly.compareDocumentPosition(monthly) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(total.compareDocumentPosition(monthly) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -259,8 +259,8 @@ describe("the front page", () => {
   test("other figures from the catalog are shown as they are", async () => {
     serve({ operator: OPERATOR, plan: { currency: "EUR", monthly: "1000", yearly: "9000" }, writer: null });
     render(<SignIn />);
-    await screen.findByText("€7.50 a month, billed yearly");
-    expect(screen.getByText("€90.00 a year, 25% less than paying monthly.")).toBeTruthy();
+    await screen.findByText("€7.50 a month, billed €90.00 a year");
+    expect(screen.getByText("25% less than paying monthly.")).toBeTruthy();
     expect(screen.getByText("€10.00 a month")).toBeTruthy();
   });
 

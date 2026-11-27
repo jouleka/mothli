@@ -77,7 +77,7 @@ function MemoryState({ mood, children }: { mood: "thinking" | "sleepy" | "curiou
  * section 4), and it names no limit, cost or wait. */
 export const CATCHING_UP = "I’m still catching up on what you’ve read. It’ll fill in here as I go.";
 /** A chapter Mothli could not make notes on (hosted story memory keeps it and reads on). */
-const UNREMEMBERED ="This chapter slipped past me, so I couldn’t make notes on it. You can still ask me about it in the chat.";
+const UNREMEMBERED ="This chapter slipped past me, so I couldn’t make notes on it. You can still ask me about it whenever you like.";
 
 /** Whether the notes shown stop short of the chapters the reader has finished. ``place`` is the
  * reader's chapter counter (the read map's finished chapters, past which the server never shows
