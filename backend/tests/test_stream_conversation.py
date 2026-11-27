@@ -285,3 +285,31 @@ def test_a_dropped_sentence_does_not_cost_the_ones_after_it_their_second_look(pa
     assert [e["text"] for e in events if e["type"] == "sentence"] == [
         f"Mara seems careful with tin {i}." for i in range(5)]
     assert events[-1]["answer"]["dropped_sentences"] == 1
+
+
+def test_the_reply_and_its_second_looks_mark_what_they_share_for_the_prompt_cache(page_env, monkeypatch):
+    """Only how the calls are billed: the reply's fixed instructions and the part every second
+    look of one reply shares are marked as reusable; the text itself is unchanged."""
+    from app.stream_conversation import STREAM_SYSTEM
+    api, bid, app, settings = page_env
+    point = confirm(api, bid)
+    settings.reader_conversation_jev = settings.reader_conversation_stream = True
+    seen = []
+
+    def complete(system, user, tier="cheap", schema=None):
+        seen.append((system, user))
+        if schema is not None:
+            return {"supported": True}, {"in": 90, "out": 5}
+        return "Mara seems careful with tin 1. Mara seems careful with tin 2.", {"in": 100, "out": 40}
+
+    stream_models(app, monkeypatch, "", unsupported=["careful"])
+    monkeypatch.setattr(app.state.client, "complete", complete)
+    events = events_of(api.post(f"/api/books/{bid}/ask/stream",
+                                json={"question": "What did Mara do?", "read_frontier": point}))
+    assert len([e for e in events if e["type"] == "sentence"]) == 2
+    (reply_system, _), *looks = seen
+    assert reply_system == STREAM_SYSTEM and reply_system.reusable_end == len(STREAM_SYSTEM)
+    assert len(looks) == 2
+    heads = {user[:user.reusable_end] for _, user in looks}
+    assert len(heads) == 1 and '"passages"' in heads.pop()
+    assert all('"sentence"' in user[user.reusable_end:] for _, user in looks)
