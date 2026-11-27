@@ -14,10 +14,7 @@ import "./account.css";
 export const ACCOUNT_PLAN_LINES = {
   loading: "Looking up your plan…",
   failed: "I couldn’t look up your plan just now. Try again in a moment.",
-  new: "Talking with Mothli is free for your first two weeks, starting the first time you use it.",
-  free: "You’re in your free weeks with Mothli.",
-  endedTime: "Your two free weeks with Mothli are over. Your books stay free, always.",
-  endedCeiling: "Your free start with Mothli is all used up. Your books stay free, always.",
+  new: "Talking with Mothli comes with the plan, whenever you’d like to start. Your books stay free, always.",
   endedPlan: "Your plan has ended. Your books stay free, always.",
   onPlan: "You’re on the plan.",
   retrying: "Your last payment didn’t go through. Paddle will try again, or you can update your card here.",
@@ -36,7 +33,6 @@ export const ACCOUNT_PLAN_LINES = {
   confirmNoDate: "Cancel your plan? You won’t be charged again. Your books stay yours, always.",
   failedAction: "I couldn’t do that just now. Check your connection and try again.",
 } as const;
-export const freeEnds = (day: string) => `Your free weeks end on ${day}.`;
 /** A gift with an end: the last day it lasts, in the reader's own zone. */
 export const giftUntil = (day: string) => `Mothli is on the house for you until ${day}. Enjoy!`;
 export const renews = (kind: "monthly" | "yearly", day: string | null) =>
@@ -122,10 +118,7 @@ export function YourPlan({
 
   const lines: string[] = [];
   if (plan.state === "new") lines.push(ACCOUNT_PLAN_LINES.new);
-  else if (plan.state === "free") lines.push(day ? freeEnds(day) : ACCOUNT_PLAN_LINES.free);
-  else if (plan.state === "ended")
-    lines.push(plan.why === "ceiling" ? ACCOUNT_PLAN_LINES.endedCeiling
-      : plan.why === "plan" ? ACCOUNT_PLAN_LINES.endedPlan : ACCOUNT_PLAN_LINES.endedTime);
+  else if (plan.state === "ended") lines.push(ACCOUNT_PLAN_LINES.endedPlan);
   else if (gift) {
     // The plan's next_date is the gift's last moment while it lasts (none for a gift for good).
     lines.push(day ? giftUntil(day) : ACCOUNT_PLAN_LINES.gift);

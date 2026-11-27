@@ -8,7 +8,6 @@
  * moth and the lamp are drawn outside the page, and anything that moves waits for a tap. */
 import { type ReactNode, useEffect, useLayoutEffect, useState } from "react";
 import { Moth } from "../../ui/Moth";
-import { SIGN_UP_LINE } from "../../ui/MothliPlan";
 import { MothliMark } from "../../ui/MothliMark";
 import { AboutMothli, SiteFooter } from "../PublicPage";
 import type { Site } from "../site";
@@ -81,7 +80,6 @@ export function Landing({ door, notes, site }: { door: ReactNode; notes: ReactNo
               Bring a book you love. Mothli reads along with you and only knows it as far as you’ve
               read, so it can never spoil what happens next.
             </p>
-            <p className="lp-lede lp-in lp-in--2">{SIGN_UP_LINE}</p>
             <div className="lp-door lp-in lp-in--3">
               {notes}
               {door}

@@ -276,7 +276,7 @@ def pending_deletion_detail(erase_after: datetime) -> dict[str, str]:
 
 def _mothli(request: Request, owner) -> dict | None:
     """Where the reader stands with Mothli (ADR 0045 step 5, ``gate.standing``): ``state``,
-    ``why`` and ``ending_note``, or None where this server has no chat or the plan cannot be read
+    ``why``, or None where this server has no chat or the plan cannot be read
     just now (the gate still answers every Mothli route itself)."""
     if not request.app.state.settings.companion_chat():
         return None

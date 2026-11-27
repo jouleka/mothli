@@ -109,7 +109,7 @@ async def delete_account(request: Request, owner_id: OwnerId = Depends(_csrf_own
     it is marked that cancel is asked of Paddle through the code "Cancel my plan" runs. Paddle
     unreachable, slow or refusing changes nothing for the request: the owed mark stays and the
     regular check asks again every hour until Paddle's answer brings the scheduled end. A reader
-    with no live plan (a gift only, the free weeks, ended, or already cancelled) costs no call."""
+    with no live plan (a gift only, new, ended, or already cancelled) costs no call."""
     tenant = request.app.state.tenant_repository
     billing = _billing(request)
     if billing is not None:

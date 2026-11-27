@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 import { PAGE_PATHS } from "./pages";
 import type { Operator } from "./site";
 
-export const UPDATED = "23 November 2026";
+export const UPDATED = "27 November 2026";
 
 export const PADDLE_LINKS = {
   buyerTerms: "https://www.paddle.com/legal/checkout-buyer-terms",
@@ -89,14 +89,8 @@ export function Terms({ operator }: PageProps) {
         </p>
         <p>
           Talking with Mothli is the plan: the chat in your books and on your home page, who’s who,
-          and the story so far. Your first two weeks of it are free, starting the first time you use
-          it, and you don’t need a card. If you talk with Mothli a great deal, the free weeks can end
-          sooner, and Mothli tells you when they have.
-        </p>
-        <p>
-          After that you can join the plan, paid every month or every year. The prices are on our{" "}
-          <a href="/">front page</a> and in the checkout. If you join during your free weeks, your
-          plan starts that day.
+          and the story so far. The plan is paid every month or every year. The prices are on our{" "}
+          <a href="/">front page</a> and in the checkout.
         </p>
         <p>
           The plan has fair-use limits for each day and each month, so Mothli can keep running well
@@ -234,8 +228,8 @@ export function Privacy({ operator, writer = null }: PageProps) {
             <strong>Mothli’s notes on the chapters you have finished</strong>, made for you.
           </li>
           <li>
-            <strong>Your plan.</strong> When your free weeks began, and your plan’s status and dates
-            as Paddle reports them, with Paddle’s ids for your plan and for you as its customer. We
+            <strong>Your plan.</strong> Any gift of Mothli, and your plan’s status and dates as
+            Paddle reports them, with Paddle’s ids for your plan and for you as its customer. We
             never see or keep your card details.
           </li>
           <li>
@@ -321,8 +315,8 @@ export function Privacy({ operator, writer = null }: PageProps) {
             email address and when you joined; the books on your shelf and where you are in each;
             your highlights, notes and bookmarks; your conversations with Mothli; Mothli’s notes on
             the chapters you finished, and who you have met and the story so far, up to where you
-            are; how you like the page to look; what Mothli remembers about you; and your plan (when
-            your free weeks began, any gift, and your plan’s status and dates). The books themselves
+            are; how you like the page to look; what Mothli remembers about you; and your plan (any
+            gift, and your plan’s status and dates). The books themselves
             aren’t in it: open a book, press Notebook, and choose “Download the book”.
           </li>
           <li>
@@ -368,12 +362,6 @@ export function Refunds({ operator }: PageProps) {
         Paddle handles payments for Mothli and sells the plan on our behalf. So refunds are handled
         by Paddle, under Paddle’s own terms. Here’s how it works.
       </p>
-      <Section title="Try it first">
-        <p>
-          Talking with Mothli is free for your first two weeks, and you don’t need a card. That way
-          you can see whether it’s for you before you pay anything.
-        </p>
-      </Section>
       <Section title="Cancel any time">
         <p>
           You can cancel your plan in Your account whenever you like. You keep Mothli until the end

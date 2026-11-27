@@ -577,6 +577,17 @@ def _apply_before(database: str, version: int, monkeypatch) -> None:
         apply_migrations(database)
 
 
+def _apply_through(database: str, version: int, monkeypatch) -> None:
+    """Apply every migration up to and including ``version``, as a database made then would be:
+    a migration's own test looks at what it did, before a later one changed it."""
+    from app.hosted import migrations
+
+    upto = tuple(item for item in discover_migrations() if item.version <= version)
+    with monkeypatch.context() as patch:
+        patch.setattr(migrations, "discover_migrations", lambda: upto)
+        apply_migrations(database)
+
+
 def _book_job_world(conn) -> dict:
     """One reader with a book and a job of every kind, the retired one waiting for a key and with
     an attempt behind it, as a database made before 0028 could hold them."""
@@ -1008,8 +1019,9 @@ def test_a_new_database_has_one_notes_account_that_never_signs_in(database: str)
                             (account,)).fetchone()[0] == 1
         assert conn.execute("SELECT count(*) FROM books WHERE owner_id = %s",
                             (account,)).fetchone()[0] == 0
-        # 0035 adds the later-name check, 0036 the background budget, 0037 the start of the free
-        # weeks, 0038 the gift, 0039 the Paddle look-up (their own tests below).
+        # 0035 adds the later-name check, 0036 the background budget, 0038 the gift, 0039 the
+        # Paddle look-up, 0040 the regular check's list (their own tests below; 0037's start of
+        # the free weeks went with 0042).
         assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
     apply_migrations(database)
     with psycopg.connect(database) as conn:
@@ -1316,7 +1328,7 @@ def test_reader_plans_start_empty_change_nothing_else_and_only_the_start_writes(
                      (reader,))
         users = conn.execute("SELECT to_jsonb(person) FROM users AS person ORDER BY id").fetchall()
         ledger = conn.execute("SELECT to_jsonb(entry) FROM cost_ledger AS entry").fetchall()
-    apply_migrations(database)
+    _apply_through(database, READER_PLANS, monkeypatch)
 
     with psycopg.connect(database) as conn:
         assert conn.execute("SELECT to_jsonb(person) FROM users AS person ORDER BY id"
@@ -1343,7 +1355,7 @@ def test_reader_plans_start_empty_change_nothing_else_and_only_the_start_writes(
                                     (function,)).fetchone()[0]
         assert conn.execute("SELECT count(*) FROM pg_proc WHERE proname = 'start_free_weeks'"
                             ).fetchone()[0] == 1
-        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
+        assert _definers(conn) == _DEFINERS | _DEFINERS_THROUGH[READER_PLANS]
 
 
 # ---- 0038: gifts (ADR 0045 step 2) ------------------------------------------------------------------
@@ -1351,13 +1363,20 @@ def test_reader_plans_start_empty_change_nothing_else_and_only_the_start_writes(
 READER_GIFTS = 38
 _SET_GIFT = "set_gift(uuid,date)"
 # The SECURITY DEFINER functions migrations after the door add: 0035 the later-name check, 0036
-# the background budget, 0037 the start of the free weeks, 0038 the gift, 0039 the look-up of
-# which account a Paddle message is for.
+# the background budget, 0037 the start of the free weeks (dropped by 0042), 0038 the gift, 0039
+# the look-up of which account a Paddle message is for.
 _PADDLE_READER = "paddle_reader(text,uuid)"
 # 0040 the list of stored subscriptions the regular check against Paddle fetches.
 _PLANS_TO_CHECK = "paddle_plans_to_check(integer)"
-_LATER_DEFINERS = {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE, _SET_GIFT, _PADDLE_READER,
-                   _PLANS_TO_CHECK}
+_LATER_DEFINERS = {_LATER_NAMES, _BACKGROUND_OPEN, _SET_GIFT, _PADDLE_READER, _PLANS_TO_CHECK}
+# As a database made up to each of 0037 to 0041 had them, for those migrations' own tests.
+_DEFINERS_THROUGH = {
+    37: {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE},
+    38: {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE, _SET_GIFT},
+    39: {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE, _SET_GIFT, _PADDLE_READER},
+    40: {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE, _SET_GIFT, _PADDLE_READER, _PLANS_TO_CHECK},
+    41: {_LATER_NAMES, _BACKGROUND_OPEN, _START_FREE, _SET_GIFT, _PADDLE_READER, _PLANS_TO_CHECK},
+}
 
 
 def test_gifts_start_empty_change_no_plan_and_only_set_gift_writes_them(
@@ -1379,16 +1398,11 @@ def test_gifts_start_empty_change_no_plan_and_only_set_gift_writes_them(
         states = [conn.execute("SELECT state, why, free_started_at, free_ends_at"
                                " FROM reader_plan_state(%s, 14, 2.10)", (reader,)).fetchone()
                   for reader in (started, never)]
-    apply_migrations(database)
+    _apply_through(database, READER_GIFTS, monkeypatch)
 
     with psycopg.connect(database) as conn:
-        # (Less the columns later migrations add: 0039's, 0040's and 0041's Paddle part.)
         assert conn.execute(
-            "SELECT to_jsonb(plan) - 'gift_until' - %s::text[] FROM reader_plans AS plan",
-            (["paddle_customer_id", "paddle_subscription_id", "paddle_status", "period_ends_at",
-              "ends_at", "paddle_occurred_at", "first_paid_at", "paddle_price_id",
-              "cancel_owed_since"],)
-        ).fetchall() == plans
+            "SELECT to_jsonb(plan) - 'gift_until' FROM reader_plans AS plan").fetchall() == plans
         assert conn.execute("SELECT count(*) FROM reader_plans WHERE gift_until IS NOT NULL"
                             ).fetchone()[0] == 0
         assert [conn.execute("SELECT state, why, free_started_at, free_ends_at"
@@ -1411,7 +1425,7 @@ def test_gifts_start_empty_change_no_plan_and_only_set_gift_writes_them(
                                     (function,)).fetchone()[0]
         assert conn.execute("SELECT count(*) FROM pg_proc WHERE proname IN"
                             " ('set_gift', 'reader_plan_state')").fetchone()[0] == 2
-        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
+        assert _definers(conn) == _DEFINERS | _DEFINERS_THROUGH[READER_GIFTS]
 
 
 # ---- 0039: Paddle's messages (ADR 0045 step 3) -----------------------------------------------------
@@ -1443,12 +1457,10 @@ def test_paddle_columns_start_empty_change_no_plan_and_only_the_billing_lookup_c
         query = ("SELECT state, why, free_started_at, free_ends_at, paid_by, gift_until,"
                  " free_spent_usd FROM reader_plan_state(%s, 14, 2.10)")
         states = [conn.execute(query, (reader,)).fetchone() for reader in (started, gifted, never)]
-    apply_migrations(database)
+    _apply_through(database, PADDLE_EVENTS, monkeypatch)
 
     paddle = ("paddle_customer_id", "paddle_subscription_id", "paddle_status", "period_ends_at",
-              "ends_at", "paddle_occurred_at", "first_paid_at",
-              # (and 0040's and 0041's, below)
-              "paddle_price_id", "cancel_owed_since")
+              "ends_at", "paddle_occurred_at", "first_paid_at")
     with psycopg.connect(database) as conn:
         assert conn.execute(
             "SELECT to_jsonb(plan) - %s::text[] FROM reader_plans AS plan ORDER BY owner_id",
@@ -1499,7 +1511,7 @@ def test_paddle_columns_start_empty_change_no_plan_and_only_the_billing_lookup_c
         with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
             conn.execute("UPDATE reader_plans SET paddle_status = 'active' WHERE owner_id = %s",
                          (started,))
-        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
+        assert _definers(conn) == _DEFINERS | _DEFINERS_THROUGH[PADDLE_EVENTS]
 
 
 # ---- 0040: checkouts, and the regular check (ADR 0045 step 4) ---------------------------------------
@@ -1534,11 +1546,10 @@ def test_checkouts_start_empty_no_plan_changes_and_the_check_lists_only_stored_l
                              ).fetchall()
         query = "SELECT * FROM reader_plan_state(%s, 14, 2.10)"
         states = [conn.execute(query, (reader,)).fetchone() for reader in (paying, ended, never)]
-    apply_migrations(database)
+    _apply_through(database, PADDLE_CHECKOUTS, monkeypatch)
 
     with psycopg.connect(database) as conn:
-        # (Less 0041's column, below.)
-        assert conn.execute("SELECT to_jsonb(plan) - 'paddle_price_id' - 'cancel_owed_since'"
+        assert conn.execute("SELECT to_jsonb(plan) - 'paddle_price_id'"
                             " FROM reader_plans AS plan ORDER BY owner_id").fetchall() == plans
         assert conn.execute("SELECT count(*) FROM reader_plans WHERE paddle_price_id IS NOT NULL"
                             ).fetchone()[0] == 0
@@ -1583,7 +1594,7 @@ def test_checkouts_start_empty_no_plan_changes_and_the_check_lists_only_stored_l
         assert sorted(conn.execute(listed, (10,)).fetchall()) == sorted(
             [(paying, subs[paying]), (ended, subs[ended])])
         assert len(conn.execute(listed, (1,)).fetchall()) == 1
-        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
+        assert _definers(conn) == _DEFINERS | _DEFINERS_THROUGH[PADDLE_CHECKOUTS]
 
 
 # ---- 0041: the cancel owed when a paying reader asks to delete (ADR 0045 step 7) --------------------
@@ -1613,7 +1624,7 @@ def test_no_cancel_is_owed_after_the_migration_and_owed_cancels_are_checked_firs
                      (erased,))
         plans = conn.execute("SELECT to_jsonb(plan) FROM reader_plans AS plan ORDER BY owner_id"
                              ).fetchall()
-    apply_migrations(database)
+    _apply_through(database, CANCEL_OWED, monkeypatch)
 
     with psycopg.connect(database) as conn:
         assert conn.execute("SELECT to_jsonb(plan) - 'cancel_owed_since' FROM reader_plans AS plan"
@@ -1643,6 +1654,81 @@ def test_no_cancel_is_owed_after_the_migration_and_owed_cancels_are_checked_firs
         for _ in range(8):
             assert conn.execute(listed, (1,)).fetchall() == [(owed, subs[owed])]
         assert len(conn.execute(listed, (5,)).fetchall()) == 5
+        assert _definers(conn) == _DEFINERS | _DEFINERS_THROUGH[CANCEL_OWED]
+
+
+# ---- 0042: no free weeks (ADR 0046) -----------------------------------------------------------------
+
+NO_FREE_WEEKS = 42
+_NEW_PLAN_STATE = "reader_plan_state(uuid)"
+
+
+def test_no_free_weeks_keeps_every_plan_and_gift_and_answers_new_paying_or_ended(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0042 with a reader in their free weeks, one
+    past them, a gifted reader, one whose gift passed, one paying through Paddle in their first
+    paid month, one whose Paddle plan was cancelled and one who never asked: a plan, a gift or a
+    first paid month changed by the migration; the start of the free weeks, its stamp or the old
+    state left behind (a reader could still be let in free); anyone who never had a plan answered
+    other than new, or anyone who had one answered new; the state made a security definer (it
+    would read every reader's spend), given other arguments, or left callable by PUBLIC."""
+    _apply_before(database, NO_FREE_WEEKS, monkeypatch)
+    free, past, gifted, lapsed, paying, cancelled, never = (uuid.uuid4() for _ in range(7))
+    subs = {paying: "sub_" + paying.hex[:26], cancelled: "sub_" + cancelled.hex[:26]}
+    with psycopg.connect(database) as conn:
+        for reader in (free, past, gifted, lapsed, paying, cancelled, never):
+            conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (reader,))
+        for reader, ago in ((free, "3 days"), (past, "40 days")):
+            conn.execute("INSERT INTO reader_plans (owner_id, free_started_at)"
+                         " VALUES (%s, now() - %s::interval)", (reader, ago))
+        conn.execute("SELECT set_gift(%s, '9999-12-31'::date)", (gifted,))
+        conn.execute("SELECT set_gift(%s, '2020-01-31'::date)", (lapsed,))
+        for reader, status in ((paying, "active"), (cancelled, "canceled")):
+            conn.execute("INSERT INTO reader_plans (owner_id, free_started_at,"
+                         " paddle_subscription_id, paddle_status, paddle_occurred_at,"
+                         " first_paid_at) VALUES (%s, now() - interval '20 days', %s, %s, now(),"
+                         " now() - interval '2 days')", (reader, subs[reader], status))
+        conn.execute("INSERT INTO cost_ledger (owner_id, phase, model, usd, idempotency_key,"
+                     " purpose) VALUES (%s, 'synthesis', 'm', 0.25, 'a-reply', 'stream-reply')",
+                     (paying,))
+        plans = conn.execute("SELECT to_jsonb(plan) - 'free_started_at' - 'updated_at'"
+                             " FROM reader_plans AS plan ORDER BY owner_id").fetchall()
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT to_jsonb(plan) - 'updated_at' FROM reader_plans AS plan"
+                            " ORDER BY owner_id").fetchall() == plans
+        assert conn.execute(
+            "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public'"
+            " AND table_name = 'reader_plans' AND column_name = 'free_started_at'"
+        ).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM pg_proc WHERE proname = 'start_free_weeks'"
+                            ).fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM pg_proc WHERE proname = 'reader_plan_state'"
+                            ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT prosecdef, provolatile, pg_get_function_identity_arguments(oid)"
+            " FROM pg_proc WHERE oid = %s::regprocedure", (_NEW_PLAN_STATE,)).fetchone() == (
+            False, "s", "reader uuid")
+        assert not conn.execute("SELECT has_function_privilege('public', %s, 'EXECUTE')",
+                                (_NEW_PLAN_STATE,)).fetchone()[0]
+        query = "SELECT state, why, paid_by FROM reader_plan_state(%s)"
+        assert {reader: conn.execute(query, (reader,)).fetchone()
+                for reader in (free, past, gifted, lapsed, paying, cancelled, never)} == {
+            free: ("new", None, None),
+            past: ("new", None, None),
+            gifted: ("paying", None, "gift"),
+            lapsed: ("ended", "plan", None),
+            paying: ("paying", None, "paddle"),
+            cancelled: ("ended", "plan", None),
+            never: ("new", None, None),
+        }
+        # The first paid month is kept: the paying reader's chat since their first payment.
+        assert conn.execute("SELECT first_month_spent_usd FROM reader_plan_state(%s)",
+                            (paying,)).fetchone()[0] == 0.25
+        assert conn.execute("SELECT first_month_spent_usd FROM reader_plan_state(%s)",
+                            (never,)).fetchone()[0] is None
         assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
 
 

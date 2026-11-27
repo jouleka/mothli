@@ -98,7 +98,7 @@ type Initialization =
 async function initialize(): Promise<OfflineSession | null | undefined> {
   const session = await initializeOfflineSupport();
   // Where the reader stands with Mothli; every chat, the cast and "Story so far" follow it.
-  setMothliStanding(session?.mothli ?? null, session?.user?.email ?? null, session?.user?.id ?? null);
+  setMothliStanding(session?.mothli ?? null, session?.user?.email ?? null);
   return session;
 }
 

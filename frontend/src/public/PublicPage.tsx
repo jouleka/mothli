@@ -137,7 +137,6 @@ export function AboutMothli({ site, action }: { site: Site | null; action?: Reac
         Reading here is free, always: your books, your place, your highlights and the free library.
         Mothli, the chat in every book, who’s who and the story so far, is the plan.
       </p>
-      <p className="pp-free"><strong>Two free weeks with Mothli, no card needed.</strong> They start the first time you use it.</p>
       {shown ? (
         <ul className="pp-prices" aria-labelledby="plan-title">
           <li className="pp-price pp-price--best">
@@ -151,7 +150,7 @@ export function AboutMothli({ site, action }: { site: Site | null; action?: Reac
           </li>
         </ul>
       ) : (
-        <p>After that, the plan is paid monthly or yearly. You’ll see the prices when you choose.</p>
+        <p>The plan is paid monthly or yearly. You’ll see the prices when you choose.</p>
       )}
       {/* The way in, again beside the prices (the welcome's own door, the same action). */}
       {action && <div className="pp-cta">{action}</div>}

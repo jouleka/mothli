@@ -8,7 +8,6 @@ import { api, ApiError, type PlanEnding } from "../api";
 import { PENDING_DELETION_EVENT, SIGNED_OUT_EVENT, type OfflineSession } from "../pwa/offline";
 import { Button } from "../ui/Button";
 import { Moth } from "../ui/Moth";
-import { SIGN_UP_LINE } from "../ui/MothliPlan";
 import { MothliMark } from "../ui/MothliMark";
 import { noteMothliJoined } from "../ui/mothliStanding";
 import { readerDay } from "../ui/readerDay";
@@ -247,10 +246,6 @@ export function SignIn({ ended = false, paymentLink = null, again = false }: {
                 ? "You’ve been signed out. Sign in again and I’ll take you straight back to where you were."
                 : "Bring a book you love. Mothli reads along with you and only knows it as far as you’ve read, so it can never spoil what happens next."}
             </p>
-            {/* Not beside a payment link's checkout: that reader has used Mothli and is joining.
-                Nor on the goodbye after deleting an account: that reader may have had their free
-                weeks or been paying, so it would not be true for them. */}
-            {!ended && !paymentLink && !deleted && <p className="ml-spread-lede">{SIGN_UP_LINE}</p>}
             <div className="ml-spread-foot">
               {deleted && (
                 <p className="ml-welcome-note" role="status">
@@ -291,7 +286,7 @@ export function SignIn({ ended = false, paymentLink = null, again = false }: {
         </section>
         {/* What Mothli is and what the plan costs, for a visitor (and Paddle's reviewers); not
             on the welcome-back, nor beside a payment link's checkout, nor on the goodbye after
-            deleting an account (its free weeks are not that reader's to promise). */}
+            deleting an account. */}
         {!ended && !paymentLink && !deleted && <AboutMothli site={site} action={door} />}
       </main>
       <SiteFooter site={site} />

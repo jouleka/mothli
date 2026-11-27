@@ -128,14 +128,15 @@ describe("the pages' words", () => {
   });
 
   // Catches (the owner's decision on refunds): a refund page that promises anything of Mothli's
-  // own instead of pointing to Paddle's terms, or forgets cancelling and the free weeks.
-  test("the refunds page is Paddle's terms, cancelling any time and the free weeks", async () => {
+  // own instead of pointing to Paddle's terms, forgets cancelling, or still offers the free weeks
+  // removed by ADR 0046 ("Try it first").
+  test("the refunds page is Paddle's terms and cancelling any time, and no free weeks", async () => {
     serve({ operator: OPERATOR, plan: null, writer: null });
     const { container } = await opened("refunds");
     const text = container.textContent ?? "";
     expect(text).toContain("refunds are handled by Paddle, under Paddle’s own terms");
     expect(text).toContain("You keep Mothli until the end of the month or year you have paid for");
-    expect(text).toContain("free for your first two weeks, and you don’t need a card");
+    expect(text).not.toMatch(/Try it first|free weeks|first two weeks|don’t need a card/);
     expect(text).toContain("the right of withdrawal for buyers in the European Union and the United Kingdom, Paddle’s terms explain");
     expect(screen.getByRole("link", { name: "Paddle’s refund policy" }).getAttribute("href")).toBe(PADDLE_LINKS.refundPolicy);
     expect(screen.getAllByRole("link", { name: "Paddle’s buyer terms" })[0].getAttribute("href")).toBe(PADDLE_LINKS.buyerTerms);
@@ -156,9 +157,12 @@ describe("the pages' words", () => {
       "governed by the law of Ireland",
       // Step 7: asking to delete stops the plan renewing by itself; never "cancel first".
       "If you’re on the plan, asking to delete your account stops it from renewing, so you won’t be charged again. You keep Mothli until the end of the month or year you have paid for, or until your account is erased, whichever comes first. If you come back within the 30 days, your plan still ends unless you choose “Keep my plan”.",
+      // ADR 0046: talking with Mothli is the plan, with no free weeks.
+      "Talking with Mothli is the plan: the chat in your books and on your home page, who’s who, and the story so far. The plan is paid every month or every year. The prices are on our front page and in the checkout.",
       SHARED_NOTES,
     ]) expect(text).toContain(said);
     expect(text).not.toMatch(/cancel it[^.]*before you delete/i);
+    expect(text).not.toMatch(/free weeks|first two weeks|don’t need a card/);
     cleanup();
     text = (await opened("privacy")).container.textContent ?? "";
     for (const said of [
@@ -169,13 +173,14 @@ describe("the pages' words", () => {
       "for up to two weeks after that",
       "keeps its own records of your purchases and payments, even after we erase your account. We don’t ask Paddle to delete them.",
       "deleting your account stops it from renewing",
-      "and your plan (when your free weeks began, any gift, and your plan’s status and dates)",
+      "and your plan (any gift, and your plan’s status and dates)",
       "The books themselves aren’t in it: open a book, press Notebook, and choose “Download the book”.",
       "Mothli sets three cookies, all needed for signing in",
       "no advertising, analytics or tracking cookies",
       SHARED_NOTES,
     ]) expect(text).toContain(said);
     expect(text).not.toContain("Anthropic");
+    expect(text).not.toMatch(/free weeks/);
   });
 
   // Catches: the privacy page offering two possibilities, or naming a company the server does
@@ -224,7 +229,7 @@ describe("the operator's details missing", () => {
 
 describe("the front page", () => {
   // Catches: prices other than the catalog's, the monthly plan first, the saving or the month
-  // worked out wrong or from anything but the two prices, the free weeks or the card left out.
+  // worked out wrong or from anything but the two prices; or the removed free weeks (ADR 0046).
   test("the prices are the server's, the yearly plan first as a month with its saving", async () => {
     serve({ operator: OPERATOR, plan: PLAN, writer: null });
     const { container } = render(<SignIn />);
@@ -233,7 +238,7 @@ describe("the front page", () => {
     const monthly = screen.getByText("$12.99 a month");
     expect(yearly.compareDocumentPosition(monthly) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(total.compareDocumentPosition(monthly) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(container.textContent).toContain("Two free weeks with Mothli, no card needed.");
+    expect(container.textContent).not.toMatch(/free weeks|no card needed|first time you use it/);
     expect(container.textContent).toContain("Payments are handled by Paddle, who sells Mothli on our behalf.");
     // A way in right beside the prices too (L9 of the plan walk), the same as the welcome's.
     const [door, again] = screen.getAllByRole("link", { name: "Sign in to start reading" });
@@ -262,7 +267,7 @@ describe("the front page", () => {
       serve(answer);
       const { container } = render(<SignIn />);
       await waitFor(() => expect(calls).toEqual(["/api/site"]));
-      await screen.findByText("After that, the plan is paid monthly or yearly. You’ll see the prices when you choose.");
+      await screen.findByText("The plan is paid monthly or yearly. You’ll see the prices when you choose.");
       const about = container.querySelector(".pp-about")!;
       expect(about.textContent).not.toMatch(/\d|\$|€|£/);
       cleanup();

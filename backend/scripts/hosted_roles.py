@@ -74,7 +74,7 @@ OPERATOR_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
 # makes, and reads where a reader stands. No other role may execute set_gift.
 OPERATOR_FUNCTION_PRIVILEGES: dict[str, frozenset[str]] = {
     "set_gift(uuid,date)": frozenset({"EXECUTE"}),
-    "reader_plan_state(uuid,integer,numeric)": frozenset({"EXECUTE"}),
+    "reader_plan_state(uuid)": frozenset({"EXECUTE"}),
 }
 
 

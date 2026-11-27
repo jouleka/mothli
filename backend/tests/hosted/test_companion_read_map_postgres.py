@@ -67,8 +67,16 @@ def page(chapter: int, first: int, last: int, *, to_chapter: int | None = None,
             "end": anchor(to_chapter or chapter, last, after=True), "skimmed": skimmed}
 
 
-@pytest.fixture()
-def readers(database: str) -> dict:
+def give_the_plan(database: str, *owners: uuid.UUID) -> None:
+    """Make each reader a paying one with a gift for good, the owner's own way (``set_gift``).
+    Since ADR 0046 talking with Mothli needs the plan from the first question, so a reader who
+    asks, opens the cast or reads "Story so far" in these tests has one."""
+    with psycopg.connect(database) as conn:
+        for owner in owners:
+            conn.execute("SELECT set_gift(%s, '9999-12-31'::date)", (owner,))
+
+
+def _two_readers(database: str) -> dict:
     owners = {"a": uuid.uuid4(), "b": uuid.uuid4()}
     with psycopg.connect(database) as conn:
         conn.cursor().executemany(
@@ -76,6 +84,20 @@ def readers(database: str) -> dict:
             [(owner, f"Reader {label.upper()}") for label, owner in owners.items()],
         )
     return owners
+
+
+@pytest.fixture()
+def readers(database: str) -> dict:
+    """Two readers with Mothli: each has the plan (``give_the_plan``)."""
+    owners = _two_readers(database)
+    give_the_plan(database, *owners.values())
+    return owners
+
+
+@pytest.fixture()
+def new_readers(database: str) -> dict:
+    """Two readers who have never had a plan or a gift: Mothli is closed to them (ADR 0046)."""
+    return _two_readers(database)
 
 
 def hosted_settings(tenant: str, objects, **overrides) -> Settings:

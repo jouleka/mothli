@@ -123,11 +123,10 @@ WHERE chapter.owner_id=%(owner)s AND chapter.book_id=%(book)s
 # Where a reader stands, for their background work (ADR 0045 section 5): their state from
 # ``reader_plan_state`` (the one function the session, the spend check and this all call), whether
 # they signed up within the warm-up's days, what Mothli's background work for them has cost (the
-# ledger and every reservation still open, of any age: before their first question that is their
-# chapter notes alone, recollections coming only from replies), and how many chapters their
-# story-memory runs were the first to build, ever (their jobs that published; a job row is kept for
-# the life of the account, so for a reader who has never asked this is the count over the whole
-# time they have been new).
+# ledger and every reservation still open, of any age: before they first pay that is their chapter
+# notes alone, recollections coming only from replies), and how many chapters their story-memory
+# runs were the first to build, ever (their jobs that published; a job row is kept for the life of
+# the account, so for a new reader this is the count over the whole time they have been new).
 _STANDING = """
 SELECT plan.state,
        COALESCE(person.created_at>now()-make_interval(days=>%(days)s::integer),false) AS warm,
@@ -139,25 +138,22 @@ SELECT plan.state,
        (SELECT count(*) FROM public.jobs AS job
         WHERE job.owner_id=%(owner)s AND job.kind='story_memory'
           AND job.payload_metadata @> '{"published":true}'::jsonb) AS first_builds
-FROM public.reader_plan_state(%(owner)s,%(free_days)s::integer,%(free_usd)s::numeric) AS plan
+FROM public.reader_plan_state(%(owner)s) AS plan
 LEFT JOIN public.users AS person ON person.id=%(owner)s
 """
 
 
 def background_held(conn: psycopg.Connection, owner_id: uuid.UUID) -> bool:
-    """Whether Mothli does no background work for this reader now (ADR 0045 section 5): their
-    free weeks are over and they do not pay (``ended``), or they have never asked Mothli
-    anything (``new``) and are past the warm-up: more than ``HOSTED_WARMUP_DAYS`` since sign-up,
+    """Whether Mothli does no background work for this reader now (ADR 0045 section 5, ADR
+    0046): a plan they had has stopped (``ended``), or they have never had a plan or a gift
+    (``new``) and are past the warm-up: more than ``HOSTED_WARMUP_DAYS`` since sign-up,
     ``HOSTED_WARMUP_NOTES_USD`` of chapter notes, or ``HOSTED_WARMUP_NEW_CHAPTERS`` chapters of
-    story memory their reading was the first to build. In their free weeks and while they pay,
-    never. Read on the caller's connection (rows as dicts); it writes nothing and is told to no
+    story memory their reading was the first to build. While they pay, never. Read on the caller's connection (rows as dicts); it writes nothing and is told to no
     reader."""
     from app.hosted.companion.spend import spend_limits
 
     limits = spend_limits()
-    row = conn.execute(_STANDING, {"owner": owner_id, "days": limits.warmup_days,
-                                   "free_days": limits.free_days,
-                                   "free_usd": limits.free_usd}).fetchone()
+    row = conn.execute(_STANDING, {"owner": owner_id, "days": limits.warmup_days}).fetchone()
     if row["state"] == "ended":
         return True
     return row["state"] == "new" and (

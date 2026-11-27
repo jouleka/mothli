@@ -57,8 +57,8 @@ IN_THE_COPY = {
     "conversation_turns": "each book's file (its chat) and home chat.json",
     "chapter_notes": "each book's file: Mothli's notes on the chapters you finished",
     "recollections": "what Mothli remembers.json",
-    "reader_plans": ("your plan.json: when your free weeks began, any gift, and your plan's "
-                     "kind, status and dates (Paddle's ids for it are left out)"),
+    "reader_plans": ("your plan.json: any gift, and your plan's kind, status and dates "
+                     "(Paddle's ids for it are left out)"),
 }
 LEFT_OUT = {
     "users": "you.json holds your name, email and when you joined; the rest is account state",
@@ -122,9 +122,9 @@ home chat.json
 what Mothli remembers.json
     The little things Mothli remembers about you, and when you said them.
 your plan.json
-    When your free weeks with Mothli began, any gift, and your plan: monthly
-    or yearly, its status as Paddle gave it, and its dates. Paddle sells the
-    plan and keeps its own records of your payments.
+    Any gift of Mothli, and your plan: monthly or yearly, its status as Paddle
+    gave it, and its dates. Paddle sells the plan and keeps its own records of
+    your payments.
 
 What isn't here
 ---------------
@@ -329,18 +329,17 @@ class _Copy:
                     "chat": [_said(turn) for turn in turns]})
 
     def _plan(self) -> dict:
-        """What ``reader_plans`` holds about the reader's free weeks, gift and plan, in words:
+        """What ``reader_plans`` holds about the reader's gift and plan, in words:
         never Paddle's ids for the customer, the subscription or the price."""
         # The catalog's own transaction: the reader's row only, within this process's limit on
         # companion connections.
         with self._catalog._transaction() as conn:
             row = conn.execute(
-                "SELECT free_started_at, gift_until, paddle_status, paddle_price_id,"
+                "SELECT gift_until, paddle_status, paddle_price_id,"
                 " first_paid_at, period_ends_at, ends_at, cancel_owed_since"
                 " FROM public.reader_plans WHERE owner_id=%s", (self._owner.value,)).fetchone()
         row = row or {}
-        began, gift, status = row.get("free_started_at"), row.get("gift_until"), \
-            row.get("paddle_status")
+        gift, status = row.get("gift_until"), row.get("paddle_status")
         if gift is None:
             gift_said = None
         elif gift == date(9999, 12, 31):
@@ -358,7 +357,7 @@ class _Copy:
                     "this_period_ends": _when(row["period_ends_at"]),
                     "ends": _when(row["ends_at"]),
                     "sold_by": "Paddle sells the plan and keeps its own records of your payments."}
-        return {"free_weeks_began": _when(began), "gift": gift_said, "plan": plan,
+        return {"gift": gift_said, "plan": plan,
                 "not_to_renew_since_you_asked_to_delete_your_account":
                     _when(row.get("cancel_owed_since"))}
 

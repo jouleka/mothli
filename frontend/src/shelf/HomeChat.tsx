@@ -14,8 +14,8 @@ import { Icon } from "../ui/Icon";
 import { Errand } from "../ui/Errand";
 import { useCycle } from "../ui/useCycle";
 import { Moth } from "../ui/Moth";
-import { HOME_HELLO_NO_BOOKS, MOTHLI_HELLO, MothliEndingNote, MothliInvitation } from "../ui/MothliPlan";
-import { noteMothliUsed, useMothliStanding } from "../ui/mothliStanding";
+import { MothliInvitation } from "../ui/MothliPlan";
+import { useMothliClosed, useMothliStanding } from "../ui/mothliStanding";
 import { MothliRemembers } from "./MothliRemembers";
 import "./home-chat.css";
 
@@ -74,14 +74,14 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
   shelfEmpty?: boolean;
 } = {}) {
   const [turns, setTurns] = useState<HomeTurn[] | null>(null); // null until the server says it exists
-  // Where the reader stands with Mothli (ADR 0045): after the free weeks, without the plan, the
-  // invitation stands in place of the conversation; a new reader is greeted with the free weeks.
+  // Where the reader stands with Mothli (ADR 0045, ADR 0046): without the plan (new, or ended)
+  // the invitation stands in place of the conversation.
   const standing = useMothliStanding();
-  const ended = standing?.state === "ended";
-  const wasEnded = useRef(ended);
+  const closed = useMothliClosed();
+  const wasClosed = useRef(closed);
   // Whether the conversation was ever on screen here, so the invitation replacing it is read out.
   const showedChat = useRef(false);
-  if (!ended && turns !== null) showedChat.current = true;
+  if (!closed && turns !== null) showedChat.current = true;
   const [start, setStart] = useState(0); // first exchange drawn; earlier ones wait behind "Show earlier"
   const [question, setQuestion] = useState("");
   const [asked, setAsked] = useState<string | null>(null); // the question in flight
@@ -124,9 +124,9 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
   useEffect(() => () => request.current?.abort(), []);
 
   useEffect(() => {
-    // Ended: nothing of the conversation is asked for or kept on screen. Joined again: it comes
+    // Closed: nothing of the conversation is asked for or kept on screen. Joined: it comes
     // back from the server, through the same filter as always.
-    if (ended) {
+    if (closed) {
       setTurns([]);
       setStart(0);
       setOffers(null);
@@ -142,14 +142,14 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
       })
       .catch(() => { /* 404: no home conversation here; the panel stays hidden */ });
     return () => { dead = true; };
-  }, [ended]);
+  }, [closed]);
 
   // Back from the invitation (the reader joined): the box takes focus if the invitation had it.
   useEffect(() => {
     const active = document.activeElement;
-    if (wasEnded.current && !ended && (!active || active === document.body)) inputRef.current?.focus();
-    wasEnded.current = ended;
-  }, [ended]);
+    if (wasClosed.current && !closed && (!active || active === document.body)) inputRef.current?.focus();
+    wasClosed.current = closed;
+  }, [closed]);
 
   const busy = asked !== null;
   const waiting = busy && sentences.length === 0;
@@ -198,7 +198,7 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
     thread.querySelector<HTMLElement>(`[data-exchange="${pending.focus}"]`)?.focus();
   }, [start]);
 
-  if (turns === null && !ended) return null;
+  if (turns === null && !closed) return null;
   const exchanges = exchangesOf(turns ?? []);
   const empty = exchanges.length === 0 && !busy;
 
@@ -232,7 +232,6 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
         setSentences((current) => [...current, sentence]);
         setSpoken((current) => [...current, sentence]);
       }, controller.signal);
-      noteMothliUsed();
       const claims = answer.claims.map((claim) => claim.text);
       const reply = claims.join(" ") || NOTHING_SHOWN;
       const unsaid = claims.length ? claims.filter((text) => !streamed.includes(text)) : [NOTHING_SHOWN];
@@ -358,7 +357,7 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
           >
             What Mothli remembers
           </button>
-          {exchanges.length > 0 && !confirming && !ended && (
+          {exchanges.length > 0 && !confirming && !closed && (
             <button
               ref={clearRef}
               type="button"
@@ -402,16 +401,12 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
         </div>
       )}
 
-      {ended ? (
+      {closed ? (
         <MothliInvitation why={standing?.why ?? null} home replaced={showedChat.current} />
       ) : (
       <>
-      <MothliEndingNote home after={inputRef} />
       {empty ? (
         <div className="ml-hc-hello">
-          {standing?.state === "new" && (
-            <p className="ml-hc-hand">{shelfEmpty ? HOME_HELLO_NO_BOOKS : MOTHLI_HELLO}</p>
-          )}
           <p className="ml-hc-hand">{shelfEmpty ? FIRST_INTRO : INTRO}</p>
           <div className="ml-hc-starters">
             {(shelfEmpty ? FIRST_STARTERS : STARTERS).map((starter) => (

@@ -19,7 +19,7 @@ import {
 } from "./latePlan";
 import { mothliStanding, setMothliStanding } from "./mothliStanding";
 
-const ENDED = { state: "ended", why: "plan", ending_note: false };
+const ENDED = { state: "ended", why: "plan" };
 const PAYING = planOf({ state: "paying", plan: "monthly", subscribed: true });
 
 function showTab(state: "visible" | "hidden") {

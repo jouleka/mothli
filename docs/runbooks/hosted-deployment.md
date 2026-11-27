@@ -365,8 +365,8 @@ cancel scheduled. Nothing for you to do in the ordinary case. The waiting screen
   with everything else. Paddle is the seller and keeps its own records of the customer, the
   subscription and the payments; Mothli asks Paddle to delete nothing. The privacy page says so
   (its sentence is in `docs/product/companion-open-items.md`).
-- **The copy of their data** holds `your plan.json`: when their free weeks began, any gift, and
-  their plan's kind, status and dates. No Paddle id, token or amount.
+- **The copy of their data** holds `your plan.json`: any gift, and their plan's kind, status and
+  dates. No Paddle id, token or amount.
 
 ## 4b. Story memory: who's who and the story so far
 
@@ -404,16 +404,15 @@ day uses about $0.42. Past any of them the work waits for the next day and the r
 nothing; their chat goes on. Note that the platform's day ($15) must leave room for the chat
 beside story memory ($10) and this budget ($3).
 
-**Background work by plan** (ADR 0045 step 6). Both kinds above run as described for readers in
-their free weeks and for paying readers (gifts included). For a reader whose free weeks are over
-and who does not pay, none: the worker finishes their waiting jobs without doing or paying for
-anything, and their pages ask for no new ones (their place is still kept). When they pay again,
-their next question asks for it, and it catches up to where they are. A reader who has signed up
-and never asked anything gets a warm-up, so their first session is not cold: within 30 days of
-signing up (`HOSTED_WARMUP_DAYS`), up to 25 chapters of story memory their reading is the first to
-have made (`HOSTED_WARMUP_NEW_CHAPTERS`) and $0.50 of chapter notes (`HOSTED_WARMUP_NOTES_USD`);
-past any of the three, nothing until their first question. At most about $2.75 a sign-up who
-never asks. Readers are never told any of it. The worker reads a reader's plan, and when they
+**Background work by plan** (ADR 0045 step 6, ADR 0046). Both kinds above run as described for
+paying readers (gifts included). For a reader whose plan or gift has stopped, none: the worker
+finishes their waiting jobs without doing or paying for anything, and their pages ask for no new
+ones (their place is still kept). When they pay again, their next question asks for it, and it
+catches up to where they are. A new reader (never a plan or a gift) gets a warm-up, so their
+first session is not cold: within 30 days of signing up (`HOSTED_WARMUP_DAYS`), up to 25 chapters
+of story memory their reading is the first to have made (`HOSTED_WARMUP_NEW_CHAPTERS`) and $0.50
+of chapter notes (`HOSTED_WARMUP_NOTES_USD`); past any of the three, nothing until they pay. At
+most about $2.75 a sign-up who never pays. Readers are never told any of it. The worker reads a reader's plan, and when they
 signed up (two columns of `users`, never a name or an email); `scripts/hosted_roles.py deploy`
 grants and checks both.
 
@@ -468,8 +467,7 @@ paying for as long as it is in the line.
 **Where a reader stands.** `python -m app.hosted.plans show ACCOUNT_ID` (step 7) shows `paying`
 with `paid_by` `paddle` while their plan is live: active, or a payment Paddle is retrying
 (`past_due`), or cancelled but paid to the end of the period. A paused or cancelled plan shows
-`ended` with `why` `plan`; such a reader never gets the free weeks again. A gift wins while it
-lasts.
+`ended` with `why` `plan`. A gift wins while it lasts.
 
 **Rotating the secret.** Paddle may sign with an old and a new secret for a while; Mothli accepts
 a message that matches the secret it has. Paste the new secret with `deploy/setup.sh set
@@ -899,15 +897,12 @@ Cloudflare > Workers & Pages > mothli-watch > Settings > Trigger events: delete 
   ```
   docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.limits show --owner READER_ID
   ```
-  A reader in their two free weeks (ADR 0045: the 14 days after their first question,
-  `HOSTED_FREE_DAYS`) is not held by the day and month caps but by one ceiling for the whole free
-  weeks, `HOSTED_FREE_USD` ($2.10) of their own chat; past it they are told their free start is
-  used up, and on day 15 the day and month caps apply again. Setting a reader's own day or month
-  limit with `app.hosted.limits` takes them out of that rule: their own limits then apply, free
-  weeks or not. Clearing both puts them back under it.
+  Only a paying reader can reach one (ADR 0046: talking with Mothli is the plan from the first
+  question); setting a reader's own day or month limit with `app.hosted.limits` replaces the
+  default caps for them. A reader who does not pay is refused by the plan, whatever their limits:
+  give them a gift (below) to let them in.
 - **Mothli on the house: your own account and test accounts** (ADR 0045, gifts). A gifted account
-  is a paying reader without Paddle: never stopped by the free weeks' ceiling, and held only by a
-  paying reader's hidden day and month guards ($1.00 and $4.00), or by its own limits if you set
+  is a paying reader without Paddle, held only by a paying reader's hidden day and month guards ($1.00 and $4.00), or by its own limits if you set
   them with `app.hosted.limits`. Find the account's id in the audit log (below; sign in with it
   first), then give it a gift for good:
   ```
@@ -917,20 +912,20 @@ Cloudflare > Workers & Pages > mothli-watch > Settings > Trigger events: delete 
   ```
   docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.plans gift ACCOUNT_ID --until 2027-06-30
   ```
-  Look at where an account stands (the state, the dates, and its own chat spend since its free
-  weeks began; never a book or a word of a conversation):
+  Look at where an account stands (the state and the gift's date; never a book or a word of a
+  conversation):
   ```
   docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.plans show ACCOUNT_ID
   ```
   It prints one line, for example
-  `{"chat_usd_since_free_start": "0", "free_ends_at": null, "free_started_at": null, "gift_until": "for good", "owner_id": "…", "paid_by": "gift", "state": "paying", "why": null}`.
-  `state` is `new` (never asked Mothli anything), `free` (in the two free weeks), `ended` (with
-  `why`: `time`, `ceiling` or `plan`) or `paying` (`paid_by`: `gift` or `paddle`, step 4c). End a gift with
+  `{"gift_until": "for good", "owner_id": "…", "paid_by": "gift", "state": "paying", "why": null}`.
+  `state` is `new` (never had a plan or a gift), `ended` (with `why` `plan`: a plan or a gift
+  that stopped) or `paying` (`paid_by`: `gift` or `paddle`, step 4c). End a gift with
   `... python -m app.hosted.plans gift ACCOUNT_ID --end`; the account is then wherever it would
-  be without it (a gifted account's first question still started its free weeks, so they are not
-  had again). Nothing is shown to the reader yet. If you have changed `HOSTED_FREE_DAYS` or
-  `HOSTED_FREE_USD` in `deploy/app.env`, add the same to `show` (`run --rm -e HOSTED_FREE_USD=3.00
-  tools ...`) so it reports a reader without a gift as the server sees them.
+  be without it: `ended` if it has had a Paddle plan, else `new`. Either way Mothli is closed to
+  it until it pays. (A gift that simply runs out keeps its date, so the account shows `ended`.)
+  `HOSTED_FREE_DAYS` and `HOSTED_FREE_USD` are gone (ADR 0046); if `deploy/app.env` still has
+  them, they are ignored, and the lines can be deleted.
 - **"Add to my books" in the free library always says Mothli couldn't get the book.** The web
   process fetches each book itself, over HTTPS, from Project Gutenberg's `gutenberg.pglaf.org`
   and `www.gutenberg.org` (nowhere else, and through no proxy). If your server's provider or a
@@ -958,9 +953,8 @@ Cloudflare > Workers & Pages > mothli-watch > Settings > Trigger events: delete 
   `ANTHROPIC_API_KEY`) and the checker, TypeSafe (`TYPESAFE_API_KEY`), in `deploy/app.env`.
 - The spending caps: $1.00 per reader per day and $4.00 per reader per month (a paying or gifted
   reader's hidden guards, decided 23 November 2026, ADR 0045), $15 a day for the whole platform
-  and $10 a day for story memory (ADR 0044) are the owner's numbers. A reader's two free weeks and
-  their $2.10 ceiling (`HOSTED_FREE_DAYS`, `HOSTED_FREE_USD`) are ADR 0045's proposal, to confirm
-  or change.
+  and $10 a day for story memory (ADR 0044) are the owner's numbers. There are no free weeks
+  (ADR 0046): talking with Mothli is the plan from the first question.
 - Paddle (step 4c): Mothli's product and its two price ids, the notification destination and its
   secret key, the API key and its expiry date, in the sandbox first and then live (`PADDLE_*` in
   `deploy/app.env`), the regular check in the crontab, and the billing role's password

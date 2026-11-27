@@ -1,6 +1,5 @@
-/* The invitation and the gentle note (ADR 0045 section 6): the panels' own looks (memory-state,
-   lp-clear, ml-hc-hello, ml-hc-confirm), with room for a few more words. */
+/* The invitation (ADR 0045 section 6): the panels' own looks (memory-state, ml-hc-hello), with
+   room for a few more words. */
 .mothli-invite p { max-width: 34ch; }
 .mothli-invite--home { justify-items: start; }
 .mothli-invite--home p { max-width: 30ch; }
-.mothli-ending { margin-bottom: 16px; }

@@ -6,9 +6,9 @@ section 8, step 2). Run in the operator container, as ``python -m app.hosted.lim
     python -m app.hosted.plans show ACCOUNT_ID
 
 A gift is written only through ``set_gift`` (migration 0038), which only the operator role may
-execute; the web process has no path to it. ``show`` prints where the reader stands, the dates,
-and their own chat spend since their free weeks began, from ``reader_plan_state``, and nothing
-else: no book, no title, no words of any conversation.
+execute; the web process has no path to it. ``show`` prints where the reader stands and their
+gift's date, from ``reader_plan_state``, and nothing else: no book, no title, no words of any
+conversation.
 """
 
 from __future__ import annotations
@@ -18,12 +18,9 @@ import json
 import os
 import uuid
 from datetime import date
-from decimal import Decimal
 
 import psycopg
 from psycopg.rows import dict_row
-
-from app.config import Settings
 
 # "For good": a far date, so the column stays a date.
 FOR_GOOD = date(9999, 12, 31)
@@ -36,25 +33,14 @@ def set_gift(dsn: str, owner: uuid.UUID, until: date | None) -> bool:
         return conn.execute("SELECT public.set_gift(%s, %s::date)", (owner, until)).fetchone()[0]
 
 
-def _free_weeks() -> tuple[int, Decimal]:
-    """The free weeks' length and ceiling as the web process has them: ``HOSTED_FREE_DAYS`` and
-    ``HOSTED_FREE_USD`` from this process's environment, or the app's defaults."""
-    fields = Settings.model_fields
-    days = os.environ.get("HOSTED_FREE_DAYS", fields["hosted_free_days"].default)
-    usd = os.environ.get("HOSTED_FREE_USD", fields["hosted_free_usd"].default)
-    return int(days), Decimal(str(usd))
-
-
 def show_plan(dsn: str, owner: uuid.UUID) -> dict | None:
-    """Where one reader stands, with the dates and their chat spend since the free weeks began;
-    None for an unknown account."""
-    free_days, free_usd = _free_weeks()
+    """Where one reader stands, with their gift's date; None for an unknown account."""
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         if conn.execute("SELECT 1 FROM owner_limits WHERE owner_id=%s", (owner,)).fetchone() is None:
             return None
         row = conn.execute(
-            "SELECT state, why, paid_by, gift_until, free_started_at, free_ends_at, free_spent_usd"
-            " FROM public.reader_plan_state(%s, %s, %s)", (owner, free_days, free_usd)).fetchone()
+            "SELECT state, why, paid_by, gift_until FROM public.reader_plan_state(%s)",
+            (owner,)).fetchone()
     gift = row["gift_until"]
     return {
         "owner_id": str(owner),
@@ -62,10 +48,6 @@ def show_plan(dsn: str, owner: uuid.UUID) -> dict | None:
         "why": row["why"],
         "paid_by": row["paid_by"],
         "gift_until": None if gift is None else "for good" if gift == FOR_GOOD else gift.isoformat(),
-        "free_started_at": None if row["free_started_at"] is None
-        else row["free_started_at"].isoformat(),
-        "free_ends_at": None if row["free_ends_at"] is None else row["free_ends_at"].isoformat(),
-        "chat_usd_since_free_start": str(row["free_spent_usd"]),
     }
 
 
@@ -79,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     when.add_argument("--until", type=date.fromisoformat, metavar="YYYY-MM-DD",
                       help="the last day of the gift (UTC)")
     when.add_argument("--end", action="store_true", help="end the gift now")
-    show = sub.add_parser("show", help="where the reader stands, the dates and their chat spend")
+    show = sub.add_parser("show", help="where the reader stands and their gift's date")
     show.add_argument("owner", type=uuid.UUID)
     args = parser.parse_args(argv)
     dsn = os.environ.get(args.dsn_env)

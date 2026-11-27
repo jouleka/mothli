@@ -1,23 +1,22 @@
 """Mothli's background work for a reader follows where they stand with their plan (ADR 0045
-section 5, step 6), on real PostgreSQL.
+section 5, step 6; ADR 0046), on real PostgreSQL.
 
-In their free weeks and while they pay, chapter notes, recollections and story memory run as
-before. Once their free weeks are over and they do not pay (ended: the two weeks passed, the free
-ceiling reached, or a plan that stopped), none: the claim finishes such a reader's companion jobs
+While they pay, chapter notes, recollections and story memory run as before. Once a plan or a
+gift they had has stopped (ended), none: the claim finishes such a reader's companion jobs
 without work and without spending, as a cancelled job is, and the routes stop asking for new
 ones; their reading is still recorded. When they pay again, their next question asks for the
 book's story memory (and the reply for its chapter notes), and both build what is missing up to
-the reader's place, as the read map gives it, and never past it. A reader who has signed up and
-never asked anything gets a bounded warm-up: background work within ``HOSTED_WARMUP_DAYS`` of
-sign-up, up to ``HOSTED_WARMUP_NEW_CHAPTERS`` chapters of story memory their reading is the first
-to build and ``HOSTED_WARMUP_NOTES_USD`` of chapter notes; past any of the three it stops,
-silently, and their first question asks again. The guards of ADR 0044 still hold on top. One
-reader's state never changes what is built or served for another reader of the same file, and
-nothing about any of it is shown to a reader.
+the reader's place, as the read map gives it, and never past it. A new reader (never a plan or
+a gift) gets a bounded warm-up: background work within ``HOSTED_WARMUP_DAYS`` of sign-up, up to
+``HOSTED_WARMUP_NEW_CHAPTERS`` chapters of story memory their reading is the first to build and
+``HOSTED_WARMUP_NOTES_USD`` of chapter notes; past any of the three it stops, silently, and their
+first question once they pay asks again. The guards of ADR 0044 still hold on top. One reader's
+state never changes what is built or served for another reader of the same file, and nothing
+about any of it is shown to a reader.
 
 Through the hosted HTTP app on the RLS-enforced tenant role and the worker on a role granted
-exactly the reviewed lists. Plan states are set as the plan tests set them: the free weeks'
-start moved back, the reader's own chat at the free ceiling, a gift, a Paddle plan's status.
+exactly the reviewed lists. The readers start new; plan states are set as the plan tests set
+them: a gift (live or passed), a Paddle plan's status.
 Stand-in writer, checker, extraction and Jev only: nothing is called and nothing paid.
 """
 
@@ -25,7 +24,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import timedelta
-from decimal import Decimal
 
 import psycopg
 import pytest
@@ -44,7 +42,6 @@ from tests.hosted.test_companion_stream_postgres import (  # noqa: F401  (autous
     restore_caps,
     sentences,
 )
-from tests.hosted.test_free_weeks_postgres import chat_spent, move_start, stamp
 from tests.hosted.test_story_memory_jobs_postgres import (
     TOMORROW,
     Lamps,
@@ -62,7 +59,8 @@ pytestmark = pytest.mark.postgres
 admin_dsn = read_map_gate.admin_dsn
 database = read_map_gate.database
 tenant_dsn = read_map_gate.tenant_dsn
-readers = read_map_gate.readers
+# New readers: each test gives the plan where it means to.
+readers = read_map_gate.new_readers
 worker_dsn = jobs_gate.worker_dsn
 notes_app = notes_gate.notes_app
 memory_app = memory_gate.memory_app
@@ -121,7 +119,7 @@ def waiting(dsn: str, owner: uuid.UUID) -> list[str]:
 
 def state_of(dsn: str, owner: uuid.UUID) -> str:
     with psycopg.connect(dsn) as conn:
-        return conn.execute("SELECT state FROM reader_plan_state(%s, 14, 2.10)",
+        return conn.execute("SELECT state FROM reader_plan_state(%s)",
                             (owner,)).fetchone()[0]
 
 
@@ -143,17 +141,13 @@ def paddle(dsn: str, owner: uuid.UUID, status: str) -> None:
             (owner, subscription(owner), status))
 
 
-def end(database: str, tenant: str, owner: uuid.UUID, why: str) -> None:
-    """Make the reader ended: their two weeks passed, their own chat at the free ceiling, or a
-    Paddle plan that stopped."""
-    if why == "plan":
-        paddle(database, owner, "canceled")
+def end(database: str, owner: uuid.UUID, how: str) -> None:
+    """Make the reader ended: a gift that has passed, or a Paddle plan that stopped."""
+    if how == "gift":
+        with psycopg.connect(database) as conn:
+            assert conn.execute("SELECT set_gift(%s, '2020-01-31'::date)", (owner,)).fetchone()[0]
     else:
-        stamp(tenant, owner)
-        if why == "time":
-            move_start(database, owner, "15 days")
-        else:
-            chat_spent(database, owner, Decimal("2.10"))
+        paddle(database, owner, "canceled")
     assert state_of(database, owner) == "ended"
 
 
@@ -189,9 +183,9 @@ def nothing_done_for(database: str, owner: uuid.UUID, book: str) -> None:
 
 # ---- ended: nothing, silently ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("why", ["time", "ceiling", "plan"])
+@pytest.mark.parametrize("how", ["gift", "paddle"])
 def test_an_ended_readers_jobs_are_finished_at_the_claim_and_no_more_are_asked_for(
-        shelf, readers, database, tenant_dsn, worker_dsn, monkeypatch, why):
+        shelf, readers, database, worker_dsn, monkeypatch, how):
     """ADR 0045 section 5, "Ended: none, silently". The break it catches: an ended reader's
     chapter notes or story memory built or paid for (by them or the notes account); their jobs
     left waiting for ever, failed, retried or claimed again; the handler given them at all (so a
@@ -204,7 +198,7 @@ def test_an_ended_readers_jobs_are_finished_at_the_claim_and_no_more_are_asked_f
     a, book = opened(shelf, readers)                      # a page read: story memory asked for
     a.mark(book, [1])                                     # and part 1's notes
     assert waiting(database, a.owner) == ["chapter_notes", "story_memory"]
-    end(database, tenant_dsn, a.owner, why)
+    end(database, a.owner, how)
 
     ran = handled(monkeypatch)
     assert drain(worker(app, extraction, worker_dsn)) == 0
@@ -224,22 +218,22 @@ def test_an_ended_readers_jobs_are_finished_at_the_claim_and_no_more_are_asked_f
 
 
 def test_work_that_began_before_the_reader_ended_is_finished(
-        notes_app, readers, database, tenant_dsn, worker_dsn, monkeypatch):
+        notes_app, readers, database, worker_dsn, monkeypatch):
     """ADR 0045 section 5, the rule for a reply under way applied to a job: the claim decides
     whether a run happens; a run it let start is finished. The break it catches: notes for the
-    rest of the run thrown away, or the run failing, because the reader's free weeks ended while
-    it ran; or a further job asked for afterwards."""
+    rest of the run thrown away, or the run failing, because the reader's plan ended while it
+    ran; or a further job asked for afterwards."""
     _client, _tokens, app = notes_app
     a, book = notes_gate.opened(notes_app, readers)
     a.mark(book, [2])                                     # one job: parts 1 and 2
-    stamp(tenant_dsn, a.owner)
+    pay(database, a.owner, "gift")
 
-    def the_free_weeks_end_mid_run():
+    def the_plan_ends_mid_run():
         if len(models.notes_prompts) == 1:
-            move_start(database, a.owner, "15 days")
+            end(database, a.owner, "gift")
 
     models = NotesModels(app.state.platform_client, monkeypatch,
-                         notes_hook=the_free_weeks_end_mid_run)
+                         notes_hook=the_plan_ends_mid_run)
     assert drain(notes_gate.worker(app, worker_dsn)) == 1
     assert state_of(database, a.owner) == "ended"
     assert [(n["atom"], n["sentences"]) for n in notes_of(database, a.owner)] == [
@@ -251,7 +245,7 @@ def test_work_that_began_before_the_reader_ended_is_finished(
 
 # ---- paying again: both kinds resume, up to the place and never past it ----------------------------
 
-@pytest.mark.parametrize("ended_by, how", [("time", "gift"), ("plan", "paddle")])
+@pytest.mark.parametrize("ended_by, how", [("gift", "gift"), ("paddle", "paddle")])
 def test_a_reader_who_pays_again_gets_notes_and_story_memory_to_their_place_and_not_past_it(
         shelf, readers, database, tenant_dsn, worker_dsn, monkeypatch, ended_by, how):
     """ADR 0045 sections 5 and 9: subscribing picks up where the reader left off, and nothing is
@@ -267,7 +261,7 @@ def test_a_reader_who_pays_again_gets_notes_and_story_memory_to_their_place_and_
     models = NotesModels(app.state.platform_client, monkeypatch, reply=line(1, 2))
     work = worker(app, extraction, worker_dsn)
     a, book = opened(shelf, readers)                      # story memory asked for while new
-    end(database, tenant_dsn, a.owner, ended_by)
+    end(database, a.owner, ended_by)
     a.mark(book, [1])                                     # place 1, ended: nothing asked for
     ran = handled(monkeypatch)
     assert drain(work) == 0 and ran == []
@@ -307,7 +301,7 @@ def test_two_readers_of_one_file_one_ended_one_paying_each_get_only_what_their_o
     NotesModels(app.state.platform_client, monkeypatch, reply=line(1, 2))
     a, book_a = opened(shelf, readers, "a")
     b, book_b = opened(shelf, readers, "b")               # the same file
-    end(database, tenant_dsn, a.owner, "time")
+    end(database, a.owner, "paddle")
     pay(database, b.owner, "gift")
     a.mark(book_a, [1])
     b.mark(book_b, [1])
@@ -331,7 +325,7 @@ def test_two_readers_of_one_file_one_ended_one_paying_each_get_only_what_their_o
     for path in ("graph", "ingest"):
         refused = a.call("GET", f"/api/books/{book_a}/{path}")
         assert (refused.status_code, refused.json()) == (
-            402, {"detail": {"code": "mothli_plan", "why": "time"}}), path
+            402, {"detail": {"code": "mothli_plan", "why": "plan"}}), path
     pay(database, a.owner, "gift")
     for path in ("graph", "ingest"):
         seen = [someone.call("GET", f"/api/books/{book}/{path}") for someone, book in (
@@ -347,9 +341,9 @@ def test_two_readers_of_one_file_one_ended_one_paying_each_get_only_what_their_o
 def test_a_new_reader_is_built_for_within_the_warm_ups_days_and_not_after(
         shelf, readers, database, worker_dsn, monkeypatch, days_ago, built):
     """ADR 0045 section 5, the warm-up's first bound: 30 days from sign-up. The break it catches:
-    a reader who signed up a month ago and never asked having story memory or notes built for
-    them, or one inside the 30 days left cold; or, past it, their first question not asking for
-    the work again (it starts their free weeks)."""
+    a new reader who signed up a month ago having story memory or notes built for them, or one
+    inside the 30 days left cold; or, past it, their first question once they pay not asking for
+    the work again."""
     _client, _tokens, app = shelf
     extraction = extraction_client()
     lamps = Lamps(extraction, monkeypatch)
@@ -367,8 +361,8 @@ def test_a_new_reader_is_built_for_within_the_warm_ups_days_and_not_after(
     nothing_done_for(database, a.owner, book)
     assert lamps.calls == [] and models.notes_prompts == []
 
-    assert sentences(a.ask(book)) == [line(1, 2)]         # the first question: free weeks
-    assert state_of(database, a.owner) == "free"
+    pay(database, a.owner, "gift")
+    assert sentences(a.ask(book)) == [line(1, 2)]         # their first question, paying
     drain(work)
     assert built_for(database, a.owner, book) == [(1, "body"), (2, "body")]
     assert [n["atom"] for n in notes_of(database, a.owner)] == [1]
@@ -377,7 +371,7 @@ def test_a_new_reader_is_built_for_within_the_warm_ups_days_and_not_after(
 def test_a_new_reader_gets_chapter_notes_up_to_the_warm_ups_amount_and_not_past_it(
         notes_app, readers, database, worker_dsn, monkeypatch):
     """ADR 0045 section 5, the warm-up's second bound: $0.50 of chapter notes, counted from the
-    reader's background ledger over the whole time they have not asked. The break it catches: a
+    reader's background ledger over the whole time they have been new. The break it catches: a
     new reader under it held, or one at it given more notes (or a job of theirs left waiting, or
     held only until tomorrow and paid for then)."""
     _client, _tokens, app = notes_app
@@ -405,7 +399,7 @@ def test_a_new_reader_is_first_to_the_warm_ups_chapters_and_not_one_more(
     is the first to build, counted over the whole time they are new (their jobs that published,
     kept for the life of the account). The break it catches: the 25th chapter refused, a 26th
     built, the reader's later runs waiting for tomorrow and paying then, or their first question
-    not resuming the work."""
+    once they pay not resuming the work."""
     _client, _tokens, app = memory_app
     extraction = extraction_client()
     lamps = Lamps(extraction, monkeypatch)
@@ -422,7 +416,8 @@ def test_a_new_reader_is_first_to_the_warm_ups_chapters_and_not_one_more(
     assert waiting(database, a.owner) == []
 
     StandIns(app.state.platform_client, monkeypatch, reply=line(1, 2))
-    assert sentences(a.ask(book)) == [line(1, 2)]         # the first question: free weeks
+    pay(database, a.owner, "gift")
+    assert sentences(a.ask(book)) == [line(1, 2)]         # their first question, paying
     assert drain(work) == 1
     assert built_for(database, a.owner, book) == [(1, "body"), (2, "body")]
     assert lamps.parts() == [1, 2]
@@ -449,15 +444,14 @@ def test_the_chapter_guards_still_hold_on_top_of_the_warm_up(
         assert (last["state"], last["run_after"]) == ("pending", rows(database, TOMORROW)[0]["at"])
 
 
-# ---- the free weeks and paying readers: as before -----------------------------------------------
+# ---- paying readers: as before -------------------------------------------------------------------
 
-@pytest.mark.parametrize("standing", ["free", "paying"])
-def test_the_warm_up_never_holds_a_reader_in_their_free_weeks_or_paying(
-        shelf, readers, database, tenant_dsn, worker_dsn, monkeypatch, standing):
-    """ADR 0045 section 5: "Free weeks, Paying: as today". The break it catches: the warm-up's
-    bounds applied to a reader who has asked (or pays): one who signed up long ago, whose notes
-    have cost more than the warm-up's amount and whose reading was first to more chapters than
-    its count, held."""
+@pytest.mark.parametrize("how", ["gift", "paddle"])
+def test_the_warm_up_never_holds_a_paying_reader(
+        shelf, readers, database, worker_dsn, monkeypatch, how):
+    """ADR 0045 section 5: "Paying: as today". The break it catches: the warm-up's bounds
+    applied to a reader who pays: one who signed up long ago, whose notes have cost more than the
+    warm-up's amount and whose reading was first to more chapters than its count, held."""
     _client, _tokens, app = shelf
     extraction = extraction_client()
     Lamps(extraction, monkeypatch)
@@ -467,11 +461,7 @@ def test_the_warm_up_never_holds_a_reader_in_their_free_weeks_or_paying(
     seed_first_builds(database, a.owner, seed_book, 26, ended="now() - interval '20 days'")
     spend_on_ledger(database, a.owner, book, "0.60")
     signed_up(database, a.owner, 400)
-    if standing == "free":
-        stamp(tenant_dsn, a.owner)
-    else:
-        pay(database, a.owner, "gift")
-    assert state_of(database, a.owner) == standing
+    pay(database, a.owner, how)
     a.mark(book, [1])
     drain(worker(app, extraction, worker_dsn))
     assert built_for(database, a.owner, book) == [(1, "body"), (2, "body")]

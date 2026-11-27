@@ -11,7 +11,7 @@ const CHECKOUT = {
   prices: { monthly: "pri_monthlystandin", yearly: "pri_yearlystandin" },
 };
 export const planOf = (values: Partial<Plan> = {}): Plan => ({
-  state: "free", why: null, plan: null, next_date: "2099-12-04T10:00:00+00:00", subscribed: false,
+  state: "ended", why: "plan", plan: null, next_date: null, subscribed: false,
   cancel_scheduled: false, payment_retrying: false, manage: true, checkout: CHECKOUT, ...values,
 });
 

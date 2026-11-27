@@ -18,9 +18,9 @@ and 7); none of them waits for it.
 
 The gate (ADR 0045 step 5, ``app.hosted.companion.gate``): every route that serves what Mothli
 wrote or knows (the two chats, the two stored conversations, the cast, a person's card, "Story so
-far" and its progress) takes its reader through ``_mothli`` or ``_csrf_mothli``, which answer an
-ended reader ``402 mothli_plan`` before the route's body runs. Reading is never gated: the read
-map, page reports (taken in every state, so the place is right when Mothli is used again), "I've
+far" and its progress) takes its reader through ``_mothli`` or ``_csrf_mothli``, which answer a
+reader who is not paying (``new`` or ``ended``, ADR 0046) ``402 mothli_plan`` before the route's
+body runs. Reading is never gated: the read map, page reports (taken in every state, so the place is right when Mothli is used again), "I've
 read this", clearing a conversation, the profile and what Mothli remembers (the reader's own data,
 to read and to forget).
 """
@@ -33,7 +33,6 @@ import uuid
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict
 
 from app.api.profile import reader_profile
 from app.api.reading import ReadChapters, ReadPage
@@ -87,9 +86,9 @@ def _notes_queue(request: Request, owner_id: OwnerId) -> ChapterNotesQueue:
 
 
 def _going(catalog) -> bool:
-    """Whether to ask for this reader's background work at all (ADR 0045 section 5): not once
-    their free weeks are over and they do not pay (``ended``). A new reader is asked for as
-    everyone is; the claim holds them to the warm-up. A database that cannot be reached asks
+    """Whether to ask for this reader's background work at all (ADR 0045 section 5, ADR 0046):
+    not once a plan they had has stopped (``ended``). A new reader is asked for as everyone is;
+    the claim holds them to the warm-up. A database that cannot be reached asks
     for nothing, as a queue that cannot be reached adds nothing: the next page or question asks
     again. Nothing here is told to the reader."""
     try:
@@ -108,17 +107,19 @@ def _standing(request: Request, owner_id: OwnerId) -> dict:
 
 
 def _gate(request: Request, owner_id: OwnerId) -> OwnerId:
-    """The gate (ADR 0045 step 5): an ended reader is answered ``402 mothli_plan`` with why;
-    anyone else goes on exactly as before. It reads the reader's plan alone."""
+    """The gate (ADR 0045 step 5, ADR 0046): a reader who is not paying, new or ended, is
+    answered ``402 mothli_plan`` with why; a paying reader goes on exactly as before. It reads
+    the reader's plan alone."""
     standing = _standing(request, owner_id)
-    if standing["state"] == "ended":
+    if standing["state"] != "paying":
         raise gate.refusal(standing["why"])
     return owner_id
 
 
 def _mothli(request: Request, owner_id: OwnerId = Depends(_owner)) -> OwnerId:
     """The signed-in reader of a route that serves Mothli, through the gate. As a dependency it
-    runs before the route's body, so nothing of the reader's is opened for an ended reader."""
+    runs before the route's body, so nothing of the reader's is opened for a reader who is not
+    paying."""
     return _gate(request, owner_id)
 
 
@@ -290,13 +291,10 @@ def ask_the_book_stream(book_id: uuid.UUID, body: AskRequest, request: Request,
     # One story memory per request: every sentence's check of this reply reads the same snapshot.
     store = HostedBookStore(request.app.state.companion_dsn, owner_id)
     try:
-        # A question starts the reader's two free weeks, once (ADR 0045 step 1), before anything
-        # is read or reserved. Nothing else here changes with them.
-        catalog.start_free_weeks()
-        # ADR 0045 section 5: past the gate the reader is not ended, so the question asks for
-        # the book's story memory, and a reader who has become paying again (or a new one, whose
-        # question just started the free weeks) has it built up to their place as the read map
-        # gives it; their chapter notes are asked for after the reply, as always.
+        # ADR 0045 section 5: past the gate the reader is paying, so the question asks for the
+        # book's story memory, and a reader who has become paying again has it built up to their
+        # place as the read map gives it; their chapter notes are asked for after the reply, as
+        # always.
         _story_memory(request, owner_id, str(book_id))
         events = stream_read_prefix(str(book_id), body, catalog, store, settings,
                                     request.app.state.platform_client, source,
@@ -357,8 +355,7 @@ def clear_conversation(book_id: uuid.UUID, request: Request,
 
 # ---- the story memory screens: the cast, a person's card, the story so far, progress (ADR 0042
 # part 4). The bodies are the local ones (``app.memory_views``), over this reader's story memory.
-# Each is behind the gate; none starts the free weeks (the app fetches the cast and the notes by
-# itself; the reader's own tap calls ``POST /api/reader/mothli/start``).
+# Each is behind the gate.
 
 _BOOKMARK = Query(default=None, ge=0, description="explicit bookmark; clamped to the reader's place")
 
@@ -496,7 +493,6 @@ def ask_home(body: HomeAsk, request: Request, owner_id: OwnerId = Depends(_csrf_
     catalog, source, settings = _home(request, owner_id, ReplyCatalog)
     store = HostedBookStore(request.app.state.companion_dsn, owner_id)
     try:
-        catalog.start_free_weeks()          # as in a book: a question starts the free weeks
         events = stream_home(body, catalog, store, settings, request.app.state.platform_client,
                              source, [], recollector=_recollector(request, owner_id))
     except CompanionDatabaseBusy as exc:
@@ -574,34 +570,3 @@ def forget_recollections(request: Request, owner_id: OwnerId = Depends(_csrf_own
         catalog.clear_recollections()
     except CompanionDatabaseBusy as exc:
         raise _busy(exc) from exc
-
-
-# ---- the start of the free weeks by the reader's own tap (ADR 0045 section 2, step 5) ----------
-
-class MothliStart(BaseModel):
-    """The book the reader is in, if any: its background work is asked for, as a question's is."""
-
-    model_config = ConfigDict(extra="forbid")
-    book_id: uuid.UUID | None = None
-
-
-@reader_router.post("/mothli/start")
-def start_mothli(body: MothliStart, request: Request, owner_id: OwnerId = Depends(_csrf_owner)):
-    """The reader opened the cast or "Story so far" themselves: their first use of Mothli, as a
-    question is. Unless they are ended, it starts their free weeks once (``start_free_weeks``,
-    exactly as a question does) and asks for the book's chapter notes and story memory, which
-    build what is missing up to their place (section 5). An ended reader is only told where they
-    stand: nothing is stamped or asked for. The answer is the session's ``mothli``. The app's own
-    fetches (the cast for names in the page, the notes after a chapter) never call it."""
-    if not request.app.state.settings.companion_chat():
-        raise HTTPException(404, "Mothli is not enabled")
-    standing = _standing(request, owner_id)
-    if standing["state"] != "ended":
-        try:
-            HostedCompanionCatalog(request.app.state.companion_dsn, owner_id).start_free_weeks()
-        except CompanionDatabaseBusy as exc:
-            raise _busy(exc) from exc
-        if body.book_id is not None:            # a book that is not this reader's adds nothing
-            _finished(request, owner_id, str(body.book_id))
-        standing = _standing(request, owner_id)
-    return standing

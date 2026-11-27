@@ -29,7 +29,12 @@ from app.hosted.tenant.repository import PostgresTenantRepository
 from app.main import create_app
 from tests._alice_shaped import alice_shaped_epub
 from tests.hosted import test_tenant_postgres as tenant_gate
-from tests.hosted.test_companion_read_map_postgres import hosted_settings, signed_in, upload
+from tests.hosted.test_companion_read_map_postgres import (
+    give_the_plan,
+    hosted_settings,
+    signed_in,
+    upload,
+)
 from tests.hosted.test_tenant_postgres import UnusedOIDCClient, _become
 
 pytestmark = pytest.mark.postgres
@@ -282,6 +287,7 @@ def test_second_reader_gets_first_readers_story_memory_as_missing_on_every_route
         for label, owner in readers.items():
             conn.execute("INSERT INTO users (id,display_name) VALUES (%s,%s)",
                           (owner, f"Reader {label.upper()}"))
+    give_the_plan(database, *readers.values())
     dsn = tenant_dsn if role == "tenant" else database
     with Shelf(dsn, readers, tmp_path, superuser=role == "superuser") as shelf:
         book_a, book_b, ids = _readers_shelf(shelf, database, readers)
@@ -324,6 +330,7 @@ def test_the_place_is_the_read_map_even_when_a_device_pushes_the_counter_ahead(
     with psycopg.connect(database) as conn:
         for owner in readers.values():
             conn.execute("INSERT INTO users (id,display_name) VALUES (%s,'Reader')", (owner,))
+    give_the_plan(database, *readers.values())
     with Shelf(tenant_dsn, readers, tmp_path, superuser=False) as shelf:
         book = upload(shelf.client, shelf.tokens, "a", alice_shaped_epub())
         ids = seed_edition(database, readers["a"], book, book_keys(shelf.app, readers["a"], book),
@@ -369,6 +376,7 @@ def test_progress_says_running_waiting_or_nothing_and_a_book_with_no_memory_is_e
     with psycopg.connect(database) as conn:
         for owner in readers.values():
             conn.execute("INSERT INTO users (id,display_name) VALUES (%s,'Reader')", (owner,))
+    give_the_plan(database, *readers.values())
     with Shelf(tenant_dsn, readers, tmp_path, superuser=False) as shelf:
         book = upload(shelf.client, shelf.tokens, "a", alice_shaped_epub())
         shelf.read("a", book, [3])
@@ -422,6 +430,7 @@ def test_the_story_memory_screens_refuse_a_memory_built_from_another_split_of_th
     with psycopg.connect(database) as conn:
         for owner in readers.values():
             conn.execute("INSERT INTO users (id,display_name) VALUES (%s,'Reader')", (owner,))
+    give_the_plan(database, *readers.values())
     with Shelf(tenant_dsn, readers, tmp_path, superuser=False) as shelf:
         book = upload(shelf.client, shelf.tokens, "a", alice_shaped_epub())
         keys = book_keys(shelf.app, readers["a"], book)

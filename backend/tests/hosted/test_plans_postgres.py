@@ -1,12 +1,12 @@
 """Gifts: the owner's own account and test accounts as paying readers without Paddle (ADR 0045
-section 8, step 2), on real PostgreSQL.
+section 8, step 2; ADR 0046), on real PostgreSQL.
 
 A gift is written only by the operator's command (``python -m app.hosted.plans``), through
 ``set_gift``, which only the operator role may execute. A reader whose gift lasts today is
-``paying``: the free ceiling does not apply to them and the reader's day and month caps (the
-paying readers' hidden guards) do, with today's lines; an operator's own caps for that reader
-still win. A gift that has passed changes nothing. A gifted reader's first question still stamps
-their free weeks, once.
+``paying``: the reader's day and month caps (the paying readers' hidden guards) hold them, with
+today's lines; an operator's own caps for that reader still win. A gift that has passed leaves
+the reader ``ended`` with why ``plan``, and the gate answers; a reader who never had a plan or a
+gift is ``new``, and the gate answers them too.
 
 At the spend adapter, through the hosted HTTP app on the RLS-enforced tenant role, and through
 the command on a role granted exactly what the deployment's role script grants the operator.
@@ -29,7 +29,7 @@ from app.hosted.companion.store import HostedCompanionCatalog
 from app.hosted.limits import update_limits
 from app.hosted.tenant.models import OwnerId
 from tests.hosted import test_companion_read_map_postgres as read_map_gate
-from tests.hosted import test_free_weeks_postgres as free_weeks
+from tests.hosted import test_mothli_gate_postgres as mothli_gate
 from tests.hosted.test_companion_spend_postgres import spend
 from tests.hosted.test_companion_stream_postgres import (
     StandIns,
@@ -37,18 +37,14 @@ from tests.hosted.test_companion_stream_postgres import (
     sentences,
 )
 from tests.hosted.test_deploy import load_roles
-from tests.hosted.test_free_weeks_postgres import (
+from tests.hosted.test_mothli_gate_postgres import (
     QUESTION,
-    chat_since_start,
     chat_spent,
     gate_of,
     gated,
-    move_start,
     opened,
     refused,
     shelve,
-    stamp,
-    started,
 )
 
 pytestmark = pytest.mark.postgres
@@ -56,12 +52,12 @@ pytestmark = pytest.mark.postgres
 admin_dsn = read_map_gate.admin_dsn
 database = read_map_gate.database
 tenant_dsn = read_map_gate.tenant_dsn
-readers = read_map_gate.readers
-make_app = free_weeks.make_app
+# New readers: the gifts are what these tests give.
+readers = read_map_gate.new_readers
+make_app = mothli_gate.make_app
 line = read_map_gate.line
 
-SHOWN = {"owner_id", "state", "why", "paid_by", "gift_until", "free_started_at", "free_ends_at",
-         "chat_usd_since_free_start"}
+SHOWN = {"owner_id", "state", "why", "paid_by", "gift_until"}
 
 
 @pytest.fixture()
@@ -106,11 +102,10 @@ def gift_relative(dsn: str, owner: uuid.UUID, days: int) -> None:
         conn.execute("SELECT set_gift(%s, (now() AT TIME ZONE 'UTC')::date + %s)", (owner, days))
 
 
-def plan_of(dsn: str, owner: uuid.UUID, usd: str = "2.10") -> tuple:
+def plan_of(dsn: str, owner: uuid.UUID) -> tuple:
     with psycopg.connect(dsn) as conn:
-        return conn.execute("SELECT state, why, free_started_at, free_ends_at, paid_by,"
-                            " free_spent_usd FROM reader_plan_state(%s, 14, %s)",
-                            (owner, Decimal(usd))).fetchone()
+        return conn.execute("SELECT state, why, paid_by FROM reader_plan_state(%s)",
+                            (owner,)).fetchone()
 
 
 def row_of(dsn: str, owner: uuid.UUID):
@@ -120,9 +115,9 @@ def row_of(dsn: str, owner: uuid.UUID):
     return None if found is None else found[0]
 
 
-def caps(day, month, free="0.05") -> None:
+def caps(day, month) -> None:
     set_spend_limits(reader_usd_per_day=Decimal(day), reader_usd_per_month=Decimal(month),
-                     platform_usd_per_day=100, free_usd=Decimal(free))
+                     platform_usd_per_day=100)
 
 
 # ---- the command ----------------------------------------------------------------------------------
@@ -132,12 +127,11 @@ def test_the_command_gives_a_gift_for_good_or_to_a_day_ends_it_and_shows_it(
     """The break it catches: the owner unable to give his own account a gift, for good or to a
     day, or to end one, from the operator container's role; a gift that does not make the reader
     paying; another reader touched; an unknown id given a row; or ``show`` printing anything but
-    the state, the dates and the chat spend."""
+    the state and the gift's date."""
     a, b = readers["a"], readers["b"]
     shown = command(operator_dsn, monkeypatch, capsys, "show", str(a))
     assert shown == {"owner_id": str(a), "state": "new", "why": None, "paid_by": None,
-                     "gift_until": None, "free_started_at": None, "free_ends_at": None,
-                     "chat_usd_since_free_start": "0"}
+                     "gift_until": None}
 
     shown = command(operator_dsn, monkeypatch, capsys, "gift", str(a))
     assert (shown["state"], shown["why"], shown["paid_by"], shown["gift_until"]) == (
@@ -172,64 +166,71 @@ def test_the_command_gives_a_gift_for_good_or_to_a_day_ends_it_and_shows_it(
 def test_show_prints_no_book_title_and_no_conversation_text(
         make_app, readers, database, operator_dsn, monkeypatch, capsys):
     """The break it catches: the owner's look at a reader's plan showing what they read or said:
-    a book's title or author, a question, a reply, or anything beyond the state, the dates and
-    the spend."""
+    a book's title or author, a question, a reply, or anything beyond the state and the gift."""
     a, book, app = opened(make_app, readers)
     StandIns(app.state.platform_client, monkeypatch, reply=line(1, 2))
+    gift(database, a.owner)
     events = a.ask(book, QUESTION)
     assert events[-1]["type"] == "done" and sentences(events) == [line(1, 2)]
-    gift(database, a.owner)
 
     monkeypatch.setenv("DATABASE_URL", operator_dsn)
     assert plans.main(["show", str(a.owner)]) == 0
     printed = capsys.readouterr().out
     shown = json.loads(printed)
     assert set(shown) == SHOWN and shown["state"] == "paying"
-    assert shown["free_started_at"] is not None
-    assert Decimal(shown["chat_usd_since_free_start"]) == chat_since_start(database, a.owner)
     for words in ("Lamp", "Ada Writer", QUESTION, line(1, 2), "lamp", "Mara", str(book)):
         assert words not in printed, words
 
 
 # ---- who may give a gift --------------------------------------------------------------------------
 
-def test_the_tenant_role_cannot_give_a_gift_or_write_one(tenant_dsn, database, readers):
+def test_the_tenant_role_cannot_give_a_gift_write_its_plan_or_see_another_readers(
+        tenant_dsn, database, readers):
     """The break it catches: a reader's session that could give itself (or another reader) a
-    gift, by calling ``set_gift`` or by writing ``gift_until``."""
+    gift or a plan, by calling ``set_gift``, writing ``gift_until``, inserting, moving or erasing
+    its row; that finds a way left to start anything free (the removed ``start_free_weeks``); or
+    that can read another reader's row or state."""
     a, b = readers["a"], readers["b"]
+    gift_relative(database, a, -1)                          # the reader's own row exists: ended
     with psycopg.connect(tenant_dsn, autocommit=True) as conn:
         conn.execute("SELECT set_config('app.owner_id', %s, false)", (str(a),))
-        conn.execute("SELECT start_free_weeks()")          # the reader's own row exists
         for statement, params in (
                 ("SELECT set_gift(%s, '9999-12-31'::date)", (a,)),
                 ("SELECT set_gift(%s, '9999-12-31'::date)", (b,)),
                 ("SELECT set_gift(%s, NULL::date)", (a,)),
                 ("UPDATE reader_plans SET gift_until = '9999-12-31'", ()),
                 ("INSERT INTO reader_plans (owner_id, gift_until) VALUES (%s, '9999-12-31')",
-                 (b,))):
+                 (b,)),
+                ("DELETE FROM reader_plans", ())):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(statement, params)
-        assert conn.execute("SELECT state, paid_by FROM reader_plan_state(%s, 14, 2.10)",
-                            (a,)).fetchone() == ("free", None)
-    assert row_of(database, a)["gift_until"] is None and row_of(database, b) is None
+        with pytest.raises(psycopg.errors.UndefinedFunction):
+            conn.execute("SELECT start_free_weeks()")
+        assert conn.execute("SELECT state, why, paid_by FROM reader_plan_state(%s)",
+                            (a,)).fetchone() == ("ended", "plan", None)
+        conn.execute("SELECT set_config('app.owner_id', %s, false)", (str(b),))
+        assert conn.execute("SELECT count(*) FROM reader_plans").fetchone()[0] == 0
+        assert conn.execute("SELECT state, why, gift_until FROM reader_plan_state(%s)",
+                            (a,)).fetchone() == ("new", None, None)
+    assert row_of(database, a)["gift_until"] is not None and row_of(database, b) is None
 
 
 # ---- a gifted reader is a paying reader -----------------------------------------------------------
 
-def test_a_gifted_reader_is_not_stopped_by_the_free_ceiling_and_is_held_by_the_day_and_month(
+def test_a_gifted_reader_is_held_by_the_day_and_month_and_gated_once_the_gift_ends(
         tenant_dsn, database, readers):
-    """The break it catches: the owner or a tester stopped by the free ceiling; or a gifted
-    reader held by nothing (the day and month guards of a paying reader skipped); or an
-    operator's own caps for that reader ignored once they are gifted."""
+    """The break it catches: a gifted reader held by nothing (the day and month guards of a
+    paying reader skipped); an operator's own caps for that reader ignored once they are gifted;
+    or a reader whose gift was taken back or has passed answered past the gate."""
     a = readers["a"]
     book = shelve(database, a)
     caps("0.10", "0.20")
-    stamp(tenant_dsn, a)                                    # in the free weeks, and gifted
-    gift(database, a)
     chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
-    spend(chat, book, 0.06)                                 # past the $0.05 free ceiling
+    gated(chat, book, None)                                 # new: the gate
+    gift(database, a)
+    spend(chat, book, 0.06)
     spend(chat, book, 0.04)
-    assert plan_of(database, a, "0.05")[:2] == ("paying", None)
+    assert plan_of(database, a) == ("paying", None, "gift")
     refused(chat, book, "day", _DAY)                        # today's day, today's line
     caps("1", "0.10")
     refused(chat, book, "month", _MONTH)
@@ -244,32 +245,26 @@ def test_a_gifted_reader_is_not_stopped_by_the_free_ceiling_and_is_held_by_the_d
                                 "max_spend_usd_per_month": Decimal("50")})
     spend(chat, book, 0.30)
 
-    # The gift ended: the reader is back where they would be, here past the free ceiling, so
-    # ended, and the gate answers (ADR 0045 step 5).
-    update_limits(database, a, {"max_spend_usd_per_day": None, "max_spend_usd_per_month": None})
+    # The gift taken back: they never had a plan of their own, so they are new again, and the
+    # gate answers, whatever their own caps. A gift that has passed: ended, and the gate answers.
     gift(database, a, None)
-    gated(chat, book, "ceiling")
+    assert plan_of(database, a) == ("new", None, None)
+    gated(chat, book, None)
+    gift_relative(database, a, -1)
+    assert plan_of(database, a) == ("ended", "plan", None)
+    gated(chat, book, "plan")
 
 
-def test_a_gifted_reader_who_never_asked_is_paying_and_their_first_question_starts_the_free_weeks(
+def test_a_gifted_reader_asks_through_the_app_and_meets_the_gate_when_the_gift_passes(
         make_app, readers, database, monkeypatch):
-    """The break it catches: a gifted reader who has not asked yet shown as new; their first
-    question not stamping the free weeks (they could have them again after the gift ends) or
-    stamping them twice; or a gifted reader at today's day cap answered past it or told anything
-    but today's line. Through the hosted app, with today's caps."""
-    a, book, app = opened(make_app, readers, hosted_free_usd=0.05)
+    """The break it catches: a gifted reader refused by the gate; a gifted reader at today's day
+    cap answered past it or told anything but today's line; or a reader whose gift has passed
+    answered. Through the hosted app, with low caps."""
+    a, book, app = opened(make_app, readers)
     models = StandIns(app.state.platform_client, monkeypatch, reply=line(1, 2))
     gift(database, a.owner)
-    assert plan_of(database, a.owner)[:2] == ("paying", None) and started(database, a.owner) is None
-
-    assert a.ask(book)[-1]["type"] == "done"
-    first = started(database, a.owner)
-    assert first is not None and plan_of(database, a.owner)[:2] == ("paying", None)
-    move_start(database, a.owner, "1 day")
-    first = started(database, a.owner)
-    chat_spent(database, a.owner, Decimal("0.06"))          # past the free ceiling, under the day
+    assert plan_of(database, a.owner) == ("paying", None, "gift")
     assert sentences(a.ask(book)) == [line(1, 2)]
-    assert started(database, a.owner) == first
 
     chat_spent(database, a.owner, Decimal("0.10"))          # past today's $0.10 day
     writes = models.writes
@@ -277,49 +272,36 @@ def test_a_gifted_reader_who_never_asked_is_paying_and_their_first_question_star
                             "message": _DAY}]
     assert models.writes == writes
 
-    # The gift lasted past the two weeks; when it ends, the free weeks are over, not begun again:
-    # the reader's question meets the gate (ADR 0045 step 5).
-    move_start(database, a.owner, "20 days")
-    moved = started(database, a.owner)
-    gift(database, a.owner, None)
-    assert plan_of(database, a.owner)[:2] == ("ended", "time")
+    gift_relative(database, a.owner, -1)
+    assert plan_of(database, a.owner)[:2] == ("ended", "plan")
     refused_now = a.stream(book)
-    assert (refused_now.status_code, refused_now.json()) == (402, gate_of("time"))
-    assert started(database, a.owner) == moved
-    assert plan_of(database, a.owner)[:2] == ("ended", "time")
+    assert (refused_now.status_code, refused_now.json()) == (402, gate_of("plan"))
+    assert models.writes == writes
 
 
-def test_a_gift_that_has_passed_changes_nothing(tenant_dsn, database, readers):
-    """The break it catches: a gift that has passed still making the reader paying, or moving
-    them anywhere but where they would be without it: new, in their free weeks (with the free
-    ceiling), or ended. A gift ending today still holds today."""
+def test_a_gift_holds_to_the_end_of_its_day_and_then_ends_the_plan(tenant_dsn, database, readers):
+    """The break it catches: a gift ending today not holding today; a gift that has passed still
+    making the reader paying, or leaving them new (as if they never had one) rather than ended."""
     a, b = readers["a"], readers["b"]
     book = shelve(database, a)
-    caps("0.10", "2")
-    stamp(tenant_dsn, a)
+    caps("1", "5")
     chat = HostedCompanionCatalog(tenant_dsn, OwnerId(a))
-    spend(chat, book, 0.05)
-    before = {owner: plan_of(database, owner, "0.05") for owner in (a, b)}
-    assert before[a][:2] == ("ended", "ceiling") and before[b][:2] == ("new", None)
-
     for owner in (a, b):
         gift_relative(database, owner, 0)                   # ends at the end of today: it holds
-        assert plan_of(database, owner, "0.05")[:2] == ("paying", None)
+        assert plan_of(database, owner) == ("paying", None, "gift")
         gift_relative(database, owner, -1)                  # ended yesterday
-    assert {owner: plan_of(database, owner, "0.05") for owner in (a, b)} == before
-    gated(chat, book, "ceiling")
+        assert plan_of(database, owner) == ("ended", "plan", None)
+    gated(chat, book, "plan")
     with psycopg.connect(database) as conn:
-        assert conn.execute("SELECT gift_until FROM reader_plan_state(%s, 14, 0.05)",
+        assert conn.execute("SELECT gift_until FROM reader_plan_state(%s)",
                             (a,)).fetchone()[0] is not None
-    move_start(database, a, "15 days")
-    assert plan_of(database, a, "0.05")[:2] == ("ended", "time")
 
 
 def test_a_gift_for_one_reader_never_touches_another(tenant_dsn, database, readers):
     """The break it catches: a gift given, changed or ended for one reader writing another's row
     or moving their state; or one reader's session able to see another's gift."""
     a, b = readers["a"], readers["b"]
-    stamp(tenant_dsn, b)
+    gift_relative(database, b, -1)
     b_row, b_plan = row_of(database, b), plan_of(database, b)
     for until in ("9999-12-31", "2099-06-30", None):
         gift(database, a, until)
@@ -328,7 +310,7 @@ def test_a_gift_for_one_reader_never_touches_another(tenant_dsn, database, reade
     with psycopg.connect(tenant_dsn, autocommit=True) as conn:
         conn.execute("SELECT set_config('app.owner_id', %s, false)", (str(b),))
         assert conn.execute("SELECT owner_id FROM reader_plans").fetchall() == [(b,)]
-        assert conn.execute("SELECT state, paid_by, gift_until FROM reader_plan_state"
-                            "(%s, 14, 2.10)", (a,)).fetchone() == ("new", None, None)
-        assert conn.execute("SELECT state, paid_by FROM reader_plan_state(%s, 14, 2.10)",
-                            (b,)).fetchone() == ("free", None)
+        assert conn.execute("SELECT state, paid_by, gift_until FROM reader_plan_state(%s)",
+                            (a,)).fetchone() == ("new", None, None)
+        assert conn.execute("SELECT state, paid_by FROM reader_plan_state(%s)",
+                            (b,)).fetchone() == ("ended", None)

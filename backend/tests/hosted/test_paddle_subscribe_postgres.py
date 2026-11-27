@@ -589,8 +589,8 @@ def test_reader_a_can_neither_act_on_nor_learn_about_reader_bs_plan(shop, databa
 def test_the_plan_says_state_kind_date_cancel_and_retry_and_never_an_amount(shop, database,
                                                                            readers, tenant_dsn):
     """The break it catches: the account sheet told an amount, a count of questions or a
-    countdown; the wrong kind of plan; the wrong date (the free weeks' end, the renewal, the
-    scheduled end, the gift's last day); a payment Paddle is retrying not said."""
+    countdown; the wrong kind of plan; the wrong date (the renewal, the scheduled end, the gift's
+    last day); a payment Paddle is retrying not said."""
     client, tokens, standin = shop
     a, b = readers["a"], readers["b"]
     keys = {"state", "why", "plan", "next_date", "subscribed", "cancel_scheduled",
@@ -601,14 +601,6 @@ def test_the_plan_says_state_kind_date_cancel_and_retry_and_never_an_amount(shop
     assert new == {"state": "new", "why": None, "plan": None, "next_date": None,
                    "subscribed": False, "cancel_scheduled": False, "payment_retrying": False,
                    "manage": True, "checkout": None}
-    messages.stamp(tenant_dsn, a)
-    free = plan(client, tokens, "a")
-    assert (free["state"], free["plan"]) == ("free", None)
-    with psycopg.connect(database) as conn:
-        ends = conn.execute("SELECT free_ends_at FROM reader_plan_state(%s, 14, 2.10)",
-                            (a,)).fetchone()[0]
-    assert datetime.fromisoformat(free["next_date"]) == ends
-
     subscribe(client, tokens, standin, "a", a, sub_id("a"), which="yearly")
     paying = plan(client, tokens, "a")
     assert (paying["state"], paying["plan"], paying["subscribed"]) == ("paying", "yearly", True)
@@ -626,7 +618,7 @@ def test_the_plan_says_state_kind_date_cancel_and_retry_and_never_an_amount(shop
     gift = plan(client, tokens, "b")
     assert (gift["plan"], gift["subscribed"]) == ("gift", False)
     assert gift["next_date"].startswith("2099-06-30T23:59:59")
-    for seen in (new, free, paying, retrying, gift):
+    for seen in (new, paying, retrying, gift):
         assert set(seen) == keys
         text = json.dumps(seen).casefold()
         for word in ("usd", "spent", "question", "left", "unlimited", "remaining", "$"):

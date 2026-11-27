@@ -56,7 +56,6 @@
 .pp-about p { margin: 0 0 12px; }
 .pp-points { display: grid; gap: 12px; margin: 0 0 48px; padding: 0; list-style: none; }
 .pp-points strong,
-.pp-free strong { font-weight: 600; color: var(--m-ink); }
 .pp-prices {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
