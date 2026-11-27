@@ -242,9 +242,13 @@ def budgeted_completion(catalog, settings, client, book_id, *, phase, system, us
         actual = reserved_usage                         # missing real-provider usage fails conservative
     actual_usd = reserved_usd_of(model, actual) if missing_usage else usd_of(model, actual)
     try:
+        # Recorded only (migration 0043): the parts of the input read from and written to the
+        # prompt cache, as ``completion_usage`` kept them; unknown when the provider gave no usage.
         catalog.note_reservation_actual(
             book_id, reservation_id, input_tokens=actual["in"], output_tokens=actual["out"],
             usd=actual_usd,
+            cache_read_tokens=None if missing_usage else actual.get("cache_read", 0),
+            cache_write_tokens=None if missing_usage else actual.get("cache_write", 0),
         )
     except ValueError as exc:
         raise RuntimeError("cost reservation disappeared while provider call was in flight") from exc

@@ -865,6 +865,29 @@ Node.js and a bash terminal: on Windows, Git Bash), in the Mothli folder.
 setting `JOBS_OFF`, the jobs not to watch separated by commas, as in step 4. To stop everything,
 Cloudflare > Workers & Pages > mothli-watch > Settings > Trigger events: delete the cron trigger.
 
+## 6b. Measuring what paying readers use and what the calls cost
+
+Before and after a change meant to make the chat cheaper, take the numbers (read only; it writes
+nothing):
+```
+docker compose -f deploy/compose.yaml run --rm tools python -m app.hosted.measure
+```
+`--days 7` looks at the last 7 UTC days instead of 30. It prints one line of JSON, numbers and
+account ids only (never a title, a word of a conversation or an email address):
+
+- `readers`: one entry per paying reader (`state` `paying`, as `app.hosted.plans show` says):
+  `replies_per_day` for every day of the window, `replies_per_month` for every month they have
+  talked with Mothli, and `unique_uploads`, how many books on their shelf are files they uploaded
+  that no other account has (Mothli builds that book's story memory for them alone). A reply is
+  one writer call of a reply in a book or on the home page; its checks and second looks are not
+  counted.
+- `calls`: every account's calls in the window, per `purpose` and `phase`: how many, and the
+  totals of full-price input, input written to the provider's cache, input read from it, output,
+  and `usd`. `calls_without_split` counts calls whose cache split is not known (from before this
+  was recorded, a failed call, a check or an embedding); their whole input counts as full price.
+
+To compare, run it for the same number of days before the change and again after it.
+
 ## 7. When something is wrong
 
 - **A reader says the site is down.** Run the two `curl` lines of step 6.
