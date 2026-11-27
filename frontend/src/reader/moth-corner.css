@@ -60,6 +60,9 @@
   font-size: 15px;
   font-weight: 600;
   line-height: 1.5;
+  /* A longer note (Mothli's at the end of a book) scrolls inside the bubble, never over the page. */
+  max-height: min(14em, 40vh);
+  overflow-y: auto;
 }
 .mc-bubble.welcome-back p {
   padding-right: 22px;

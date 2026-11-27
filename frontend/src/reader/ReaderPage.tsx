@@ -24,7 +24,8 @@ import { MothCorner, WelcomeBackCard, type CornerNote } from "./MothMoments";
 import { crossedMilestone, milestoneLine, readingStreak, recordReadingDay, streakName, unlockCast } from "../journey/journey";
 import { useCycle } from "../ui/useCycle";
 import { Moth } from "../ui/Moth";
-import { mothliClosed, useMothliClosed } from "../ui/mothliStanding";
+import { mothliClosed, mothliStanding, useMothliClosed, useMothliStanding } from "../ui/mothliStanding";
+import { finishedTheBook, leaveBookEndNote } from "./bookEndNote";
 import "./reader.css";
 import "./panels.css";
 import { keptPasses, keptReplyShown, readSavedReplies, writeSavedReplies, type SavedCompanionReply } from "./companionNotes";
@@ -231,6 +232,8 @@ export function ReaderPage({
   // Hosted: the reader does not have the plan (ADR 0045, ADR 0046). Reading is untouched;
   // Mothli's own offers on the page are not made.
   const mothliEnded = useMothliClosed();
+  // Hosted: the welcome back and the note at the end of a book are for a reader who pays.
+  const mothliPaying = useMothliStanding()?.state === "paying";
   useEffect(() => {
     const owner = activeOfflineOwner();
     const onGone = (event: Event) => {
@@ -403,6 +406,8 @@ export function ReaderPage({
   // its way, so a page report that lands first is quiet too.
   const toldThroughRef = useRef(-1);
   const lastSeenBookmark = useRef<number | null>(null);
+  const bookIdNow = useRef(bookId);
+  bookIdNow.current = bookId;
   // The Notebook shows a kept reply only while what it was written from still counts as read,
   // as the chat panel does: "I haven't read this" or "read it fresh" keeps it back (not deleted)
   // until those pages are read again, in this reading pass or a later one. Without the read map
@@ -1705,6 +1710,21 @@ export function ReaderPage({
     // Chapters the reader said they had read are counted, not celebrated: a reader who has just
     // told Mothli they are halfway gets no "a quarter of the way through" (2026-11-20).
     if (bookmark <= toldThroughRef.current) return;
+    // The last chapter read (a page turned past it, or "Finish book"): a reader who pays gets one
+    // note from Mothli about the book, an ordinary reply asked once and shown in the corner.
+    if (hosted && chat && mothliStanding()?.state === "paying" &&
+        finishedTheBook(manifest.atoms, previous, bookmark)) {
+      const forBook = bookId;
+      void leaveBookEndNote(bookId, prepareReadContext, () => bookIdNow.current === forBook)
+        .then((text) => {
+          if (!text || bookIdNow.current !== forBook) return;
+          // The note stands in for the last chapter's "Want to hear what I noticed?".
+          setCornerNotes((current) => [
+            { id: `book-end-${forBook}`, text, action: { label: "Talk about it", run: () => openConversation() } },
+            ...current.filter((note) => !note.id.startsWith("chapter-")),
+          ].slice(0, 3));
+        });
+    }
     // Only for a chapter: never for a cover or Project Gutenberg's own page (finishedNoteFor).
     const finished = finishedNoteFor(manifest.atoms, previous, bookmark, unit);
     // No chat on this server: no "Want to hear what I noticed?" that nothing could answer.
@@ -2167,11 +2187,13 @@ export function ReaderPage({
             note={latestNote}
             disabled={!pos}
             welcome={
-              welcomeBack && pos && !mothliEnded ? (
+              welcomeBack && pos && (hosted ? mothliPaying : !mothliEnded) ? (
                 <WelcomeBackCard
                   bookId={bookId}
                   bookmark={pos.bookmark}
                   awayMs={welcomeBack.awayMs}
+                  hosted={hosted}
+                  chapterTitle={chapterLabel || readerPlace || undefined}
                   onCatchUp={(recap) =>
                     recap
                       ? openConversation(null, {

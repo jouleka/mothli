@@ -1204,3 +1204,175 @@ describe("a server without Mothli's chat", () => {
     expect(await screen.findByRole("button", { name: "Talk to Mothli" })).toBeTruthy();
   });
 });
+
+// 2026-11-27, the first paid week: "where you left off" and a note at the end of a book, on
+// mothli.com, for a reader who pays only.
+describe("hosted mode: a return after a gap", () => {
+  const extra = mocks as Record<string, unknown>;
+  const away = () =>
+    localStorage.setItem("rc:lastSeen:b", JSON.stringify({ t: Date.now() - 3 * 24 * 60 * 60 * 1000, bm: 1 }));
+  afterEach(() => {
+    for (const name of ["notes", "catchMeUp", "askBookStream", "bookConversation", "graph"]) delete extra[name];
+    setMothliStanding(null);
+  });
+
+  // Catches: a paying reader's welcome back asking the recap route hosted mode does not have, or
+  // anything made just to show the card; the chapter they were in not named.
+  test("paying: names the chapter and shows the story so far already written; asks nothing", async () => {
+    const asked = {
+      notes: vi.fn().mockResolvedValue({ as_of_chapter: 1, cast: [], chapters: [
+        { chapter_key: "c1", revealed_at: 1, title: "Chapter 1", summary: "Anna meets the fox.",
+          new_characters: [], events: [] },
+      ] }),
+      catchMeUp: vi.fn(), askBookStream: vi.fn(), bookConversation: vi.fn().mockResolvedValue({ turns: [] }),
+      graph: vi.fn().mockResolvedValue({ as_of_chapter: 1, characters: [], relationships: [] }),
+    };
+    Object.assign(extra, asked);
+    setMothliStanding({ state: "paying", why: null });
+    away();
+    render(<ReaderPage bookId="b" onBack={() => {}} hosted />);
+    const card = await screen.findByRole("region", { name: "Welcome back" });
+    await waitFor(() => expect(card.textContent).toMatch(/Last time: Anna meets the fox\./));
+    // The chapter on the page they open at, as the footer names it (Chapter 1 is finished).
+    expect(card.textContent).toMatch(/It’s been 3 days\. You were in Chapter 2\./);
+    expect(asked.notes).toHaveBeenCalledWith("b", 1);
+    expect(asked.catchMeUp).not.toHaveBeenCalled();
+    expect(asked.askBookStream).not.toHaveBeenCalled();
+    expect(card.textContent).not.toMatch(/\d+ (replies|questions)|AI|credits|trial|unlimited/);
+  });
+
+  // Catches: "Catch me up" in hosted mode showing nothing, or anything but an ordinary question.
+  test("paying: Catch me up asks Mothli, as any question", async () => {
+    mocks.readFrontier.mockResolvedValue({ ...hostedPoint, available_chapter: 1 } as never);
+    const asked = {
+      notes: vi.fn().mockResolvedValue({ as_of_chapter: 1, cast: [], chapters: [] }),
+      askBookStream: vi.fn(async () => ({ as_of_chapter: 1, insufficient_evidence: true,
+        claims: [], citations: [], cost: null, read_frontier: hostedPoint })),
+      bookConversation: vi.fn().mockResolvedValue({ turns: [] }),
+      graph: vi.fn().mockResolvedValue({ as_of_chapter: 1, characters: [], relationships: [] }),
+    };
+    Object.assign(extra, asked);
+    setMothliStanding({ state: "paying", why: null });
+    away();
+    render(<ReaderPage bookId="b" onBack={() => {}} hosted />);
+    const card = await screen.findByRole("region", { name: "Welcome back" });
+    await waitFor(() => expect(card.textContent).toMatch(/quick refresher/));
+    fireEvent.click(within(card).getByRole("button", { name: "Catch me up" }));
+    await waitFor(() => expect(asked.askBookStream).toHaveBeenCalled());
+    expect((asked.askBookStream as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBe("Catch me up");
+  });
+
+  // Catches: the card shown to a reader who does not pay (reading stays free and un-nagged), or
+  // where the server told nothing of the plan.
+  test.each([
+    ["new", { state: "new", why: null }],
+    ["ended", { state: "ended", why: "plan" }],
+    ["not told", null],
+  ])("%s: no welcome back, nothing asked", async (_name, standing) => {
+    const asked = { notes: vi.fn(), catchMeUp: vi.fn(), askBookStream: vi.fn() };
+    Object.assign(extra, asked, { graph: vi.fn().mockResolvedValue({ as_of_chapter: 1, characters: [], relationships: [] }) });
+    setMothliStanding(standing);
+    away();
+    render(<ReaderPage bookId="b" onBack={() => {}} hosted />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(screen.queryByRole("region", { name: "Welcome back" })).toBeNull();
+    for (const [name, call] of Object.entries(asked)) expect(call, name).not.toHaveBeenCalled();
+  });
+});
+
+describe("hosted mode: the end of a book", () => {
+  const extra = mocks as Record<string, unknown>;
+  const endPoint = { ...hostedPoint, available_chapter: 3 };
+  const reply = vi.fn();
+  beforeEach(() => {
+    reply.mockReset().mockImplementation(async (_id: string, _question: string, _bookmark: number,
+      point: typeof endPoint, onSentence: (text: string) => void) => {
+      onSentence("That last chapter, with the lantern going out!");
+      onSentence("Want to talk about it?");
+      return { as_of_chapter: 3, insufficient_evidence: false, answer_type: "conversation",
+        message: "That last chapter, with the lantern going out! Want to talk about it?",
+        claims: [], citations: [], cost: null, read_frontier: point };
+    });
+    Object.assign(extra, {
+      askBookStream: reply,
+      bookConversation: vi.fn().mockResolvedValue({ turns: [] }),
+      graph: vi.fn().mockResolvedValue({ as_of_chapter: 3, characters: [], relationships: [] }),
+      notes: vi.fn().mockResolvedValue({ as_of_chapter: 3, cast: [], chapters: [] }),
+    });
+    mocks.readFrontier.mockResolvedValue(endPoint as never);
+    mocks.position.mockResolvedValue({ bookmark: 2, cfi: "2:resume", position_epoch: 0 });
+    mocks.putPosition.mockResolvedValue({ bookmark: 3, cfi: "2:end", position_epoch: 0,
+      current_chapter: 3, chapter_progress: 1 });
+    localStorage.setItem("rc:starting-place-asked:b", "yes");
+  });
+  afterEach(() => {
+    for (const name of ["askBookStream", "bookConversation", "graph", "notes"]) delete extra[name];
+    setMothliStanding(null);
+  });
+  const finishTheBook = async () => {
+    const page = render(<ReaderPage bookId="b" onBack={() => {}} hosted />);
+    await waitFor(() => expect(mocks.init).toHaveBeenCalled());
+    const view = document.querySelector("foliate-view") as TestFoliateView;
+    act(() => view.dispatchEvent(new CustomEvent("relocate", {
+      detail: { cfi: "2:end", section: { current: 2 } },
+    })));
+    return page;
+  };
+
+  // Catches: no note at the end of a book, a note written anywhere but the ordinary checked reply
+  // path, or a second one for the same book after a reload.
+  test("paying: one ordinary reply, shown in the corner, once per book", async () => {
+    setMothliStanding({ state: "paying", why: null });
+    const page = await finishTheBook();
+    expect(await screen.findByText("That last chapter, with the lantern going out! Want to talk about it?"))
+      .toBeTruthy();
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(reply.mock.calls[0][1]).toBe("I just finished the book! What did you make of the ending?");
+    expect(reply.mock.calls[0][2]).toBe(3);
+    expect(screen.queryByText(/Want to hear what I noticed/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Talk about it" }));
+    expect(await screen.findByRole("complementary", { name: /Mothli/i })).toBeTruthy();
+    page.unmount();
+    // The last page read again after a reload: nothing is asked again.
+    await finishTheBook();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(reply).toHaveBeenCalledTimes(1);
+  });
+
+  // Catches: the note asked again on another device, where the conversation already has it.
+  test("paying: already in the book's conversation, nothing is asked", async () => {
+    setMothliStanding({ state: "paying", why: null });
+    extra.bookConversation = vi.fn().mockResolvedValue({ turns: [
+      { role: "user", content: "I just finished the book! What did you make of the ending?", atom: 3 },
+    ] });
+    await finishTheBook();
+    await waitFor(() => expect(extra.bookConversation).toHaveBeenCalled());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(reply).not.toHaveBeenCalled();
+  });
+
+  // Catches: an allowance line, or any line at all, in the corner at the reader's day's rest.
+  test("paying, at the day's rest: nothing is shown", async () => {
+    setMothliStanding({ state: "paying", why: null });
+    reply.mockRejectedValue(new ApiError("We’ve talked a lot today", 429));
+    await finishTheBook();
+    await waitFor(() => expect(reply).toHaveBeenCalled());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(screen.queryByText(/talked a lot today/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Talk about it" })).toBeNull();
+  });
+
+  // Catches: a reader who does not pay sent a note, or asked anything, at the end of a book.
+  test.each([
+    ["new", { state: "new", why: null }],
+    ["ended", { state: "ended", why: "plan" }],
+  ])("%s: no note, nothing asked", async (_name, standing) => {
+    setMothliStanding(standing);
+    await finishTheBook();
+    await waitFor(() => expect(mocks.putPosition).toHaveBeenCalled());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(reply).not.toHaveBeenCalled();
+    expect(extra.bookConversation).not.toHaveBeenCalled();
+  });
+});
