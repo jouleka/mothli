@@ -6,7 +6,7 @@
 import { type ReactNode, createContext, useCallback, useContext, useEffect, useState } from "react";
 import { Button } from "../ui/Button";
 import { MothliMark } from "../ui/MothliMark";
-import { monthlyTotal, yearlyMonth, yearlyTotal } from "../ui/planFigures";
+import { monthlyTotal, yearlyMonth, yearlySaving } from "../ui/planFigures";
 import { Contact, DAILY_RHYTHM, Privacy, Refunds, Terms, UPDATED } from "./legal";
 import { PAGE_PATHS, type PublicPageName } from "./pages";
 import { fetchSite, planShown, type Operator, type PlanShown, type Site } from "./site";
@@ -109,8 +109,8 @@ export function SiteFooter({ operator, site }: { operator?: Operator | null; sit
 }
 
 /** The front page's part about Mothli: what it is, what is free, the plan and its two prices
- * (the yearly one first, as a month, with its saving), or the plan without figures when the
- * server could not read them from Paddle. */
+ * (the yearly one first, as a month beside the total it is billed, with its saving), or the plan
+ * without figures when the server could not read them from Paddle. */
 export function AboutMothli({ site, action }: { site: Site | null; action?: ReactNode }) {
   const given = useContext(ShownPlan);
   const shown = given === undefined ? planShown(site?.plan ?? null) : given;
@@ -141,8 +141,8 @@ export function AboutMothli({ site, action }: { site: Site | null; action?: Reac
         <ul className="pp-prices" aria-labelledby="plan-title">
           <li className="pp-price pp-price--best">
             <h3>Yearly <span className="pp-tag">Best value</span></h3>
-            <p className="pp-price-main">{yearlyMonth(shown.yearlyPerMonth)}</p>
-            <p>{yearlyTotal(shown.yearlyTotal, shown.saving)}</p>
+            <p className="pp-price-main">{yearlyMonth(shown.yearlyPerMonth, shown.yearlyTotal)}</p>
+            {shown.saving !== null && <p>{yearlySaving(shown.saving)}</p>}
           </li>
           <li className="pp-price">
             <h3>Monthly</h3>

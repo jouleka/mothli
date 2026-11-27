@@ -48,9 +48,10 @@ afterEach(() => {
 });
 
 describe("the plan sheet", () => {
-  // Catches: prices written in the app, monthly put first, the saving rounded up or shown when
-  // it cannot be computed, a line missing, or Paddle's script asked for before the sheet opens.
-  test("shows the yearly plan first, as a month, then the monthly, from Paddle", async () => {
+  // Catches: prices written in the app, monthly put first, the yearly month shown without the
+  // total it is billed, the saving rounded up or shown when it cannot be computed, the yearly plan
+  // chosen for the reader, a line missing, or Paddle's script asked for before the sheet opens.
+  test("shows the yearly plan first, as a month with its total, then the monthly, from Paddle", async () => {
     expect(paddleScripts()).toEqual([]);
     render(<PlanSheet email="wren@example.com" onClose={() => {}} />);
     const sheet = screen.getByRole("dialog", { name: "Keep talking with Mothli" });
@@ -62,14 +63,22 @@ describe("the plan sheet", () => {
     await within(sheet).findByRole("button", { name: "Choose yearly" });
     const choices = within(sheet).getAllByRole("listitem");
     expect(choices.map((item) => item.textContent)).toEqual([
-      "Yearly Best value$6.67 a month, billed yearly$79.99 a year, 48% less than paying monthly.Choose yearly",
+      "Yearly Best value$6.67 a month, billed $79.99 a year48% less than paying monthly.Choose yearly",
       "Monthly$12.99 a monthChoose monthly",
     ]);
     expect(within(sheet).getAllByRole("heading").map((heading) => heading.textContent)).toEqual([
       "Keep talking with Mothli", "Yearly Best value", "Monthly"]);
     const yearly = within(sheet).getByRole("button", { name: "Choose yearly" });
     expect(document.getElementById(yearly.getAttribute("aria-describedby")!)?.textContent).toBe(
-      "$6.67 a month, billed yearly$79.99 a year, 48% less than paying monthly.");
+      "$6.67 a month, billed $79.99 a year48% less than paying monthly.");
+    // Neither plan is chosen for the reader (the owner's decision, 27 November 2026): both are
+    // drawn and offered alike.
+    const monthlyButton = within(sheet).getByRole("button", { name: "Choose monthly" });
+    expect([yearly.className, choices[0].className]).toEqual([monthlyButton.className, choices[1].className]);
+    expect(within(sheet).queryByRole("radio")).toBeNull();
+    // The maker's one line; nothing about the technology, and no hurry.
+    expect(within(sheet).getByText("Made by one reader, for readers. No ads.")).toBeTruthy();
+    expect(sheet.textContent).not.toMatch(/\bAI\b|the chat|model|unlimited|trial|credits|limited time/i);
     // The owner's soft brake (27 November 2026), in Mothli's words, never a number.
     expect(within(sheet).getByText("I keep a gentle daily rhythm, so on a very busy day I might ask to pick up again tomorrow.")).toBeTruthy();
     expect(within(sheet).getByText("Cancel any time from Your account. Your books stay free either way.")).toBeTruthy();

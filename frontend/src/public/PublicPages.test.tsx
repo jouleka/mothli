@@ -235,8 +235,8 @@ describe("the front page", () => {
   test("the prices are the server's, the yearly plan first as a month with its saving", async () => {
     serve({ operator: OPERATOR, plan: PLAN, writer: null });
     const { container } = render(<SignIn />);
-    const yearly = await screen.findByText("$6.67 a month, billed yearly");
-    const total = screen.getByText("$79.99 a year, 48% less than paying monthly.");
+    const yearly = await screen.findByText("$6.67 a month, billed $79.99 a year");
+    const total = screen.getByText("48% less than paying monthly.");
     const monthly = screen.getByText("$12.99 a month");
     expect(yearly.compareDocumentPosition(monthly) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(total.compareDocumentPosition(monthly) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -259,8 +259,8 @@ describe("the front page", () => {
   test("other figures from the catalog are shown as they are", async () => {
     serve({ operator: OPERATOR, plan: { currency: "EUR", monthly: "1000", yearly: "9000" }, writer: null });
     render(<SignIn />);
-    await screen.findByText("€7.50 a month, billed yearly");
-    expect(screen.getByText("€90.00 a year, 25% less than paying monthly.")).toBeTruthy();
+    await screen.findByText("€7.50 a month, billed €90.00 a year");
+    expect(screen.getByText("25% less than paying monthly.")).toBeTruthy();
     expect(screen.getByText("€10.00 a month")).toBeTruthy();
   });
 
