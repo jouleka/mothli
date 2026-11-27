@@ -62,6 +62,8 @@ const findInvitation = () =>
     if (!card) throw new Error("no invitation yet");
     return card;
   });
+const talkButtons = () =>
+  Array.from(document.querySelectorAll("button")).filter((button) => button.textContent === "Talk with Mothli");
 const shelf = () => render(<Shelf onOpen={() => {}} session={session} />);
 /** The shelf has settled: its books are listed. */
 const settled = () => screen.findByRole("button", { name: "Pride and Prejudice, Jane Austen" });
@@ -105,6 +107,33 @@ describe("the first book's invitation", () => {
     expect(invitation()).toBeNull();
     await waitFor(() => expect(document.activeElement?.textContent).toBe("Start reading"));
     first.unmount();
+    shelf();
+    await settled();
+    expect(invitation()).toBeNull();
+  });
+
+  // Catches: two invitations on a new reader's first visit (the card and the home chat's).
+  test("the first visit has one invitation: one Talk with Mothli, the home box still there", async () => {
+    shelf();
+    const card = await findInvitation();
+    await screen.findByLabelText("Ask Mothli about your books");
+    expect(talkButtons()).toHaveLength(1);
+    expect(card.contains(talkButtons()[0])).toBe(true);
+    fireEvent.click(within(card).getByRole("button", { name: KEEP_READING_FREE }));
+    // Closed: the home chat shows its own invitation again, as before.
+    await waitFor(() => expect(talkButtons()).toHaveLength(1));
+    expect(invitation()).toBeNull();
+  });
+
+  test("a question typed at home is kept as usual, and the card goes, used up", async () => {
+    const first = shelf();
+    await findInvitation();
+    fireEvent.change(await screen.findByLabelText("Ask Mothli about your books"), { target: { value: "Who is Mr Darcy?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+    await waitFor(() => expect(invitation()).toBeNull());
+    expect(await screen.findByText("Who is Mr Darcy?")).toBeTruthy();
+    first.unmount();
+    localStorage.removeItem(Object.keys(localStorage).find((key) => key.startsWith("mothli.keptQuestion:"))!);
     shelf();
     await settled();
     expect(invitation()).toBeNull();

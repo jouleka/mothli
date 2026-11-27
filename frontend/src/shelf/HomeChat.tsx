@@ -69,10 +69,13 @@ function exchangesOf(turns: HomeTurn[]): Exchange[] {
   return out;
 }
 
-export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
+export function HomeChat({ onShelfChanged, shelfEmpty = false, invitedElsewhere = false }: {
   onShelfChanged?: () => void;
   /** Nothing on the shelf: the first question and the line above it fit a new reader. */
   shelfEmpty?: boolean;
+  /** Mothli's invitation already stands on the shelf (the first book's card): the box stays, its
+   * own invitation does not, so there is one invitation at a time. */
+  invitedElsewhere?: boolean;
 } = {}) {
   const [turns, setTurns] = useState<HomeTurn[] | null>(null); // null until the server says it exists
   // Where the reader stands with Mothli (ADR 0045, ADR 0046): without the plan (new, or ended)
@@ -452,7 +455,7 @@ export function HomeChat({ onShelfChanged, shelfEmpty = false }: {
           }}
         />
       ) : closed ? (
-        <MothliInvitation why={standing?.why ?? null} home replaced={showedChat.current} />
+        invitedElsewhere ? null : <MothliInvitation why={standing?.why ?? null} home replaced={showedChat.current} />
       ) : (
       <>
       {empty ? (

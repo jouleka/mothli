@@ -715,7 +715,7 @@ export function Shelf({
           </section>
         )}
 
-        {chat && "homeConversation" in api && <HomeChat shelfEmpty={libraryEmpty} onShelfChanged={() => void refresh()} />}
+        {chat && "homeConversation" in api && <HomeChat shelfEmpty={libraryEmpty} invitedElsewhere={!!showInvitation} onShelfChanged={() => void refresh()} />}
 
         <section className="ml-collection" aria-labelledby="collection-title">
           <div className="ml-collection-head">
