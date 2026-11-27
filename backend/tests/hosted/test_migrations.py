@@ -1701,8 +1701,9 @@ def test_no_free_weeks_keeps_every_plan_and_gift_and_answers_new_paying_or_ended
     apply_migrations(database)
 
     with psycopg.connect(database) as conn:
-        assert conn.execute("SELECT to_jsonb(plan) - 'updated_at' FROM reader_plans AS plan"
-                            " ORDER BY owner_id").fetchall() == plans
+        # (0044's refund mark, empty on rows already there, is checked by its own test.)
+        assert conn.execute("SELECT to_jsonb(plan) - 'updated_at' - 'refunded_at'"
+                            " FROM reader_plans AS plan ORDER BY owner_id").fetchall() == plans
         assert conn.execute(
             "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public'"
             " AND table_name = 'reader_plans' AND column_name = 'free_started_at'"
@@ -1785,6 +1786,62 @@ def test_cache_tokens_start_unknown_change_nothing_else_and_are_never_negative(
                 conn.execute(f"UPDATE cost_ledger SET {column} = -1")
             with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
                 conn.execute(f"UPDATE cost_reservations SET {column} = -1")
+        assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
+
+
+# ---- 0044: a refund or a chargeback ends the plan ---------------------------------------------------
+
+REFUND_ENDS_PLAN = 44
+
+
+def test_refund_mark_starts_empty_changes_no_plan_and_adjustments_are_recorded_like_messages(
+    database: str, monkeypatch
+) -> None:
+    """The break it catches, on a database made before 0044 with a paying reader, a cancelled one
+    and recorded messages: a plan or a message changed, anyone marked refunded (they would lose
+    their plan), an adjustment message that cannot be recorded, any other kind of message or
+    outcome accepted, or a new definer."""
+    _apply_before(database, REFUND_ENDS_PLAN, monkeypatch)
+    paying, cancelled = uuid.uuid4(), uuid.uuid4()
+    with psycopg.connect(database) as conn:
+        for reader, status in ((paying, "active"), (cancelled, "canceled")):
+            conn.execute("INSERT INTO users (id, display_name) VALUES (%s, 'Reader')", (reader,))
+            conn.execute("INSERT INTO reader_plans (owner_id, paddle_subscription_id,"
+                         " paddle_status, paddle_occurred_at) VALUES (%s, %s, %s, now())",
+                         (reader, "sub_" + reader.hex[:26], status))
+            conn.execute("INSERT INTO paddle_events (event_id, event_type, occurred_at,"
+                         " owner_id, outcome) VALUES (%s, 'subscription.created', now(), %s,"
+                         " 'applied')", ("evt_" + reader.hex[:26], reader))
+        plans = conn.execute("SELECT to_jsonb(plan) FROM reader_plans AS plan ORDER BY owner_id"
+                             ).fetchall()
+        recorded = conn.execute("SELECT to_jsonb(event) FROM paddle_events AS event"
+                                " ORDER BY event_id").fetchall()
+    apply_migrations(database)
+
+    with psycopg.connect(database) as conn:
+        assert conn.execute("SELECT to_jsonb(plan) - 'refunded_at' FROM reader_plans AS plan"
+                            " ORDER BY owner_id").fetchall() == plans
+        assert conn.execute("SELECT count(*) FROM reader_plans WHERE refunded_at IS NOT NULL"
+                            ).fetchone()[0] == 0
+        assert conn.execute("SELECT to_jsonb(event) FROM paddle_events AS event"
+                            " ORDER BY event_id").fetchall() == recorded
+        assert [row[:2] for row in conn.execute(
+            "SELECT state, why FROM reader_plan_state(%s)", (paying,))] == [("paying", None)]
+        insert = ("INSERT INTO paddle_events (event_id, event_type, occurred_at, owner_id, outcome)"
+                  " VALUES (%s, %s, now(), %s, %s)")
+        for event_type, outcome in (("adjustment.created", "unchanged"),
+                                    ("adjustment.updated", "applied")):
+            conn.execute(insert, ("evt_" + uuid.uuid4().hex[:26], event_type, paying, outcome))
+        for event_type, outcome in (("transaction.completed", "applied"),
+                                    ("adjustment.created", "refunded"),
+                                    ("Adjustment.created", "applied")):
+            with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+                conn.execute(insert, ("evt_" + uuid.uuid4().hex[:26], event_type, paying, outcome))
+        # The plan's end set to the refund's moment ends it, through the state as it was.
+        conn.execute("UPDATE reader_plans SET refunded_at = now(), ends_at = now()"
+                     " WHERE owner_id = %s", (paying,))
+        assert conn.execute("SELECT state, why, paid_by FROM reader_plan_state(%s)",
+                            (paying,)).fetchone() == ("ended", "plan", None)
         assert _definers(conn) == _DEFINERS | _LATER_DEFINERS
 
 

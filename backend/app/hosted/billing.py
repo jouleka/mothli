@@ -35,6 +35,19 @@ the caller; the signature is the only thing that lets a message in. The route ex
    (Paddle may deliver one more than once: developer.paddle.com/webhooks/respond-to-webhooks).
 5. 200, well inside Paddle's five seconds.
 
+A refund or a chargeback ends the plan (migration 0044). Paddle does not cancel a subscription
+when one of its transactions is refunded; it sends an adjustment message (``adjustment.created``,
+and ``adjustment.updated`` when Paddle approves or rejects a refund that waited for its review:
+developer.paddle.com/webhooks/adjustments). An adjustment carries no price, so it is Mothli's only
+when its ``subscription_id`` and ``customer_id`` are exactly the subscription and customer Mothli
+stored for a reader; any other is answered 200 and kept nowhere, as above. Of Mothli's, an
+approved refund of the whole transaction (``action`` refund, ``type`` full, ``status`` approved)
+or a chargeback (not rejected or reversed) ends the reader's plan at once (``refunded_at``, and
+``ends_at`` set to that moment), and after the answer is sent the subscription is cancelled at
+Paddle with ``effective_from: immediately`` so it never renews (``subscribe.cancel_refunded``; the
+regular check asks again while Paddle has not cancelled it). A partial refund, a refund still
+waiting for approval or rejected, and a credit change nothing; each is recorded once by its id.
+
 The logs say only that a message was refused, and why (its signature, or a Mothli message that
 cannot be read): never the secret, the signature, an email address, an id or the payload. What
 was done with each Mothli message is recorded in ``paddle_events``, not logged.
@@ -54,6 +67,7 @@ from datetime import datetime
 
 import psycopg
 from fastapi import APIRouter, Request, Response
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 _LOG = logging.getLogger(__name__)
@@ -64,6 +78,7 @@ router = APIRouter(prefix="/api/billing", tags=["hosted-billing"])
 _MAX_BODY = 256 * 1024
 _EVENT_ID = re.compile(r"evt_[a-z0-9]{26}")
 _EVENT_TYPE = re.compile(r"subscription\.[a-z_]{1,32}")
+_ADJUSTMENT_TYPE = re.compile(r"adjustment\.(created|updated)")
 _SUBSCRIPTION_ID = re.compile(r"sub_[a-z0-9]{26}")
 _CUSTOMER_ID = re.compile(r"ctm_[a-z0-9]{26}")
 _STATUSES = frozenset({"active", "trialing", "past_due", "paused", "canceled"})
@@ -102,6 +117,18 @@ class SubscriptionMessage:
     named_reader: uuid.UUID | None
     price_id: str
     checkout: str | None = None
+
+
+@dataclass(frozen=True)
+class AdjustmentMessage:
+    """An adjustment (a refund, a credit or a chargeback) about some subscription, as a message
+    brought it; Mothli's only if the subscription and customer are ones Mothli stored."""
+    event_id: str
+    event_type: str
+    occurred_at: datetime
+    subscription_id: str
+    customer_id: str
+    ends_plan: bool
 
 
 def checkout_digest(token: str) -> bytes:
@@ -183,6 +210,41 @@ def read_message(payload, prices: frozenset[str]) -> SubscriptionMessage | None:
     return SubscriptionMessage(event_id=_id(payload.get("event_id"), _EVENT_ID),
                                event_type=event_type,
                                occurred_at=_time(payload.get("occurred_at")), **fields)
+
+
+def _ends_plan(action, kind, status) -> bool:
+    """Whether an adjustment ends the plan: a refund of the whole transaction once Paddle approved
+    it (most live refunds wait for Paddle's review as ``pending_approval``, and may be rejected),
+    or a chargeback, which Paddle makes itself when a payment is disputed (never waiting for a
+    review), unless it is rejected or reversed. A partial refund, a credit, a chargeback warning
+    or a reversal ends nothing."""
+    if action == "refund":
+        return kind == "full" and status == "approved"
+    if action == "chargeback":
+        return status not in ("rejected", "reversed")
+    return False
+
+
+def read_adjustment(payload) -> AdjustmentMessage | None:
+    """The adjustment message ``payload``, or None when it is not one, names no subscription or
+    cannot be read. Nothing here can tell Mothli's from another product's (an adjustment carries
+    no price), so nothing raises: an unreadable one is ignored like any message not Mothli's."""
+    if not isinstance(payload, dict):
+        return None
+    event_type = payload.get("event_type")
+    data = payload.get("data")
+    if not isinstance(event_type, str) or not _ADJUSTMENT_TYPE.fullmatch(event_type) \
+            or not isinstance(data, dict):
+        return None
+    try:
+        return AdjustmentMessage(
+            event_id=_id(payload.get("event_id"), _EVENT_ID), event_type=event_type,
+            occurred_at=_time(payload.get("occurred_at")),
+            subscription_id=_id(data.get("subscription_id"), _SUBSCRIPTION_ID),
+            customer_id=_id(data.get("customer_id"), _CUSTOMER_ID),
+            ends_plan=_ends_plan(data.get("action"), data.get("type"), data.get("status")))
+    except Malformed:
+        return None
 
 
 def read_subscription(entity, prices: frozenset[str]) -> SubscriptionMessage | None:
@@ -296,7 +358,14 @@ def _apply(conn, message: SubscriptionMessage) -> tuple[str, uuid.UUID | None]:
                  paddle_subscription_id = EXCLUDED.paddle_subscription_id,
                  paddle_status = EXCLUDED.paddle_status,
                  period_ends_at = EXCLUDED.period_ends_at,
-                 ends_at = EXCLUDED.ends_at,
+                 -- A subscription refunded or charged back stays ended from that moment, whatever
+                 -- Paddle says of it later (migration 0044); a new subscription starts afresh.
+                 ends_at = CASE WHEN plan.paddle_subscription_id = EXCLUDED.paddle_subscription_id
+                                THEN LEAST(EXCLUDED.ends_at, plan.refunded_at)
+                                ELSE EXCLUDED.ends_at END,
+                 refunded_at = CASE
+                   WHEN plan.paddle_subscription_id = EXCLUDED.paddle_subscription_id
+                   THEN plan.refunded_at END,
                  paddle_occurred_at = EXCLUDED.paddle_occurred_at,
                  first_paid_at = COALESCE(plan.first_paid_at, EXCLUDED.first_paid_at),
                  paddle_price_id = EXCLUDED.paddle_price_id,
@@ -331,6 +400,76 @@ def apply_message(dsn: str, message: SubscriptionMessage) -> str:
     return outcome
 
 
+@dataclass(frozen=True)
+class AdjustmentOutcome:
+    """What an adjustment did: ``outcome`` (``not_ours``: nothing was recorded; ``repeat``,
+    ``applied`` or ``unchanged``), the reader it was for, and whether the subscription is still
+    to be cancelled at Paddle (the plan ended by a refund, and Paddle not yet saying cancelled)."""
+    outcome: str
+    reader: uuid.UUID | None = None
+    cancel_due: bool = False
+
+
+def _end_by_refund(conn, message: AdjustmentMessage) -> AdjustmentOutcome:
+    """Apply one adjustment in the open transaction. It is Mothli's only when its subscription
+    is the one stored for a reader, with the same customer; nothing is written otherwise."""
+    reader = conn.execute("SELECT public.paddle_reader(%s, NULL::uuid)",
+                          (message.subscription_id,)).fetchone()[0]
+    if reader is None:
+        return AdjustmentOutcome("not_ours")
+    conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(reader),))
+    conn.execute(_PLAN_LOCK, (reader,))
+    row = conn.execute(
+        "SELECT paddle_subscription_id, paddle_customer_id, paddle_status, refunded_at"
+        " FROM public.reader_plans WHERE owner_id=%s", (reader,)).fetchone()
+    if row is None or row[0] != message.subscription_id or row[1] != message.customer_id:
+        return AdjustmentOutcome("not_ours")
+    _sub, _customer, status, refunded_at = row
+    outcome = "unchanged"
+    if message.ends_plan and refunded_at is None:
+        conn.execute("UPDATE public.reader_plans SET refunded_at = now(),"
+                     " ends_at = LEAST(ends_at, now()), updated_at = now() WHERE owner_id=%s",
+                     (reader,))
+        outcome = "applied"
+    ended = message.ends_plan or refunded_at is not None
+    return AdjustmentOutcome(outcome, reader, ended and status != "canceled")
+
+
+def apply_adjustment(dsn: str, message: AdjustmentMessage) -> AdjustmentOutcome:
+    """Apply one adjustment on the billing role, recorded once by its id when it is Mothli's."""
+    try:
+        with psycopg.connect(dsn, connect_timeout=3) as conn, conn.transaction():
+            done = _end_by_refund(conn, message)
+            if done.outcome == "not_ours":
+                return done
+            recorded = conn.execute(
+                """INSERT INTO public.paddle_events
+                     (event_id, event_type, occurred_at, owner_id, outcome)
+                   VALUES (%s, %s, %s, %s, %s) ON CONFLICT (event_id) DO NOTHING""",
+                (message.event_id, message.event_type, message.occurred_at, done.reader,
+                 done.outcome))
+            if recorded.rowcount != 1:
+                raise _Repeat
+    except _Repeat:
+        return AdjustmentOutcome("repeat")
+    return done
+
+
+def _cancel_refunded(request: Request, reader: uuid.UUID) -> BackgroundTask | None:
+    """The cancel at Paddle of a plan a refund ended, run after the answer is sent (Paddle waits
+    five seconds at most). Without an API key it cannot be made here: the operator is told."""
+    settings = request.app.state.settings
+    if settings.paddle_api_key is None:
+        _LOG.warning("a refunded plan could not be cancelled at Paddle: no PADDLE_API_KEY; "
+                     "cancel it in Paddle (runbook)")
+        return None
+    from app.hosted.subscribe import cancel_refunded, paddle_api
+
+    return BackgroundTask(cancel_refunded,
+                          settings.hosted_billing_dsn.get_secret_value(), paddle_api(request),
+                          settings.paddle_prices(), reader)
+
+
 async def _raw_body(request: Request) -> bytes | None:
     """The body exactly as sent, or None past ``_MAX_BODY``."""
     body = bytearray()
@@ -353,12 +492,19 @@ async def paddle_message(request: Request) -> Response:
         _LOG.warning("paddle message refused: signature")
         return Response(status_code=400)
     try:
-        message = read_message(json.loads(body), settings.paddle_prices())
+        payload = json.loads(body)
+        message = read_message(payload, settings.paddle_prices())
     except (ValueError, RecursionError):
         _LOG.warning("paddle message refused: malformed")
         return Response(status_code=400)
     if message is None:
-        return Response(status_code=200)
+        adjustment = read_adjustment(payload)
+        if adjustment is None:
+            return Response(status_code=200)
+        done = await run_in_threadpool(
+            apply_adjustment, settings.hosted_billing_dsn.get_secret_value(), adjustment)
+        task = _cancel_refunded(request, done.reader) if done.cancel_due else None
+        return Response(status_code=200, background=task)
     # What was done is recorded with the message's id (paddle_events), not logged.
     await run_in_threadpool(apply_message, settings.hosted_billing_dsn.get_secret_value(), message)
     return Response(status_code=200)

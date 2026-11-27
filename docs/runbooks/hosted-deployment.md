@@ -437,7 +437,9 @@ same in the live account:
 2. In Paddle: **Events > Notifications > New destination**. Notification type: webhook. URL:
    `https://YOURDOMAIN/api/billing/paddle`. Events: the `subscription.*` ones
    (`subscription.created`, `.updated`, `.activated`, `.canceled`, `.past_due`, `.paused`,
-   `.resumed`, `.trialing`). Mothli reads no other kind; any other is answered and ignored.
+   `.resumed`, `.trialing`), and the two adjustment ones, `adjustment.created` and
+   `adjustment.updated` (refunds and chargebacks; **Refunds and chargebacks**, below). Mothli reads
+   no other kind; any other is answered and ignored.
    Usage type: real and simulated events while you test (platform only afterwards). Save, then
    copy the destination's secret key (`pdl_ntfset_...`) and keep it like a password; Paddle may
    not show it again.
@@ -466,8 +468,52 @@ paying for as long as it is in the line.
 
 **Where a reader stands.** `python -m app.hosted.plans show ACCOUNT_ID` (step 7) shows `paying`
 with `paid_by` `paddle` while their plan is live: active, or a payment Paddle is retrying
-(`past_due`), or cancelled but paid to the end of the period. A paused or cancelled plan shows
-`ended` with `why` `plan`. A gift wins while it lasts.
+(`past_due`), or cancelled but paid to the end of the period. A paused or cancelled plan, or one
+ended by a refund or a chargeback, shows `ended` with `why` `plan`. A gift wins while it lasts.
+
+**Refunds and chargebacks.** Paddle does not cancel a subscription when you refund one of its
+payments, and it does not cancel one after a chargeback either: it only sends an adjustment
+message. So Mothli does it. When an **approved refund of a whole payment** (in Paddle: refund the
+transaction in full) or a **chargeback** reaches Mothli for a subscription Mothli stored for one
+of its readers, that reader's plan ends at once (they see the usual "Your plan has ended"
+invitation, and may subscribe again), and Mothli cancels the subscription at Paddle **at once**
+(not at the end of the period), so it never renews. Paddle's own `subscription.canceled` follows.
+What does not end the plan:
+
+- a **partial refund** (some of the money back, or some items): the plan goes on. Use one when you
+  want to give money back as a kindness and keep the reader on their plan;
+- a refund **still waiting for Paddle's approval** (most live refunds over a limit wait for Paddle's
+  review): nothing happens until Paddle approves it (`adjustment.updated`); a rejected one changes
+  nothing;
+- a credit, a chargeback warning, or a chargeback Paddle won back (the plan a chargeback ended
+  stays ended: a cancelled subscription cannot be restarted; the reader may subscribe again).
+
+An adjustment names no price, so Mothli takes one as its own only when its subscription and
+customer are exactly ones it stored for a reader; MySigner's refunds and chargebacks are answered
+"OK" and kept nowhere, and Mothli never calls Paddle about them. If Paddle is unreachable when the
+refund arrives, the plan still ends; the regular check (below) asks Paddle for the cancel again
+every hour until Paddle says cancelled, and a reader who tries to subscribe again meanwhile is
+asked to try again in a minute. The logs may then say `a refunded plan could not be cancelled at
+Paddle` or `paddle refused to cancel a refunded plan ...`; if one says `... while a renewal is
+under way ... refund it (runbook)`, that reader may have been charged once more: find them with
+
+```
+docker compose -f deploy/compose.yaml exec db psql -U postgres -d mothli -c "SELECT owner_id, paddle_subscription_id, paddle_status, refunded_at FROM reader_plans WHERE refunded_at IS NOT NULL AND paddle_status <> 'canceled'"
+```
+
+and in Paddle cancel that subscription (**Customers > Subscriptions**, **Cancel**, immediately)
+and refund any payment of theirs made after `refunded_at`. One limit: a refund that arrives before
+Mothli has stored the subscription at all (its very first message still on its way) is not
+recognised as Mothli's; refund only after the reader shows as paying, or cancel the subscription
+in Paddle yourself.
+
+**Adding the refund events to a destination made before** (once, in the sandbox and in the live
+account): in Paddle, **Events > Notifications** (as in step 2), open Mothli's destination (the one whose
+URL is `https://YOURDOMAIN/api/billing/paddle`), and tick **`adjustment.created`** and
+**`adjustment.updated`** beside the `subscription.*` events already ticked; save. Leave every
+other event as it is (Paddle unsubscribes any event left unticked when a destination is saved),
+and do not touch MySigner's destination. Nothing changes on the server, and the API key needs no
+new permission (an immediate cancel is **Subscriptions: write**, which it has).
 
 **Rotating the secret.** Paddle may sign with an old and a new secret for a while; Mothli accepts
 a message that matches the secret it has. Paste the new secret with `deploy/setup.sh set
@@ -475,7 +521,8 @@ PADDLE_WEBHOOK_SECRET` and `up -d --wait` as soon as Paddle shows it.
 
 The web log says only when a message was refused (`paddle message refused: signature` or
 `... malformed`), never a secret, an email address or an id. What was done with each of Mothli's
-messages (`applied`, `older`, `other_subscription`, `no_account`) is kept with its id, type and
+messages (`applied`, `older`, `other_subscription`, `no_account`, and for an adjustment that ends
+nothing, `unchanged`) is kept with its id, type and
 time in the database, never its contents. A message about a new subscription is applied only when
 it came from a checkout Mothli itself made for that reader (ADR 0045 step 4); one that names a
 reader without that is kept as `no_account` and changes nothing.
@@ -486,8 +533,8 @@ the regular check below. Make a key of its own for Mothli, first in the sandbox,
 
 1. In Paddle: **Developer tools > Authentication > API keys > New API key**. Name it "Mothli
    server". Give it exactly these permissions, nothing else: **Transactions: write** (a checkout
-   is a transaction Mothli makes), **Subscriptions: write** (read, cancel, undo a cancel; write
-   includes read), **Customer portal sessions: write**, **Prices: read** (the front page shows
+   is a transaction Mothli makes), **Subscriptions: write** (read, cancel, cancel at once after a
+   refund, undo a cancel; write includes read), **Customer portal sessions: write**, **Prices: read** (the front page shows
    the two prices as your catalog has them; step 4d). Mothli needs nothing on customers,
    products, notifications or anything else, and makes no customer of its own. Choose an
    expiry (Paddle's default is 90 days, a year at most) and, if offered, make it rotatable.
@@ -535,7 +582,9 @@ hour). `tail -n 5 deploy/backups/paddle-check.log` shows the last runs (a line
 1000) and `--pause` (seconds, 0.25 to 60) change the page and the pause.
 It is also what guarantees the cancel owed to a reader who deleted their account while paying
 (part 4a, "Deleting an account while paying"): those plans come first, and each that Paddle still
-shows renewing is asked for its cancel, counted in `changed` when Paddle confirms.
+shows renewing is asked for its cancel, counted in `changed` when Paddle confirms. And the same
+for a plan a refund or a chargeback ended: while Paddle does not yet say cancelled, it is asked
+for the cancel at once (**Refunds and chargebacks**, above).
 
 **The client token** (ADR 0045 step 4, the plan sheet). The reader's browser uses it to show the
 two prices from Paddle and open Paddle's checkout. Paddle calls it safe to publish, but it is still

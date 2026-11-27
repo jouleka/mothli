@@ -12,7 +12,8 @@ only through the billing role:
   creates the Paddle
   transaction for the plan's current price (the first id in its setting) with custom data naming
   the reader and that token, and answers ``{"transaction_id": "txn_..."}`` for Paddle.js
-  to open checkout with. Refused while the reader has a live Paddle plan. A gifted reader may
+  to open checkout with. Refused while the reader has a live Paddle plan, and, after a refund
+  ended their plan, until Paddle has cancelled that subscription (asked first). A gifted reader may
   subscribe: the gift still wins while it lasts, and the plan pays from the day it starts.
 - ``POST /api/billing/cancel``: schedules the cancel at the end of the period paid for.
 - ``POST /api/billing/keep``: removes that scheduled cancel, and any cancel owed since the reader
@@ -296,6 +297,13 @@ async def checkout(body: CheckoutIn, request: Request,
     stored = await run_in_threadpool(stored_plan, dsn, owner.value)
     if stored.live:
         return _refused(409, "already_subscribed", "You’re already on the plan!")
+    # A subscription a refund ended is cancelled at Paddle before a new one can start: once the
+    # new one is stored, Mothli no longer knows the old one, and it could renew.
+    if await run_in_threadpool(refund_cancel_due, dsn, owner.value) is not None:
+        outcome = await run_in_threadpool(cancel_refunded, dsn, paddle_api(request),
+                                          settings.paddle_prices(), owner.value)
+        if outcome != "done":
+            return _refused(503, *_UNAVAILABLE)
     if await run_in_threadpool(_checkouts_today, dsn, owner.value) >= CHECKOUTS_PER_DAY:
         return _refused(429, "checkout_busy",
                         "Let’s take a little break from checkouts. Please try again later.")
@@ -368,6 +376,58 @@ def cancel_owed(dsn: str, api: PaddleApi, prices: frozenset[str], owner: uuid.UU
         _LOG.warning("paddle refused an owed cancel while a renewal is under way: the regular "
                      "check tries again; if that renewal was charged, refund it (runbook)")
     return outcome
+
+
+def refund_cancel_due(dsn: str, owner: uuid.UUID) -> str | None:
+    """The reader's stored subscription when a refund or a chargeback ended their plan and
+    Paddle's last word on it is not yet cancelled (migration 0044); None otherwise."""
+    with psycopg.connect(dsn, connect_timeout=3) as conn, conn.transaction():
+        conn.execute("SELECT set_config('app.owner_id', %s, true)", (str(owner),))
+        row = conn.execute("SELECT paddle_subscription_id FROM public.reader_plans"
+                           " WHERE owner_id=%s AND refunded_at IS NOT NULL"
+                           " AND paddle_status <> 'canceled'", (owner,)).fetchone()
+    return None if row is None else row[0]
+
+
+def cancel_refunded(dsn: str, api: PaddleApi, prices: frozenset[str], owner: uuid.UUID) -> str:
+    """Cancel at once, at Paddle, the subscription of a plan a refund or a chargeback ended, so
+    it never renews, and apply Paddle's answer as a message would be. Called after the refund's
+    message is answered, and by the regular check while Paddle has not cancelled it. Paddle is
+    called at most once, and only with the subscription id stored for ``owner``. Answers
+    ``done``, ``no_plan`` (nothing owed), ``locked`` (Paddle's 30 minutes before a renewal),
+    ``refused`` or ``unavailable``, and never raises."""
+    try:
+        subscription = refund_cancel_due(dsn, owner)
+        if subscription is None:
+            return "no_plan"
+        try:
+            entity = api.cancel_now(subscription)
+        except PaddleUnavailable:
+            return "unavailable"
+        except PaddleRefused as refused:
+            if refused.code.startswith("subscription_locked"):
+                _LOG.warning("paddle refused to cancel a refunded plan while a renewal is under "
+                             "way: the regular check tries again; if that renewal was charged, "
+                             "refund it (runbook)")
+                return "locked"
+            # Perhaps already cancelled at Paddle (in its dashboard, say): its own word decides.
+            try:
+                entity = api.subscription(subscription)
+            except (PaddleUnavailable, PaddleRefused):
+                return "unavailable"
+            if entity.get("id") == subscription:
+                apply_answer(dsn, prices, entity)
+                if entity.get("status") == "canceled":
+                    return "done"
+            _LOG.warning("paddle refused to cancel a refunded plan: the regular check tries again")
+            return "refused"
+        if entity.get("id") == subscription:
+            apply_answer(dsn, prices, entity)
+        return "done"
+    except Exception:  # noqa: BLE001 - the plan has ended already; the regular check asks again
+        _LOG.warning("a refunded plan could not be cancelled at Paddle: the regular check tries "
+                     "again")
+        return "unavailable"
 
 
 async def _change(request: Request, owner: OwnerId, *, cancel: bool) -> JSONResponse:

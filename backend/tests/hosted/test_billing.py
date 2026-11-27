@@ -18,7 +18,13 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.hosted import paddle_api
-from app.hosted.billing import Malformed, read_message, read_subscription, verify_signature
+from app.hosted.billing import (
+    Malformed,
+    read_adjustment,
+    read_message,
+    read_subscription,
+    verify_signature,
+)
 from app.hosted.paddle_api import PaddleApi, PaddleRefused, PaddleUnavailable
 from tests.hosted.test_paddle_messages_postgres import (
     MONTHLY,
@@ -264,6 +270,7 @@ def test_each_paddle_call_is_sent_as_paddles_documentation_describes_it() -> Non
     assert api.subscription(sub_id("a")) == entity
     assert api.cancel(sub_id("a")) == entity
     assert api.remove_scheduled_change(sub_id("a")) == entity
+    assert api.cancel_now(sub_id("a")) == entity
     assert api.portal(paddle_id("ctm_", "c"), sub_id("a")) == portal["urls"]
     sent = [(r.method, str(r.url), json.loads(r.content) if r.content else None)
             for r in recorder.requests]
@@ -276,6 +283,9 @@ def test_each_paddle_call_is_sent_as_paddles_documentation_describes_it() -> Non
         ("POST", f"{base}/subscriptions/{sub_id('a')}/cancel",
          {"effective_from": "next_billing_period"}),
         ("PATCH", f"{base}/subscriptions/{sub_id('a')}", {"scheduled_change": None}),
+        # Only for a plan a refund or a chargeback ended: at once, never to renew.
+        ("POST", f"{base}/subscriptions/{sub_id('a')}/cancel",
+         {"effective_from": "immediately"}),
         ("POST", f"{base}/customers/{paddle_id('ctm_', 'c')}/portal-sessions",
          {"subscription_ids": [sub_id("a")]}),
     ]
@@ -293,13 +303,14 @@ def test_the_paddle_client_cannot_list_search_or_name_anything_but_one_well_form
     put anything but one Paddle id of the expected kind in a path (``../``, a query, another
     kind of id, a list)."""
     public = {name for name in dir(PaddleApi) if not name.startswith("_")}
-    assert public == {"create_transaction", "price", "subscription", "cancel",
+    assert public == {"create_transaction", "price", "subscription", "cancel", "cancel_now",
                       "remove_scheduled_change", "portal", "close"}
     api, recorder = api_with(lambda request: httpx.Response(500))
     for call in (lambda: api.subscription("sub_x/../../customers"),
                  lambda: api.subscription(paddle_id("ctm_", "c")),
                  lambda: api.subscription(sub_id("a") + "?status=active"),
                  lambda: api.cancel(""),
+                 lambda: api.cancel_now(paddle_id("ctm_", "c")),
                  lambda: api.remove_scheduled_change(paddle_id("txn_", "t")),
                  lambda: api.portal(sub_id("a"), sub_id("a")),
                  lambda: api.portal(paddle_id("ctm_", "c"), "*"),
@@ -556,6 +567,7 @@ def test_the_regular_check_fetches_only_the_stored_ids_it_is_given_and_stops_whe
     monkeypatch.setattr(paddle_check, "apply_message",
                         lambda dsn, message: applied.append(message.subscription_id) or "applied")
     monkeypatch.setattr(paddle_check, "owes_cancel", lambda dsn, reader: False)
+    monkeypatch.setattr(paddle_check, "refund_cancel_due", lambda dsn, reader: None)
 
     def answer(request: httpx.Request) -> httpx.Response:
         sub = request.url.path.rsplit("/", 1)[1]
@@ -588,6 +600,7 @@ def test_the_regular_check_asks_for_an_owed_cancel_for_that_reader_alone(monkeyp
     monkeypatch.setattr(paddle_check, "plans_to_check", lambda dsn, size: stored[:size])
     monkeypatch.setattr(paddle_check, "apply_message", lambda dsn, message: "older")
     monkeypatch.setattr(paddle_check, "owes_cancel", lambda dsn, reader: reader == owing)
+    monkeypatch.setattr(paddle_check, "refund_cancel_due", lambda dsn, reader: None)
     asked: list = []
     outcomes = ["done"]
     monkeypatch.setattr(paddle_check, "cancel_owed",
@@ -608,3 +621,68 @@ def test_the_regular_check_asks_for_an_owed_cancel_for_that_reader_alone(monkeyp
         assert paddle_check.check("dsn", api, PRICES, size=5, pause=0,
                                   sleep=lambda _s: None) == expected
         assert asked == [owing] and len(recorder.requests) == fetched
+
+
+def test_an_adjustment_ends_the_plan_only_when_approved_whole_or_a_chargeback() -> None:
+    """The break it catches: a partial refund, a credit, a refund still waiting for Paddle's
+    approval or rejected, a chargeback warning or reversal read as ending the plan; an approved
+    full refund or a chargeback not; or an adjustment with no subscription, another event type or
+    unreadable fields read at all (it could be the other product's, so it is never refused)."""
+    def adjustment(**data) -> dict:
+        fields = {"action": "refund", "type": "full", "status": "approved",
+                  "subscription_id": sub_id("a"), "customer_id": paddle_id("ctm_", "c")}
+        fields.update(data)
+        return {"event_id": paddle_id("evt_", "e"), "event_type": "adjustment.updated",
+                "occurred_at": "2026-11-23T10:00:00.000000Z", "data": fields}
+
+    read = read_adjustment(adjustment())
+    assert (read.subscription_id, read.customer_id, read.ends_plan) == (
+        sub_id("a"), paddle_id("ctm_", "c"), True)
+    for changes, ends in (({"action": "chargeback", "type": "partial"}, True),
+                          ({"action": "chargeback", "status": "reversed"}, False),
+                          ({"action": "chargeback", "status": "rejected"}, False),
+                          ({"type": "partial"}, False),
+                          ({"type": None}, False),
+                          ({"status": "pending_approval"}, False),
+                          ({"status": "rejected"}, False),
+                          ({"action": "credit"}, False),
+                          ({"action": "chargeback_warning"}, False),
+                          ({"action": "chargeback_reverse"}, False)):
+        assert read_adjustment(adjustment(**changes)).ends_plan is ends, changes
+    for changes in ({"subscription_id": None}, {"subscription_id": "sub_X"},
+                    {"customer_id": None}):
+        assert read_adjustment(adjustment(**changes)) is None, changes
+    for broken in ({"event_type": "adjustment.deleted"}, {"event_type": "transaction.completed"},
+                   {"event_id": "evt_?"}, {"occurred_at": "yesterday"}, {"data": None}):
+        assert read_adjustment({**adjustment(), **broken}) is None, broken
+    # A subscription message is never read as an adjustment, nor an adjustment as one.
+    assert read_adjustment(message(sub_id("a"))) is None
+    assert read_message(adjustment(), PRICES) is None
+
+
+def test_the_regular_check_asks_again_for_the_cancel_of_a_refunded_plan(monkeypatch) -> None:
+    """The break it catches: a refunded reader's subscription left running at Paddle because
+    the cancel after the refund failed; the cancel asked for another reader; or the check
+    carrying on when Paddle is away."""
+    from app.hosted import paddle_check
+
+    refunded, other = uuid.uuid4(), uuid.uuid4()
+    stored = [(refunded, sub_id("one")), (other, sub_id("two"))]
+    monkeypatch.setattr(paddle_check, "plans_to_check", lambda dsn, size: stored[:size])
+    monkeypatch.setattr(paddle_check, "apply_message", lambda dsn, message: "older")
+    monkeypatch.setattr(paddle_check, "owes_cancel", lambda dsn, reader: False)
+    monkeypatch.setattr(paddle_check, "refund_cancel_due",
+                        lambda dsn, reader: sub_id("one") if reader == refunded else None)
+    asked: list = []
+    outcomes = ["done"]
+    monkeypatch.setattr(paddle_check, "cancel_refunded",
+                        lambda dsn, api, prices, reader: asked.append(reader) or outcomes[0])
+    for outcome, expected, fetched in (("done", (2, 1, 0), 2), ("unavailable", (1, 0, 1), 1),
+                                       ("refused", (2, 0, 1), 2)):
+        asked.clear()
+        outcomes[0] = outcome
+        api, recorder = api_with(lambda r: httpx.Response(
+            200, json={"data": subscription_entity(r.url.path.rsplit("/", 1)[1])}))
+        assert paddle_check.check("dsn", api, PRICES, size=5, pause=0,
+                                  sleep=lambda _s: None) == expected
+        assert asked == [refunded] and len(recorder.requests) == fetched
