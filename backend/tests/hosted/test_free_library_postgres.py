@@ -10,6 +10,7 @@ that forgot to give one fails instead of fetching.
 from __future__ import annotations
 
 import asyncio
+import io
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -17,6 +18,7 @@ from datetime import UTC, datetime
 import httpx
 import psycopg
 import pytest
+from PIL import Image
 from fastapi.testclient import TestClient
 from psycopg.rows import dict_row
 
@@ -29,7 +31,7 @@ from app.hosted.tenant import classics as hosted_classics
 from app.hosted.tenant.models import OwnerId
 from app.hosted.tenant.repository import PostgresTenantRepository
 from app.main import create_app
-from tests.api._epub import epub_ncx
+from tests.api._epub import epub_ncx, epub_with_cover
 from tests.hosted import test_companion_read_map_postgres as read_map_gate
 from tests.hosted.test_tenant_postgres import UnusedOIDCClient, _become
 
@@ -193,8 +195,8 @@ def test_adding_a_classic_puts_it_on_the_readers_shelf_through_the_upload_path(
     assert catalogue_card(library_app, "a", PRIDE)["book_id"] == book["id"]
     listed = get(library_app, "a", "/api/classics?q=pride+prejudice+austen").json()
     assert {card["id"]: card["book_id"] for card in listed["books"]}[PRIDE] == book["id"]
-    assert listed["covers"] is False
-    assert get(library_app, "a", "/api/classics/front").json()["covers"] is False
+    assert listed["covers"] is True
+    assert get(library_app, "a", "/api/classics/front").json()["covers"] is True
 
     # Exactly what an upload of the same file writes, but the source tag.
     uploaded = upload(library_app, "a", BOOK)
@@ -535,3 +537,34 @@ def test_the_tenant_role_needs_no_new_grant_for_the_free_library(tenant_dsn: str
     hold. The fixture grants exactly the allow-list and the startup check refuses one more or one
     fewer (``test_tenant_role_is_rls_enforced_and_privilege_allow_list_is_exact``)."""
     asyncio.run(PostgresTenantRepository(tenant_dsn).check_runtime_role())
+
+
+def test_hosted_book_cover_is_owner_scoped(library_app):
+    image = io.BytesIO()
+    Image.new("RGB", (640, 960), "red").save(image, "PNG")
+    book = epub_with_cover(manifest='<item id="art" href="cover.png" media-type="image/png"/>',
+                       files={"cover.png": image.getvalue()})
+    book_id = upload(library_app, "a", book).json()["book_id"]
+    url = f"/api/books/{book_id}/cover"
+    art = get(library_app, "a", url)
+    assert art.status_code == 200 and art.headers["content-type"] == "image/webp"
+    assert Image.open(io.BytesIO(art.content)).size == (320, 480)
+    assert art.headers["cache-control"] == "private, no-store"
+    assert get(library_app, "b", url).status_code == 404
+    assert get(library_app, "a", url).content == art.content
+    assert library_app[0].delete(f"/api/books/{book_id}", headers=as_reader(library_app, "a")).is_success
+    assert get(library_app, "a", url).status_code == 404
+    plain = upload(library_app, "a", BOOK).json()["book_id"]
+    assert get(library_app, "a", f"/api/books/{plain}/cover").status_code == 404
+
+
+def test_catalogue_cover_cache_is_reader_scoped(library_app, source):
+    url = f"/api/classics/{PRIDE}/cover"
+    source.files[int(PRIDE)] = b"\xff\xd8\xff" + b"picture"
+    for label in ("a", "a", "b"):
+        art = get(library_app, label, url)
+        assert art.status_code == 200 and art.content == source.files[int(PRIDE)]
+        assert art.headers["cache-control"] == "private, no-store"
+    assert len(source.seen) == 2
+    assert get(library_app, "a", "/api/classics/invalid/cover").status_code == 404
+    assert len(source.seen) == 2

@@ -60,3 +60,19 @@ def three_chapter_book():
         ("c3.xhtml", "Chapter III", "Chapter III",
          "Corvus the magistrate summoned Berenice for judgment. " * 12),
     ])
+
+
+def epub_with_cover(*, manifest="", metadata="", files=None, title="Covered"):
+    """The three-chapter book with extra manifest items / metadata and extra files in the archive."""
+    source = zipfile.ZipFile(io.BytesIO(epub_ncx([("c1.xhtml", "One", "One", "Aldric walked on. " * 20)], title=title)))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as z:
+        for name in source.namelist():
+            raw = source.read(name)
+            if name == "content.opf":
+                raw = raw.replace(b"</metadata>", metadata.encode() + b"</metadata>")
+                raw = raw.replace(b"</manifest>", manifest.encode() + b"</manifest>")
+            z.writestr(name, raw)
+        for name, raw in (files or {}).items():
+            z.writestr(name, raw)
+    return out.getvalue()

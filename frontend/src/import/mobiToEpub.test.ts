@@ -139,12 +139,14 @@ describe("MOBI to EPUB", () => {
         const [, index, id] = href.split(":");
         return { index: Number(index), anchor: (doc) => (id ? doc.getElementById(id) : null) };
       },
-      getCover: () => null,
+      getCover: () => new Blob([Uint8Array.from([0xff, 0xd8, 0xff, 0xe0])]),
     };
     const { epub, title, author } = await convertKindleBook(book, async () => null, { identifier: "urn:test" });
     expect(title).toBe("Contents Book");
     expect(author).toBe("Ada North, Maya West");
     const zip = unzip(epub);
+    expect(zip.names).toContain("OEBPS/images/cover.jpg");
+    expect(zip.text("OEBPS/content.opf")).toContain('properties="cover-image"');
     expect(zip.names).not.toContain("OEBPS/sec0002.xhtml");
     const nav = zip.text("OEBPS/nav.xhtml");
     expect(nav).toContain('<li><a href="sec0001.xhtml">Prologue</a><ol><li><a href="sec0003.xhtml#mid">Midway</a></li></ol></li>');

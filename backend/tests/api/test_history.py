@@ -1,5 +1,8 @@
 """Reading history imported from other reading apps: merged idempotently, matched to the free
 library, and never a way to send this server anything but titles, dates and the reader's own notes."""
+from contextlib import contextmanager
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -177,3 +180,19 @@ def test_a_glimpse_is_one_of_the_readers_own_marked_passages(c):
     mark = c.get("/api/history/glimpse").json()["mark"]
     assert mark["text"].startswith("Clarity about what matters") and mark["title"] == "Deep Work"
     assert mark["author"] == "Cal Newport" and isinstance(mark["entry_id"], int)
+
+def test_optional_history_cover_uses_only_the_isbn_and_rejects_missing_art(c, monkeypatch):
+    requests = []
+
+    @contextmanager
+    def serve(method, url, **kwargs):
+        requests.append(url)
+        assert not kwargs["follow_redirects"]
+        yield httpx.Response(200, content=b"\xff\xd8\xffart" if len(requests) == 1 else b"<html/>")
+
+    monkeypatch.setattr(httpx, "stream", serve)
+    url = "/api/history/covers/isbn/9780141439518"
+    assert c.get(url).headers["content-type"] == "image/jpeg"
+    assert c.get(url).status_code == 404
+    assert c.get("/api/history/covers/isbn/bogus").status_code == 404
+    assert requests == ["https://covers.openlibrary.org/b/isbn/9780141439518-M.jpg?default=false"] * 2

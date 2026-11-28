@@ -47,11 +47,7 @@ def classics_routes(app) -> dict[tuple[str, str], tuple[str, ...]]:
             for method, operation in operations.items()}
 
 
-def test_local_mode_keeps_its_own_free_library_and_hosted_mode_mounts_four_routes_without_covers(
-        tmp_path):
-    """The break it catches: the hosted library changing what local mode serves (a route gone,
-    moved or answered by hosted code), or hosted mode serving covers, whose cache would be shared
-    by every reader, or reaching the local routes, which know nothing of the signed-in reader."""
+def test_local_and_hosted_catalogue_routes_keep_separate_cover_storage(tmp_path):
     local = create_app(Settings(_env_file=None, allow_stub=True, data_dir=str(tmp_path / "data")))
     local_tag, hosted_tag = tuple(local_classics.router.tags), tuple(hosted_classics.router.tags)
     assert local_tag == ("classics",) and hosted_tag == ("hosted-library",)
@@ -68,6 +64,7 @@ def test_local_mode_keeps_its_own_free_library_and_hosted_mode_mounts_four_route
         ("GET", "/api/classics"): hosted_tag,
         ("GET", "/api/classics/front"): hosted_tag,
         ("GET", "/api/classics/{classic_id}"): hosted_tag,
+        ("GET", "/api/classics/{classic_id}/cover"): hosted_tag,
         ("POST", "/api/classics/{classic_id}"): hosted_tag,
     }
 

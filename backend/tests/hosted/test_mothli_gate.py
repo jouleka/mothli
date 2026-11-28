@@ -51,6 +51,7 @@ GATED = {
 NOT_GATED = {
     ("GET", "/api/limits"), ("POST", "/api/books"), ("GET", "/api/books"),
     ("GET", "/api/books/{book_id}"), ("GET", "/api/books/{book_id}/manifest"),
+    ("GET", "/api/books/{book_id}/cover"),
     ("GET", "/api/books/{book_id}/epub"), ("DELETE", "/api/books/{book_id}"),
     ("GET", "/api/books/{book_id}/position"), ("PUT", "/api/books/{book_id}/position"),
     ("POST", "/api/books/{book_id}/position/reset"),
@@ -73,6 +74,7 @@ NOT_GATED = {
     ("GET", "/api/reader/recollections"), ("DELETE", "/api/reader/recollections/{public_id}"),
     ("DELETE", "/api/reader/recollections"),
     ("GET", "/api/classics"), ("GET", "/api/classics/front"),
+    ("GET", "/api/classics/{classic_id}/cover"),
     ("GET", "/api/classics/{classic_id}"), ("POST", "/api/classics/{classic_id}"),
     ("POST", "/api/account/delete"), ("POST", "/api/account/keep"), ("GET", "/api/account/export"),
     ("GET", "/api/billing/plan"),

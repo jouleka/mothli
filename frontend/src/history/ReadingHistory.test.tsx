@@ -445,3 +445,14 @@ describe("Your reading history", () => {
     expect(screen.getByRole("button", { name: /Read 1/ }).getAttribute("aria-pressed")).toBe("true");
   });
 });
+
+test("a Goodreads ISBN requests edition artwork only when the reader enables lookup", async () => {
+  mocks.history.mockResolvedValue({ ...full, entries: [{ ...hugo, isbn: "9781501161933" }] });
+  const { container } = render(<ReadingHistory onBack={() => {}} onOpen={() => {}} />);
+  const toggle = await screen.findByRole("checkbox", { name: /Open Library/ });
+  expect(container.querySelector(".cover-art")).toBeNull();
+  await userEvent.click(toggle);
+  expect(container.querySelector(".cover-art")?.getAttribute("src")).toBe("/api/history/covers/isbn/9781501161933");
+  await userEvent.click(toggle);
+  expect(container.querySelector(".cover-art")).toBeNull();
+});

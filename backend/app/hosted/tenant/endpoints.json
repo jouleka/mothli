@@ -1,5 +1,5 @@
 {
-  "version": 27,
+  "version": 28,
   "required_surface_classes": [
     "list",
     "get",
@@ -36,6 +36,14 @@
       "access": "read",
       "repository_method": "list_books",
       "cross_tenant_test": "test_list_and_cost_surfaces_never_include_another_owner"
+    },
+    {
+      "method": "GET",
+      "path": "/api/books/{book_id}/cover",
+      "surface": "get",
+      "access": "read",
+      "repository_method": "source_object",
+      "cross_tenant_test": "test_hosted_book_cover_is_owner_scoped"
     },
     {
       "method": "GET",
@@ -405,6 +413,14 @@
       "access": "read",
       "repository_method": "shelved_classics",
       "cross_tenant_test": "test_two_readers_adding_the_same_classic_each_get_their_own_book"
+    },
+    {
+      "method": "GET",
+      "path": "/api/classics/{classic_id}/cover",
+      "surface": "get",
+      "access": "read",
+      "repository_method": "find_classic",
+      "cross_tenant_test": "test_catalogue_cover_cache_is_reader_scoped"
     },
     {
       "method": "GET",

@@ -232,7 +232,7 @@ class PostgresTenantRepository:
             rows = await (
                 await conn.execute(
                     """
-                    SELECT b.id,b.title,b.author,b.content_language,b.book_type,b.created_at,
+                    SELECT b.id,b.title,b.author,b.source_kind AS source,b.content_language,b.book_type,b.created_at,
                            s.last_opened_at,
                            COALESCE(s.bookmark,0) AS bookmark,
                            COALESCE(s.position_epoch,0) AS position_epoch
@@ -252,7 +252,7 @@ class PostgresTenantRepository:
             row = await (
                 await conn.execute(
                     """
-                    SELECT b.id,b.title,b.author,b.content_language,b.book_type,b.created_at,
+                    SELECT b.id,b.title,b.author,b.source_kind AS source,b.content_language,b.book_type,b.created_at,
                            s.last_opened_at,
                            COALESCE(s.bookmark,0) AS bookmark,
                            COALESCE(s.position_epoch,0) AS position_epoch
