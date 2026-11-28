@@ -390,12 +390,14 @@ export async function initializeOfflineSupport(): Promise<
 }
 
 export async function cacheBookForOffline(bookId: string): Promise<void> {
+  const owner = activeOfflineOwner();
   const paths = [
     `/api/books/${bookId}/manifest`,
     `/api/books/${bookId}/epub`,
     `/api/books/${bookId}/position`,
     `/api/books/${bookId}/marks`,
     `/api/books/${bookId}/preferences`,
+    `/api/books/${bookId}/cover`,
   ];
   const results = await Promise.allSettled(paths.map((path) => fetch(path)));
   const manifest = results[0].status === "fulfilled" ? results[0].value : null;
@@ -403,7 +405,8 @@ export async function cacheBookForOffline(bookId: string): Promise<void> {
   if (!manifest?.ok || !epub?.ok || !("caches" in globalThis)) {
     throw new Error("the book could not be saved for offline reading");
   }
-  const cache = await caches.open(offlineOwnerCacheName());
+  if (owner !== activeOfflineOwner()) throw new Error("the active reader changed");
+  const cache = await caches.open(offlineOwnerCacheName(owner));
   try {
     await Promise.all(
       results.map(async (result, index) => {

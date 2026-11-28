@@ -188,13 +188,11 @@ describe("what the shelf offers, by where the reader stands", () => {
     expect(screen.queryByText(said)).toBeNull();
   });
 
-  // Catches: the shelf asking a hosted server for cover pictures it has no route for, a 404 in
-  // the console for every book (L7).
-  test("a hosted shelf asks for no cover picture; cloth covers only", async () => {
+  test("a hosted shelf loads the book's own artwork on demand", async () => {
     mocks.books.mockResolvedValue([{ book_id: "b1", title: "The Lantern", author: "Ada Example" }]);
     const { container } = render(<Shelf onOpen={() => {}} session={signedIn} />);
     await screen.findByRole("button", { name: "The Lantern, Ada Example" });
-    expect(container.querySelector(".cover-art")).toBeNull();
+    expect(container.querySelector(".cover-art")?.getAttribute("src")).toBe("/api/books/b1/cover");
     expect(container.querySelector(".ml-book .cover-title")?.textContent).toBe("The Lantern");
   });
 

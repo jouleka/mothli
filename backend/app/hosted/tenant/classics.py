@@ -12,14 +12,14 @@ any upload; nothing fetched is kept for, or shared with, another reader.
 Fenced in further than locally: one fetch in flight per reader and ``MAX_FETCHES`` in this
 process; a full shelf, or a book already on it, is refused before anything is fetched; the whole
 fetch has a deadline (``FETCH_SECONDS``) beside the per-step timeouts; and no proxy from the
-environment is used. Covers are not served: a cover cache shared by every reader would tell one
-reader which books others have looked at, so the page shows its cloth covers instead.
+environment is used. On-demand cover fetches and cached images are scoped to the reader.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -34,12 +34,15 @@ from app.classics import (
     ClassicUnavailable,
     catalog_summary,
     fetch_classic,
+    fetch_cover,
     find_classic,
     front_page,
     search,
     source_tag,
 )
 from app.hosted.limits import LimitExceededError
+from app.hosted.runtime import CacheNamespace, ResourceKind, TenantCacheKey, TenantResourceKey
+from app.ingest.cover import image_type
 from app.hosted.tenant.api import _csrf_owner, _limit_failure, _owner, _private, store_epub
 from app.hosted.tenant.models import AlreadyOnShelfError, OwnerId
 
@@ -92,7 +95,7 @@ def _tag():
     return Query("", max_length=24, pattern=r"^[a-z]*$")
 
 
-_BASE = {"source": SOURCE_NAME, "source_url": SOURCE_URL, "covers": False}
+_BASE = {"source": SOURCE_NAME, "source_url": SOURCE_URL, "covers": True}
 
 
 def _card(entry, shelved):
@@ -148,9 +151,27 @@ async def classics_front_page(request: Request, response: Response, language: st
     shelved = await request.app.state.tenant_repository.shelved_classics(owner_id)
     shelves = await asyncio.to_thread(front_page, language=language or None,
                                       min_years_since_death=settings.classics_min_years_since_death)
-    return {"covers": False,
+    return {"covers": True,
             "shelves": [{**shelf, "books": [_card(entry, shelved) for entry in shelf["books"]]}
                         for shelf in shelves]}
+
+
+@router.get("/{classic_id}/cover")
+async def classic_cover(classic_id: str, request: Request, owner_id: OwnerId = Depends(_owner)):
+    entry = _find(classic_id, request.app.state.settings)
+    runtime = request.app.state.hosted_runtime
+    resource = TenantResourceKey(owner_id, ResourceKind.CLASSIC, uuid.UUID(int=entry["pg"]))
+    key = TenantCacheKey(resource, CacheNamespace.COVER, "v1")
+    async with runtime.serialized(resource):
+        blob = await runtime.cache_get(key)
+        if blob is None:
+            async with request.app.state.cover_downloads:
+                blob = await asyncio.to_thread(_download_cover, entry)
+            if not blob:
+                raise HTTPException(404, "no cover")
+            if len(blob) <= 128 * 1024:
+                await runtime.cache_set(key, blob)
+    return Response(blob, media_type=image_type(blob))
 
 
 @router.get("/{classic_id}")
@@ -263,6 +284,12 @@ class _Timed(httpx.SyncByteStream):
         close = getattr(self._inner, "close", None)
         if close is not None:
             close()
+
+
+def _download_cover(entry):
+    with httpx.Client(transport=_Deadline(_transport(), 10), timeout=5, trust_env=False,
+                      headers={"user-agent": _USER_AGENT}) as client:
+        return fetch_cover(entry, client=client)
 
 
 def _download(entry: dict, max_bytes: int) -> bytes:

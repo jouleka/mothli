@@ -544,7 +544,8 @@ def create_app(
         app.include_router(tenant_api.router)
         app.include_router(companion_routes.router)
         app.include_router(companion_routes.reader_router)
-        # The free library (ADR 0041 part 11): the local paths, without covers.
+        app.state.cover_downloads = asyncio.Semaphore(8)
+        app.state.cover_extractions = asyncio.Semaphore(2)
         app.include_router(hosted_classics.router)
         # Paddle's messages (ADR 0045 step 3): the route exists only with its secret set.
         if settings.paddle_webhook_secret is not None:

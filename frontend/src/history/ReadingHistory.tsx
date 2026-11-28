@@ -1,10 +1,10 @@
 /** Your reading history: what a reader has read, means to read and marked in other reading apps,
  * brought in from the files those apps let them export. A title here is a record, not a book; when
  * the free library has the book, it can be added from here. */
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { createContext, useContext, Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { api, type Book, type HistoryDetail, type HistoryEntry, type HistoryPage } from "../api";
 import { BOOK_ACCEPT, BOOK_FORMATS, bookFileKind, prepareBookUpload, unsupportedBookMessage } from "../import/bookFiles";
-import { Cover } from "../library/FreeLibrary";
+import { classicArt, ownedArt } from "../library/coverArt";
 import { BookCover } from "../shelf/Shelf";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
@@ -73,15 +73,19 @@ function Stars({ rating }: { rating: number }) {
   );
 }
 
+const LookupEditions = createContext(false);
+
 function Thumb({ entry }: { entry: HistoryEntry }) {
-  if (entry.classic_id) {
-    return <Cover book={{ id: entry.classic_id, title: entry.title, author: entry.author, language: "en", book_id: entry.book_id }} />;
-  }
-  // the reader's own copy carries its own cover; a title with no book yet wears plain cloth
-  const cloth: Book = { book_id: entry.book_id ?? `history-${entry.id}`, title: entry.title, author: entry.author };
+  const book: Book = { book_id: entry.book_id ?? `history-${entry.id}`, title: entry.title, author: entry.author };
+  const isbn = entry.isbn?.replace(/-/g, "").toUpperCase();
+  const allowLookup = useContext(LookupEditions);
+  const edition = allowLookup && isbn && /^(?:[0-9]{9}[0-9X]|[0-9]{13})$/.test(isbn)
+    ? `/api/history/covers/isbn/${isbn}` : undefined;
+  const classic = entry.classic_id ? classicArt(entry.classic_id) : undefined;
   return (
     <span className="fl-cover">
-      <BookCover book={cloth} art={entry.book_id ? `/api/books/${encodeURIComponent(entry.book_id)}/cover` : undefined} />
+      <BookCover book={book} art={entry.book_id ? ownedArt(entry.book_id) : classic ?? edition ?? ""}
+        fallback={entry.book_id ? classic ?? edition : classic ? edition : undefined} />
     </span>
   );
 }
@@ -762,6 +766,7 @@ function EntrySheet({
 }
 
 export function ReadingHistory({ onBack, onOpen }: { onBack: () => void; onOpen: (bookId: string) => void }) {
+  const [lookupEditions, setLookupEditions] = useState(false);
   const [page, setPage] = useState<HistoryPage | null>(null);
   const [view, setView] = useState<View>("");
   const [query, setQuery] = useState("");
@@ -910,6 +915,7 @@ export function ReadingHistory({ onBack, onOpen }: { onBack: () => void; onOpen:
         </button>
       </header>
 
+      <LookupEditions.Provider value={lookupEditions}>
       <main id="rh-main">
         <section className="ml-spread rh-spread" aria-label="Your reading history at a glance">
           <div className="ml-page ml-page--left">
@@ -1015,6 +1021,12 @@ export function ReadingHistory({ onBack, onOpen }: { onBack: () => void; onOpen:
               </label>
             </div>
 
+            {(lookupEditions || page.entries.some((entry) => entry.isbn)) && (
+              <label className="rh-cover-lookup">
+                <input type="checkbox" checked={lookupEditions} onChange={(event) => setLookupEditions(event.target.checked)} />
+                Look up missing covers by ISBN with Open Library
+              </label>
+            )}
             <ul className="fl-grid rh-grid" aria-label="Books in your history">
               {page.entries.map((entry, index) => {
                 // a finished book sits under the year it was finished, like the pages of a reading journal
@@ -1116,6 +1128,7 @@ export function ReadingHistory({ onBack, onOpen }: { onBack: () => void; onOpen:
           onClose={closeSheet}
         />
       )}
+      </LookupEditions.Provider>
     </div>
   );
 }

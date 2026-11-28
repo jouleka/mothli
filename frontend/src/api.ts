@@ -21,7 +21,7 @@ import {
 } from "./pwa/offline";
 import { MOTHLI_PLAN, noteMothliPlan } from "./ui/mothliStanding";
 
-export type Book = { book_id: string; title: string; author: string | null };
+export type Book = { book_id: string; title: string; author: string | null; source?: string };
 /** A public-domain book from the curated catalogue; `book_id` is set once it is on the shelf. */
 export type Classic = { id: string; title: string; author: string; language: string; book_id: string | null };
 /** One page of the public-domain catalogue. `total` is its whole size, `matches` this search's. */
@@ -35,7 +35,6 @@ export type ClassicsCatalog = {
   genres: { id: string; label: string }[];
   moods: { id: string; label: string }[];
   books: Classic[];
-  /** `false` where the server has no cover art (hosted mode): the cloth covers are shown. */
   covers?: boolean;
 };
 /** A title in the reader's history from other reading apps. */
@@ -49,6 +48,7 @@ export type HistoryEntry = {
   added_on: string | null;
   /** The free-library book this title is, when there is one; `book_id` once it is on the shelf. */
   classic_id: string | null;
+  isbn?: string | null;
   book_id: string | null;
   sources: string[];
   highlights: number;
@@ -541,12 +541,6 @@ export const api = {
       if (!r.ok) throw new Error("Couldn’t remove it.");
     }),
   /** Says which covers the page is about to show, so the server starts fetching them. */
-  warmCovers: (ids: string[]) =>
-    fetch("/api/classics/covers/warm", {
-      method: "POST",
-      headers: { "content-type": "application/json", ...csrfHeaders() },
-      body: JSON.stringify({ ids }),
-    }).then((r) => j<{ started: number }>(r)),
   addClassic: (id: string) =>
     fetch(`/api/classics/${encodeURIComponent(id)}`, { method: "POST", headers: csrfHeaders() }).then(
       (r) => j<{ book_id: string }>(r),

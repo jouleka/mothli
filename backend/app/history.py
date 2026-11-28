@@ -157,7 +157,7 @@ class ReadingHistory:
 
     @staticmethod
     def _public(row):
-        entry = {key: row[key] for key in ("id", "title", "author", "status", "rating", "finished_on", "added_on", "classic_id")}
+        entry = {key: row[key] for key in ("id", "title", "author", "status", "rating", "finished_on", "added_on", "classic_id", "isbn")}
         entry["sources"] = [name for name in row["sources"].split(",") if name]
         entry["own_book_id"] = row["own_book_id"]
         entry["highlights"] = row["highlight_count"]
@@ -203,7 +203,7 @@ class ReadingHistory:
             marks = self._conn.execute(
                 "SELECT id, text, note, location, made_at, source FROM highlights WHERE entry_id = ?"
                 " ORDER BY position IS NULL, position, id", (entry_id,)).fetchall()
-        return {**self._public(row), "review": row["review"], "isbn": row["isbn"],
+        return {**self._public(row), "review": row["review"],
                 "marks": [dict(mark) for mark in marks]}
 
     def glimpse(self):

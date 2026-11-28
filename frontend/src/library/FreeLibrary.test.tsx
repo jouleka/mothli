@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { axeAA } from "../test-a11y";
 import { FreeLibrary } from "./FreeLibrary";
+import { classicArt } from "./coverArt";
 
 const mocks = vi.hoisted(() => ({
   classics: vi.fn(),
@@ -79,7 +80,7 @@ describe("The Library", () => {
     const popular = await screen.findByRole("region", { name: "Most read right now" });
     expect(within(popular).getByRole("button", { name: "Emma, Jane Austen" })).toBeTruthy();
     expect(within(popular).getByText("On your shelf")).toBeTruthy();
-    expect(container.querySelector('.fl-card img[src="/api/classics/158/cover"]')).toBeTruthy();
+    expect(container.querySelector(".fl-card img")?.getAttribute("src")).toBe(classicArt("158"));
     expect(await screen.findByText(/77,713 books, all out of copyright/)).toBeTruthy();
     expect(screen.getByRole("link", { name: "Project Gutenberg" }).getAttribute("href")).toBe("https://www.gutenberg.org/");
     expect(screen.getByText(/if you live elsewhere, check your country’s rules/)).toBeTruthy();
@@ -95,11 +96,9 @@ describe("The Library", () => {
     expect(await screen.findByText("2 books")).toBeTruthy();
     const chills = { q: "", language: "", genre: "", mood: "chills", limit: 60 };
     expect(mocks.classics).toHaveBeenCalledWith(chills);
-    // the next page is fetched ahead, and the server is told which covers are about to be shown
+    // the next page is fetched ahead, without starting image downloads for its books
     await waitFor(() => expect(mocks.classics).toHaveBeenLastCalledWith({ ...chills, offset: 1 }));
-    await waitFor(() => expect(mocks.warmCovers).toHaveBeenCalledWith(["10007"]));
-    expect(mocks.warmCovers).toHaveBeenCalledWith(["345"]);
-    expect(mocks.warmCovers).toHaveBeenCalledWith(["158", "1727", "345"]);
+    expect(mocks.warmCovers).not.toHaveBeenCalled();
     expect(window.location.search).toBe("?library=1&feel=chills");
     expect(screen.getByRole("heading", { level: 2, name: "Keep me up at night" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Most read right now" })).toBeNull();
@@ -184,27 +183,6 @@ describe("The Library", () => {
     expect(mocks.addClassic).toHaveBeenCalledWith("345");
     await user.click(await within(sheet).findByRole("button", { name: "Start reading" }));
     expect(onOpen).toHaveBeenCalledWith("bkdracula");
-  });
-
-  test("where the server has no cover art (hosted), cloth covers only and no cover is asked for", async () => {
-    const user = userEvent.setup();
-    const hosted = { ...summary, covers: false };
-    mocks.classicsFront.mockResolvedValue({ ...front, covers: false });
-    mocks.classics.mockImplementation(async (search: { mood?: string; offset?: number } = {}) => {
-      if (search.mood === "chills") return { ...(search.offset ? page([carmilla], 2) : page([dracula], 2)), covers: false };
-      return hosted;
-    });
-    const { container } = render(<FreeLibrary onBack={() => {}} onOpen={() => {}} />);
-    const popular = await screen.findByRole("region", { name: "Most read right now" });
-    expect(within(popular).getByRole("button", { name: "Emma, Jane Austen" })).toBeTruthy();
-    await user.click(await screen.findByRole("button", { name: "Keep me up at night" }));
-    expect(await screen.findByText("2 books")).toBeTruthy();
-    await waitFor(() => expect(mocks.classics).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 1 })));
-    await user.click(screen.getByRole("button", { name: "Dracula, Bram Stoker" }));
-    expect(await screen.findByText("A count leaves his castle.")).toBeTruthy();
-    expect(container.querySelector("img")).toBeNull();
-    expect(mocks.warmCovers).not.toHaveBeenCalled();
-    expect(await axeAA(container)).toHaveNoViolations();
   });
 
   test("a book someone already put on the shelf (hosted: already_on_shelf) is shown as on it", async () => {

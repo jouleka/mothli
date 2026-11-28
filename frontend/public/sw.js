@@ -12,7 +12,7 @@ function ownerCache() {
 
 function isOfflineBookRead(url) {
   if (!url.pathname.startsWith("/api/books")) return false;
-  return url.pathname === "/api/books" || /^\/api\/books\/[^/]+\/(manifest|epub|position|marks|preferences)$/.test(url.pathname);
+  return url.pathname === "/api/books" || /^\/api\/books\/[^/]+\/(manifest|epub|cover|position|marks|preferences)$/.test(url.pathname);
 }
 
 async function cacheSafe(cache, request, response) {

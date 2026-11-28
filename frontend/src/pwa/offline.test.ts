@@ -316,6 +316,7 @@ describe("tenant-scoped offline outbox", () => {
     await expect(cacheBookForOffline(book)).resolves.toBeUndefined();
     expect(stored.has(`/api/books/${book}/manifest`)).toBe(true);
     expect(stored.has(`/api/books/${book}/epub`)).toBe(true);
+    expect(stored.has(`/api/books/${book}/cover`)).toBe(true);
   });
 
   test("purge removes every owner cache and all reader-local state", async () => {

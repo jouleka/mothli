@@ -20,3 +20,10 @@ notices. CMap and font licenses are preserved beside those assets in `cmaps/LICE
 
 Python and npm packages are not relicensed by this repository. Refer to their package metadata and
 installed license files for applicable terms.
+
+
+## Free-library cover thumbnails
+
+The WebP files in `frontend/src/library/art` are thumbnails of the corresponding
+Project Gutenberg editions. Each filename is the Gutenberg ebook number. The
+source for number N is `https://gutenberg.pglaf.org/cache/epub/N/pgN.cover.medium.jpg`.

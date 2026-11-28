@@ -1,3 +1,4 @@
+import { classicArt, ownedArt } from "../library/coverArt";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Book, type ClassicsCatalog } from "../api";
 import { readingStreak, recentDays, streakName } from "../journey/journey";
@@ -50,40 +51,30 @@ function toneOf(book: Book) {
   ];
 }
 
-/** A cloth-bound cover: the title between two gilt rules, the author's surname at the foot. */
-export function BookCover({
-  book,
-  className = "",
-  art,
-}: {
-  book: Book;
-  className?: string;
-  /** Where the book's own cover picture is served, when it may have one. */
-  art?: string;
-}) {
-  // The cloth cover is always drawn: it shows while the picture loads, and stays when there is none.
-  const [picture, setPicture] = useState<"loading" | "shown" | "none">("loading");
+type CoverProps = { book: Book; className?: string; art?: string; fallback?: string; eager?: boolean };
+
+/** Keep the cloth in place while artwork loads. A new source gets a fresh load/error state. */
+export function BookCover({ book, art, fallback, ...props }: CoverProps) {
+  const classic = /^gutenberg:([1-9][0-9]*)$/.exec(book.source ?? "")?.[1];
+  const primary = art ?? (classic ? classicArt(classic) : ownedArt(book.book_id));
+  const second = fallback ?? (classic ? ownedArt(book.book_id) : undefined);
+  return <CoverPicture key={JSON.stringify([primary, second])} book={book} art={primary} fallback={second} {...props} />;
+}
+
+function CoverPicture({ book, className = "", art, fallback, eager }: CoverProps) {
+  const [source, setSource] = useState(art);
+  const [shown, setShown] = useState(false);
   return (
-    <span
-      className={`book-cover cover-${toneOf(book)} ${className}`}
-      data-art={art ? picture : undefined}
-      aria-hidden="true"
-    >
+    <span className={`book-cover cover-${toneOf(book)} ${className}`}
+      data-art={source ? (shown ? "shown" : "loading") : "none"} aria-hidden="true">
       <span className="cover-title">{book.title}</span>
-      <span className="cover-author">
-        {(book.author || "").split(/\s+/).pop() || "Your collection"}
-      </span>
-      {art && picture !== "none" && (
-        <img
-          className="cover-art"
-          src={art}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          onLoad={() => setPicture("shown")}
-          onError={() => setPicture("none")}
-        />
-      )}
+      <span className="cover-author">{(book.author || "").split(/\s+/).pop() || "Your collection"}</span>
+      {source && <img key={source} className="cover-art" src={source} alt=""
+        loading={eager ? "eager" : "lazy"} decoding="async" draggable={false}
+        onLoad={() => setShown(true)} onError={() => {
+          setShown(false);
+          setSource(source === art && fallback !== art ? fallback : undefined);
+        }} />}
     </span>
   );
 }
@@ -137,9 +128,6 @@ export function Shelf({
   const owner = activeOfflineOwner();
   // A hosted server without Mothli's chat: no home chat, and no line inviting a question.
   const chat = offersChat(session);
-  // Hosted mode has no cover pictures for a reader's own books (no route): cloth covers only,
-  // and nothing asked that can only answer 404.
-  const hosted = session !== undefined;
   // A reader without the plan (new, or ended): the home chat shows its invitation, and nothing
   // else on the shelf offers them a chat they cannot have (ADR 0045 section 6, ADR 0046).
   const mothliEnded = useMothliClosed();
@@ -851,7 +839,7 @@ export function Shelf({
                           title={bookName(book)}
                           onClick={() => openBook(book.book_id)}
                         >
-                          <BookCover book={book} art={hosted ? undefined : `/api/books/${encodeURIComponent(book.book_id)}/cover`} />
+                          <BookCover book={book} />
                         </button>
                         <span className="sr-only" id={`book-${book.book_id}-title`}>{book.title}</span>
                         <div className="ml-book-actions">
@@ -895,7 +883,7 @@ export function Shelf({
                             aria-label={bookName(book)}
                             onClick={() => openBook(book.book_id)}
                           >
-                            <span className={`ml-row-spine cover-${toneOf(book)}`} aria-hidden="true" />
+                            <BookCover book={book} className="ml-row-cover" />
                             <span className="ml-row-text">
                               <span className="ml-row-title" id={`book-${book.book_id}-title`}>{book.title}</span>
                               <span className="ml-row-author">{book.author || "Unknown author"}</span>

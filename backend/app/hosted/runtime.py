@@ -16,11 +16,13 @@ from app.hosted.tenant.models import OwnerId
 
 class ResourceKind(str, Enum):
     BOOK = "book"
+    CLASSIC = "classic"
     LIBRARY = "library"
     COSTS = "costs"
 
 
 class CacheNamespace(str, Enum):
+    COVER = "cover"
     BOOK_METADATA = "book-metadata"
 
 

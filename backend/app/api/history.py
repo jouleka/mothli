@@ -4,12 +4,14 @@ The reader's browser parses the files they exported and sends plain records here
 time. No file, credential or address of another service ever reaches this server: only titles,
 dates, ratings and the reader's own highlights and notes."""
 import os
+import re
 import tempfile
 import threading
 from difflib import SequenceMatcher
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
@@ -17,6 +19,7 @@ from app.classics import author_key, find_classic, match_title, source_tag, titl
 from app.deps import get_catalog, get_settings
 from app.history import STATUSES, ReadingHistory
 from app.history_sources import UnreadableSource, fetch_readwise, is_sqlite, read_databases
+from app.ingest.cover import image_type
 
 router = APIRouter(prefix="/api/history", tags=["history"])
 
@@ -208,6 +211,30 @@ def list_history(
     matches, page = store.list(status=status if status in STATUSES else None, only=only or None,
                                query=q, offset=offset, limit=limit)
     return {**store.summary(), "matches": matches, "entries": _with_shelf(page, catalog, settings)}
+
+
+@router.get("/covers/isbn/{isbn}")
+def isbn_cover(isbn: str):
+    """Local history's optional edition lookup. Only the ISBN is sent to Open Library."""
+    if not re.fullmatch(r"(?:[0-9]{9}[0-9X]|[0-9]{13})", isbn):
+        raise HTTPException(404, "unknown ISBN")
+    url = f"https://covers.openlibrary.org/b/isbn/{isbn}-M.jpg?default=false"
+    try:
+        with httpx.stream("GET", url, timeout=5, follow_redirects=False, trust_env=False,
+                          headers={"User-Agent": "Mothli (reader-requested edition cover)"}) as upstream:
+            if upstream.status_code != 200:
+                raise HTTPException(404, "no cover")
+            picture = bytearray()
+            for chunk in upstream.iter_bytes(chunk_size=16_384):
+                if len(picture) + len(chunk) > 1024 * 1024:
+                    raise HTTPException(404, "no cover")
+                picture.extend(chunk)
+    except httpx.HTTPError as exc:
+        raise HTTPException(503, "cover service unavailable") from exc
+    kind = image_type(picture)
+    if not kind:
+        raise HTTPException(404, "no cover")
+    return Response(bytes(picture), media_type=kind, headers={"Cache-Control": "private, max-age=604800"})
 
 
 @router.get("/glimpse")

@@ -2,9 +2,7 @@
  * or a genre, or just wander along the shelves; a book is only downloaded when they add it. The
  * catalogue lives on the reader's own server, which also serves the cover art. */
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -15,13 +13,13 @@ import {
 import {
   api,
   ApiError,
-  type Book,
   type Classic,
   type ClassicDetail,
   type ClassicShelf,
   type ClassicsCatalog,
   type ClassicsSearch,
 } from "../api";
+import { classicArt, ownedArt } from "./coverArt";
 import { BookCover } from "../shelf/Shelf";
 import { Button } from "../ui/Button";
 import { Errand } from "../ui/Errand";
@@ -33,7 +31,6 @@ import "./free-library.css";
 /** A pause while someone is typing, so half-typed words are not searched. A click waits for nothing. */
 const TYPING_DELAY_MS = 160;
 const PAGE = 60;
-const MAX_WARM = 150;
 const KEPT_SEARCHES = 30;
 const LANGUAGE_CHOICES = 40;
 const GHOSTS = Array.from({ length: 12 }, (_, index) => index);
@@ -71,21 +68,6 @@ function readingTime(minutes: number | null) {
 
 type Results = { key: string; matches: number; books: Classic[] };
 
-/** Whether the server has cover art. Hosted mode has none (a cover cache shared by every reader
- * would tell one reader what others looked at): the cloth covers are shown and nothing is asked. */
-const CoversShown = createContext(true);
-
-/** Tells the server which covers are about to be shown, so it fetches them ahead, several at once. */
-function warmCovers(books: Classic[], covers: boolean | undefined) {
-  const ids = books.slice(0, MAX_WARM).map((book) => book.id);
-  if (ids.length && covers !== false) void api.warmCovers(ids).catch(() => {});
-}
-
-/** The front page's books in the order they come into view: the start of every shelf, then the rest. */
-function firstInView(shelves: ClassicShelf[]) {
-  return [...shelves.flatMap((shelf) => shelf.books.slice(0, 7)), ...shelves.flatMap((shelf) => shelf.books.slice(7))];
-}
-
 function filtersFromLocation(): Filters {
   const params = new URLSearchParams(window.location.search);
   return {
@@ -108,23 +90,10 @@ function rememberFilters(filters: Filters) {
 
 /** Real cover art over a cloth cover: the cloth shows while the picture loads and when there is none. */
 export function Cover({ book, eager = false }: { book: Classic; eager?: boolean }) {
-  const [state, setState] = useState<"loading" | "shown" | "none">("loading");
-  const art = useContext(CoversShown);
-  const cloth: Book = { book_id: book.id, title: book.title, author: book.author };
   return (
-    <span className="fl-cover" data-art={art ? state : "none"}>
-      <BookCover book={cloth} />
-      {art && state !== "none" && (
-        <img
-          src={`/api/classics/${encodeURIComponent(book.id)}/cover`}
-          alt=""
-          loading={eager ? "eager" : "lazy"}
-          decoding="async"
-          draggable={false}
-          onLoad={() => setState("shown")}
-          onError={() => setState("none")}
-        />
-      )}
+    <span className="fl-cover">
+      <BookCover book={{ book_id: book.id, title: book.title, author: book.author }}
+        art={classicArt(book.id)} fallback={book.book_id ? ownedArt(book.book_id) : undefined} eager={eager} />
     </span>
   );
 }
@@ -313,7 +282,7 @@ function ShelfRow({
       <ul className="fl-row fl-slide" ref={row}>
         {shelf.books.map((book, index) => (
           <li key={book.id}>
-            <BookCard book={book} onShelf={owned(book)} onPick={onPick} eager={eager && index < 8} />
+            <BookCard book={book} onShelf={owned(book)} onPick={onPick} eager={eager && index < 6} />
           </li>
         ))}
       </ul>
@@ -459,7 +428,6 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [added, setAdded] = useState<Record<string, string>>({});
-  const [covers, setCovers] = useState(true);
   const [picked, setPicked] = useState<Classic | null>(null);
   const pickedFrom = useRef<HTMLElement | null>(null);
   const sentinel = useRef<HTMLLIElement>(null);
@@ -481,7 +449,6 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
     api
       .classics({ limit: 1 })
       .then((catalog) => {
-        if (catalog.covers === false) setCovers(false);
         if (!stale) setSummary(catalog);
       })
       .catch(() => {
@@ -532,8 +499,6 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
         .classicsFront(language)
         .then((loaded) => {
           kept.current.fronts.set(language, loaded.shelves);
-          if (loaded.covers === false) setCovers(false);
-          warmCovers(firstInView(loaded.shelves), loaded.covers);
           if (!stale) setShelves({ language, shelves: loaded.shelves });
         })
         .catch(fail)
@@ -554,8 +519,6 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
         api
           .classics({ ...search, limit: PAGE })
           .then((loaded) => {
-            if (loaded.covers === false) setCovers(false);
-            warmCovers(loaded.books, loaded.covers);
             if (!stale) setResults({ key, matches: loaded.matches, books: loaded.books });
           })
           .catch(fail)
@@ -574,7 +537,7 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
   const showing = current ?? (wandering ? null : results);
   const hasMore = current !== null && current.books.length < current.matches;
 
-  // The next page is fetched, and its covers started, before the reader reaches the end of this one.
+  // The next page is fetched, before the reader reaches the end of this one.
   useEffect(() => {
     if (!current || current.books.length >= current.matches) return;
     const at = current.key;
@@ -587,7 +550,6 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
       .then((page) => {
         if (stale) return;
         kept.current.next = { key: at, offset, page };
-        warmCovers(page.books, page.covers);
       })
       .catch(() => {});
     return () => {
@@ -658,7 +620,6 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
   const shownShelves = shelves && shelves.language === filters.language ? shelves.shelves : null;
 
   return (
-    <CoversShown.Provider value={covers}>
     <div className="mothli-library fl">
       <a className="skip-link" href="#fl-main">
         Skip to the books
@@ -783,7 +744,7 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
               ? shownShelves.map((shelf, index) => (
                   <ShelfRow
                     key={`${shelf.kind}-${shelf.id}`}
-                    eager={index < 2}
+                    eager={index === 0}
                     shelf={shelf}
                     owned={owned}
                     onPick={pick}
@@ -824,7 +785,7 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
               {showing ? (
                 showing.books.map((book, index) => (
                   <li key={book.id}>
-                    <BookCard book={book} onShelf={owned(book)} onPick={pick} eager={index < 18} />
+                    <BookCard book={book} onShelf={owned(book)} onPick={pick} eager={index < 6} />
                   </li>
                 ))
               ) : (
@@ -869,6 +830,5 @@ export function FreeLibrary({ onBack, onOpen }: { onBack: () => void; onOpen: (b
         />
       )}
     </div>
-    </CoversShown.Provider>
   );
 }

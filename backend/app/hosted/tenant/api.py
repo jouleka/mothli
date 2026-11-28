@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import uuid
@@ -39,6 +40,7 @@ from app.hosted.tenant.models import (
     StalePositionEpochError,
 )
 from app.ingest.book_type import detect_book_type
+from app.ingest.cover import extract_thumbnail
 from app.ingest.extraction.chapter_text import segment_for_ingest, split_hash_of
 from app.ingest.segmentation.epub_segmenter import EpubDrmError
 
@@ -440,6 +442,48 @@ async def get_book_manifest(
         return manifest
 
 
+async def _source_record(request, owner_id, book_id):
+    record = await request.app.state.tenant_repository.source_object(owner_id, book_id)
+    if record is None:
+        raise HTTPException(404, "unknown book")
+    return record
+
+
+async def _read_source(request, owner_id, record):
+    if record.provider != request.app.state.object_storage.provider:
+        raise HTTPException(503, "source object storage is unavailable")
+    ref = SourceObjectRef(owner_id, record.object_id)
+    try:
+        stored = await asyncio.to_thread(request.app.state.object_storage.get, ref)
+    except (ObjectNotFoundError, ObjectIntegrityError, ObjectStorageUnavailableError) as exc:
+        raise _storage_failure(exc) from exc
+    if (
+        stored.media_type != record.media_type
+        or stored.byte_size != record.byte_size
+        or stored.sha256 != record.sha256
+    ):
+        raise HTTPException(503, "source object metadata does not match stored bytes")
+    return stored
+
+
+@router.get("/books/{book_id}/cover")
+async def book_cover(book_id: uuid.UUID, request: Request, owner_id: OwnerId = Depends(_owner)):
+    resource = _resource(owner_id, ResourceKind.BOOK, book_id)
+    runtime = request.app.state.hosted_runtime
+    async with runtime.serialized(resource):
+        record = await _source_record(request, owner_id, book_id)
+        key = TenantCacheKey(resource, CacheNamespace.COVER, str(record.book_incarnation))
+        picture = await runtime.cache_get(key)
+        if picture is None:
+            async with request.app.state.cover_extractions:
+                stored = await _read_source(request, owner_id, record)
+                picture = await asyncio.to_thread(extract_thumbnail, io.BytesIO(stored.data))
+            await runtime.cache_set(key, picture)
+    if not picture:
+        raise HTTPException(404, "no cover")
+    return Response(picture, media_type="image/webp")
+
+
 @router.get("/books/{book_id}/epub")
 async def stream_epub(
     book_id: uuid.UUID,
@@ -450,22 +494,8 @@ async def stream_epub(
     _private(response)
     resource = _resource(owner_id, ResourceKind.BOOK, book_id)
     async with request.app.state.hosted_runtime.serialized(resource):
-        record = await request.app.state.tenant_repository.source_object(owner_id, book_id)
-        if record is None:
-            raise HTTPException(404, "unknown book")
-        if record.provider != request.app.state.object_storage.provider:
-            raise HTTPException(503, "source object storage is unavailable")
-        ref = SourceObjectRef(owner_id, record.object_id)
-        try:
-            stored = await asyncio.to_thread(request.app.state.object_storage.get, ref)
-        except (ObjectNotFoundError, ObjectIntegrityError, ObjectStorageUnavailableError) as exc:
-            raise _storage_failure(exc) from exc
-        if (
-            stored.media_type != record.media_type
-            or stored.byte_size != record.byte_size
-            or stored.sha256 != record.sha256
-        ):
-            raise HTTPException(503, "source object metadata does not match stored bytes")
+        record = await _source_record(request, owner_id, book_id)
+        stored = await _read_source(request, owner_id, record)
 
     def chunks():
         for offset in range(0, len(stored.data), 64 * 1024):
